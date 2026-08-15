@@ -12,7 +12,7 @@ class LGFX : public lgfx::LGFX_Device {
 
 public:
   LGFX(void) {
-    // --- Bus SPI ---
+    // --- Bus SPI2 (Layar) ---
     {
       auto cfg = _bus_instance.config();
       cfg.spi_host    = SPI2_HOST;
@@ -22,10 +22,10 @@ public:
       cfg.spi_3wire   = false;
       cfg.use_lock    = true;
       cfg.dma_channel = SPI_DMA_CH_AUTO;
-      cfg.pin_sclk    = 12;
-      cfg.pin_mosi    = 11;
-      cfg.pin_miso    = 13;
-      cfg.pin_dc      = 2;
+      cfg.pin_sclk    = 12;   // SCK
+      cfg.pin_mosi    = 11;   // SDI/MOSI
+      cfg.pin_miso    = 13;   // SDO/MISO
+      cfg.pin_dc      = 2;    // DC
       _bus_instance.config(cfg);
       _panel_instance.setBus(&_bus_instance);
     }
@@ -33,8 +33,8 @@ public:
     // --- Panel ILI9341 ---
     {
       auto cfg = _panel_instance.config();
-      cfg.pin_cs           = 10;
-      cfg.pin_rst          = 14;
+      cfg.pin_cs           = 10;   // CS
+      cfg.pin_rst          = 14;   // RESET
       cfg.pin_busy         = -1;
       cfg.memory_width     = 240;
       cfg.memory_height    = 320;
@@ -49,7 +49,7 @@ public:
       cfg.invert           = false;
       cfg.rgb_order        = false;
       cfg.dlen_16bit       = false;
-      cfg.bus_shared       = true;
+      cfg.bus_shared       = false;  // Bus independen!
       _panel_instance.config(cfg);
     }
 
@@ -64,18 +64,18 @@ public:
       _panel_instance.setLight(&_light_instance);
     }
 
-    // --- Touchscreen XPT2046 ---
+    // --- Touchscreen XPT2046 (SPI3, independen) ---
     {
       auto cfg = _touch_instance.config();
-      cfg.pin_int    = 1;        // T_IRQ (opsional)
-      cfg.bus_shared = true;
+      cfg.pin_int         = 1;        // T_IRQ (opsional)
+      cfg.bus_shared      = false;    // Bus independen!
       cfg.offset_rotation = 0;
-      cfg.spi_host   = SPI2_HOST;
-      cfg.freq       = 1000000;
-      cfg.pin_sclk   = 12;      // T_CLK
-      cfg.pin_mosi   = 11;      // T_DIN
-      cfg.pin_miso   = 13;      // T_DO
-      cfg.pin_cs     = 9;       // T_CS
+      cfg.spi_host        = SPI3_HOST;
+      cfg.freq            = 2000000;
+      cfg.pin_sclk        = 6;        // T_CLK
+      cfg.pin_mosi        = 5;        // T_DIN
+      cfg.pin_miso        = 4;        // T_DO
+      cfg.pin_cs          = 9;        // T_CS
       _touch_instance.config(cfg);
       _panel_instance.setTouch(&_touch_instance);
     }
@@ -98,12 +98,10 @@ void loadOrRunCalibration() {
   calibrated = prefs.getBool("done", false);
 
   if (calibrated) {
-    // Muat data kalibrasi dari flash
     prefs.getBytes("data", calData, sizeof(calData));
     display.setTouchCalibrate(calData);
     Serial.println("Kalibrasi dimuat dari flash.");
   } else {
-    // Jalankan kalibrasi bawaan LGFX
     display.fillScreen(TFT_BLACK);
     display.setTextColor(TFT_WHITE);
     display.setTextSize(2);
@@ -113,10 +111,8 @@ void loadOrRunCalibration() {
     display.setCursor(10, display.height() / 2 + 10);
     display.println("Sentuh tanda panah di layar");
 
-    // calibrateTouch: tampilkan marker di 4 sudut, sentuh satu per satu
     display.calibrateTouch(calData, TFT_WHITE, TFT_BLACK, 15);
 
-    // Simpan ke flash supaya tidak perlu kalibrasi lagi
     prefs.putBytes("data", calData, sizeof(calData));
     prefs.putBool("done", true);
     Serial.println("Kalibrasi selesai & disimpan.");
@@ -131,7 +127,7 @@ void loadOrRunCalibration() {
 void setup() {
   Serial.begin(115200);
   display.init();
-  display.setRotation(1);  // Landscape
+  display.setRotation(1);
 
   Serial.println("Init OK!");
 
@@ -148,7 +144,7 @@ void setup() {
     Serial.println("Touch tidak terdeteksi!");
   }
 
-  // --- UI setelah kalibrasi ---
+  // --- UI ---
   display.fillScreen(TFT_BLACK);
   display.setTextSize(2);
   display.setTextColor(TFT_WHITE);
@@ -167,7 +163,6 @@ void setup() {
   display.setCursor(210, 14);
   display.println("Reset Cal");
 
-  // Garis pemisah
   display.drawLine(0, 75, 320, 75, TFT_DARKGREY);
 }
 
@@ -178,7 +173,7 @@ void loop() {
   lgfx::touch_point_t tp;
 
   if (display.getTouch(&tp)) {
-    // Cek tombol reset kalibrasi
+    // Tombol reset kalibrasi
     if (tp.x > 200 && tp.y < 35) {
       Serial.println("Reset kalibrasi...");
       prefs.begin("touch_cal", false);
