@@ -49,7 +49,7 @@ public:
       cfg.invert           = false;
       cfg.rgb_order        = false;
       cfg.dlen_16bit       = false;
-      cfg.bus_shared       = false;  // Bus independen!
+      cfg.bus_shared       = true;  // Bus independen!
       _panel_instance.config(cfg);
     }
 
@@ -68,7 +68,7 @@ public:
     {
       auto cfg = _touch_instance.config();
       cfg.pin_int         = 1;        // T_IRQ (opsional)
-      cfg.bus_shared      = false;    // Bus independen!
+      cfg.bus_shared      = true;    // Bus independen!
       cfg.offset_rotation = 0;
       cfg.spi_host        = SPI3_HOST;
       cfg.freq            = 2000000;
