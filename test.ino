@@ -1114,6 +1114,15 @@ void setup() {
   buildCanvasScreen();
   buildStatusBar();
   lv_scr_load(scrHome);
+  Serial.println("=== DEBUG ===");
+Serial.printf("lvBuf1: %p\n", lvBuf1);
+Serial.printf("canvasBuf: %p\n", canvasBuf);
+Serial.printf("scrHome: %p\n", scrHome);
+Serial.printf("Free PSRAM: %d\n", ESP.getFreePsram());
+Serial.printf("Free heap: %d\n", ESP.getFreeHeap());
+lv_timer_handler();
+lv_timer_handler();
+Serial.println("=== DONE ===");
 
   // Paksa render frame pertama sebelum masuk loop
   lv_timer_handler();
