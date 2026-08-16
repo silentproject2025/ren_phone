@@ -4,7 +4,7 @@
 #include <time.h>
 
 // =============================================
-// WIFI CONFIG (bisa diubah via Setting)
+// WIFI CONFIG
 // =============================================
 char WIFI_SSID[64]     = "";
 char WIFI_PASSWORD[64] = "";
@@ -19,7 +19,7 @@ const int   DST_OFFSET = 0;
 #define COL_SURFACE   0x2104
 #define COL_SURFACE2  0x3186
 #define COL_ACCENT    0xFD40
-#define COL_ACCENT2   0x867F
+#define COL_ACCENT2   0x04FF  // biru terang
 #define COL_TEXT      0xFFFF
 #define COL_SUBTEXT   0x8C51
 #define COL_DIVIDER   0x2965
@@ -41,61 +41,41 @@ public:
   LGFX(void) {
     {
       auto cfg = _bus_instance.config();
-      cfg.spi_host    = SPI2_HOST;
-      cfg.spi_mode    = 0;
-      cfg.freq_write  = 40000000;
-      cfg.freq_read   = 16000000;
-      cfg.spi_3wire   = false;
-      cfg.use_lock    = true;
+      cfg.spi_host = SPI2_HOST; cfg.spi_mode = 0;
+      cfg.freq_write = 40000000; cfg.freq_read = 16000000;
+      cfg.spi_3wire = false; cfg.use_lock = true;
       cfg.dma_channel = SPI_DMA_CH_AUTO;
-      cfg.pin_sclk    = 12;
-      cfg.pin_mosi    = 11;
-      cfg.pin_miso    = 13;
-      cfg.pin_dc      = 2;
+      cfg.pin_sclk = 12; cfg.pin_mosi = 11;
+      cfg.pin_miso = 13; cfg.pin_dc   = 2;
       _bus_instance.config(cfg);
       _panel_instance.setBus(&_bus_instance);
     }
     {
       auto cfg = _panel_instance.config();
-      cfg.pin_cs           = 10;
-      cfg.pin_rst          = 14;
-      cfg.pin_busy         = -1;
-      cfg.memory_width     = 240;
-      cfg.memory_height    = 320;
-      cfg.panel_width      = 240;
-      cfg.panel_height     = 320;
-      cfg.offset_x         = 0;
-      cfg.offset_y         = 0;
-      cfg.offset_rotation  = 0;
-      cfg.dummy_read_pixel = 8;
-      cfg.dummy_read_bits  = 1;
-      cfg.readable         = true;
-      cfg.invert           = false;
-      cfg.rgb_order        = false;
-      cfg.dlen_16bit       = false;
-      cfg.bus_shared       = false;
+      cfg.pin_cs = 10; cfg.pin_rst = 14; cfg.pin_busy = -1;
+      cfg.memory_width = 240; cfg.memory_height = 320;
+      cfg.panel_width  = 240; cfg.panel_height  = 320;
+      cfg.offset_x = 0; cfg.offset_y = 0; cfg.offset_rotation = 0;
+      cfg.dummy_read_pixel = 8; cfg.dummy_read_bits = 1;
+      cfg.readable = true; cfg.invert = false;
+      cfg.rgb_order = false; cfg.dlen_16bit = false;
+      cfg.bus_shared = false;
       _panel_instance.config(cfg);
     }
     {
       auto cfg = _light_instance.config();
-      cfg.pin_bl      = 21;
-      cfg.invert      = false;
-      cfg.freq        = 44100;
-      cfg.pwm_channel = 7;
+      cfg.pin_bl = 21; cfg.invert = false;
+      cfg.freq = 44100; cfg.pwm_channel = 7;
       _light_instance.config(cfg);
       _panel_instance.setLight(&_light_instance);
     }
     {
       auto cfg = _touch_instance.config();
-      cfg.pin_int         = -1;
-      cfg.bus_shared      = false;
-      cfg.offset_rotation = 0;
-      cfg.spi_host        = SPI3_HOST;
-      cfg.freq            = 2000000;
-      cfg.pin_sclk        = 6;
-      cfg.pin_mosi        = 5;
-      cfg.pin_miso        = 4;
-      cfg.pin_cs          = 9;
+      cfg.pin_int = -1; cfg.bus_shared = false;
+      cfg.offset_rotation = 0; cfg.spi_host = SPI3_HOST;
+      cfg.freq = 2000000;
+      cfg.pin_sclk = 6; cfg.pin_mosi = 5;
+      cfg.pin_miso = 4; cfg.pin_cs   = 9;
       _touch_instance.config(cfg);
       _panel_instance.setTouch(&_touch_instance);
     }
@@ -104,127 +84,125 @@ public:
 };
 
 LGFX display;
-LGFX_Sprite canvas(&display);   // Sprite utama (framebuffer)
-LGFX_Sprite canvasApp(&display); // Sprite khusus app Canvas
+LGFX_Sprite canvas(&display);
+LGFX_Sprite canvasApp(&display);
 
 // =============================================
 // STATE GLOBAL
 // =============================================
-enum Screen {
-  SCR_HOME,
-  SCR_CLOCK,
-  SCR_CALC,
-  SCR_SENSOR,
-  SCR_SETTINGS,
-  SCR_NOTEPAD,
-  SCR_CANVAS
-};
+enum Screen { SCR_HOME, SCR_CLOCK, SCR_CALC, SCR_SENSOR, SCR_SETTINGS, SCR_NOTEPAD, SCR_CANVAS };
 Screen currentScreen = SCR_HOME;
-
 bool wifiConnected = false;
 bool ntpSynced     = false;
 int  brightness    = 200;
 
 // Home scroll
-float homeScrollY    = 0;
-float homeScrollVel  = 0;
-int   touchStartX    = 0;
-int   touchStartY    = 0;
-int   touchLastY     = 0;
-bool  isSwiping      = false;
+float homeScrollY   = 0;
+float homeScrollVel = 0;
+int   touchStartX   = 0;
+int   touchStartY   = 0;
+int   touchLastY    = 0;
+bool  isSwiping     = false;
 unsigned long swipeStartTime = 0;
 
 // =============================================
 // KEYBOARD VIRTUAL
+// Layout: 10 kolom x 3 baris huruf + 1 baris kontrol
+// Total lebar 320px, tiap key ~30px
 // =============================================
 enum KbMode { KB_LOWER, KB_UPPER, KB_NUM };
-KbMode kbMode = KB_LOWER;
-bool kbVisible = false;
-String* kbTarget = nullptr;
+KbMode  kbMode    = KB_LOWER;
+bool    kbVisible = false;
+String* kbTarget  = nullptr;
 
-const char* kbRows[3][3][10] = {
-  { // Lower
-    {"q","w","e","r","t","y","u","i","o","p"},
-    {"a","s","d","f","g","h","j","k","l",";"},
-    {"z","x","c","v","b","n","m",",",".","?"}
-  },
-  { // Upper
-    {"Q","W","E","R","T","Y","U","I","O","P"},
-    {"A","S","D","F","G","H","J","K","L",":"},
-    {"Z","X","C","V","B","N","M","!","@","#"}
-  },
-  { // Num
-    {"1","2","3","4","5","6","7","8","9","0"},
-    {"-","=","[","]","\\",";","'",",",".","/"},
-    {"~","!","@","#","$","%","^","&","*","("}
-  }
+// KEY_W=29, gap=2 → 10*(29+2)-2=308, sisa 12px → offsetX=6
+#define KB_KEY_W   29
+#define KB_KEY_H   22
+#define KB_GAP     2
+#define KB_Y_START 148  // mulai dari y=148, tinggi total ~96px
+
+const char* kbLower[3][10] = {
+  {"q","w","e","r","t","y","u","i","o","p"},
+  {"a","s","d","f","g","h","j","k","l",";"},
+  {"z","x","c","v","b","n","m",",",".","?"}
+};
+const char* kbUpper[3][10] = {
+  {"Q","W","E","R","T","Y","U","I","O","P"},
+  {"A","S","D","F","G","H","J","K","L",":"},
+  {"Z","X","C","V","B","N","M","!","@","#"}
+};
+const char* kbNum[3][10] = {
+  {"1","2","3","4","5","6","7","8","9","0"},
+  {"-","=","[","]","/","'","\"","<",">","\\"},
+  {"~","!","@","#","$","%","^","&","*","("}
 };
 
-// Keyboard area: y dari 148 ke 240 (portrait 240px tinggi)
-#define KB_Y       148
-#define KB_H       92
-#define KEY_W      23
-#define KEY_H      20
+const char* (*kbLayouts[3])[10] = { kbLower, kbUpper, kbNum };
+
+// Baris r → offsetX biar centered (baris 1 geser 15px, baris 2 geser 30px)
+int kbRowOffset(int r) { return 6 + (r==1?15:(r==2?30:0)); }
 
 void drawKeyboard(LGFX_Sprite& spr) {
-  spr.fillRect(0, KB_Y - 4, 320, KB_H + 8, COL_SURFACE);
-  spr.drawFastHLine(0, KB_Y - 4, 320, COL_DIVIDER);
+  // Background keyboard
+  spr.fillRect(0, KB_Y_START - 2, 320, 240 - KB_Y_START + 2, COL_SURFACE);
+  spr.drawFastHLine(0, KB_Y_START - 2, 320, COL_DIVIDER);
 
-  int row0 = KB_Y;
-  int row1 = KB_Y + 24;
-  int row2 = KB_Y + 48;
-  int row3 = KB_Y + 72; // baris spasi dll
+  const char* (*layout)[10] = kbLayouts[(int)kbMode];
 
-  // Baris 0-2
+  // 3 baris huruf
   for (int r = 0; r < 3; r++) {
-    int rowY = KB_Y + r * 24;
-    int offsetX = (r == 1) ? 4 : (r == 2) ? 8 : 0;
+    int ry = KB_Y_START + r * (KB_KEY_H + KB_GAP);
+    int ox = kbRowOffset(r);
     for (int c = 0; c < 10; c++) {
-      int kx = offsetX + c * (KEY_W + 1);
-      int ky = rowY;
-      spr.fillRoundRect(kx, ky, KEY_W, KEY_H, 3, COL_SURFACE2);
+      int kx = ox + c * (KB_KEY_W + KB_GAP);
+      spr.fillRoundRect(kx, ry, KB_KEY_W, KB_KEY_H, 3, COL_SURFACE2);
       spr.setTextColor(COL_TEXT);
       spr.setTextSize(1);
-      spr.setCursor(kx + 7, ky + 6);
-      spr.print(kbRows[(int)kbMode][r][c]);
+      // Center karakter
+      int cx = kx + KB_KEY_W/2 - 3;
+      int cy = ry + KB_KEY_H/2 - 4;
+      spr.setCursor(cx, cy);
+      spr.print(layout[r][c]);
     }
   }
 
-  // Baris kontrol: Shift | Space | Backspace | 123/ABC
-  // Shift
-  spr.fillRoundRect(0, row3, 40, KEY_H, 3, kbMode == KB_UPPER ? COL_ACCENT : COL_SURFACE2);
+  // Baris kontrol (y = KB_Y_START + 3*(KB_KEY_H+KB_GAP))
+  int cy = KB_Y_START + 3 * (KB_KEY_H + KB_GAP);
+
+  // SHF (40px)
+  spr.fillRoundRect(4, cy, 40, KB_KEY_H, 3, kbMode==KB_UPPER ? COL_ACCENT : COL_SURFACE2);
   spr.setTextColor(COL_TEXT); spr.setTextSize(1);
-  spr.setCursor(6, row3 + 6); spr.print("SHF");
+  spr.setCursor(10, cy + KB_KEY_H/2 - 4); spr.print("SHF");
 
-  // 123/ABC
-  spr.fillRoundRect(44, row3, 40, KEY_H, 3, kbMode == KB_NUM ? COL_ACCENT : COL_SURFACE2);
-  spr.setCursor(50, row3 + 6);
-  spr.print(kbMode == KB_NUM ? "ABC" : "123");
+  // 123/ABC (44px)
+  spr.fillRoundRect(48, cy, 44, KB_KEY_H, 3, kbMode==KB_NUM ? COL_ACCENT : COL_SURFACE2);
+  spr.setCursor(54, cy + KB_KEY_H/2 - 4);
+  spr.print(kbMode==KB_NUM ? "ABC" : "123");
 
-  // Space
-  spr.fillRoundRect(88, row3, 144, KEY_H, 3, COL_SURFACE2);
-  spr.setCursor(140, row3 + 6); spr.print("SPACE");
+  // SPACE (mengisi tengah)
+  spr.fillRoundRect(96, cy, 128, KB_KEY_H, 3, COL_SURFACE2);
+  spr.setCursor(136, cy + KB_KEY_H/2 - 4); spr.print("SPACE");
 
-  // Backspace
-  spr.fillRoundRect(236, row3, 84, KEY_H, 3, COL_RED);
-  spr.setCursor(248, row3 + 6); spr.print("<--");
+  // BKSP (sisa kanan)
+  spr.fillRoundRect(228, cy, 88, KB_KEY_H, 3, COL_RED);
+  spr.setCursor(248, cy + KB_KEY_H/2 - 4); spr.print("<--");
 }
 
 void kbHandleTouch(int x, int y) {
   if (!kbVisible || kbTarget == nullptr) return;
-  if (y < KB_Y - 4) return;
+  if (y < KB_Y_START - 2) return;
 
-  int row3 = KB_Y + 72;
+  int ctrlY = KB_Y_START + 3 * (KB_KEY_H + KB_GAP);
 
   // Baris kontrol
-  if (y >= row3 && y <= row3 + KEY_H) {
-    if (x <= 40) {
+  if (y >= ctrlY && y <= ctrlY + KB_KEY_H) {
+    if (x >= 4 && x <= 44) {
       kbMode = (kbMode == KB_UPPER) ? KB_LOWER : KB_UPPER;
-    } else if (x >= 44 && x <= 84) {
+    } else if (x >= 48 && x <= 92) {
       kbMode = (kbMode == KB_NUM) ? KB_LOWER : KB_NUM;
-    } else if (x >= 88 && x <= 232) {
+    } else if (x >= 96 && x <= 224) {
       *kbTarget += " ";
-    } else if (x >= 236) {
+    } else if (x >= 228) {
       if (kbTarget->length() > 0)
         *kbTarget = kbTarget->substring(0, kbTarget->length() - 1);
     }
@@ -232,14 +210,15 @@ void kbHandleTouch(int x, int y) {
   }
 
   // Baris huruf
+  const char* (*layout)[10] = kbLayouts[(int)kbMode];
   for (int r = 0; r < 3; r++) {
-    int rowY = KB_Y + r * 24;
-    if (y >= rowY && y <= rowY + KEY_H) {
-      int offsetX = (r == 1) ? 4 : (r == 2) ? 8 : 0;
+    int ry = KB_Y_START + r * (KB_KEY_H + KB_GAP);
+    if (y >= ry && y <= ry + KB_KEY_H) {
+      int ox = kbRowOffset(r);
       for (int c = 0; c < 10; c++) {
-        int kx = offsetX + c * (KEY_W + 1);
-        if (x >= kx && x <= kx + KEY_W) {
-          *kbTarget += kbRows[(int)kbMode][r][c];
+        int kx = ox + c * (KB_KEY_W + KB_GAP);
+        if (x >= kx && x <= kx + KB_KEY_W) {
+          *kbTarget += layout[r][c];
           if (kbMode == KB_UPPER) kbMode = KB_LOWER;
           return;
         }
@@ -261,13 +240,10 @@ void loadOrRunCalibration() {
     display.setTouchCalibrate(calData);
   } else {
     display.fillScreen(COL_BG);
-    display.setTextColor(COL_TEXT);
-    display.setTextSize(2);
-    display.setCursor(20, display.height() / 2 - 30);
-    display.println("Kalibrasi Touch");
+    display.setTextColor(COL_TEXT); display.setTextSize(2);
+    display.setCursor(20, 100); display.println("Kalibrasi Touch");
     display.setTextSize(1);
-    display.setCursor(20, display.height() / 2 + 5);
-    display.println("Sentuh tanda di setiap sudut");
+    display.setCursor(20, 130); display.println("Sentuh tanda di setiap sudut");
     uint16_t calData[8];
     display.calibrateTouch(calData, TFT_WHITE, TFT_BLACK, 15);
     prefs.putBytes("data", calData, sizeof(calData));
@@ -283,9 +259,7 @@ void connectWifi() {
   if (strlen(WIFI_SSID) == 0) return;
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   int tries = 0;
-  while (WiFi.status() != WL_CONNECTED && tries < 20) {
-    delay(300); tries++;
-  }
+  while (WiFi.status() != WL_CONNECTED && tries < 20) { delay(300); tries++; }
   wifiConnected = (WiFi.status() == WL_CONNECTED);
   if (wifiConnected) {
     configTime(GMT_OFFSET, DST_OFFSET, NTP_SERVER);
@@ -293,48 +267,34 @@ void connectWifi() {
     if (getLocalTime(&t, 5000)) ntpSynced = true;
   }
 }
-
 void loadWifiCreds() {
-  Preferences prefs;
-  prefs.begin("wifi", true);
-  String s = prefs.getString("ssid", "");
-  String p = prefs.getString("pass", "");
+  Preferences prefs; prefs.begin("wifi", true);
+  prefs.getString("ssid", "").toCharArray(WIFI_SSID, 64);
+  prefs.getString("pass", "").toCharArray(WIFI_PASSWORD, 64);
   prefs.end();
-  s.toCharArray(WIFI_SSID, 64);
-  p.toCharArray(WIFI_PASSWORD, 64);
 }
-
 void saveWifiCreds() {
-  Preferences prefs;
-  prefs.begin("wifi", false);
+  Preferences prefs; prefs.begin("wifi", false);
   prefs.putString("ssid", WIFI_SSID);
   prefs.putString("pass", WIFI_PASSWORD);
   prefs.end();
 }
 
 // =============================================
-// STATUS BAR
+// STATUS BAR & BACK BUTTON
 // =============================================
 void drawStatusBar(LGFX_Sprite& spr) {
   spr.fillRect(0, 0, 320, 24, COL_SURFACE);
   spr.drawFastHLine(0, 24, 320, COL_DIVIDER);
-
   struct tm t;
   if (ntpSynced && getLocalTime(&t)) {
-    char buf[9];
-    sprintf(buf, "%02d:%02d", t.tm_hour, t.tm_min);
-    spr.setTextColor(COL_TEXT);
-    spr.setTextSize(1);
-    spr.setCursor(8, 8);
-    spr.print(buf);
+    char buf[9]; sprintf(buf, "%02d:%02d", t.tm_hour, t.tm_min);
+    spr.setTextColor(COL_TEXT); spr.setTextSize(1);
+    spr.setCursor(8, 8); spr.print(buf);
   } else {
-    spr.setTextColor(COL_SUBTEXT);
-    spr.setTextSize(1);
-    spr.setCursor(8, 8);
-    spr.print("--:--");
+    spr.setTextColor(COL_SUBTEXT); spr.setTextSize(1);
+    spr.setCursor(8, 8); spr.print("--:--");
   }
-
-  // WiFi icon
   if (wifiConnected) {
     spr.fillCircle(302, 17, 2, COL_GREEN);
     spr.drawArc(302, 19, 5, 4, 210, 330, COL_GREEN);
@@ -345,79 +305,69 @@ void drawStatusBar(LGFX_Sprite& spr) {
   }
 }
 
+// Back button hanya ditampilkan jika keyboard TIDAK aktif
+#define BACK_X 4
+#define BACK_Y 213
+#define BACK_W 62
+#define BACK_H 24
+
 void drawBackButton(LGFX_Sprite& spr) {
-  spr.fillRoundRect(4, 210, 60, 26, 6, COL_SURFACE);
-  spr.setTextColor(COL_ACCENT);
-  spr.setTextSize(1);
-  spr.setCursor(14, 220);
-  spr.print("< Back");
+  if (kbVisible) return; // Jangan tampilkan kalau keyboard aktif
+  spr.fillRoundRect(BACK_X, BACK_Y, BACK_W, BACK_H, 6, COL_SURFACE);
+  spr.setTextColor(COL_ACCENT); spr.setTextSize(1);
+  spr.setCursor(BACK_X + 10, BACK_Y + 8); spr.print("< Back");
 }
 
+// Back hanya aktif kalau keyboard tidak aktif DAN tombol benar-benar ditekan
 bool backButtonPressed(int x, int y) {
-  return (x >= 4 && x <= 64 && y >= 210 && y <= 236);
+  if (kbVisible) return false; // PENTING: block back kalau keyboard terbuka
+  return (x >= BACK_X && x <= BACK_X + BACK_W && y >= BACK_Y && y <= BACK_Y + BACK_H);
 }
 
 // =============================================
-// HOME SCREEN (Scrollable, 6 App)
+// HOME SCREEN
 // =============================================
 struct AppDef { const char* name; uint16_t color; char sym; };
 AppDef appDefs[6] = {
-  { "Jam",       COL_ACCENT,   'T' },
-  { "Kalkulator",COL_ACCENT2,  '+' },
-  { "Sensor",    COL_CYAN,     '~' },
-  { "Setting",   COL_MAGENTA,  '@' },
-  { "Notepad",   COL_YELLOW,   'N' },
-  { "Canvas",    COL_GREEN,    'C' },
+  { "Jam",        COL_ACCENT,  'T' },
+  { "Kalkulator", COL_ACCENT2, '+' },
+  { "Sensor",     COL_CYAN,    '~' },
+  { "Setting",    COL_MAGENTA, '@' },
+  { "Notepad",    COL_YELLOW,  'N' },
+  { "Canvas",     COL_GREEN,   'C' },
 };
+#define HOME_CARD_W  140
+#define HOME_CARD_H  94
+#define HOME_CONTENT_H 330
 
-// Total tinggi konten home: 3 baris * 100px + padding
-#define HOME_CONTENT_H  340
-#define HOME_CARD_H     95
-#define HOME_CARD_W     140
-
-void drawHomeContent(LGFX_Sprite& spr, int scrollY) {
+void drawHomeContent(LGFX_Sprite& spr, float scrollY) {
   spr.fillSprite(COL_BG);
   drawStatusBar(spr);
-
-  spr.setTextColor(COL_SUBTEXT);
-  spr.setTextSize(1);
-  spr.setCursor(8, 30);
-  spr.print("Beranda");
+  spr.setTextColor(COL_SUBTEXT); spr.setTextSize(1);
+  spr.setCursor(8, 30); spr.print("Beranda");
 
   for (int i = 0; i < 6; i++) {
-    int col = i % 2;
-    int row = i / 2;
-    int x   = 8 + col * 152;
-    int y   = 45 + row * (HOME_CARD_H + 8) - (int)scrollY;
-
-    // Clip — jangan gambar kalau diluar layar
+    int col = i % 2, row = i / 2;
+    int x = 10 + col * 160;
+    int y = 44 + row * (HOME_CARD_H + 8) - (int)scrollY;
     if (y + HOME_CARD_H < 0 || y > 240) continue;
-
     spr.fillRoundRect(x, y, HOME_CARD_W, HOME_CARD_H, 12, COL_SURFACE);
-
-    // Icon
     spr.fillRoundRect(x + 48, y + 10, 44, 38, 8, appDefs[i].color);
-    spr.setTextSize(3);
-    spr.setTextColor(COL_BG);
-    spr.setCursor(x + 59, y + 18);
-    spr.print(appDefs[i].sym);
-
-    // Nama
-    spr.setTextSize(1);
-    spr.setTextColor(COL_TEXT);
+    spr.setTextSize(3); spr.setTextColor(COL_BG);
+    spr.setCursor(x + 59, y + 17); spr.print(appDefs[i].sym);
+    spr.setTextSize(1); spr.setTextColor(COL_TEXT);
     int nameLen = strlen(appDefs[i].name);
-    spr.setCursor(x + HOME_CARD_W / 2 - nameLen * 3, y + 72);
+    spr.setCursor(x + HOME_CARD_W/2 - nameLen*3, y + 72);
     spr.print(appDefs[i].name);
   }
 }
 
-Screen homeTouchCheck(int x, int y, int scrollY) {
+Screen homeTouchCheck(int x, int y, float scrollY) {
   Screen apps[6] = { SCR_CLOCK, SCR_CALC, SCR_SENSOR, SCR_SETTINGS, SCR_NOTEPAD, SCR_CANVAS };
   for (int i = 0; i < 6; i++) {
-    int col = i % 2;
-    int row = i / 2;
-    int ax  = 8 + col * 152;
-    int ay  = 45 + row * (HOME_CARD_H + 8) - (int)scrollY;
+    int col = i % 2, row = i / 2;
+    int ax = 10 + col * 160;
+    int ay = 44 + row * (HOME_CARD_H + 8) - (int)scrollY;
     if (x >= ax && x <= ax + HOME_CARD_W && y >= ay && y <= ay + HOME_CARD_H)
       return apps[i];
   }
@@ -430,119 +380,114 @@ Screen homeTouchCheck(int x, int y, int scrollY) {
 void drawClock(LGFX_Sprite& spr) {
   spr.fillSprite(COL_BG);
   drawStatusBar(spr);
-  spr.setTextColor(COL_ACCENT);
-  spr.setTextSize(1);
-  spr.setCursor(8, 30);
-  spr.print("Jam");
+  spr.setTextColor(COL_ACCENT); spr.setTextSize(1);
+  spr.setCursor(8, 30); spr.print("Jam");
 
   struct tm t;
   if (ntpSynced && getLocalTime(&t)) {
     char timeBuf[9];
     sprintf(timeBuf, "%02d:%02d:%02d", t.tm_hour, t.tm_min, t.tm_sec);
-    spr.setTextColor(COL_TEXT);
-    spr.setTextSize(3);
-    spr.setCursor(20, 65);
-    spr.print(timeBuf);
+    spr.setTextColor(COL_TEXT); spr.setTextSize(3);
+    spr.setCursor(20, 65); spr.print(timeBuf);
 
     const char* days[]   = {"Min","Sen","Sel","Rab","Kam","Jum","Sab"};
     const char* months[] = {"Jan","Feb","Mar","Apr","Mei","Jun","Jul","Agu","Sep","Okt","Nov","Des"};
-    char dateBuf[24];
+    char dateBuf[28];
     sprintf(dateBuf, "%s, %02d %s %04d", days[t.tm_wday], t.tm_mday, months[t.tm_mon], t.tm_year+1900);
-    spr.setTextColor(COL_SUBTEXT);
-    spr.setTextSize(1);
-    spr.setCursor(20, 108);
-    spr.print(dateBuf);
+    spr.setTextColor(COL_SUBTEXT); spr.setTextSize(1);
+    spr.setCursor(20, 108); spr.print(dateBuf);
     spr.drawFastHLine(20, 122, 280, COL_ACCENT);
-    spr.setTextColor(COL_GREEN);
-    spr.setCursor(20, 130);
+    spr.setTextColor(COL_GREEN); spr.setCursor(20, 130);
     spr.print(ntpSynced ? "NTP Sync OK" : "Tidak sync");
   } else {
-    spr.setTextColor(COL_RED);
-    spr.setTextSize(2);
-    spr.setCursor(20, 80);
-    spr.print("Tidak sync");
+    spr.setTextColor(COL_RED); spr.setTextSize(2);
+    spr.setCursor(20, 80); spr.print("Tidak sync");
   }
   drawBackButton(spr);
 }
 
 // =============================================
 // APP: KALKULATOR
+// Layar landscape 320x240, area y: 25-240
+// Baris display: y 28-62 (34px)
+// 5 baris tombol: masing2 34px, gap 2px
+// Total: 5*34 + 4*2 = 178px, mulai y=64
+// Tombol terakhir y=64+4*36=208, end=208+34=242 → pas!
 // =============================================
-String calcInput   = "0";
-float  calcA       = 0;
-char   calcOp      = 0;
-bool   calcNewNum  = true;
+String calcInput  = "0";
+float  calcA      = 0;
+char   calcOp     = 0;
+bool   calcNewNum = true;
 
-void drawCalcBtn(LGFX_Sprite& spr, int x, int y, int w, int h, const char* lbl, uint16_t bg, uint16_t fg) {
-  spr.fillRoundRect(x, y, w, h, 6, bg);
-  spr.setTextColor(fg);
-  spr.setTextSize(2);
-  spr.setCursor(x + w/2 - strlen(lbl)*6, y + h/2 - 8);
-  spr.print(lbl);
-}
+struct CalcBtn { int x, y, w, h; const char* lbl; uint16_t bg, fg; };
+
+CalcBtn calcBtns[] = {
+  // Baris 1: y=64
+  {4,  64, 72,34, "C",   COL_SURFACE, COL_ACCENT},
+  {80, 64, 72,34, "+/-", COL_SURFACE, COL_ACCENT},
+  {156,64, 72,34, "%",   COL_SURFACE, COL_ACCENT},
+  {232,64, 84,34, "/",   COL_ACCENT,  COL_BG},
+  // Baris 2: y=100
+  {4,  100,72,34, "7", COL_SURFACE, COL_TEXT},
+  {80, 100,72,34, "8", COL_SURFACE, COL_TEXT},
+  {156,100,72,34, "9", COL_SURFACE, COL_TEXT},
+  {232,100,84,34, "x", COL_ACCENT,  COL_BG},
+  // Baris 3: y=136
+  {4,  136,72,34, "4", COL_SURFACE, COL_TEXT},
+  {80, 136,72,34, "5", COL_SURFACE, COL_TEXT},
+  {156,136,72,34, "6", COL_SURFACE, COL_TEXT},
+  {232,136,84,34, "-", COL_ACCENT,  COL_BG},
+  // Baris 4: y=172
+  {4,  172,72,34, "1", COL_SURFACE, COL_TEXT},
+  {80, 172,72,34, "2", COL_SURFACE, COL_TEXT},
+  {156,172,72,34, "3", COL_SURFACE, COL_TEXT},
+  {232,172,84,34, "+", COL_ACCENT,  COL_BG},
+  // Baris 5: y=208
+  {4,  208,148,34, "0", COL_SURFACE, COL_TEXT},
+  {156,208, 72,34, ".", COL_SURFACE, COL_TEXT},
+  {232,208, 84,34, "=", COL_ACCENT2, COL_BG},
+};
 
 void drawCalc(LGFX_Sprite& spr) {
   spr.fillSprite(COL_BG);
   drawStatusBar(spr);
-  spr.setTextColor(COL_ACCENT);
-  spr.setTextSize(1);
-  spr.setCursor(8, 30);
-  spr.print("Kalkulator");
+  spr.setTextColor(COL_ACCENT); spr.setTextSize(1);
+  spr.setCursor(8, 30); spr.print("Kalkulator");
 
-  spr.fillRoundRect(4, 40, 312, 40, 6, COL_SURFACE);
-  spr.setTextColor(COL_TEXT);
-  spr.setTextSize(2);
+  // Display
+  spr.fillRoundRect(4, 38, 312, 24, 4, COL_SURFACE);
+  spr.setTextColor(COL_TEXT); spr.setTextSize(2);
   int tw = calcInput.length() * 12;
-  spr.setCursor(max(8, 310 - tw), 52);
+  spr.setCursor(max(8, 308 - tw), 42);
   spr.print(calcInput);
 
-  drawCalcBtn(spr, 4,   88, 72, 34, "C",   COL_SURFACE, COL_ACCENT);
-  drawCalcBtn(spr, 82,  88, 72, 34, "+/-", COL_SURFACE, COL_ACCENT);
-  drawCalcBtn(spr, 160, 88, 72, 34, "%",   COL_SURFACE, COL_ACCENT);
-  drawCalcBtn(spr, 238, 88, 78, 34, "/",   COL_ACCENT,  COL_BG);
-
-  drawCalcBtn(spr, 4,   128, 72, 34, "7", COL_SURFACE, COL_TEXT);
-  drawCalcBtn(spr, 82,  128, 72, 34, "8", COL_SURFACE, COL_TEXT);
-  drawCalcBtn(spr, 160, 128, 72, 34, "9", COL_SURFACE, COL_TEXT);
-  drawCalcBtn(spr, 238, 128, 78, 34, "x", COL_ACCENT,  COL_BG);
-
-  drawCalcBtn(spr, 4,   168, 72, 34, "4", COL_SURFACE, COL_TEXT);
-  drawCalcBtn(spr, 82,  168, 72, 34, "5", COL_SURFACE, COL_TEXT);
-  drawCalcBtn(spr, 160, 168, 72, 34, "6", COL_SURFACE, COL_TEXT);
-  drawCalcBtn(spr, 238, 168, 78, 34, "-", COL_ACCENT,  COL_BG);
-
-  drawCalcBtn(spr, 4,   208, 72, 34, "1", COL_SURFACE, COL_TEXT);
-  drawCalcBtn(spr, 82,  208, 72, 34, "2", COL_SURFACE, COL_TEXT);
-  drawCalcBtn(spr, 160, 208, 72, 34, "3", COL_SURFACE, COL_TEXT);
-  drawCalcBtn(spr, 238, 208, 78, 34, "+", COL_ACCENT,  COL_BG);
-
-  drawCalcBtn(spr, 4,   248, 150, 34, "0", COL_SURFACE, COL_TEXT);
-  drawCalcBtn(spr, 160, 248, 72,  34, ".", COL_SURFACE, COL_TEXT);
-  drawCalcBtn(spr, 238, 248, 78,  34, "=", COL_ACCENT2, COL_BG);
+  // Tombol
+  int n = sizeof(calcBtns)/sizeof(calcBtns[0]);
+  for (int i = 0; i < n; i++) {
+    auto& b = calcBtns[i];
+    spr.fillRoundRect(b.x, b.y, b.w, b.h, 6, b.bg);
+    spr.setTextColor(b.fg); spr.setTextSize(2);
+    int lw = strlen(b.lbl) * 12;
+    spr.setCursor(b.x + b.w/2 - lw/2, b.y + b.h/2 - 8);
+    spr.print(b.lbl);
+  }
 }
 
 void calcHandleTouch(int x, int y) {
-  struct CB { int x,y,w,h; const char* l; };
-  CB b[] = {
-    {4,88,72,34,"C"},{82,88,72,34,"+/-"},{160,88,72,34,"%"},{238,88,78,34,"/"},
-    {4,128,72,34,"7"},{82,128,72,34,"8"},{160,128,72,34,"9"},{238,128,78,34,"x"},
-    {4,168,72,34,"4"},{82,168,72,34,"5"},{160,168,72,34,"6"},{238,168,78,34,"-"},
-    {4,208,72,34,"1"},{82,208,72,34,"2"},{160,208,72,34,"3"},{238,208,78,34,"+"},
-    {4,248,150,34,"0"},{160,248,72,34,"."},{238,248,78,34,"="},
-  };
-  for (auto& btn : b) {
-    if (x>=btn.x && x<=btn.x+btn.w && y>=btn.y && y<=btn.y+btn.h) {
-      const char* l = btn.l;
+  int n = sizeof(calcBtns)/sizeof(calcBtns[0]);
+  for (int i = 0; i < n; i++) {
+    auto& b = calcBtns[i];
+    if (x>=b.x && x<=b.x+b.w && y>=b.y && y<=b.y+b.h) {
+      const char* l = b.lbl;
       if (!strcmp(l,"C"))       { calcInput="0"; calcA=0; calcOp=0; calcNewNum=true; }
-      else if (!strcmp(l,"+/-")){ float v=calcInput.toFloat()*-1; calcInput=String(v); }
-      else if (!strcmp(l,"%"))  { float v=calcInput.toFloat()/100; calcInput=String(v); }
+      else if (!strcmp(l,"+/-")){ calcInput=String(calcInput.toFloat()*-1); }
+      else if (!strcmp(l,"%"))  { calcInput=String(calcInput.toFloat()/100); }
       else if (!strcmp(l,"="))  {
         float b2=calcInput.toFloat(), res=0;
-        if(calcOp=='+') res=calcA+b2;
-        else if(calcOp=='-') res=calcA-b2;
+        if(calcOp=='+') res=calcA+b2; else if(calcOp=='-') res=calcA-b2;
         else if(calcOp=='x') res=calcA*b2;
         else if(calcOp=='/') res=(b2!=0)?calcA/b2:0;
-        calcInput = (res==(int)res) ? String((int)res) : String(res);
+        calcInput=(res==(int)res)?String((int)res):String(res,4);
         calcOp=0; calcNewNum=true;
       }
       else if(!strcmp(l,"+")||!strcmp(l,"-")||!strcmp(l,"x")||!strcmp(l,"/")) {
@@ -554,7 +499,7 @@ void calcHandleTouch(int x, int y) {
         calcInput+=l;
       }
       if(calcInput.length()>12) calcInput=calcInput.substring(0,12);
-      break;
+      return;
     }
   }
 }
@@ -562,49 +507,33 @@ void calcHandleTouch(int x, int y) {
 // =============================================
 // APP: SENSOR
 // =============================================
-float readInternalTemp() {
-  #if defined(CONFIG_IDF_TARGET_ESP32S3)
-    return temperatureRead(); // Built-in di ESP32 core v3.x
-  #else
-    return temperatureRead();
-  #endif
-}
+float readInternalTemp() { return temperatureRead(); }
 
 void drawSensor(LGFX_Sprite& spr) {
   spr.fillSprite(COL_BG);
   drawStatusBar(spr);
-  spr.setTextColor(COL_CYAN);
-  spr.setTextSize(1);
-  spr.setCursor(8, 30);
-  spr.print("Sensor");
+  spr.setTextColor(COL_CYAN); spr.setTextSize(1);
+  spr.setCursor(8, 30); spr.print("Sensor");
 
   float temp = readInternalTemp();
   spr.fillRoundRect(20, 48, 280, 100, 14, COL_SURFACE);
-  spr.setTextColor(COL_SUBTEXT);
-  spr.setTextSize(1);
-  spr.setCursor(35, 62);
-  spr.print("Suhu Internal Chip");
+  spr.setTextColor(COL_SUBTEXT); spr.setTextSize(1);
+  spr.setCursor(35, 62); spr.print("Suhu Internal Chip");
 
   char buf[16]; sprintf(buf, "%.1f", temp);
-  spr.setTextColor(COL_CYAN);
-  spr.setTextSize(4);
-  spr.setCursor(40, 80);
-  spr.print(buf);
-  spr.setTextSize(2);
-  spr.print(" C");
+  spr.setTextColor(COL_CYAN); spr.setTextSize(4);
+  spr.setCursor(40, 78); spr.print(buf);
+  spr.setTextSize(2); spr.print(" C");
 
-  spr.fillRoundRect(20, 162, 280, 18, 6, COL_DIVIDER);
+  spr.fillRoundRect(20, 158, 280, 18, 6, COL_DIVIDER);
   int bw = constrain(map((int)temp, 20, 90, 0, 276), 0, 276);
   uint16_t bc = (temp<50)?COL_GREEN:(temp<70)?COL_ACCENT:COL_RED;
-  spr.fillRoundRect(22, 164, bw, 14, 4, bc);
+  spr.fillRoundRect(22, 160, bw, 14, 4, bc);
 
-  spr.setTextColor(COL_SUBTEXT);
-  spr.setTextSize(1);
-  spr.setCursor(20, 185);
-  spr.print("Normal <50C  Hangat <70C  Panas >70C");
+  spr.setTextColor(COL_SUBTEXT); spr.setTextSize(1);
+  spr.setCursor(20, 182); spr.print("20C            55C            90C");
   spr.setTextColor(COL_DIVIDER);
-  spr.setCursor(90, 200);
-  spr.print("Tap untuk refresh");
+  spr.setCursor(88, 198); spr.print("Tap untuk refresh");
 
   drawBackButton(spr);
 }
@@ -612,114 +541,104 @@ void drawSensor(LGFX_Sprite& spr) {
 // =============================================
 // APP: SETTINGS
 // =============================================
-String settWifiSSID = "";
-String settWifiPass = "";
+String settWifiSSID  = "";
+String settWifiPass  = "";
 bool   settShowPass  = false;
-int    settFocusField = -1; // 0=ssid, 1=pass
+int    settFocus     = -1; // 0=ssid, 1=pass
 
 void drawSettings(LGFX_Sprite& spr) {
   spr.fillSprite(COL_BG);
   drawStatusBar(spr);
-  spr.setTextColor(COL_MAGENTA);
-  spr.setTextSize(1);
-  spr.setCursor(8, 30);
-  spr.print("Pengaturan");
+  spr.setTextColor(COL_MAGENTA); spr.setTextSize(1);
+  spr.setCursor(8, 30); spr.print("Pengaturan");
 
   // Brightness
-  spr.fillRoundRect(8, 42, 304, 36, 8, COL_SURFACE);
-  spr.setTextColor(COL_TEXT);
-  spr.setCursor(18, 50);
-  spr.print("Kecerahan");
-  spr.fillRoundRect(18, 62, 220, 10, 4, COL_DIVIDER);
-  spr.fillRoundRect(19, 63, map(brightness,0,255,0,218), 8, 3, COL_ACCENT);
+  spr.fillRoundRect(8, 40, 304, 34, 8, COL_SURFACE);
+  spr.setTextColor(COL_TEXT); spr.setCursor(18, 48); spr.print("Kecerahan");
+  spr.fillRoundRect(18, 60, 220, 8, 4, COL_DIVIDER);
+  spr.fillRoundRect(19, 61, map(brightness,0,255,0,218), 6, 3, COL_ACCENT);
   char bb[6]; sprintf(bb, "%d%%", brightness*100/255);
-  spr.setTextColor(COL_SUBTEXT);
-  spr.setCursor(248, 62); spr.print(bb);
+  spr.setTextColor(COL_SUBTEXT); spr.setCursor(248, 60); spr.print(bb);
 
-  // WiFi SSID field
-  spr.fillRoundRect(8, 84, 304, 28, 6, settFocusField==0 ? COL_SURFACE2 : COL_SURFACE);
+  // SSID
+  spr.fillRoundRect(8, 80, 304, 28, 6, settFocus==0 ? COL_SURFACE2 : COL_SURFACE);
   spr.setTextColor(COL_SUBTEXT); spr.setCursor(18, 88); spr.print("SSID:");
-  spr.setTextColor(COL_TEXT);    spr.setCursor(60, 88);
-  spr.print(settWifiSSID.length()>0 ? settWifiSSID.c_str() : "(ketuk untuk isi)");
+  spr.setTextColor(COL_TEXT); spr.setCursor(64, 88);
+  String ssidDisp = settWifiSSID.length()>0 ? settWifiSSID : "(ketuk)";
+  if(ssidDisp.length()>22) ssidDisp = ssidDisp.substring(0,22)+"..";
+  spr.print(ssidDisp.c_str());
 
-  // WiFi Pass field
-  spr.fillRoundRect(8, 118, 304, 28, 6, settFocusField==1 ? COL_SURFACE2 : COL_SURFACE);
+  // Password
+  spr.fillRoundRect(8, 114, 268, 28, 6, settFocus==1 ? COL_SURFACE2 : COL_SURFACE);
   spr.setTextColor(COL_SUBTEXT); spr.setCursor(18, 122); spr.print("Pass:");
-  spr.setTextColor(COL_TEXT);    spr.setCursor(60, 122);
-  if (settWifiPass.length() > 0) {
-    if (settShowPass) spr.print(settWifiPass.c_str());
-    else { for(int i=0;i<(int)settWifiPass.length()&&i<20;i++) spr.print("*"); }
-  } else spr.print("(ketuk untuk isi)");
+  spr.setTextColor(COL_TEXT); spr.setCursor(64, 122);
+  if(settWifiPass.length()>0) {
+    String p = settShowPass ? settWifiPass : String("").operator+=(String(settWifiPass.length()>18?18:settWifiPass.length(), '*'));
+    if(!settShowPass) { for(int i=0;i<(int)settWifiPass.length()&&i<18;i++) spr.print("*"); }
+    else spr.print(settWifiPass.substring(0,18).c_str());
+  } else spr.print("(ketuk)");
 
-  // Show/hide pass
-  spr.fillRoundRect(280, 118, 28, 28, 4, COL_SURFACE2);
-  spr.setTextColor(COL_ACCENT); spr.setCursor(286, 126);
+  // Tombol show/hide pass
+  spr.fillRoundRect(280, 114, 32, 28, 4, COL_SURFACE2);
+  spr.setTextColor(COL_ACCENT); spr.setCursor(287, 122);
   spr.print(settShowPass ? "H" : "S");
 
   // Tombol Connect
-  spr.fillRoundRect(8, 152, 144, 28, 8, COL_ACCENT);
-  spr.setTextColor(COL_BG); spr.setCursor(30, 160); spr.print("Sambungkan");
+  spr.fillRoundRect(8, 148, 148, 28, 8, COL_ACCENT);
+  spr.setTextColor(COL_BG); spr.setCursor(28, 156); spr.print("Sambungkan");
 
-  // Status WiFi
+  // Status
   spr.setTextColor(wifiConnected ? COL_GREEN : COL_RED);
-  spr.setCursor(168, 160);
-  spr.print(wifiConnected ? WiFi.SSID().c_str() : "Tidak terhubung");
+  spr.setCursor(164, 156);
+  String ssidShow = wifiConnected ? String(WiFi.SSID()) : String("Tdk terhubung");
+  spr.print(ssidShow.substring(0,14).c_str());
 
   // Kalibrasi
-  spr.fillRoundRect(8, 186, 144, 28, 8, COL_SURFACE);
-  spr.setTextColor(COL_TEXT); spr.setCursor(18, 194); spr.print("Kalibrasi Ulang");
+  spr.fillRoundRect(8, 182, 148, 28, 8, COL_SURFACE);
+  spr.setTextColor(COL_TEXT); spr.setCursor(18, 190); spr.print("Kalibrasi Ulang");
 
-  // Keyboard (kalau aktif)
   if (kbVisible) drawKeyboard(spr);
   else drawBackButton(spr);
 }
 
-void settingsHandleTouch(int x, int y, LGFX_Sprite& spr) {
-  // Brightness bar
-  if (x>=18&&x<=238&&y>=42&&y<=78) {
+void settingsHandleTouch(int x, int y) {
+  // Kalau keyboard aktif, handle keyboard dulu
+  if (kbVisible) {
+    // Tombol close keyboard: tap di area non-keyboard (y < KB_Y_START-2)
+    if (y < KB_Y_START - 2) {
+      // Tap di luar keyboard → tutup keyboard
+      kbVisible = false; kbTarget = nullptr; settFocus = -1;
+    } else {
+      kbHandleTouch(x, y);
+    }
+    return;
+  }
+
+  // Brightness
+  if (x>=18&&x<=238&&y>=40&&y<=74) {
     brightness = constrain(map(x-18,0,220,0,255),10,255);
-    display.setBrightness(brightness);
-    return;
+    display.setBrightness(brightness); return;
   }
-  // SSID field
-  if (x>=8&&x<=312&&y>=84&&y<=112) {
-    settFocusField = 0;
-    kbTarget = &settWifiSSID;
-    kbVisible = true; kbMode = KB_LOWER;
-    return;
+  // SSID
+  if (x>=8&&x<=312&&y>=80&&y<=108) {
+    settFocus=0; kbTarget=&settWifiSSID; kbVisible=true; kbMode=KB_LOWER; return;
   }
-  // Pass field
-  if (x>=8&&x<=280&&y>=118&&y<=146) {
-    settFocusField = 1;
-    kbTarget = &settWifiPass;
-    kbVisible = true; kbMode = KB_LOWER;
-    return;
+  // Pass
+  if (x>=8&&x<=280&&y>=114&&y<=142) {
+    settFocus=1; kbTarget=&settWifiPass; kbVisible=true; kbMode=KB_LOWER; return;
   }
-  // Show/hide pass
-  if (x>=280&&y>=118&&y<=146) { settShowPass=!settShowPass; return; }
-
-  // Keyboard
-  if (kbVisible && y >= KB_Y-4) {
-    kbHandleTouch(x, y);
-    return;
-  }
-
-  // Tombol Connect
-  if (x>=8&&x<=152&&y>=152&&y<=180) {
-    kbVisible = false; kbTarget = nullptr; settFocusField = -1;
-    settWifiSSID.toCharArray(WIFI_SSID, 64);
-    settWifiPass.toCharArray(WIFI_PASSWORD, 64);
-    saveWifiCreds();
-    connectWifi();
-    return;
+  // Show/hide
+  if (x>=280&&y>=114&&y<=142) { settShowPass=!settShowPass; return; }
+  // Connect
+  if (x>=8&&x<=156&&y>=148&&y<=176) {
+    settWifiSSID.toCharArray(WIFI_SSID,64);
+    settWifiPass.toCharArray(WIFI_PASSWORD,64);
+    saveWifiCreds(); connectWifi(); return;
   }
   // Kalibrasi
-  if (x>=8&&x<=152&&y>=186&&y<=214) {
-    Preferences prefs;
-    prefs.begin("touch_cal",false);
-    prefs.putBool("done",false);
-    prefs.end();
-    ESP.restart();
+  if (x>=8&&x<=156&&y>=182&&y<=210) {
+    Preferences prefs; prefs.begin("touch_cal",false);
+    prefs.putBool("done",false); prefs.end(); ESP.restart();
   }
 }
 
@@ -731,64 +650,64 @@ String noteText = "";
 void drawNotepad(LGFX_Sprite& spr) {
   spr.fillSprite(COL_BG);
   drawStatusBar(spr);
-  spr.setTextColor(COL_YELLOW);
-  spr.setTextSize(1);
-  spr.setCursor(8, 30);
-  spr.print("Notepad");
+  spr.setTextColor(COL_YELLOW); spr.setTextSize(1);
+  spr.setCursor(8, 30); spr.print("Notepad");
+
+  // Tombol Hapus (pojok kanan, TIDAK BERTABRAKAN dengan area teks)
+  spr.fillRoundRect(240, 26, 76, 18, 4, COL_RED);
+  spr.setTextColor(COL_TEXT); spr.setCursor(256, 31); spr.print("Hapus");
 
   // Area teks
-  int areaH = kbVisible ? (KB_Y - 40) : 160;
-  spr.fillRoundRect(4, 38, 312, areaH, 6, COL_SURFACE);
-  spr.setTextColor(COL_TEXT);
-  spr.setTextSize(1);
-  spr.setCursor(10, 44);
+  int areaBottom = kbVisible ? KB_Y_START - 4 : 208;
+  spr.fillRoundRect(4, 46, 312, areaBottom - 46, 6, COL_SURFACE);
+  spr.setTextColor(COL_TEXT); spr.setTextSize(1);
   spr.setTextWrap(true);
-
-  // Tampilkan teks dengan cursor blink
-  String display_text = noteText + "|";
-  spr.print(display_text.c_str());
-
-  // Tombol Clear
-  spr.fillRoundRect(236, 30, 80, 20, 4, COL_RED);
-  spr.setTextColor(COL_TEXT);
-  spr.setCursor(252, 36);
-  spr.print("Hapus");
+  spr.setCursor(10, 52);
+  spr.print((noteText + "|").c_str());
 
   if (kbVisible) drawKeyboard(spr);
   else drawBackButton(spr);
 }
 
 void notepadHandleTouch(int x, int y) {
-  // Tombol hapus
-  if (x>=236&&x<=316&&y>=30&&y<=50) { noteText=""; return; }
-  // Area teks — buka keyboard
-  if (y>=38&&y<=200&&!kbVisible) {
-    kbTarget  = &noteText;
-    kbVisible = true;
-    kbMode    = KB_LOWER;
+  if (kbVisible) {
+    if (y < KB_Y_START - 2) {
+      // Tap di luar keyboard → tutup
+      kbVisible = false; kbTarget = nullptr;
+    } else {
+      kbHandleTouch(x, y);
+    }
     return;
   }
-  // Keyboard
-  if (kbVisible && y>=KB_Y-4) kbHandleTouch(x, y);
+  // Tombol Hapus
+  if (x>=240&&x<=316&&y>=26&&y<=44) { noteText=""; return; }
+  // Area teks → buka keyboard
+  if (y>=46&&y<=208) {
+    kbTarget=&noteText; kbVisible=true; kbMode=KB_LOWER;
+  }
 }
 
 // =============================================
-// APP: CANVAS (pakai sprite terpisah)
+// APP: CANVAS
 // =============================================
+bool     canvasInit = false;
 uint16_t drawColor  = COL_ACCENT;
 int      brushSize  = 3;
-bool     canvasInit = false;
 int      lastDrawX  = -1, lastDrawY = -1;
 
 uint16_t palette[] = {
-  COL_TEXT, COL_RED, COL_GREEN, COL_ACCENT2, COL_YELLOW,
-  COL_CYAN, COL_MAGENTA, COL_ACCENT, COL_BG
+  COL_TEXT, COL_RED, COL_GREEN, COL_ACCENT2,
+  COL_YELLOW, COL_CYAN, COL_MAGENTA, COL_ACCENT, COL_BG
 };
 #define PAL_COUNT 9
+#define CANVAS_AREA_Y  26
+#define CANVAS_AREA_H  190  // y 26~216
+#define TOOLBAR_Y      216
 
 void initCanvasApp() {
   if (!canvasInit) {
-    canvasApp.createSprite(320, 180); // Area gambar
+    canvasApp.setPsram(true);
+    canvasApp.createSprite(320, CANVAS_AREA_H);
     canvasApp.fillSprite(COL_BG);
     canvasInit = true;
   }
@@ -797,131 +716,111 @@ void initCanvasApp() {
 void drawCanvasScreen(LGFX_Sprite& spr) {
   spr.fillSprite(COL_BG);
   drawStatusBar(spr);
-  spr.setTextColor(COL_GREEN);
-  spr.setTextSize(1);
-  spr.setCursor(8, 30);
-  spr.print("Canvas");
 
-  // Area gambar dari canvasApp sprite
-  canvasApp.pushSprite(&spr, 0, 40);
+  // Label
+  spr.setTextColor(COL_GREEN); spr.setTextSize(1);
+  spr.setCursor(8, 14); spr.print("Canvas");
 
-  // Toolbar bawah
-  spr.fillRect(0, 220, 320, 20, COL_SURFACE);
+  // Gambar dari canvasApp sprite ke posisi y=CANVAS_AREA_Y
+  canvasApp.pushSprite(&spr, 0, CANVAS_AREA_Y);
+
+  // Toolbar (y=TOOLBAR_Y ~ 240)
+  spr.fillRect(0, TOOLBAR_Y, 320, 240 - TOOLBAR_Y, COL_SURFACE);
+  spr.drawFastHLine(0, TOOLBAR_Y, 320, COL_DIVIDER);
 
   // Palet warna
   for (int i = 0; i < PAL_COUNT; i++) {
     int px = 4 + i * 24;
-    spr.fillCircle(px+10, 229, 8, palette[i]);
+    spr.fillCircle(px + 10, TOOLBAR_Y + 12, 9, palette[i]);
     if (palette[i] == drawColor)
-      spr.drawCircle(px+10, 229, 10, COL_TEXT);
+      spr.drawCircle(px + 10, TOOLBAR_Y + 12, 11, COL_TEXT);
   }
 
   // Brush size
-  spr.fillRoundRect(226, 221, 40, 18, 4, COL_SURFACE2);
-  spr.setTextColor(COL_TEXT);
-  spr.setCursor(230, 226);
-  char bs[8]; sprintf(bs,"B:%d", brushSize);
-  spr.print(bs);
+  spr.fillRoundRect(224, TOOLBAR_Y + 2, 44, 20, 4, COL_SURFACE2);
+  spr.setTextColor(COL_TEXT); spr.setTextSize(1);
+  char bs[8]; sprintf(bs, "B:%d", brushSize);
+  spr.setCursor(228, TOOLBAR_Y + 8); spr.print(bs);
 
-  // Tombol Clear
-  spr.fillRoundRect(270, 221, 46, 18, 4, COL_RED);
+  // CLR
+  spr.fillRoundRect(272, TOOLBAR_Y + 2, 44, 20, 4, COL_RED);
   spr.setTextColor(COL_TEXT);
-  spr.setCursor(278, 226);
-  spr.print("CLR");
+  spr.setCursor(280, TOOLBAR_Y + 8); spr.print("CLR");
 
-  drawBackButton(spr);
+  // Back (kiri bawah, di bawah toolbar — di sini back selalu tampil karena tidak ada keyboard)
+  spr.fillRoundRect(BACK_X, BACK_Y, BACK_W, BACK_H, 6, COL_SURFACE);
+  spr.setTextColor(COL_ACCENT); spr.setTextSize(1);
+  spr.setCursor(BACK_X + 10, BACK_Y + 8); spr.print("< Back");
 }
 
 void canvasHandleTouch(int x, int y, bool isHeld) {
-  // Toolbar bawah
-  if (y >= 220) {
-    // Palet
-    for (int i = 0; i < PAL_COUNT; i++) {
-      int px = 4 + i * 24;
-      if (x>=px&&x<=px+20) { drawColor=palette[i]; lastDrawX=-1; return; }
-    }
-    // Brush size
-    if (x>=226&&x<=266) {
-      brushSize = (brushSize % 6) + 1;
-      lastDrawX=-1; return;
-    }
-    // Clear
-    if (x>=270) {
-      canvasApp.fillSprite(COL_BG);
-      lastDrawX=-1; return;
+  // Toolbar
+  if (y >= TOOLBAR_Y) {
+    if (!isHeld) { // hanya saat touch baru untuk toolbar
+      for (int i = 0; i < PAL_COUNT; i++) {
+        int px = 4 + i * 24;
+        if (x >= px && x <= px + 20) { drawColor = palette[i]; lastDrawX = -1; return; }
+      }
+      if (x >= 224 && x <= 268) { brushSize = (brushSize % 8) + 1; lastDrawX = -1; return; }
+      if (x >= 272) { canvasApp.fillSprite(COL_BG); lastDrawX = -1; return; }
     }
     return;
   }
 
-  // Area gambar (y: 40-220 → canvasApp y: 0-180)
-  if (y >= 40 && y <= 220) {
-    int cy = y - 40;
+  // Back button area (di canvas, back ada di pojok kiri bawah y>BACK_Y)
+  if (y >= BACK_Y && x >= BACK_X && x <= BACK_X + BACK_W) return; // dibiarkan loop utama handle
+
+  // Area gambar
+  if (y >= CANVAS_AREA_Y && y <= CANVAS_AREA_Y + CANVAS_AREA_H) {
+    int cy = y - CANVAS_AREA_Y;
     if (isHeld && lastDrawX >= 0) {
-      // Gambar garis dari titik terakhir (smooth)
       canvasApp.drawLine(lastDrawX, lastDrawY, x, cy, drawColor);
-      // Tebalkan
       for (int t = 1; t < brushSize; t++) {
-        canvasApp.drawLine(lastDrawX+t, lastDrawY, x+t, cy, drawColor);
         canvasApp.drawLine(lastDrawX, lastDrawY+t, x, cy+t, drawColor);
+        canvasApp.drawLine(lastDrawX+t, lastDrawY, x+t, cy, drawColor);
       }
     } else {
       canvasApp.fillCircle(x, cy, brushSize, drawColor);
     }
-    lastDrawX = x;
-    lastDrawY = cy;
+    lastDrawX = x; lastDrawY = cy;
   }
 }
 
 // =============================================
-// PUSH FRAME (Sprite → Display via DMA)
+// PUSH FRAME
 // =============================================
-void pushFrame() {
-  canvas.pushSprite(0, 0);
-}
+void pushFrame() { canvas.pushSprite(0, 0); }
 
 // =============================================
 // SETUP
 // =============================================
 void setup() {
   Serial.begin(115200);
-
   display.init();
   display.setRotation(1);
   display.setBrightness(brightness);
 
-  // Alokasi sprite utama di PSRAM
   canvas.setPsram(true);
   canvas.createSprite(320, 240);
 
   // Splash
   canvas.fillSprite(COL_BG);
-  canvas.setTextColor(COL_ACCENT);
-  canvas.setTextSize(3);
-  canvas.setCursor(50, 80);
-  canvas.print("ESP Phone");
-  canvas.setTextColor(COL_SUBTEXT);
-  canvas.setTextSize(1);
-  canvas.setCursor(96, 125);
-  canvas.print("Powered by ESP32-S3");
-  canvas.setCursor(108, 140);
-  canvas.print("LovyanGFX + Sprite");
-  pushFrame();
-  delay(1500);
+  canvas.setTextColor(COL_ACCENT); canvas.setTextSize(3);
+  canvas.setCursor(50, 80); canvas.print("ESP Phone");
+  canvas.setTextColor(COL_SUBTEXT); canvas.setTextSize(1);
+  canvas.setCursor(80, 125); canvas.print("Powered by ESP32-S3 + LGFX");
+  pushFrame(); delay(1400);
 
-  // Kalibrasi touch
   if (display.touch()) loadOrRunCalibration();
 
-  // Load WiFi creds & connect
   loadWifiCreds();
   settWifiSSID = String(WIFI_SSID);
   settWifiPass = String(WIFI_PASSWORD);
   connectWifi();
 
-  // Init canvas app
   canvasApp.setPsram(true);
   initCanvasApp();
 
-  // Gambar home
   drawHomeContent(canvas, 0);
   pushFrame();
 }
@@ -939,114 +838,91 @@ bool          needRedraw       = true;
 void loop() {
   lgfx::touch_point_t tp;
   bool touched = display.getTouch(&tp);
-  int tx = touched ? tp.x : 0;
-  int ty = touched ? tp.y : 0;
+  int tx = touched ? (int)tp.x : 0;
+  int ty = touched ? (int)tp.y : 0;
 
-  // ---- HOME: swipe scroll ----
+  // ============ HOME ============
   if (currentScreen == SCR_HOME) {
     if (touched) {
       if (!wasTouched) {
-        touchStartX = tx;
-        touchStartY = ty;
-        touchLastY  = ty;
-        isSwiping   = false;
+        touchStartX = tx; touchStartY = ty;
+        touchLastY = ty; isSwiping = false;
         swipeStartTime = millis();
       } else {
-        int dy = touchLastY - ty;
         int totalDy = abs(ty - touchStartY);
         if (totalDy > 12) isSwiping = true;
         if (isSwiping) {
+          int dy = touchLastY - ty;
           homeScrollVel = dy * 0.8f;
           homeScrollY  += dy;
-          float maxScroll = HOME_CONTENT_H - 200.0f;
-          homeScrollY = constrain(homeScrollY, 0, maxScroll);
+          homeScrollY   = constrain(homeScrollY, 0, (float)(HOME_CONTENT_H - 200));
           needRedraw = true;
         }
         touchLastY = ty;
       }
     } else if (wasTouched) {
-      // Tap (bukan swipe) - pakai koordinat START
       if (!isSwiping && millis() - swipeStartTime < 400) {
         Screen next = homeTouchCheck(touchStartX, touchStartY, homeScrollY);
         if (next != SCR_HOME) {
           currentScreen = next;
           kbVisible = false; kbTarget = nullptr;
-          needRedraw = true;
-          lastDrawX = -1;
+          needRedraw = true; lastDrawX = -1;
         }
       }
     } else {
-      // Inersia scroll
+      // inersia
       if (abs(homeScrollVel) > 0.5f) {
-        homeScrollY += homeScrollVel;
+        homeScrollY  += homeScrollVel;
         homeScrollVel *= 0.85f;
-        float maxScroll = HOME_CONTENT_H - 200.0f;
-        homeScrollY = constrain(homeScrollY, 0, maxScroll);
+        homeScrollY   = constrain(homeScrollY, 0, (float)(HOME_CONTENT_H - 200));
         needRedraw = true;
       }
     }
 
-    if (needRedraw) {
-      drawHomeContent(canvas, homeScrollY);
-      pushFrame();
-      needRedraw = false;
-    }
-
-    // Update status bar jam setiap menit
+    if (needRedraw) { drawHomeContent(canvas, homeScrollY); pushFrame(); needRedraw = false; }
     if (millis() - lastHomeUpdate > 60000) {
-      lastHomeUpdate = millis();
-      drawStatusBar(canvas);
-      pushFrame();
+      lastHomeUpdate = millis(); drawStatusBar(canvas); pushFrame();
     }
 
+  // ============ APP SCREENS ============
   } else {
-    // ---- APP SCREENS ----
-    bool doTouch = touched && !wasTouched && millis()-lastTouch > 180;
+    bool newTouch = touched && !wasTouched;
 
-    // Canvas: handle held touch juga
+    // Canvas: gambar saat touched (held)
     if (currentScreen == SCR_CANVAS && touched) {
+      // Back button di canvas
+      if (newTouch && ty >= BACK_Y && tx >= BACK_X && tx <= BACK_X + BACK_W) {
+        currentScreen = SCR_HOME; needRedraw = true;
+        goto endLoop;
+      }
       canvasHandleTouch(tx, ty, wasTouched);
       needRedraw = true;
     }
 
-    if (doTouch) {
+    if (newTouch && currentScreen != SCR_CANVAS) {
       lastTouch = millis();
 
-      // Back button (semua app kecuali canvas area gambar)
-      if (backButtonPressed(tx, ty) && !(currentScreen==SCR_CANVAS && ty<220)) {
+      // Back button — hanya kalau keyboard tidak aktif
+      if (backButtonPressed(tx, ty)) {
         kbVisible = false; kbTarget = nullptr;
-        currentScreen = SCR_HOME;
-        needRedraw = true;
+        currentScreen = SCR_HOME; needRedraw = true;
         goto endLoop;
       }
 
       switch (currentScreen) {
-        case SCR_CALC:
-          if (!backButtonPressed(tx,ty)) calcHandleTouch(tx, ty);
-          needRedraw = true;
-          break;
-        case SCR_SENSOR:
-          needRedraw = true;
-          break;
-        case SCR_SETTINGS:
-          settingsHandleTouch(tx, ty, canvas);
-          needRedraw = true;
-          break;
-        case SCR_NOTEPAD:
-          notepadHandleTouch(tx, ty);
-          needRedraw = true;
-          break;
+        case SCR_CALC:     calcHandleTouch(tx, ty);      needRedraw = true; break;
+        case SCR_SENSOR:                                  needRedraw = true; break;
+        case SCR_SETTINGS: settingsHandleTouch(tx, ty);  needRedraw = true; break;
+        case SCR_NOTEPAD:  notepadHandleTouch(tx, ty);   needRedraw = true; break;
         default: break;
       }
     }
 
     // Auto update
-    if (currentScreen == SCR_CLOCK && millis()-lastClockUpdate > 1000) {
-      lastClockUpdate = millis(); needRedraw = true;
-    }
-    if (currentScreen == SCR_SENSOR && millis()-lastSensorUpdate > 2000) {
-      lastSensorUpdate = millis(); needRedraw = true;
-    }
+    if (currentScreen == SCR_CLOCK && millis() - lastClockUpdate > 1000)
+      { lastClockUpdate = millis(); needRedraw = true; }
+    if (currentScreen == SCR_SENSOR && millis() - lastSensorUpdate > 2000)
+      { lastSensorUpdate = millis(); needRedraw = true; }
 
     if (needRedraw) {
       switch (currentScreen) {
@@ -1058,12 +934,14 @@ void loop() {
         case SCR_CANVAS:   drawCanvasScreen(canvas); break;
         default: break;
       }
-      pushFrame();
-      needRedraw = false;
+      pushFrame(); needRedraw = false;
     }
   }
 
   endLoop:
   wasTouched = touched;
-  delay(8); // ~120fps max
+  delay(8);
 }
+ENDOFFILE
+echo "Done: $(wc -l < /mnt/user-data/outputs/esp32_phone.ino) baris"
+Output
