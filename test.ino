@@ -36,7 +36,46 @@ const char* NOTE_FILE   = "/notepad.txt";
 const char* CANVAS_FILE = "/canvas.bin";
 
 // =============================================
-// LGFX DRIVER (panel + touch) — sama seperti versi sebelumnya
+// SISTEM TEMA — struct HARUS di sini, sebelum LGFX & T()
+// =============================================
+struct AppTheme {
+  const char* name;
+  lv_color_t bg, surface, surface2, accent, accent2, text, subtext, danger, good;
+  bool dark;
+};
+
+AppTheme themes[] = {
+  { "Dark",   lv_color_hex(0x10141c), lv_color_hex(0x1e2430), lv_color_hex(0x2c3444),
+              lv_color_hex(0xffcf40), lv_color_hex(0x08bfff), lv_color_hex(0xffffff),
+              lv_color_hex(0x8c94a8), lv_color_hex(0xff4444), lv_color_hex(0x35d07f), true },
+  { "AMOLED", lv_color_hex(0x000000), lv_color_hex(0x121212), lv_color_hex(0x1e1e1e),
+              lv_color_hex(0xffcf40), lv_color_hex(0x08bfff), lv_color_hex(0xffffff),
+              lv_color_hex(0x8c94a8), lv_color_hex(0xff4444), lv_color_hex(0x35d07f), true },
+  { "Light",  lv_color_hex(0xf2f3f7), lv_color_hex(0xffffff), lv_color_hex(0xe8eaf0),
+              lv_color_hex(0xff8a00), lv_color_hex(0x0077ff), lv_color_hex(0x1a1a1a),
+              lv_color_hex(0x6b7280), lv_color_hex(0xd7263d), lv_color_hex(0x1a9c5c), false },
+  { "Pastel", lv_color_hex(0xfff0f5), lv_color_hex(0xffffff), lv_color_hex(0xffe0ec),
+              lv_color_hex(0xff6f91), lv_color_hex(0x6fb8ff), lv_color_hex(0x3a2e35),
+              lv_color_hex(0x9c8a92), lv_color_hex(0xe0507a), lv_color_hex(0x4cbf8f), false },
+};
+#define THEME_COUNT 4
+int currentThemeIdx = 0;
+AppTheme& T() { return themes[currentThemeIdx]; }
+
+void saveThemePref() {
+  Preferences p; p.begin("ui", false);
+  p.putInt("theme", currentThemeIdx);
+  p.end();
+}
+void loadThemePref() {
+  Preferences p; p.begin("ui", true);
+  currentThemeIdx = p.getInt("theme", 0);
+  p.end();
+  if (currentThemeIdx < 0 || currentThemeIdx >= THEME_COUNT) currentThemeIdx = 0;
+}
+
+// =============================================
+// LGFX DRIVER (panel + touch)
 // =============================================
 class LGFX : public lgfx::LGFX_Device {
   lgfx::Panel_ILI9341 _panel_instance;
@@ -95,7 +134,7 @@ int brightness = 200;
 // =============================================
 // JEMBATAN LVGL <-> LovyanGFX
 // =============================================
-#define LV_BUF_LINES 40   // buffer gambar 320 x 40 baris, cukup & hemat RAM
+#define LV_BUF_LINES 40
 static lv_disp_draw_buf_t draw_buf;
 static lv_color_t* lvBuf1;
 static lv_disp_drv_t disp_drv;
@@ -124,46 +163,7 @@ void lvglTouchReadCb(lv_indev_drv_t* drv, lv_indev_data_t* data) {
 }
 
 // =============================================
-// SISTEM TEMA — 4 preset, disimpan di Preferences
-// =============================================
-struct AppTheme {
-  const char* name;
-  lv_color_t bg, surface, surface2, accent, accent2, text, subtext, danger, good;
-  bool dark;
-};
-
-AppTheme themes[] = {
-  { "Dark",   lv_color_hex(0x10141c), lv_color_hex(0x1e2430), lv_color_hex(0x2c3444),
-              lv_color_hex(0xffcf40), lv_color_hex(0x08bfff), lv_color_hex(0xffffff),
-              lv_color_hex(0x8c94a8), lv_color_hex(0xff4444), lv_color_hex(0x35d07f), true },
-  { "AMOLED", lv_color_hex(0x000000), lv_color_hex(0x121212), lv_color_hex(0x1e1e1e),
-              lv_color_hex(0xffcf40), lv_color_hex(0x08bfff), lv_color_hex(0xffffff),
-              lv_color_hex(0x8c94a8), lv_color_hex(0xff4444), lv_color_hex(0x35d07f), true },
-  { "Light",  lv_color_hex(0xf2f3f7), lv_color_hex(0xffffff), lv_color_hex(0xe8eaf0),
-              lv_color_hex(0xff8a00), lv_color_hex(0x0077ff), lv_color_hex(0x1a1a1a),
-              lv_color_hex(0x6b7280), lv_color_hex(0xd7263d), lv_color_hex(0x1a9c5c), false },
-  { "Pastel", lv_color_hex(0xfff0f5), lv_color_hex(0xffffff), lv_color_hex(0xffe0ec),
-              lv_color_hex(0xff6f91), lv_color_hex(0x6fb8ff), lv_color_hex(0x3a2e35),
-              lv_color_hex(0x9c8a92), lv_color_hex(0xe0507a), lv_color_hex(0x4cbf8f), false },
-};
-#define THEME_COUNT 4
-int currentThemeIdx = 0;
-AppTheme& T() { return themes[currentThemeIdx]; }
-
-void saveThemePref() {
-  Preferences p; p.begin("ui", false);
-  p.putInt("theme", currentThemeIdx);
-  p.end();
-}
-void loadThemePref() {
-  Preferences p; p.begin("ui", true);
-  currentThemeIdx = p.getInt("theme", 0);
-  p.end();
-  if (currentThemeIdx < 0 || currentThemeIdx >= THEME_COUNT) currentThemeIdx = 0;
-}
-
-// =============================================
-// TOUCH CALIBRATION (langsung lewat LGFX, sebelum LVGL aktif)
+// TOUCH CALIBRATION
 // =============================================
 void loadOrRunCalibration() {
   Preferences prefs;
@@ -183,13 +183,13 @@ void loadOrRunCalibration() {
     display.calibrateTouch(calData, TFT_WHITE, TFT_BLACK, 15);
     prefs.putBytes("data", calData, sizeof(calData));
     prefs.putBool("done", true);
-
-    // ✅ FIX: Bersihkan layar setelah kalibrasi selesai
+    // Bersihkan sisa gambar kalibrasi sebelum LVGL ambil alih
     display.fillScreen(TFT_BLACK);
-    delay(100); // beri waktu layar settle
+    delay(100);
   }
   prefs.end();
 }
+
 // =============================================
 // WIFI & NTP
 // =============================================
@@ -219,11 +219,11 @@ void saveWifiCreds() {
 }
 
 // =============================================
-// SD CARD: init + storage notepad & canvas
+// SD CARD
 // =============================================
 void initSD() {
   SD_MMC.setPins(SD_PIN_CLK, SD_PIN_CMD, SD_PIN_D0);
-  sdReady = SD_MMC.begin("/sdcard", true); // 1-bit mode
+  sdReady = SD_MMC.begin("/sdcard", true);
   if (!sdReady) Serial.println("SD Card: gagal mount / tidak terpasang");
   else Serial.printf("SD Card: OK, %llu MB\n", SD_MMC.cardSize() / (1024 * 1024));
 }
@@ -242,7 +242,7 @@ void saveNoteToSD() {
 
 #define CANVAS_W 320
 #define CANVAS_H 190
-static lv_color_t* canvasBuf = nullptr; // buffer persisten (PSRAM), bertahan lintas rebuild tema
+static lv_color_t* canvasBuf = nullptr;
 #define CANVAS_BUF_BYTES ((uint32_t)CANVAS_W * CANVAS_H * sizeof(lv_color_t))
 
 void loadCanvasFromSD() {
@@ -258,7 +258,7 @@ void saveCanvasToSD() {
 }
 
 // =============================================
-// STYLE GLOBAL (dibangun ulang tiap ganti tema)
+// STYLE GLOBAL
 // =============================================
 static lv_style_t style_card;
 static lv_style_t style_dock;
@@ -386,7 +386,7 @@ void showToast(const char* msg, bool isError = false) {
 }
 
 // =============================================
-// STATUS BAR (di lv_layer_top -> otomatis nempel di semua layar)
+// STATUS BAR
 // =============================================
 void buildStatusBar() {
   lv_obj_clean(lv_layer_top());
@@ -463,7 +463,6 @@ void openApp(lv_obj_t* scr) {
   lv_scr_load_anim(scr, LV_SCR_LOAD_ANIM_MOVE_LEFT, 180, 0, false);
 }
 
-// Tombol back generik dipasang di tiap app (kecuali Canvas, dia punya sendiri di toolbar)
 lv_obj_t* makeBackBtn(lv_obj_t* parent) {
   lv_obj_t* btn = lv_btn_create(parent);
   lv_obj_add_style(btn, &style_btn_neutral, 0);
@@ -514,7 +513,7 @@ void buildClockScreen() {
 }
 
 // =============================================
-// APP: KALKULATOR (lv_btnmatrix)
+// APP: KALKULATOR
 // =============================================
 static const char* calc_map[] = {
   "C", "+/-", "%", "/", "\n",
@@ -679,7 +678,6 @@ void buildSettingsScreen() {
   lv_obj_clear_flag(scrSettings, LV_OBJ_FLAG_SCROLLABLE);
   makeTitle(scrSettings, "Pengaturan", T().good);
 
-  // Kecerahan
   lv_obj_t* cardB = lv_obj_create(scrSettings);
   lv_obj_add_style(cardB, &style_card, 0);
   lv_obj_set_size(cardB, 304, 40);
@@ -703,7 +701,6 @@ void buildSettingsScreen() {
   lv_obj_set_style_text_color(lblBrightVal, T().subtext, 0);
   lv_obj_align(lblBrightVal, LV_ALIGN_BOTTOM_RIGHT, -2, -2);
 
-  // Tema
   lv_obj_t* cardT = lv_obj_create(scrSettings);
   lv_obj_add_style(cardT, &style_card, 0);
   lv_obj_set_size(cardT, 304, 36);
@@ -720,7 +717,6 @@ void buildSettingsScreen() {
   lv_obj_align(ddTheme, LV_ALIGN_RIGHT_MID, -2, 0);
   lv_obj_add_event_cb(ddTheme, themeDropdownCb, LV_EVENT_VALUE_CHANGED, nullptr);
 
-  // SSID
   taSSID = lv_textarea_create(scrSettings);
   lv_textarea_set_one_line(taSSID, true);
   lv_textarea_set_placeholder_text(taSSID, "SSID WiFi");
@@ -729,7 +725,6 @@ void buildSettingsScreen() {
   lv_obj_align(taSSID, LV_ALIGN_TOP_MID, 0, 126);
   lv_obj_add_event_cb(taSSID, taFocusCb, LV_EVENT_FOCUSED, nullptr);
 
-  // Password
   taPass = lv_textarea_create(scrSettings);
   lv_textarea_set_one_line(taPass, true);
   lv_textarea_set_password_mode(taPass, true);
@@ -739,7 +734,6 @@ void buildSettingsScreen() {
   lv_obj_align(taPass, LV_ALIGN_TOP_MID, 0, 162);
   lv_obj_add_event_cb(taPass, taFocusCb, LV_EVENT_FOCUSED, nullptr);
 
-  // Tombol connect + status
   lv_obj_t* btnConn = lv_btn_create(scrSettings);
   lv_obj_add_style(btnConn, &style_btn_accent, 0);
   lv_obj_set_size(btnConn, 120, 28);
@@ -754,7 +748,6 @@ void buildSettingsScreen() {
   lv_obj_set_style_text_color(lblWifiStat, wifiConnected ? T().good : T().danger, 0);
   lv_obj_align(lblWifiStat, LV_ALIGN_TOP_LEFT, 136, 206);
 
-  // Kalibrasi ulang
   lv_obj_t* btnCal = lv_btn_create(scrSettings);
   lv_obj_add_style(btnCal, &style_btn_neutral, 0);
   lv_obj_set_size(btnCal, 150, 26);
@@ -767,7 +760,6 @@ void buildSettingsScreen() {
 
   makeBackBtn(scrSettings);
 
-  // Keyboard (hidden by default)
   kbSettings = lv_keyboard_create(scrSettings);
   lv_obj_add_flag(kbSettings, LV_OBJ_FLAG_HIDDEN);
   lv_obj_add_event_cb(kbSettings, kbSettingsCb, LV_EVENT_ALL, nullptr);
@@ -825,7 +817,7 @@ void buildNotepadScreen() {
 }
 
 // =============================================
-// APP: CANVAS (lv_canvas)
+// APP: CANVAS
 // =============================================
 lv_color_t canvasPalette[] = {
   lv_color_white(), lv_color_hex(0xff4444), lv_color_hex(0x35d07f), lv_color_hex(0x08bfff),
@@ -890,7 +882,6 @@ void buildCanvasScreen() {
   lv_obj_add_event_cb(canvasWidget, canvasReleaseCb, LV_EVENT_RELEASED, nullptr);
   lv_obj_add_event_cb(canvasWidget, canvasReleaseCb, LV_EVENT_PRESS_LOST, nullptr);
 
-  // Toolbar bawah
   lv_obj_t* toolbar = lv_obj_create(scrCanvas);
   lv_obj_add_style(toolbar, &style_dock, 0);
   lv_obj_set_size(toolbar, 320, 24);
@@ -913,8 +904,8 @@ void buildCanvasScreen() {
   }
 
   lblBrush = lv_label_create(toolbar);
-  char bb[8]; sprintf(bb, "B:%d", brushSize);
-  lv_label_set_text(lblBrush, bb);
+  char bbb[8]; sprintf(bbb, "B:%d", brushSize);
+  lv_label_set_text(lblBrush, bbb);
   lv_obj_set_style_text_color(lblBrush, T().text, 0);
   lv_obj_align(lblBrush, LV_ALIGN_RIGHT_MID, -70, 0);
   lv_obj_add_flag(lblBrush, LV_OBJ_FLAG_CLICKABLE);
@@ -929,7 +920,6 @@ void buildCanvasScreen() {
   lv_obj_center(lblClr);
   lv_obj_add_event_cb(btnClr, canvasClearCb, LV_EVENT_CLICKED, nullptr);
 
-  // Back untuk canvas (posisi khusus, di atas toolbar)
   lv_obj_t* btnBack = lv_btn_create(scrCanvas);
   lv_obj_add_style(btnBack, &style_btn_neutral, 0);
   lv_obj_set_size(btnBack, 50, 22);
@@ -944,7 +934,7 @@ void buildCanvasScreen() {
 }
 
 // =============================================
-// HOME SCREEN — clock widget + grid app + dock
+// HOME SCREEN
 // =============================================
 struct AppDef { const char* name; char sym; lv_color_t color; };
 AppDef appDefs[6] = {
@@ -959,7 +949,7 @@ AppDef appDefs[6] = {
 void homeAppClickCb(lv_event_t* e) {
   int idx = (int)(intptr_t)lv_event_get_user_data(e);
   lv_obj_t* targets[6] = { scrClock, scrCalc, scrSensor, scrSettings, scrNotepad, scrCanvas };
-  if (idx == 5) loadCanvasFromSD(); // pastikan canvas termuat sebelum dibuka (aman dipanggil berkali-kali)
+  if (idx == 5) loadCanvasFromSD();
   openApp(targets[idx]);
 }
 
@@ -1005,14 +995,12 @@ void buildHomeScreen() {
   lv_obj_add_style(scrHome, &style_scr_bg, 0);
   lv_obj_clear_flag(scrHome, LV_OBJ_FLAG_SCROLLABLE);
 
-  // Widget jam digital besar di atas
   lblHomeClock = lv_label_create(scrHome);
   lv_obj_set_style_text_font(lblHomeClock, &lv_font_montserrat_28, 0);
   lv_obj_set_style_text_color(lblHomeClock, T().text, 0);
   lv_label_set_text(lblHomeClock, "--:--");
   lv_obj_align(lblHomeClock, LV_ALIGN_TOP_MID, 0, 28);
 
-  // Grid app (3 kolom x 2 baris)
   lv_obj_t* grid = lv_obj_create(scrHome);
   lv_obj_remove_style_all(grid);
   lv_obj_set_size(grid, 312, 108);
@@ -1022,7 +1010,6 @@ void buildHomeScreen() {
   lv_obj_clear_flag(grid, LV_OBJ_FLAG_SCROLLABLE);
   for (int i = 0; i < 6; i++) makeAppIcon(grid, i, 96, 50);
 
-  // Dock bawah (favorit tetap): Jam, Notepad, Canvas, Settings
   lv_obj_t* dock = lv_obj_create(scrHome);
   lv_obj_add_style(dock, &style_dock, 0);
   lv_obj_set_size(dock, 300, 40);
@@ -1049,13 +1036,12 @@ void buildHomeScreen() {
 }
 
 // =============================================
-// REBUILD SEMUA LAYAR (dipanggil saat ganti tema)
+// REBUILD SEMUA LAYAR
 // =============================================
 void rebuildUI() {
   lv_obj_t* oldHome=scrHome, *oldClock=scrClock, *oldCalc=scrCalc, *oldSensor=scrSensor;
   lv_obj_t* oldSettings=scrSettings, *oldNotepad=scrNotepad, *oldCanvas=scrCanvas;
 
-  // Simpan state teks notepad sebelum layar lama dihapus
   if (taNotepad) noteText = String(lv_textarea_get_text(taNotepad));
 
   buildStyles();
@@ -1085,7 +1071,7 @@ void rebuildUI() {
 void setup() {
   Serial.begin(115200);
   display.init();
-  display.setRotation(1);      // ✅ Rotasi dulu sebelum kalibrasi
+  display.setRotation(1);
   display.setBrightness(brightness);
 
   if (display.touch()) loadOrRunCalibration();
@@ -1096,14 +1082,12 @@ void setup() {
   loadNoteFromSD();
   connectWifi();
 
-  // Buffer canvas persisten di PSRAM
   canvasBuf = (lv_color_t*)heap_caps_malloc(CANVAS_BUF_BYTES, MALLOC_CAP_SPIRAM);
   if (canvasBuf) {
     for (uint32_t i = 0; i < (uint32_t)CANVAS_W*CANVAS_H; i++) canvasBuf[i] = T().bg;
     loadCanvasFromSD();
   }
 
-  // Init LVGL
   lv_init();
   lvBuf1 = (lv_color_t*)heap_caps_malloc(320 * LV_BUF_LINES * sizeof(lv_color_t), MALLOC_CAP_SPIRAM);
   lv_disp_draw_buf_init(&draw_buf, lvBuf1, NULL, 320 * LV_BUF_LINES);
@@ -1131,9 +1115,12 @@ void setup() {
   buildStatusBar();
   lv_scr_load(scrHome);
 
-  // ✅ Paksa LVGL render frame pertama segera
+  // Paksa render frame pertama sebelum masuk loop
   lv_timer_handler();
   lv_timer_handler();
+
+  lv_timer_create(statusTimerCb, 1000, nullptr);
+  lv_timer_create(sensorTimerCb, 2000, nullptr);
 }
 
 // =============================================
