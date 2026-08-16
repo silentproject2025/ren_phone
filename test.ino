@@ -2,11 +2,14 @@
 // ren_phone v4 — "OS" rewrite (FIXED GEMINI AI HTTP ERROR -1)
 // ESP32-S3, ILI9341, XPT2046 touch, SD via SDIO
 //
-// PERBAIKAN BUG HTTP ERROR -1:
-//  1. Mengubah client.setTimeout(15) menjadi client.setTimeout(15000) 
-//     karena setTimeout di Arduino dihitung dalam MILIDETIK (ms).
-//  2. Menambah validasi WiFi.status() real-time sebelum request HTTP.
-//  3. Memperbaiki JSON parser balasan Gemini agar aman dari tanda kutip (\").
+// PERBAIKAN BUG HTTP ERROR -1 (v2):
+//  1. client.setTimeout() & http.setTimeout() dalam MILIDETIK (ms).
+//  2. Validasi WiFi.status() + DNS resolve sebelum request HTTP.
+//  3. Parser file gemini_key.txt dibaca UTUH lalu dinormalisasi
+//     (buang BOM, CRLF/CR, tanda kutip, spasi) agar API Key selalu bersih.
+//  4. Retry sekali otomatis jika request pertama gagal koneksi.
+//  5. Stack task dinaikkan ke 32KB + pinned ke core 1 utk stabilitas TLS.
+//  6. Logging Serial supaya mudah didiagnosa.
 // =================================================================
 #include <LovyanGFX.hpp>
 #include <Preferences.h>
@@ -168,46 +171,94 @@ void saveNote(){
   if(f){f.print(noteText);f.close();}
 }
 
+// ---------- FIXED: Sanitasi 1 baris key (buang BOM, CR, kutip, spasi) ----------
+String sanitizeKeyLine(String line) {
+  // Buang BOM UTF-8 kalau ada di awal baris
+  if (line.length() >= 3 &&
+      (uint8_t)line[0]==0xEF && (uint8_t)line[1]==0xBB && (uint8_t)line[2]==0xBF) {
+    line = line.substring(3);
+  }
+  line.trim(); // buang spasi, \r, \n, tab di ujung2
+  // Buang tanda kutip pembungkus kalau user iseng kasih tanda kutip
+  if (line.length()>=2 &&
+      ((line.startsWith("\"") && line.endsWith("\"")) ||
+       (line.startsWith("'")  && line.endsWith("'")))) {
+    line = line.substring(1, line.length()-1);
+    line.trim();
+  }
+  return line;
+}
+
+// ---------- FIXED: loadGeminiKey() baca file UTUH lalu parse per baris ----------
 void loadGeminiKey(){
+  geminiApiKey = "";
   if(!sdReady) return;
+
   if(!SD_MMC.exists(GEMINI_KEY_FILE)){
     File f = SD_MMC.open(GEMINI_KEY_FILE, FILE_WRITE);
     if(f){
-      f.println("# =============================================");
-      f.println("# GEMINI API KEY CONFIGURATION (ESP32-S3)");
-      f.println("# Dapatkan API key gratis dari Google AI Studio:");
-      f.println("# https://aistudio.google.com/app/apikey");
-      f.println("#");
-      f.println("# Tempel API Key kamu di baris tanpa tanda '#':");
-      f.println("# =============================================");
-      f.println("YOUR_GEMINI_API_KEY_HERE");
+      f.print("# =============================================\r\n");
+      f.print("# GEMINI API KEY CONFIGURATION (ESP32-S3)\r\n");
+      f.print("# Dapatkan API key gratis dari Google AI Studio:\r\n");
+      f.print("# https://aistudio.google.com/app/apikey\r\n");
+      f.print("#\r\n");
+      f.print("# Tempel API Key kamu di baris tanpa tanda '#':\r\n");
+      f.print("# =============================================\r\n");
+      f.print("YOUR_GEMINI_API_KEY_HERE\r\n");
       f.close();
     }
   }
+
   File f = SD_MMC.open(GEMINI_KEY_FILE, FILE_READ);
-  if(f){
-    geminiApiKey = "";
-    while(f.available()){
-      String line = f.readStringUntil('\n');
-      line.trim();
-      if(line.length() > 0 && !line.startsWith("#")){
-        geminiApiKey = line;
-        break;
-      }
+  if(!f){
+    Serial.println("[Gemini] Gagal membuka file key!");
+    return;
+  }
+
+  // Baca SELURUH isi file jadi satu string (paling aman utk semua jenis newline/BOM)
+  String raw;
+  raw.reserve(f.size()+1);
+  while(f.available()) raw += (char)f.read();
+  f.close();
+
+  // Normalisasi semua jenis newline jadi '\n'
+  raw.replace("\r\n", "\n");
+  raw.replace("\r", "\n");
+
+  int start = 0;
+  while (start < (int)raw.length()) {
+    int nl = raw.indexOf('\n', start);
+    String line = (nl == -1) ? raw.substring(start) : raw.substring(start, nl);
+    line = sanitizeKeyLine(line);
+    if (line.length() > 0 && line.charAt(0) != '#') {
+      geminiApiKey = line;
+      break;
     }
-    f.close();
+    if (nl == -1) break;
+    start = nl + 1;
+  }
+
+  Serial.printf("[Gemini] Key loaded, length=%d\n", geminiApiKey.length());
+  if (geminiApiKey.length() > 8) {
+    Serial.printf("[Gemini] Preview: %s...%s\n",
+                  geminiApiKey.substring(0,4).c_str(),
+                  geminiApiKey.substring(geminiApiKey.length()-4).c_str());
   }
 }
+
+// ---------- FIXED: saveGeminiKey() sanitasi dulu sebelum ditulis ----------
 void saveGeminiKey(){
   if(!sdReady) return;
+  geminiApiKey = sanitizeKeyLine(geminiApiKey);
   File f = SD_MMC.open(GEMINI_KEY_FILE, FILE_WRITE);
   if(f){
-    f.println("# =============================================");
-    f.println("# GEMINI API KEY CONFIGURATION (ESP32-S3)");
-    f.println("# Dapatkan API key gratis dari Google AI Studio:");
-    f.println("# https://aistudio.google.com/app/apikey");
-    f.println("# =============================================");
-    f.println(geminiApiKey);
+    f.print("# =============================================\r\n");
+    f.print("# GEMINI API KEY CONFIGURATION (ESP32-S3)\r\n");
+    f.print("# Dapatkan API key gratis dari Google AI Studio:\r\n");
+    f.print("# https://aistudio.google.com/app/apikey\r\n");
+    f.print("# =============================================\r\n");
+    f.print(geminiApiKey);
+    f.print("\r\n");
     f.close();
   }
 }
@@ -471,11 +522,90 @@ void toggleAirplaneMode(){
 }
 
 // =============================================
-// GEMINI AI HTTP CLIENT & FREERTOS TASK (FIXED STACK & TIMEOUT)
+// GEMINI AI HTTP CLIENT & FREERTOS TASK (FIXED HTTP ERROR -1)
 // =============================================
 String aiPrompt = "";
 String aiResponse = "";
 bool aiLoading = false;
+
+// ---------- FIXED: fungsi terpisah utk 1x percobaan request, bisa di-retry ----------
+bool doGeminiHttpRequest(const String& promptText, String& outResponse) {
+  WiFiClientSecure client;
+  client.setInsecure();
+  client.setTimeout(15000); // ms
+
+  HTTPClient http;
+  http.setTimeout(15000);
+  http.setConnectTimeout(15000);
+  http.useHTTP10(true); // bantu stabilitas parsing response besar di ESP32
+
+  String url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=" + geminiApiKey;
+
+  Serial.printf("[Gemini] Free heap sebelum request: %u\n", ESP.getFreeHeap());
+
+  if (!http.begin(client, url)) {
+    outResponse = "Gagal inisialisasi HTTPClient (begin() gagal).";
+    return false;
+  }
+
+  http.addHeader("Content-Type", "application/json");
+  http.addHeader("Connection", "close");
+
+  // Format & Escape JSON Payload
+  String escapedPrompt = promptText;
+  escapedPrompt.replace("\\", "\\\\");
+  escapedPrompt.replace("\"", "\\\"");
+  escapedPrompt.replace("\r", "");
+  escapedPrompt.replace("\n", "\\n");
+
+  String jsonPayload = "{\"contents\":[{\"parts\":[{\"text\":\"" + escapedPrompt + "\"}]}]}";
+
+  int httpCode = http.POST(jsonPayload);
+  Serial.printf("[Gemini] httpCode=%d err=%s\n", httpCode, http.errorToString(httpCode).c_str());
+
+  bool ok = false;
+  if (httpCode > 0) {
+    if (httpCode == HTTP_CODE_OK) {
+      String respStr = http.getString();
+      int textIdx = respStr.indexOf("\"text\":");
+      if (textIdx >= 0) {
+        int start = respStr.indexOf("\"", textIdx + 7);
+        if (start >= 0) {
+          start += 1;
+          int end = start;
+          while (end < (int)respStr.length()) {
+            end = respStr.indexOf("\"", end);
+            if (end < 0) break;
+            if (respStr.charAt(end - 1) != '\\') break;
+            end++;
+          }
+          if (end > start) {
+            String rawText = respStr.substring(start, end);
+            rawText.replace("\\n", "\n");
+            rawText.replace("\\\"", "\"");
+            rawText.replace("\\\\", "\\");
+            outResponse = rawText;
+          } else {
+            outResponse = respStr;
+          }
+        } else {
+          outResponse = respStr;
+        }
+      } else {
+        outResponse = "Response: " + respStr.substring(0, 150);
+      }
+      ok = true;
+    } else {
+      String errBody = http.getString();
+      outResponse = "HTTP Error " + String(httpCode) + ": " + errBody.substring(0, 150);
+    }
+  } else {
+    outResponse = "HTTP Connection Error: " + http.errorToString(httpCode) + " (" + String(httpCode) + ")";
+  }
+
+  http.end();
+  return ok;
+}
 
 void sendGeminiRequest(String promptText) {
   if (WiFi.status() != WL_CONNECTED) {
@@ -485,7 +615,7 @@ void sendGeminiRequest(String promptText) {
     needRedrawNow();
     return;
   }
-  
+
   geminiApiKey.trim();
   if (geminiApiKey.length() == 0 || geminiApiKey == "YOUR_GEMINI_API_KEY_HERE") {
     aiResponse = "Error: Isi API Key di /gemini_key.txt pada SD Card!";
@@ -494,71 +624,24 @@ void sendGeminiRequest(String promptText) {
     return;
   }
 
-  WiFiClientSecure client;
-  client.setInsecure();
-  client.setTimeout(15000); // FIX: 15000 ms (15 detik), bukan 15 ms!
-
-  HTTPClient http;
-  String url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=" + geminiApiKey;
-
-  http.setTimeout(15000);
-  http.setConnectTimeout(15000);
-
-  if (http.begin(client, url)) {
-    http.addHeader("Content-Type", "application/json");
-
-    // Format & Escape JSON Payload
-    String escapedPrompt = promptText;
-    escapedPrompt.replace("\\", "\\\\");
-    escapedPrompt.replace("\"", "\\\"");
-    escapedPrompt.replace("\r", "");
-    escapedPrompt.replace("\n", "\\n");
-
-    String jsonPayload = "{\"contents\":[{\"parts\":[{\"text\":\"" + escapedPrompt + "\"}]}]}";
-
-    int httpCode = http.POST(jsonPayload);
-    if (httpCode > 0) {
-      if (httpCode == HTTP_CODE_OK || httpCode == 200) {
-        String respStr = http.getString();
-        int textIdx = respStr.indexOf("\"text\":");
-        if (textIdx >= 0) {
-          int start = respStr.indexOf("\"", textIdx + 7);
-          if (start >= 0) {
-            start += 1;
-            int end = start;
-            while (end < (int)respStr.length()) {
-              end = respStr.indexOf("\"", end);
-              if (end < 0) break;
-              if (respStr.charAt(end - 1) != '\\') break;
-              end++;
-            }
-            if (end > start) {
-              String rawText = respStr.substring(start, end);
-              rawText.replace("\\n", "\n");
-              rawText.replace("\\\"", "\"");
-              rawText.replace("\\\\", "\\");
-              aiResponse = rawText;
-            } else {
-              aiResponse = respStr;
-            }
-          } else {
-            aiResponse = respStr;
-          }
-        } else {
-          aiResponse = "Response: " + respStr.substring(0, 150);
-        }
-      } else {
-        String errBody = http.getString();
-        aiResponse = "HTTP Error " + String(httpCode) + ": " + errBody.substring(0, 100);
-      }
-    } else {
-      aiResponse = "HTTP Connection Error: " + http.errorToString(httpCode) + " (" + String(httpCode) + ")";
-    }
-    http.end();
-  } else {
-    aiResponse = "Gagal inisialisasi koneksi HTTP.";
+  // ---------- FIXED: Cek DNS dulu supaya error lebih jelas jika jaringan bermasalah ----------
+  IPAddress testIp;
+  if (!WiFi.hostByName("generativelanguage.googleapis.com", testIp)) {
+    aiResponse = "Error: DNS gagal resolve googleapis.com. Cek jaringan WiFi/DNS.";
+    aiLoading = false;
+    needRedrawNow();
+    return;
   }
 
+  String resp;
+  bool ok = doGeminiHttpRequest(promptText, resp);
+  if (!ok) {
+    Serial.println("[Gemini] Percobaan pertama gagal, retry sekali...");
+    delay(500);
+    ok = doGeminiHttpRequest(promptText, resp); // retry sekali otomatis
+  }
+
+  aiResponse = resp;
   aiLoading = false;
   needRedrawNow();
 }
@@ -573,8 +656,8 @@ void triggerGeminiAI() {
   aiLoading = true;
   aiResponse = "Menghubungi Gemini AI...";
   needRedrawNow();
-  // Stack size 16KB (16384 byte) agar SSL Handshake stabil
-  xTaskCreate(geminiTaskFunc, "geminiTask", 16384, NULL, 1, NULL);
+  // Stack size 32KB (32768 byte) + pinned ke core 1 agar SSL Handshake stabil
+  xTaskCreatePinnedToCore(geminiTaskFunc, "geminiTask", 32768, NULL, 1, NULL, 1);
 }
 
 // =============================================
