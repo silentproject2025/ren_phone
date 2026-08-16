@@ -25,6 +25,7 @@ jobs:
           arduino-cli core update-index
           arduino-cli core install esp32:esp32
           arduino-cli lib install "LovyanGFX"
+          arduino-cli lib install "LovyanGFX" "JPEGDEC"
 
       - name: Compile Sketch
         run: |
