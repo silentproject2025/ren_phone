@@ -561,10 +561,13 @@ void calcHandleTouch(int x, int y) {
 // =============================================
 // APP: SENSOR
 // =============================================
-#ifdef __cplusplus
-extern "C" { uint8_t temprature_sens_read(); }
-#endif
-float readInternalTemp() { return (temprature_sens_read()-32)/1.8f; }
+float readInternalTemp() {
+  #if defined(CONFIG_IDF_TARGET_ESP32S3)
+    return temperatureRead(); // Built-in di ESP32 core v3.x
+  #else
+    return temperatureRead();
+  #endif
+}
 
 void drawSensor(LGFX_Sprite& spr) {
   spr.fillSprite(COL_BG);
