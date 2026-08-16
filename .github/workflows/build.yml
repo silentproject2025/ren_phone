@@ -28,12 +28,11 @@ jobs:
           arduino-cli lib install "LovyanGFX" "JPEGDEC"
 
       - name: Compile Sketch
-  run: |
-    mkdir -p build_sketch
-    cp test.ino build_sketch/
-    cp MjpegClass.h build_sketch/
-    mv build_sketch/test.ino build_sketch/build_sketch.ino
-    arduino-cli compile --fqbn esp32:esp32:esp32s3 build_sketch --output-dir build
+        run: |
+          mkdir -p build_sketch
+          cp test.ino build_sketch/
+          mv build_sketch/test.ino build_sketch/build_sketch.ino
+          arduino-cli compile --fqbn esp32:esp32:esp32s3 build_sketch --output-dir build
 
       - name: Upload Binary Artifacts
         uses: actions/upload-artifact@v4
