@@ -1,21 +1,21 @@
 // =================================================================
-// ren_phone v4 — "OS" rewrite (FIXED VERSION + AUTO WIFI SCAN)
+// ren_phone v4 — "OS" rewrite (WITH GEMINI AI CHAT & AUTO WIFI SCAN)
 // ESP32-S3, ILI9341, XPT2046 touch, SD via SDIO
 //
-// FITUR BARU & PERBAIKAN:
-//  1. Auto Scan WiFi: Begitu masuk Pengaturan (Settings), sistem otomatis
-//     memindai (scan) WiFi di sekitar secara async (background).
-//     WiFi yang ditemukan ditampilkan sebagai tombol yang bisa langsung diketuk.
-//     Mengetuk WiFi otomatis mengisi SSID dan memunculkan keyboard Password!
-//  2. Tombol Pindai Ulang: Tersedia tombol [Pindai] di kanan atas Pengaturan.
-//  3. Perbaikan Bug Kalkulator: Tombol back berfungsi, grid diperbaiki.
-//  4. Perbaikan Bug Settings: Tombol "Kalibrasi Ulang" di posisi kanan.
-//  5. Perbaikan Bug Canvas: Toolbar 2 baris bersih, Back button terpisah.
-//  6. Perbaikan Bug Notepad: Keyboard virtual langsung muncul saat diketuk.
+// FITUR BARU AI CHAT (GEMINI):
+//  1. Otomatis cek file /gemini_key.txt di SD Card. Jika belum ada,
+//     file otomatis dibuatkan di SD Card.
+//  2. API Key bisa diisi di SD Card atau diedit langsung via layar HP!
+//  3. Menggunakan Gemini 1.5 Flash REST API via HTTPS.
+//  4. Panggilan API berjalan di FreeRTOS background task sehingga
+//     tampilan layar tetap smooth (tidak freeze saat memproses jawaban).
+//  5. Auto Scan WiFi di Settings & perbaikan bug pada versi sebelumnya.
 // =================================================================
 #include <LovyanGFX.hpp>
 #include <Preferences.h>
 #include <WiFi.h>
+#include <HTTPClient.h>
+#include <WiFiClientSecure.h>
 #include <time.h>
 #include "FS.h"
 #include "SD_MMC.h"
@@ -23,7 +23,7 @@
 // TYPE DEFINITIONS
 // =============================================
 enum Screen { SCR_HOME, SCR_CLOCK, SCR_CALC, SCR_SENSOR,
-              SCR_SETTINGS, SCR_NOTEPAD, SCR_CANVAS };
+              SCR_SETTINGS, SCR_NOTEPAD, SCR_CANVAS, SCR_AICHAT };
 enum Orientation { ORIENT_LANDSCAPE = 0, ORIENT_PORTRAIT = 1 };
 struct Theme {
   const char* name;
@@ -205,13 +205,15 @@ void toggleAirplaneMode(){
   else connectWifi();
 }
 // =============================================
-// SD CARD
+// SD CARD & GEMINI API KEY STORAGE
 // =============================================
 #define SD_PIN_CLK 39
 #define SD_PIN_CMD 38
 #define SD_PIN_D0  40
 bool sdReady=false;
 const char* NOTE_FILE="/notepad.txt";
+const char* GEMINI_KEY_FILE="/gemini_key.txt";
+String geminiApiKey = "";
 void initSD(){
   SD_MMC.setPins(SD_PIN_CLK,SD_PIN_CMD,SD_PIN_D0);
   sdReady=SD_MMC.begin("/sdcard",true);
@@ -226,6 +228,31 @@ void saveNote(){
   if(!sdReady) return;
   File f=SD_MMC.open(NOTE_FILE,FILE_WRITE);
   if(f){f.print(noteText);f.close();}
+}
+// Auto Load / Create Gemini API Key di SD Card
+void loadGeminiKey(){
+  if(!sdReady) return;
+  if(!SD_MMC.exists(GEMINI_KEY_FILE)){
+    File f = SD_MMC.open(GEMINI_KEY_FILE, FILE_WRITE);
+    if(f){
+      f.print("YOUR_GEMINI_API_KEY_HERE");
+      f.close();
+    }
+  }
+  File f = SD_MMC.open(GEMINI_KEY_FILE, FILE_READ);
+  if(f){
+    geminiApiKey = f.readString();
+    geminiApiKey.trim();
+    f.close();
+  }
+}
+void saveGeminiKey(){
+  if(!sdReady) return;
+  File f = SD_MMC.open(GEMINI_KEY_FILE, FILE_WRITE);
+  if(f){
+    f.print(geminiApiKey);
+    f.close();
+  }
 }
 int canvasAppHeight(){
   return SCR_H - STATUS_H - 44;
@@ -245,6 +272,75 @@ void saveCanvas(){
   uint32_t need = (uint32_t)SCR_W * canvasAppHeight() * 2;
   File f=SD_MMC.open(canvasFileFor(currentOrient),FILE_WRITE);
   if(f){ f.write((uint8_t*)canvasApp.getBuffer(), need); f.close(); }
+}
+// =============================================
+// GEMINI AI HTTP CLIENT & FREERTOS TASK
+// =============================================
+String aiPrompt = "";
+String aiResponse = "";
+bool aiLoading = false;
+void sendGeminiRequest(String promptText) {
+  if (!wifiConnected) {
+    aiResponse = "Error: WiFi belum terhubung!";
+    aiLoading = false;
+    needRedrawNow();
+    return;
+  }
+  if (geminiApiKey.length() == 0 || geminiApiKey == "YOUR_GEMINI_API_KEY_HERE") {
+    aiResponse = "Error: Isi API Key di /gemini_key.txt pada SD Card!";
+    aiLoading = false;
+    needRedrawNow();
+    return;
+  }
+  WiFiClientSecure client;
+  client.setInsecure(); // Skip verifikasi sertifikat SSL untuk performa ESP32
+  HTTPClient http;
+  String url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=" + geminiApiKey;
+  if (http.begin(client, url)) {
+    http.addHeader("Content-Type", "application/json");
+    http.setTimeout(12000);
+    // Formating JSON payload
+    promptText.replace("\"", "\\\"");
+    promptText.replace("\n", " ");
+    String jsonPayload = "{\"contents\":[{\"parts\":[{\"text\":\"" + promptText + "\"}]}]}";
+    int httpCode = http.POST(jsonPayload);
+    if (httpCode == HTTP_CODE_OK || httpCode == 200) {
+      String respStr = http.getString();
+      int textIdx = respStr.indexOf("\"text\": \"");
+      if (textIdx >= 0) {
+        int start = textIdx + 9;
+        int end = respStr.indexOf("\"", start);
+        if (end > start) {
+          String rawText = respStr.substring(start, end);
+          rawText.replace("\\n", "\n");
+          rawText.replace("\\\"", "\"");
+          aiResponse = rawText;
+        } else {
+          aiResponse = respStr;
+        }
+      } else {
+        aiResponse = "Gagal membaca teks respon AI.";
+      }
+    } else {
+      aiResponse = "HTTP Error: " + String(httpCode);
+    }
+    http.end();
+  } else {
+    aiResponse = "Gagal terhubung ke Gemini Server.";
+  }
+  aiLoading = false;
+  needRedrawNow();
+}
+void geminiTaskFunc(void* parameter) {
+  sendGeminiRequest(aiPrompt);
+  vTaskDelete(NULL);
+}
+void triggerGeminiAI() {
+  if (aiPrompt.length() == 0 || aiLoading) return;
+  aiLoading = true;
+  aiResponse = "Menghubungi Gemini AI...";
+  needRedrawNow();
+  xTaskCreate(geminiTaskFunc, "geminiTask", 8192, NULL, 1, NULL);
 }
 // =============================================
 // TOUCH CALIBRATION
@@ -598,21 +694,25 @@ void notepadEnter(); void notepadExit();
 void drawNotepad(LGFX_Sprite&); void notepadTouch(int,int,bool,bool);
 void canvasEnter(); void canvasExit();
 void drawCanvasScreen(LGFX_Sprite&); void canvasTouch(int,int,bool,bool);
-AppDef apps[6] = {
+void aiEnter(); void aiExit();
+void drawAiChat(LGFX_Sprite&); void aiTouch(int,int,bool,bool);
+AppDef apps[7] = {
   { "Jam",        'J', 0, clockEnter,    clockExit,    drawClock,        clockTouch,    SCR_CLOCK },
   { "Kalkulator", '+', 0, calcEnter,     calcExit,     drawCalc,         calcTouch,     SCR_CALC },
   { "Sensor",     '~', 0, sensorEnter,   sensorExit,   drawSensor,       sensorTouch,   SCR_SENSOR },
   { "Setting",    '@', 0, settingsEnter, settingsExit, drawSettings,     settingsTouch, SCR_SETTINGS },
   { "Notepad",    'N', 0, notepadEnter,  notepadExit,  drawNotepad,      notepadTouch,  SCR_NOTEPAD },
   { "Canvas",     'C', 0, canvasEnter,   canvasExit,   drawCanvasScreen, canvasTouch,   SCR_CANVAS },
+  { "AI Chat",    'A', 0, aiEnter,       aiExit,       drawAiChat,       aiTouch,       SCR_AICHAT },
 };
 void initAppColors(){
   apps[0].color=T().accent;   apps[1].color=T().accent2;
   apps[2].color=0x07FF;       apps[3].color=0xF81F;
   apps[4].color=0xFFE0;       apps[5].color=T().good;
+  apps[6].color=0xFD40;
 }
 int appIndexForScreen(Screen s){
-  for(int i=0;i<6;i++) if(apps[i].screen==s) return i;
+  for(int i=0;i<7;i++) if(apps[i].screen==s) return i;
   return -1;
 }
 void appOnEnter(Screen s){ int i=appIndexForScreen(s); if(i>=0 && apps[i].onEnter) apps[i].onEnter(); }
@@ -632,7 +732,7 @@ void drawHome(LGFX_Sprite& s,float sc){
   s.setCursor(SCR_W/2-tw/2,26);s.print(tb);
   int cols=homeCols(), cw=homeCardW(), ch=homeCardH();
   int gap=6, gridTop=72;
-  for(int i=0;i<6;i++){
+  for(int i=0;i<7;i++){
     int col=i%cols, row=i/cols;
     int x=gap+col*(cw+gap), y=gridTop+row*(ch+gap)-(int)sc;
     if(y+ch<STATUS_H+2||y>homeDockY()-4)continue;
@@ -648,7 +748,7 @@ void drawHome(LGFX_Sprite& s,float sc){
   }
   int dockY=homeDockY();
   s.fillRoundRect(6,dockY,SCR_W-12,38,12,T().surface2);
-  int dockIdx[4]={0,4,5,3};
+  int dockIdx[4]={0,4,6,3}; // Jam, Notepad, AI Chat, Setting
   int dw=(SCR_W-12)/4;
   for(int i=0;i<4;i++){
     int di=dockIdx[i];
@@ -663,7 +763,7 @@ void drawHome(LGFX_Sprite& s,float sc){
 Screen homeCheck(int x,int y,float sc){
   int dockY=homeDockY();
   if(y>=dockY&&y<=dockY+38){
-    int dockIdx[4]={0,4,5,3};
+    int dockIdx[4]={0,4,6,3};
     int dw=(SCR_W-12)/4;
     for(int i=0;i<4;i++){
       int cx=6+i*dw+dw/2;
@@ -672,7 +772,7 @@ Screen homeCheck(int x,int y,float sc){
   }
   int cols=homeCols(), cw=homeCardW(), ch=homeCardH();
   int gap=6, gridTop=72;
-  for(int i=0;i<6;i++){
+  for(int i=0;i<7;i++){
     int col=i%cols,row=i/cols;
     int ax=gap+col*(cw+gap), ay=gridTop+row*(ch+gap)-(int)sc;
     if(x>=ax&&x<=ax+cw&&y>=ay&&y<=ay+ch) return apps[i].screen;
@@ -681,7 +781,7 @@ Screen homeCheck(int x,int y,float sc){
 }
 int homeMaxScroll(){
   int cols=homeCols();
-  int rows=(6+cols-1)/cols;
+  int rows=(7+cols-1)/cols;
   int ch=homeCardH(), gap=6, gridTop=72;
   int needed = gridTop + rows*(ch+gap) - homeDockY();
   return max(0, needed);
@@ -831,22 +931,22 @@ void sensorTouch(int x,int y,bool held,bool isNew){
   if(isNew && isBack(x,y)) navBack();
 }
 // =============================================
-// APP: SETTINGS (DENGAN AUTO SCAN WIFI)
+// APP: SETTINGS
 // =============================================
 String settSSID="",settPass="";
 bool settShowPass=false;int settFocus=-1;
 void settingsEnter(){ 
   settSSID=String(WIFI_SSID); 
   settPass=String(WIFI_PASSWORD); 
-  startWifiScan(); // Otomatis mulai scan WiFi saat masuk ke Settings
+  startWifiScan();
 }
 void settingsExit(){}
 void drawSettings(LGFX_Sprite& s){
-  checkWifiScanComplete(); // Cek jika background scan sudah selesai
+  checkWifiScanComplete();
   s.fillSprite(T().bg);drawStatusBar(s);
   s.setTextColor(T().good);s.setTextSize(1);s.setCursor(8,26);s.print("Pengaturan");
   
-  // Tombol Pindai WiFi (Kanan Atas)
+  // Tombol Pindai WiFi
   s.fillRoundRect(SCR_W-74,24,66,18,4,wifiScanning?T().surface2:T().accent);
   s.setTextColor(wifiScanning?T().subtext:T().bg);
   s.setCursor(SCR_W-68,29);
@@ -877,7 +977,7 @@ void drawSettings(LGFX_Sprite& s){
     s.setCursor(tx+(tbtnW-3)/2-nl/2,rowY+7);s.print(themes[i].name);
   }
   
-  // Row 3: List WiFi Auto Scan (Pilihan Tombol WiFi)
+  // Row 3: List WiFi Auto Scan
   rowY+=28;
   s.fillRoundRect(8,rowY,rowW,36,6,T().surface);
   s.setTextColor(T().subtext);s.setCursor(14,rowY+4);
@@ -904,7 +1004,6 @@ void drawSettings(LGFX_Sprite& s){
   }
   // Row 4: Input SSID & Pass
   rowY+=38;
-  // SSID Input
   s.fillRoundRect(8,rowY,rowW,22,4,settFocus==0?T().surface2:T().surface);
   s.setTextColor(T().subtext);s.setCursor(14,rowY+6);s.print("SSID:");
   s.setTextColor(T().text);s.setCursor(54,rowY+6);
@@ -913,7 +1012,6 @@ void drawSettings(LGFX_Sprite& s){
   s.print(sd2.c_str());
   
   rowY+=24;
-  // Pass Input
   s.fillRoundRect(8,rowY,rowW-28,22,4,settFocus==1?T().surface2:T().surface);
   s.setTextColor(T().subtext);s.setCursor(14,rowY+6);s.print("Pass:");
   s.setTextColor(T().text);s.setCursor(54,rowY+6);
@@ -921,17 +1019,14 @@ void drawSettings(LGFX_Sprite& s){
     if(settShowPass)s.print(settPass.substring(0,18).c_str());
     else for(int i=0;i<(int)settPass.length()&&i<18;i++)s.print("*");
   } else s.print("(ketuk)");
-  // Show/Hide Toggle
   s.fillRoundRect(8+rowW-24,rowY,24,22,4,T().surface2);
   s.setTextColor(T().accent);s.setCursor(8+rowW-18,rowY+6);s.print(settShowPass?"H":"S");
   
-  // Row 5: Action Buttons (Sambungkan & Kalibrasi)
+  // Row 5: Action Buttons
   rowY+=26;
   int btnW=(rowW-8)/2;
-  // Sambungkan (Kiri)
   s.fillRoundRect(8,rowY,btnW,24,6,T().accent);
   s.setTextColor(T().bg);s.setCursor(16,rowY+7);s.print("Sambungkan");
-  // Kalibrasi Ulang (Kanan)
   s.fillRoundRect(SCR_W/2+4,rowY,btnW,24,6,T().surface2);
   s.setTextColor(T().text);s.setCursor(SCR_W/2+10,rowY+7);s.print("Kalibrasi Ulang");
   if(kbVisible)drawKb(s);else drawBack(s);
@@ -949,24 +1044,18 @@ void settingsTouch(int x,int y,bool held,bool isNew){
   if(!isNew) return;
   
   if(isBack(x,y)){ navBack(); return; }
-  // 1. Tombol Pindai WiFi (Kanan Atas)
   if(x>=SCR_W-74 && x<=SCR_W-8 && y>=24 && y<=42){
-    if(!wifiScanning){
-      startWifiScan();
-      showToast("Memindai...");
-    }
+    if(!wifiScanning){ startWifiScan(); showToast("Memindai..."); }
     return;
   }
   int rowW = SCR_W-16;
   int rowY = STATUS_H+12;
-  // 2. Kecerahan
   if(x>=58&&x<=58+rowW-90&&y>=rowY&&y<=rowY+26){
     brightness=constrain(map(x-58,0,rowW-90,10,255),10,255);
     display.setBrightness(brightness);
     needRedraw=true;
     return;
   }
-  // 3. Tema
   rowY+=28;
   int tbtnW=(rowW-50)/THEME_COUNT;
   if(y>=rowY&&y<=rowY+26){
@@ -978,7 +1067,6 @@ void settingsTouch(int x,int y,bool held,bool isNew){
       }
     }
   }
-  // 4. Pilih WiFi dari List Auto Scan
   rowY+=28;
   if(y>=rowY+14 && y<=rowY+34 && !wifiScanning && scannedWifiNum>0){
     int wifiPillW=(rowW-12)/3;
@@ -986,7 +1074,7 @@ void settingsTouch(int x,int y,bool held,bool isNew){
       int wx=12+i*(wifiPillW+4);
       if(x>=wx && x<=wx+wifiPillW-2){
         settSSID = scannedWifis[i].ssid;
-        settPass = ""; // Reset pass untuk SSID baru
+        settPass = "";
         settFocus = 1; kbTarget = &settPass; kbVisible = true; kbMode = KB_LOWER;
         showToast(settSSID.c_str());
         needRedraw=true;
@@ -994,23 +1082,19 @@ void settingsTouch(int x,int y,bool held,bool isNew){
       }
     }
   }
-  // 5. Input Manual SSID
   rowY+=38;
   if(y>=rowY&&y<=rowY+22){ 
     settFocus=0;kbTarget=&settSSID;kbVisible=true;kbMode=KB_LOWER;
     needRedraw=true;return; 
   }
-  // 6. Input Pass
   rowY+=24;
   if(y>=rowY&&y<=rowY+22){
     if(x>=8+rowW-24){ settShowPass=!settShowPass; needRedraw=true; return; }
     settFocus=1;kbTarget=&settPass;kbVisible=true;kbMode=KB_LOWER;needRedraw=true;return;
   }
-  // 7. Action Buttons (Sambungkan & Kalibrasi)
   rowY+=26;
   int btnW=(rowW-8)/2;
   if(y>=rowY&&y<=rowY+24){
-    // Sambungkan (Kiri)
     if(x>=8&&x<=8+btnW){
       settSSID.toCharArray(WIFI_SSID,64);
       settPass.toCharArray(WIFI_PASSWORD,64);
@@ -1019,7 +1103,6 @@ void settingsTouch(int x,int y,bool held,bool isNew){
       needRedraw=true;
       return;
     }
-    // Kalibrasi Ulang (Kanan)
     if(x>=SCR_W/2+4 && x<=SCR_W/2+4+btnW){
       Preferences p;p.begin("touch_cal",false);p.putBool("done",false);p.end();
       ESP.restart();
@@ -1090,15 +1173,12 @@ void drawCanvasScreen(LGFX_Sprite& s){
   drawStatusBar(s);
   s.setTextColor(T().good);s.setTextSize(1);s.setCursor(8,14);s.print("Canvas");
   
-  // Push buffer gambar
   canvasApp.pushSprite(&s,0,canvasCapY());
   
-  // Area Toolbar bawah
   int ty=canvasToolY();
   s.fillRect(0,ty,SCR_W,SCR_H-ty,T().surface);
   s.drawFastHLine(0,ty,SCR_W,T().divider);
   
-  // Row 1 Toolbar: Palette Warna
   int palGap = (SCR_W-8)/PAL_N;
   for(int i=0;i<PAL_N;i++){
     int px=4+i*palGap;
@@ -1106,18 +1186,14 @@ void drawCanvasScreen(LGFX_Sprite& s){
     if(palette[i]==drawColor) s.drawCircle(px+palGap/2,ty+10,9,T().text);
   }
   
-  // Row 2 Toolbar: Tombol Back, Ukuran Brush, dan Clear
   int r2Y = ty + 22;
-  // Tombol Back di kiri bawah toolbar
   s.fillRoundRect(4,r2Y,56,18,4,T().surface2);
   s.setTextColor(T().accent);s.setCursor(10,r2Y+5);s.print("< Back");
   
-  // Ukuran Brush (Tengah)
   s.fillRoundRect(66,r2Y,60,18,4,T().surface2);
   s.setTextColor(T().text);char bs[8];sprintf(bs,"B:%d",brushSize);
   s.setCursor(76,r2Y+5);s.print(bs);
   
-  // Tombol Clear (Kanan)
   s.fillRoundRect(SCR_W-64,r2Y,60,18,4,T().danger);
   s.setTextColor(0xFFFF);s.setCursor(SCR_W-52,r2Y+5);s.print("CLR");
   
@@ -1126,14 +1202,11 @@ void drawCanvasScreen(LGFX_Sprite& s){
 void canvasTouch(int x,int y,bool held,bool isNew){
   int ty=canvasToolY();
   
-  // Touch di area toolbar
   if(y>=ty){
     if(isNew){
       int r2Y = ty + 22;
-      // 1. Cek Back button dulu
       if(x>=4 && x<=60 && y>=r2Y){ navBack(); return; }
       
-      // 2. Cek Palette (Row 1 toolbar)
       if(y>=ty && y<r2Y){
         int palGap=(SCR_W-8)/PAL_N;
         for(int i=0;i<PAL_N;i++){
@@ -1142,7 +1215,6 @@ void canvasTouch(int x,int y,bool held,bool isNew){
         }
       }
       
-      // 3. Cek Brush & Clear (Row 2 toolbar)
       if(y>=r2Y){
         if(x>=66 && x<=126){ brushSize=(brushSize%8)+1; lastDX=-1; needRedraw=true; return; }
         if(x>=SCR_W-64 && x<=SCR_W-4){ canvasApp.fillSprite(T().bg); lastDX=-1; saveCanvas(); showToast("Dibersihkan"); needRedraw=true; return; }
@@ -1151,7 +1223,6 @@ void canvasTouch(int x,int y,bool held,bool isNew){
     return;
   }
   
-  // Touch di area gambar
   int capY=canvasCapY();
   if(y>=capY && y<ty){
     int cy=y-capY;
@@ -1164,6 +1235,102 @@ void canvasTouch(int x,int y,bool held,bool isNew){
     } else canvasApp.fillCircle(x,cy,brushSize/2,drawColor);
     lastDX=x;lastDY=cy;
     needRedraw=true;
+  }
+}
+// =============================================
+// APP: AI CHAT (GEMINI)
+// =============================================
+void aiEnter(){} void aiExit(){}
+void drawAiChat(LGFX_Sprite& s){
+  s.fillSprite(T().bg);drawStatusBar(s);
+  s.setTextColor(T().accent);s.setTextSize(1);s.setCursor(8,26);s.print("AI Chat (Gemini)");
+  
+  // Indicator Status API Key di Kanan Atas
+  bool hasKey = (geminiApiKey.length() > 0 && geminiApiKey != "YOUR_GEMINI_API_KEY_HERE");
+  s.fillRoundRect(SCR_W-72,24,68,18,4,hasKey?T().good:T().danger);
+  s.setTextColor(0xFFFF);s.setCursor(SCR_W-66,29);
+  s.print(hasKey?"Key: OK":"Key: Edit");
+  int contentBot = kbVisible ? kbY()-4 : backY()-32;
+  
+  // Box Tanya (User Prompt)
+  s.fillRoundRect(4,44,SCR_W-8,30,6,T().surface);
+  s.setTextColor(T().accent);s.setCursor(10,48);s.print("Tanya: ");
+  s.setTextColor(T().text);
+  String pText = aiPrompt.length() ? aiPrompt : "(ketuk area bawah utk ketik)";
+  if(pText.length()>32) pText = pText.substring(0,32) + "..";
+  s.print(pText.c_str());
+  // Box Respon Gemini AI
+  int respH = contentBot - 80;
+  if(respH > 20){
+    s.fillRoundRect(4,78,SCR_W-8,respH,6,T().surface2);
+    s.setTextColor(T().accent2);s.setCursor(10,84);s.print("Gemini: ");
+    s.setTextColor(T().text);s.setTextWrap(true);
+    if(aiLoading){
+      s.setTextColor(T().good);
+      s.print("Sedang berpikir & menghubungi Gemini API...");
+    } else if(aiResponse.length()){
+      String rDisp = aiResponse;
+      if(rDisp.length() > 180) rDisp = rDisp.substring(0,180) + "...";
+      s.print(rDisp.c_str());
+    } else {
+      s.setTextColor(T().subtext);
+      s.print("Ketik pertanyaan lalu tekan [Kirim].");
+    }
+  }
+  // Baris Input Prompt & Tombol Kirim (Jika keyboard tutup)
+  if(!kbVisible){
+    int inputY = backY() - 26;
+    // Input Box
+    s.fillRoundRect(4,inputY,SCR_W-64,22,4,T().surface);
+    s.setTextColor(T().subtext);s.setCursor(10,inputY+6);
+    String ipDisp = aiPrompt.length() ? aiPrompt : "Ketik pertanyaan...";
+    if(ipDisp.length()>24) ipDisp = ipDisp.substring(0,24)+"..";
+    s.print(ipDisp.c_str());
+    
+    // Tombol Kirim
+    s.fillRoundRect(SCR_W-56,inputY,52,22,4,aiLoading?T().surface2:T().accent);
+    s.setTextColor(aiLoading?T().subtext:T().bg);s.setCursor(SCR_W-48,inputY+6);
+    s.print("Kirim");
+  }
+  if(kbVisible) drawKb(s); else drawBack(s);
+  drawToast(s);
+}
+void aiTouch(int x,int y,bool held,bool isNew){
+  if(kbVisible){
+    if(!isNew) return;
+    int y0=kbY();
+    if(y<y0-2){ kbVisible=false; kbTarget=nullptr; }
+    else kbTouch(x,y);
+    needRedraw=true;
+    return;
+  }
+  if(!isNew) return;
+  
+  if(isBack(x,y)){ navBack(); return; }
+  // 1. Edit API Key di Kanan Atas
+  if(x>=SCR_W-72 && x<=SCR_W-4 && y>=24 && y<=42){
+    kbTarget = &geminiApiKey;
+    kbVisible = true;
+    kbMode = KB_LOWER;
+    showToast("Edit API Key");
+    needRedraw = true;
+    return;
+  }
+  int inputY = backY() - 26;
+  
+  // 2. Ketuk Box Pertanyaan / Input
+  if((y>=44 && y<=74) || (y>=inputY && y<=inputY+22 && x<=SCR_W-60)){
+    kbTarget = &aiPrompt;
+    kbVisible = true;
+    kbMode = KB_LOWER;
+    needRedraw = true;
+    return;
+  }
+  // 3. Tombol Kirim
+  if(x>=SCR_W-56 && x<=SCR_W-4 && y>=inputY && y<=inputY+22){
+    saveGeminiKey(); // Simpan API Key ke SD Card jika ada perubahan
+    triggerGeminiAI();
+    return;
   }
 }
 // =============================================
@@ -1209,10 +1376,11 @@ void setup(){
   initSD();
   loadWifiCreds();
   connectWifi();
+  loadNote();
+  loadGeminiKey(); // Deteksi / buat file /gemini_key.txt di SD Card otomatis
   canvasApp.setPsram(true);
   canvasApp.createSprite(320,240-STATUS_H-44);
   canvasApp.fillSprite(T().bg);
-  loadNote();
   Orientation savedOrient = loadOrientPref();
   applyOrientation(savedOrient, false);
   locked = true;
