@@ -1,10 +1,12 @@
 // =================================================================
-// ren_phone v4 — "OS" rewrite (HUMAN READABLE GEMINI_KEY.TXT)
+// ren_phone v4 — "OS" rewrite (FIXED GEMINI AI HTTP ERROR -1)
 // ESP32-S3, ILI9341, XPT2046 touch, SD via SDIO
 //
-// FITUR BARU:
-//  File /gemini_key.txt di SD Card dibuat dengan format ramah manusia (human readable)
-//  dilengkapi petunjuk & cara mendapatkan API Key gratis dari Google AI Studio.
+// PERBAIKAN BUG HTTP ERROR -1:
+//  1. Menambah Stack Size task FreeRTOS Gemini dari 8KB ke 16KB (16384 byte)
+//     karena MbedTLS SSL Handshake di ESP32-S3 butuh alokasi memori stack cukup besar.
+//  2. Menambahkan timeout socket & TLS connection handshake (15000 ms).
+//  3. Menambahkan helper http.errorToString() untuk diagnosa koneksi detail.
 // =================================================================
 #include <LovyanGFX.hpp>
 #include <Preferences.h>
@@ -469,7 +471,7 @@ void toggleAirplaneMode(){
 }
 
 // =============================================
-// GEMINI AI HTTP CLIENT & FREERTOS TASK
+// GEMINI AI HTTP CLIENT & FREERTOS TASK (FIXED STACK & TIMEOUT)
 // =============================================
 String aiPrompt = "";
 String aiResponse = "";
@@ -482,6 +484,8 @@ void sendGeminiRequest(String promptText) {
     needRedrawNow();
     return;
   }
+  
+  geminiApiKey.trim();
   if (geminiApiKey.length() == 0 || geminiApiKey == "YOUR_GEMINI_API_KEY_HERE") {
     aiResponse = "Error: Isi API Key di /gemini_key.txt pada SD Card!";
     aiLoading = false;
@@ -491,42 +495,55 @@ void sendGeminiRequest(String promptText) {
 
   WiFiClientSecure client;
   client.setInsecure();
+  client.setTimeout(15); // Timeout socket TLS 15 detik
 
   HTTPClient http;
-  String url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=" + geminiApiKey;
+  String url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=" + geminiApiKey;
+
+  http.setTimeout(15000);
+  http.setConnectTimeout(15000);
 
   if (http.begin(client, url)) {
     http.addHeader("Content-Type", "application/json");
-    http.setTimeout(12000);
 
-    promptText.replace("\"", "\\\"");
-    promptText.replace("\n", " ");
-    String jsonPayload = "{\"contents\":[{\"parts\":[{\"text\":\"" + promptText + "\"}]}]}";
+    // Format & Escape JSON Payload dengan benar
+    String escapedPrompt = promptText;
+    escapedPrompt.replace("\\", "\\\\");
+    escapedPrompt.replace("\"", "\\\"");
+    escapedPrompt.replace("\r", "");
+    escapedPrompt.replace("\n", "\\n");
+
+    String jsonPayload = "{\"contents\":[{\"parts\":[{\"text\":\"" + escapedPrompt + "\"}]}]}";
 
     int httpCode = http.POST(jsonPayload);
-    if (httpCode == HTTP_CODE_OK || httpCode == 200) {
-      String respStr = http.getString();
-      int textIdx = respStr.indexOf("\"text\": \"");
-      if (textIdx >= 0) {
-        int start = textIdx + 9;
-        int end = respStr.indexOf("\"", start);
-        if (end > start) {
-          String rawText = respStr.substring(start, end);
-          rawText.replace("\\n", "\n");
-          rawText.replace("\\\"", "\"");
-          aiResponse = rawText;
+    if (httpCode > 0) {
+      if (httpCode == HTTP_CODE_OK || httpCode == 200) {
+        String respStr = http.getString();
+        int textIdx = respStr.indexOf("\"text\": \"");
+        if (textIdx >= 0) {
+          int start = textIdx + 9;
+          int end = respStr.indexOf("\"", start);
+          if (end > start) {
+            String rawText = respStr.substring(start, end);
+            rawText.replace("\\n", "\n");
+            rawText.replace("\\\"", "\"");
+            aiResponse = rawText;
+          } else {
+            aiResponse = respStr;
+          }
         } else {
-          aiResponse = respStr;
+          aiResponse = "Response: " + respStr.substring(0, 150);
         }
       } else {
-        aiResponse = "Gagal membaca teks respon AI.";
+        String errBody = http.getString();
+        aiResponse = "HTTP Error " + String(httpCode) + ": " + errBody.substring(0, 100);
       }
     } else {
-      aiResponse = "HTTP Error: " + String(httpCode);
+      aiResponse = "HTTP Connection Error: " + http.errorToString(httpCode) + " (" + String(httpCode) + ")";
     }
     http.end();
   } else {
-    aiResponse = "Gagal terhubung ke Gemini Server.";
+    aiResponse = "Gagal inisialisasi koneksi HTTP.";
   }
 
   aiLoading = false;
@@ -543,7 +560,8 @@ void triggerGeminiAI() {
   aiLoading = true;
   aiResponse = "Menghubungi Gemini AI...";
   needRedrawNow();
-  xTaskCreate(geminiTaskFunc, "geminiTask", 8192, NULL, 1, NULL);
+  // Gunakan stack size 16KB (16384 byte) agar MbedTLS SSL Handshake tidak stack overflow
+  xTaskCreate(geminiTaskFunc, "geminiTask", 16384, NULL, 1, NULL);
 }
 
 // =============================================
