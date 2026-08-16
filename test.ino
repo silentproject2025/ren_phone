@@ -1,5 +1,5 @@
 // =================================================================
-// ren_phone v4 — "OS" rewrite (FINAL FIX GEMINI AI: NO MORE PSRAM STACK)
+// ren_phone v6 — "OS" rewrite + MJPEG PLAYER
 // ESP32-S3, ILI9341, XPT2046 touch, SD via SDIO
 //
 // PERBAIKAN FINAL (v5):
@@ -15,6 +15,16 @@
 //     - Watchdog timeout (soft 15s putus socket, hard 30s hapus task)
 //       supaya UI tidak pernah stuck selamanya walau ada masalah lain
 //     - Parser gemini_key.txt yang aman dari BOM/CRLF/kutip
+//
+// TAMBAHAN (v6): APLIKASI MJPEG PLAYER
+//  - Menggunakan MjpegClass.h (JPEGDEC) yang sudah dipunya user.
+//  - File .mjpeg dibaca dari folder /mjpeg di SD Card (SD_MMC).
+//  - Frame digambar langsung ke `display` (hardware) memakai
+//    lgfx::swap565_t (karena output JPEGDEC di-set big-endian),
+//    BUKAN lewat sprite `canvas` (supaya framerate maksimal, hemat RAM).
+//  - Ketuk layar kapan saja saat video main -> berhenti, balik ke list.
+//  - Setelah play selesai/berhenti, needRedrawNow() dipanggil supaya
+//    UI "OS" normal (canvas sprite) digambar ulang menimpa layar.
 // =================================================================
 #include <LovyanGFX.hpp>
 #include <Preferences.h>
@@ -27,11 +37,16 @@
 #include "SD_MMC.h"
 #include "esp_heap_caps.h"
 
+// ---- MJPEG PLAYER: dependensi tambahan ----
+#include <JPEGDEC.h>
+#include "MjpegClass.h"
+
 // =============================================
 // TYPE DEFINITIONS
 // =============================================
 enum Screen { SCR_HOME, SCR_CLOCK, SCR_CALC, SCR_SENSOR,
-              SCR_SETTINGS, SCR_NOTEPAD, SCR_CANVAS, SCR_AICHAT, SCR_FILEEXPLORER };
+              SCR_SETTINGS, SCR_NOTEPAD, SCR_CANVAS, SCR_AICHAT, SCR_FILEEXPLORER,
+              SCR_MJPEG };
 enum Orientation { ORIENT_LANDSCAPE = 0, ORIENT_PORTRAIT = 1 };
 
 struct Theme {
@@ -1111,8 +1126,11 @@ void aiEnter(); void aiExit();
 void drawAiChat(LGFX_Sprite&); void aiTouch(int,int,bool,bool);
 void fileExpEnter(); void fileExpExit();
 void drawFileExplorer(LGFX_Sprite&); void fileExpTouch(int,int,bool,bool);
+// ---- MJPEG PLAYER: forward declarations ----
+void mjpegEnter(); void mjpegExit();
+void drawMjpegPlayer(LGFX_Sprite&); void mjpegTouch(int,int,bool,bool);
 
-AppDef apps[8] = {
+AppDef apps[9] = {
   { "Jam",        'J', 0, clockEnter,    clockExit,    drawClock,        clockTouch,    SCR_CLOCK },
   { "Kalkulator", '+', 0, calcEnter,     calcExit,     drawCalc,         calcTouch,     SCR_CALC },
   { "Sensor",     '~', 0, sensorEnter,   sensorExit,   drawSensor,       sensorTouch,   SCR_SENSOR },
@@ -1121,17 +1139,20 @@ AppDef apps[8] = {
   { "Canvas",     'C', 0, canvasEnter,   canvasExit,   drawCanvasScreen, canvasTouch,   SCR_CANVAS },
   { "AI Chat",    'A', 0, aiEnter,       aiExit,       drawAiChat,       aiTouch,       SCR_AICHAT },
   { "Files",      'F', 0, fileExpEnter,  fileExpExit,  drawFileExplorer, fileExpTouch,  SCR_FILEEXPLORER },
+  { "MJPEG",      'M', 0, mjpegEnter,    mjpegExit,    drawMjpegPlayer,  mjpegTouch,    SCR_MJPEG },
 };
+#define APP_COUNT 9
 
 void initAppColors(){
   apps[0].color=T().accent;   apps[1].color=T().accent2;
   apps[2].color=0x07FF;       apps[3].color=0xF81F;
   apps[4].color=0xFFE0;       apps[5].color=T().good;
   apps[6].color=0xFD40;       apps[7].color=0x3ADF;
+  apps[8].color=0xFBE0; // MJPEG player - warna oranye
 }
 
 int appIndexForScreen(Screen s){
-  for(int i=0;i<8;i++) if(apps[i].screen==s) return i;
+  for(int i=0;i<APP_COUNT;i++) if(apps[i].screen==s) return i;
   return -1;
 }
 void appOnEnter(Screen s){ int i=appIndexForScreen(s); if(i>=0 && apps[i].onEnter) apps[i].onEnter(); }
@@ -1153,7 +1174,7 @@ void drawHome(LGFX_Sprite& s,float sc){
   s.setCursor(SCR_W/2-tw/2,26);s.print(tb);
   int cols=homeCols(), cw=homeCardW(), ch=homeCardH();
   int gap=6, gridTop=72;
-  for(int i=0;i<8;i++){
+  for(int i=0;i<APP_COUNT;i++){
     int col=i%cols, row=i/cols;
     int x=gap+col*(cw+gap), y=gridTop+row*(ch+gap)-(int)sc;
     if(y+ch<STATUS_H+2||y>homeDockY()-4)continue;
@@ -1194,7 +1215,7 @@ Screen homeCheck(int x,int y,float sc){
   }
   int cols=homeCols(), cw=homeCardW(), ch=homeCardH();
   int gap=6, gridTop=72;
-  for(int i=0;i<8;i++){
+  for(int i=0;i<APP_COUNT;i++){
     int col=i%cols,row=i/cols;
     int ax=gap+col*(cw+gap), ay=gridTop+row*(ch+gap)-(int)sc;
     if(x>=ax&&x<=ax+cw&&y>=ay&&y<=ay+ch) return apps[i].screen;
@@ -1204,7 +1225,7 @@ Screen homeCheck(int x,int y,float sc){
 
 int homeMaxScroll(){
   int cols=homeCols();
-  int rows=(8+cols-1)/cols;
+  int rows=(APP_COUNT+cols-1)/cols;
   int ch=homeCardH(), gap=6, gridTop=72;
   int needed = gridTop + rows*(ch+gap) - homeDockY();
   return max(0, needed);
@@ -1955,6 +1976,247 @@ void fileExpTouch(int x,int y,bool held,bool isNew){
 }
 
 // =============================================
+// APP: MJPEG PLAYER (FITUR BARU)
+// =============================================
+const char* MJPEG_FOLDER = "/mjpeg";
+#define MJPEG_MAX_FILES 30
+String  mjpegFileList[MJPEG_MAX_FILES];
+uint32_t mjpegFileSizes[MJPEG_MAX_FILES];
+int mjpegFileCount   = 0;
+int mjpegScrollPage  = 0;
+int mjpegSelectedIdx = -1;
+volatile bool mjpegPlaying       = false;
+volatile bool mjpegStopRequested = false;
+
+MjpegClass mjpeg;
+uint8_t* mjpegBuf = nullptr;
+size_t   mjpegBufSize = 0;
+unsigned long mjpegTotalFrames = 0;
+unsigned long mjpegStartMs = 0;
+
+// Scan folder /mjpeg di SD Card, ambil semua file *.mjpeg
+void mjpegScanFiles(){
+  mjpegFileCount = 0;
+  if(!sdReady) return;
+
+  if(!SD_MMC.exists(MJPEG_FOLDER)){
+    SD_MMC.mkdir(MJPEG_FOLDER);
+    return;
+  }
+
+  File dir = SD_MMC.open(MJPEG_FOLDER);
+  if(!dir || !dir.isDirectory()){ if(dir) dir.close(); return; }
+
+  File f = dir.openNextFile();
+  while(f && mjpegFileCount < MJPEG_MAX_FILES){
+    if(!f.isDirectory()){
+      String name = String(f.name());
+      int slashIdx = name.lastIndexOf('/');
+      if(slashIdx >= 0) name = name.substring(slashIdx+1);
+      String lower = name; lower.toLowerCase();
+      if(lower.endsWith(".mjpeg")){
+        mjpegFileList[mjpegFileCount]  = name;
+        mjpegFileSizes[mjpegFileCount] = f.size();
+        mjpegFileCount++;
+      }
+    }
+    f = dir.openNextFile();
+  }
+  dir.close();
+  Serial.printf("[MJPEG] %d file ditemukan di %s\n", mjpegFileCount, MJPEG_FOLDER);
+}
+
+// Callback dipanggil JPEGDEC setiap kali 1 baris/blok JPEG selesai didecode.
+// Digambar LANGSUNG ke hardware `display` (bukan canvas sprite) demi speed.
+// lgfx::swap565_t dipakai karena MjpegClass di-setup dgn useBigEndian=true.
+int mjpegDrawCallback(JPEGDRAW *pDraw){
+  display.pushImage(pDraw->x, pDraw->y, pDraw->iWidth, pDraw->iHeight,
+                     (lgfx::swap565_t*)pDraw->pPixels);
+  return 1;
+}
+
+// Alokasi buffer decode MJPEG sekali saja (lazy), taruh di PSRAM kalau bisa
+bool mjpegEnsureBuffer(){
+  if(mjpegBuf) return true;
+  // Ukuran aman utk 1 frame JPEG terkompresi pada layar 320x240
+  mjpegBufSize = (size_t)320 * 240 * 2 / 5;
+  mjpegBuf = (uint8_t*)heap_caps_malloc(mjpegBufSize, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  if(!mjpegBuf){
+    mjpegBuf = (uint8_t*)heap_caps_malloc(mjpegBufSize, MALLOC_CAP_8BIT);
+  }
+  if(!mjpegBuf){
+    Serial.println("[MJPEG] Gagal alokasi buffer decode!");
+    return false;
+  }
+  return true;
+}
+
+// Putar 1 file mjpeg secara blocking. Ketuk layar kapan saja utk berhenti.
+void mjpegPlayFile(const String& filename){
+  if(!mjpegEnsureBuffer()){
+    showToast("RAM tidak cukup utk MJPEG");
+    return;
+  }
+
+  String fullPath = String(MJPEG_FOLDER) + "/" + filename;
+  File mjFile = SD_MMC.open(fullPath, FILE_READ);
+  if(!mjFile || mjFile.isDirectory()){
+    if(mjFile) mjFile.close();
+    showToast("Gagal membuka file MJPEG");
+    return;
+  }
+
+  // Layar hint sebelum mulai
+  display.fillScreen(TFT_BLACK);
+  display.setTextColor(TFT_WHITE);
+  display.setTextSize(1);
+  display.setCursor(10,10);
+  display.print("Memutar: "); display.println(filename);
+  display.setCursor(10,26);
+  display.print("Ketuk layar utk berhenti...");
+  delay(600);
+  display.fillScreen(TFT_BLACK);
+
+  mjpegPlaying       = true;
+  mjpegStopRequested = false;
+  mjpegTotalFrames   = 0;
+  mjpegStartMs       = millis();
+
+  mjpeg.setup(&mjFile, mjpegBuf, mjpegDrawCallback, true /* useBigEndian */,
+              0 /* x */, 0 /* y */, display.width(), display.height());
+
+  int frameCheckCounter = 0;
+  while(!mjpegStopRequested && mjFile.available() && mjpeg.readMjpegBuf()){
+    mjpeg.drawJpg();
+    mjpegTotalFrames++;
+
+    // Cek sentuhan setiap beberapa frame supaya tidak terlalu membebani SPI
+    if(++frameCheckCounter >= 2){
+      frameCheckCounter = 0;
+      lgfx::touch_point_t tp;
+      if(display.getTouch(&tp)){
+        mjpegStopRequested = true;
+      }
+    }
+
+    // Tetap layani web server & jaga watchdog selama playback panjang
+    if(wifiConnected && webServerRunning) webServer.handleClient();
+    yield();
+  }
+
+  mjFile.close();
+  mjpegPlaying       = false;
+  mjpegStopRequested = false;
+
+  unsigned long timeUsed = millis() - mjpegStartMs;
+  float fps = timeUsed > 0 ? (1000.0f * mjpegTotalFrames / timeUsed) : 0;
+  Serial.printf("[MJPEG] Selesai '%s' | frame=%lu | waktu=%lums | fps=%.1f\n",
+                filename.c_str(), mjpegTotalFrames, timeUsed, fps);
+
+  // Layar sudah kotor karena digambar langsung ke hardware,
+  // paksa UI "OS" digambar ulang lewat canvas sprite.
+  needRedrawNow();
+}
+
+void mjpegEnter(){
+  mjpegScanFiles();
+  mjpegScrollPage = 0;
+}
+void mjpegExit(){}
+
+void drawMjpegPlayer(LGFX_Sprite& s){
+  s.fillSprite(T().bg);drawStatusBar(s);
+  s.setTextColor(0xFBE0);s.setTextSize(1);s.setCursor(8,26);s.print("MJPEG Player");
+
+  s.fillRoundRect(SCR_W-70,24,64,18,4,T().surface2);
+  s.setTextColor(T().accent);s.setCursor(SCR_W-62,29);s.print("Scan");
+
+  int listY = 44;
+  int itemH = 26;
+  int itemsPerPage = 5;
+  int startIdx = mjpegScrollPage * itemsPerPage;
+
+  if(!sdReady){
+    s.setTextColor(T().danger);s.setTextSize(2);s.setCursor(20,80);
+    s.print("SD Card Tdk Siap");
+  } else if(mjpegFileCount == 0){
+    s.setTextColor(T().subtext);s.setTextSize(1);s.setCursor(14,80);
+    s.print("Tidak ada file .mjpeg di /mjpeg");
+    s.setCursor(14,96);
+    s.print("Taruh file *.mjpeg di folder itu,");
+    s.setCursor(14,108);
+    s.print("lalu ketuk [Scan].");
+  } else {
+    for(int i=0; i<itemsPerPage && (startIdx+i)<mjpegFileCount; i++){
+      int idx = startIdx+i;
+      int itemY = listY + i*(itemH+4);
+      s.fillRoundRect(4,itemY,SCR_W-8,itemH,6,T().surface);
+
+      s.setTextColor(0xFBE0);s.setCursor(10,itemY+8);s.print("[V]");
+      s.setTextColor(T().text);s.setCursor(32,itemY+8);
+      String fn = mjpegFileList[idx];
+      if(fn.length() > 15) fn = fn.substring(0,13) + "..";
+      s.print(fn.c_str());
+
+      s.fillRoundRect(SCR_W-64,itemY+3,56,20,4,T().good);
+      s.setTextColor(T().bg);s.setCursor(SCR_W-56,itemY+8);s.print("Play");
+    }
+  }
+
+  int pageY = backY() - 2;
+  if(mjpegScrollPage > 0){
+    s.fillRoundRect(SCR_W-120,pageY,54,22,4,T().surface2);
+    s.setTextColor(T().text);s.setCursor(SCR_W-110,pageY+6);s.print("< Prev");
+  }
+  if((mjpegScrollPage+1)*itemsPerPage < mjpegFileCount){
+    s.fillRoundRect(SCR_W-60,pageY,54,22,4,T().surface2);
+    s.setTextColor(T().text);s.setCursor(SCR_W-52,pageY+6);s.print("Next >");
+  }
+
+  drawBack(s);
+  drawToast(s);
+}
+
+void mjpegTouch(int x,int y,bool held,bool isNew){
+  if(!isNew) return;
+  if(isBack(x,y)){ navBack(); return; }
+
+  if(x>=SCR_W-70 && x<=SCR_W-6 && y>=24 && y<=42){
+    mjpegScanFiles();
+    showToast("Scan selesai");
+    needRedraw = true;
+    return;
+  }
+
+  if(!sdReady) return;
+
+  int listY = 44;
+  int itemH = 26;
+  int itemsPerPage = 5;
+  int startIdx = mjpegScrollPage * itemsPerPage;
+
+  for(int i=0;i<itemsPerPage && (startIdx+i)<mjpegFileCount;i++){
+    int idx = startIdx+i;
+    int itemY = listY + i*(itemH+4);
+    if(y>=itemY && y<=itemY+itemH){
+      if(x>=SCR_W-64 && x<=SCR_W-8){
+        mjpegSelectedIdx = idx;
+        mjpegPlayFile(mjpegFileList[idx]);   // blocking, berhenti saat disentuh
+        return;
+      }
+    }
+  }
+
+  int pageY = backY() - 2;
+  if(mjpegScrollPage>0 && x>=SCR_W-120 && x<=SCR_W-66 && y>=pageY){
+    mjpegScrollPage--; needRedraw=true; return;
+  }
+  if((mjpegScrollPage+1)*itemsPerPage < mjpegFileCount && x>=SCR_W-60 && x<=SCR_W-6 && y>=pageY){
+    mjpegScrollPage++; needRedraw=true; return;
+  }
+}
+
+// =============================================
 // PUSH FRAME
 // =============================================
 void push(){ canvas.pushSprite(0,0); }
@@ -2008,6 +2270,11 @@ void setup(){
   applyOrientation(savedOrient, false);
   locked = true;
   needRedraw = true;
+
+  // Pastikan folder /mjpeg ada di SD Card
+  if(sdReady && !SD_MMC.exists(MJPEG_FOLDER)){
+    SD_MMC.mkdir(MJPEG_FOLDER);
+  }
 
   Serial.printf("[Boot] FreePsram=%u FreeInternal=%u LargestInternalBlock=%u\n",
                 ESP.getFreePsram(),
