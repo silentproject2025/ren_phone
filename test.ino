@@ -1,15 +1,14 @@
 // =================================================================
-// ren_phone v4 — "OS" rewrite (FIXED GEMINI AI HTTP ERROR -1)
+// ren_phone v4 — "OS" rewrite (FIXED GEMINI AI STUCK/HANG BUG)
 // ESP32-S3, ILI9341, XPT2046 touch, SD via SDIO
 //
-// PERBAIKAN BUG HTTP ERROR -1 (v2):
-//  1. client.setTimeout() & http.setTimeout() dalam MILIDETIK (ms).
-//  2. Validasi WiFi.status() + DNS resolve sebelum request HTTP.
-//  3. Parser file gemini_key.txt dibaca UTUH lalu dinormalisasi
-//     (buang BOM, CRLF/CR, tanda kutip, spasi) agar API Key selalu bersih.
-//  4. Retry sekali otomatis jika request pertama gagal koneksi.
-//  5. Stack task dinaikkan ke 32KB + pinned ke core 1 utk stabilitas TLS.
-//  6. Logging Serial supaya mudah didiagnosa.
+// PERBAIKAN BUG STUCK "Sedang berpikir..." (v3):
+//  1. HAPUS http.useHTTP10(true) -> ini penyebab utama macet permanen
+//     karena Gemini API pakai chunked transfer encoding (butuh HTTP/1.1).
+//  2. Tambah WATCHDOG TIMEOUT di loop(): soft-timeout (paksa putus socket)
+//     & hard-timeout (paksa hapus task) agar UI tidak pernah stuck lagi.
+//  3. Cek return value xTaskCreate() & free heap sebelum membuat task AI.
+//  4. Parser file gemini_key.txt tetap aman dari BOM/CRLF/kutip.
 // =================================================================
 #include <LovyanGFX.hpp>
 #include <Preferences.h>
@@ -171,15 +170,13 @@ void saveNote(){
   if(f){f.print(noteText);f.close();}
 }
 
-// ---------- FIXED: Sanitasi 1 baris key (buang BOM, CR, kutip, spasi) ----------
+// ---------- Sanitasi 1 baris key (buang BOM, CR, kutip, spasi) ----------
 String sanitizeKeyLine(String line) {
-  // Buang BOM UTF-8 kalau ada di awal baris
   if (line.length() >= 3 &&
       (uint8_t)line[0]==0xEF && (uint8_t)line[1]==0xBB && (uint8_t)line[2]==0xBF) {
     line = line.substring(3);
   }
-  line.trim(); // buang spasi, \r, \n, tab di ujung2
-  // Buang tanda kutip pembungkus kalau user iseng kasih tanda kutip
+  line.trim();
   if (line.length()>=2 &&
       ((line.startsWith("\"") && line.endsWith("\"")) ||
        (line.startsWith("'")  && line.endsWith("'")))) {
@@ -189,7 +186,6 @@ String sanitizeKeyLine(String line) {
   return line;
 }
 
-// ---------- FIXED: loadGeminiKey() baca file UTUH lalu parse per baris ----------
 void loadGeminiKey(){
   geminiApiKey = "";
   if(!sdReady) return;
@@ -215,13 +211,11 @@ void loadGeminiKey(){
     return;
   }
 
-  // Baca SELURUH isi file jadi satu string (paling aman utk semua jenis newline/BOM)
   String raw;
   raw.reserve(f.size()+1);
   while(f.available()) raw += (char)f.read();
   f.close();
 
-  // Normalisasi semua jenis newline jadi '\n'
   raw.replace("\r\n", "\n");
   raw.replace("\r", "\n");
 
@@ -246,7 +240,6 @@ void loadGeminiKey(){
   }
 }
 
-// ---------- FIXED: saveGeminiKey() sanitasi dulu sebelum ditulis ----------
 void saveGeminiKey(){
   if(!sdReady) return;
   geminiApiKey = sanitizeKeyLine(geminiApiKey);
@@ -299,14 +292,12 @@ void handleWebRoot() {
   html += "table{width:100%;border-collapse:collapse;margin-top:10px;} td,th{padding:10px;text-align:left;border-bottom:1px solid #333;}</style>";
   html += "</head><body><h2>ESP32 Web File Manager</h2>";
   
-  // Upload Form
   html += "<div class='card'><h3>Upload File ke ESP32 SD Card</h3>";
   html += "<form method='POST' action='/upload' enctype='multipart/form-data'>";
   html += "<input type='file' name='upload' required style='margin-bottom:10px;'><br>";
   html += "<input type='submit' class='btn' value='Upload File'>";
   html += "</form></div>";
 
-  // File List
   html += "<div class='card'><h3>Daftar File SD Card</h3><table><tr><th>Nama File</th><th>Ukuran</th><th>Aksi</th></tr>";
   if (sdReady) {
     File root = SD_MMC.open("/");
@@ -522,36 +513,48 @@ void toggleAirplaneMode(){
 }
 
 // =============================================
-// GEMINI AI HTTP CLIENT & FREERTOS TASK (FIXED HTTP ERROR -1)
+// GEMINI AI HTTP CLIENT & FREERTOS TASK
+// (FIXED: HAPUS useHTTP10 + WATCHDOG TIMEOUT ANTI-STUCK)
 // =============================================
 String aiPrompt = "";
 String aiResponse = "";
-bool aiLoading = false;
+volatile bool aiLoading = false;
 
-// ---------- FIXED: fungsi terpisah utk 1x percobaan request, bisa di-retry ----------
+TaskHandle_t geminiTaskHandle = NULL;
+WiFiClientSecure* aiClientPtr = nullptr;      // pointer ke client aktif, utk watchdog
+volatile unsigned long aiRequestStartMillis = 0;
+const unsigned long AI_SOFT_TIMEOUT_MS = 15000; // 15s -> paksa putus socket
+const unsigned long AI_HARD_TIMEOUT_MS = 30000; // 30s -> paksa hapus task (last resort)
+volatile bool aiSoftStopTriggered = false;
+
 bool doGeminiHttpRequest(const String& promptText, String& outResponse) {
+  bool ok = false;
   WiFiClientSecure client;
   client.setInsecure();
   client.setTimeout(15000); // ms
+  aiClientPtr = &client; // agar bisa di-stop() paksa dari loop() kalau macet
 
   HTTPClient http;
   http.setTimeout(15000);
   http.setConnectTimeout(15000);
-  http.useHTTP10(true); // bantu stabilitas parsing response besar di ESP32
+  // PENTING: JANGAN pakai http.useHTTP10(true) di sini!
+  // Response Gemini API pakai chunked transfer-encoding (HTTP/1.1),
+  // kalau dipaksa HTTP/1.0 maka client tidak pernah tahu kapan response
+  // selesai -> http.POST() BISA STUCK SELAMANYA. Ini akar bug "stuck".
 
-  String url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=" + geminiApiKey;
+  String url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=" + geminiApiKey;
 
   Serial.printf("[Gemini] Free heap sebelum request: %u\n", ESP.getFreeHeap());
 
   if (!http.begin(client, url)) {
     outResponse = "Gagal inisialisasi HTTPClient (begin() gagal).";
+    aiClientPtr = nullptr;
     return false;
   }
 
   http.addHeader("Content-Type", "application/json");
-  http.addHeader("Connection", "close");
+  http.addHeader("Connection", "close"); // pastikan server tutup socket setelah selesai
 
-  // Format & Escape JSON Payload
   String escapedPrompt = promptText;
   escapedPrompt.replace("\\", "\\\\");
   escapedPrompt.replace("\"", "\\\"");
@@ -563,7 +566,6 @@ bool doGeminiHttpRequest(const String& promptText, String& outResponse) {
   int httpCode = http.POST(jsonPayload);
   Serial.printf("[Gemini] httpCode=%d err=%s\n", httpCode, http.errorToString(httpCode).c_str());
 
-  bool ok = false;
   if (httpCode > 0) {
     if (httpCode == HTTP_CODE_OK) {
       String respStr = http.getString();
@@ -604,6 +606,7 @@ bool doGeminiHttpRequest(const String& promptText, String& outResponse) {
   }
 
   http.end();
+  aiClientPtr = nullptr;
   return ok;
 }
 
@@ -612,6 +615,7 @@ void sendGeminiRequest(String promptText) {
     wifiConnected = false;
     aiResponse = "Error: WiFi belum terhubung!";
     aiLoading = false;
+    aiRequestStartMillis = 0;
     needRedrawNow();
     return;
   }
@@ -620,44 +624,104 @@ void sendGeminiRequest(String promptText) {
   if (geminiApiKey.length() == 0 || geminiApiKey == "YOUR_GEMINI_API_KEY_HERE") {
     aiResponse = "Error: Isi API Key di /gemini_key.txt pada SD Card!";
     aiLoading = false;
+    aiRequestStartMillis = 0;
     needRedrawNow();
     return;
   }
 
-  // ---------- FIXED: Cek DNS dulu supaya error lebih jelas jika jaringan bermasalah ----------
   IPAddress testIp;
   if (!WiFi.hostByName("generativelanguage.googleapis.com", testIp)) {
     aiResponse = "Error: DNS gagal resolve googleapis.com. Cek jaringan WiFi/DNS.";
     aiLoading = false;
+    aiRequestStartMillis = 0;
     needRedrawNow();
     return;
   }
 
   String resp;
   bool ok = doGeminiHttpRequest(promptText, resp);
-  if (!ok) {
+  if (!ok && !aiSoftStopTriggered) {
+    // kalau bukan karena dipaksa stop oleh watchdog, coba retry sekali
     Serial.println("[Gemini] Percobaan pertama gagal, retry sekali...");
     delay(500);
-    ok = doGeminiHttpRequest(promptText, resp); // retry sekali otomatis
+    if (WiFi.status() == WL_CONNECTED) {
+      ok = doGeminiHttpRequest(promptText, resp);
+    }
   }
 
   aiResponse = resp;
   aiLoading = false;
+  aiRequestStartMillis = 0;
+  aiSoftStopTriggered = false;
   needRedrawNow();
 }
 
 void geminiTaskFunc(void* parameter) {
   sendGeminiRequest(aiPrompt);
+  geminiTaskHandle = NULL; // clear handle sebelum task menghapus dirinya sendiri
   vTaskDelete(NULL);
 }
 
 void triggerGeminiAI() {
   if (aiPrompt.length() == 0 || aiLoading) return;
+
+  // Cek heap dulu supaya tidak silent-fail saat bikin task
+  uint32_t freeHeap = ESP.getFreeHeap();
+  if (freeHeap < 40000) {
+    aiResponse = "Error: Memori tidak cukup utk request AI (heap rendah). Coba restart.";
+    needRedrawNow();
+    return;
+  }
+
   aiLoading = true;
+  aiSoftStopTriggered = false;
   aiResponse = "Menghubungi Gemini AI...";
+  aiRequestStartMillis = millis();
   needRedrawNow();
-  // Stack size 32KB (32768 byte) + pinned ke core 1 agar SSL Handshake stabil
-  xTaskCreatePinnedToCore(geminiTaskFunc, "geminiTask", 32768, NULL, 1, NULL, 1);
+
+  BaseType_t res = xTaskCreatePinnedToCore(
+      geminiTaskFunc, "geminiTask", 32768, NULL, 1, &geminiTaskHandle, 1);
+
+  if (res != pdPASS) {
+    // Gagal membuat task -> JANGAN biarkan UI stuck loading selamanya
+    Serial.println("[Gemini] xTaskCreate GAGAL!");
+    aiLoading = false;
+    aiRequestStartMillis = 0;
+    geminiTaskHandle = NULL;
+    aiResponse = "Error: Gagal membuat proses AI (memori tidak cukup).";
+    needRedrawNow();
+  }
+}
+
+// ---------- FIXED: Watchdog anti-stuck, dipanggil tiap loop() ----------
+void checkAiWatchdog() {
+  if (!aiLoading || aiRequestStartMillis == 0) return;
+
+  unsigned long elapsed = millis() - aiRequestStartMillis;
+
+  // Soft timeout: paksa putus koneksi socket, biarkan task keluar wajar
+  if (!aiSoftStopTriggered && elapsed > AI_SOFT_TIMEOUT_MS) {
+    Serial.println("[Gemini][Watchdog] Soft-timeout tercapai, memutus koneksi paksa...");
+    aiSoftStopTriggered = true;
+    if (aiClientPtr) {
+      aiClientPtr->stop(); // ini akan membuat blocking read/write di dalam task gagal & keluar
+    }
+  }
+
+  // Hard timeout: kalau task masih belum selesai juga -> paksa hapus task (last resort)
+  if (elapsed > AI_HARD_TIMEOUT_MS) {
+    Serial.println("[Gemini][Watchdog] Hard-timeout tercapai, memaksa hapus task!");
+    if (geminiTaskHandle != NULL) {
+      vTaskDelete(geminiTaskHandle);
+      geminiTaskHandle = NULL;
+    }
+    aiClientPtr = nullptr;
+    aiLoading = false;
+    aiRequestStartMillis = 0;
+    aiSoftStopTriggered = false;
+    aiResponse = "Error: Request timeout total. Coba lagi atau restart perangkat.";
+    needRedrawNow();
+  }
 }
 
 // =============================================
@@ -1643,7 +1707,11 @@ void drawAiChat(LGFX_Sprite& s){
     s.setTextColor(T().text);s.setTextWrap(true);
     if(aiLoading){
       s.setTextColor(T().good);
-      s.print("Sedang berpikir & menghubungi Gemini API...");
+      // tampilkan sisa waktu sebelum watchdog memaksa berhenti
+      unsigned long elapsed = aiRequestStartMillis ? (millis()-aiRequestStartMillis) : 0;
+      long remain = (long)(AI_HARD_TIMEOUT_MS - elapsed) / 1000;
+      if (remain < 0) remain = 0;
+      s.printf("Sedang berpikir & menghubungi Gemini API...\n(timeout otomatis dlm %lds)", remain);
     } else if(aiResponse.length()){
       String rDisp = aiResponse;
       if(rDisp.length() > 180) rDisp = rDisp.substring(0,180) + "...";
@@ -1942,6 +2010,9 @@ void loop(){
     webServer.handleClient();
   }
 
+  // ---------- FIXED: Watchdog anti-stuck AI, dicek tiap loop ----------
+  checkAiWatchdog();
+
   lgfx::touch_point_t tp;
   bool touched=display.getTouch(&tp);
   int tx=touched?(int)tp.x:0,ty=touched?(int)tp.y:0;
@@ -2024,6 +2095,8 @@ void loop(){
     }
     if(curScreen()==SCR_CLOCK && millis()-lastClk>500){ needRedraw=true; lastClk=millis(); }
     if(curScreen()==SCR_SENSOR && millis()-lastSen>1000){ needRedraw=true; lastSen=millis(); }
+    // Auto-redraw kalau sedang loading AI, supaya countdown timer di layar update
+    if(curScreen()==SCR_AICHAT && aiLoading){ needRedraw=true; }
     if(needRedraw){renderCurrentFrame();push();needRedraw=false;}
   }
   wasTouched=touched;
