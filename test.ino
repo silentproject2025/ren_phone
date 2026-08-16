@@ -546,7 +546,7 @@ bool doGeminiHttpRequest(const String& promptText, String& outResponse) {
   // PENTING: JANGAN pakai http.useHTTP10(true) -> penyebab stuck permanen
   // karena Gemini API pakai chunked transfer-encoding (butuh HTTP/1.1).
 
-  String url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=" + geminiApiKey;
+  String url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=" + geminiApiKey;
 
   Serial.printf("[Gemini] Free DRAM internal: %u bytes (blok terbesar: %u)\n",
                 heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
