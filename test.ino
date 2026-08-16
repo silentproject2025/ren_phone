@@ -1,28 +1,17 @@
 // =================================================================
-// ren_phone v4 — "OS" rewrite
+// ren_phone v4 — "OS" rewrite (FIXED VERSION)
 // ESP32-S3, ILI9341, XPT2046 touch, SD via SDIO
 //
-// APA YANG BARU DIBANDING v3:
-//  - App interface (struct AppDef + function pointer) gantiin switch-case
-//  - Navigation stack (navPush/navBack) gantiin currentScreen mentah
-//  - Input engine global (deteksi tap/hold/swipe) terpisah dari logic app
-//  - Control Center (swipe-down dari status bar, dari LAYAR MANAPUN)
-//  - Lock Screen (swipe-up buat unlock)
-//  - Orientasi Landscape <-> Portrait, layout dihitung relatif (SCR_W/SCR_H)
-//
-// CATATAN JUJUR (baca sebelum flash ke hardware):
-//  - Kode ini BELUM di-compile/di-test di ESP32 asli (sandbox aku nggak
-//    punya toolchain Arduino/ESP-IDF). Cek dulu di IDE kamu, kemungkinan
-//    ada typo kecil atau nama API LovyanGFX yang meleset dikit.
-//  - Remap koordinat touch pas ganti rotation itu aku andalkan ke fitur
-//    bawaan LovyanGFX (touch nempel ke panel, ikut rotation). Kalau di
-//    hardware kamu ternyata offset-nya nggak pas pas masuk Portrait,
-//    kemungkinan perlu kalibrasi ULANG khusus buat orientasi itu (lihat
-//    fungsi touchCalForOrient() di bawah, sudah aku siapin slotnya).
-//  - Canvas (app gambar) DIRESET isinya kalau ganti orientasi, karena
-//    ukuran buffer gambarnya beda antara landscape/portrait. Ini
-//    trade-off sadar, bukan bug — scaling bitmap on-the-fly di device
-//    sekecil ini berisiko lebih banyak daripada manfaatnya.
+// PERBAIKAN BUG:
+//  1. Kalkulator: Tombol back ditambahkan, grid kalkulator diperbaiki
+//     posisinya agar tidak menutupi Back button, dan needRedraw diaktifkan.
+//  2. Settings: Tombol "Kalibrasi Ulang" dipindahkan ke sebelah kanan 
+//     (sebelah tombol "Sambungkan") agar tidak bertabrakan dengan tombol Back di kiri bawah.
+//  3. Canvas: Layout toolbar bawah ditata ulang (Palette di baris atas toolbar, 
+//     Back/Brush/Clear di baris bawah toolbar). Tombol Back diprioritaskan 
+//     sehingga tidak sengaja memilih tinta putih.
+//  4. Notepad: Keyboard virtual sekarang memicu needRedraw sehingga langsung
+//     muncul saat layar notepad diketuk, dan penanganan tombol Back diperbaiki.
 // =================================================================
 #include <LovyanGFX.hpp>
 #include <Preferences.h>
@@ -30,18 +19,20 @@
 #include <time.h>
 #include "FS.h"
 #include "SD_MMC.h"
+
 // =============================================
-// TYPE DEFINITIONS — harus di atas supaya Arduino
-// auto-prototype bisa resolve semua tipe
+// TYPE DEFINITIONS
 // =============================================
 enum Screen { SCR_HOME, SCR_CLOCK, SCR_CALC, SCR_SENSOR,
               SCR_SETTINGS, SCR_NOTEPAD, SCR_CANVAS };
 enum Orientation { ORIENT_LANDSCAPE = 0, ORIENT_PORTRAIT = 1 };
+
 struct Theme {
   const char* name;
   uint16_t bg, surface, surface2, accent, accent2,
            text, subtext, divider, good, danger;
 };
+
 Theme themes[] = {
   { "Dark",   0x1084,0x2104,0x31A6,0xFD40,0x04FF,0xFFFF,0x8C51,0x2965,0x07E0,0xF800 },
   { "AMOLED", 0x0000,0x1082,0x2104,0xFD40,0x04FF,0xFFFF,0x8C51,0x2104,0x07E0,0xF800 },
@@ -51,15 +42,18 @@ Theme themes[] = {
 #define THEME_COUNT 4
 int themeIdx = 0;
 Theme& T() { return themes[themeIdx]; }
+
 void saveTheme(){ Preferences p; p.begin("ui",false); p.putInt("theme",themeIdx); p.end(); }
 void loadTheme(){
   Preferences p; p.begin("ui",true);
   themeIdx = p.getInt("theme",0); p.end();
   if(themeIdx<0||themeIdx>=THEME_COUNT) themeIdx=0;
 }
+
 enum KbMode { KB_LOWER, KB_UPPER, KB_NUM };
+
 // =============================================
-// LGFX CONFIG (hardware pin tidak berubah dari v3)
+// LGFX CONFIG
 // =============================================
 class LGFX : public lgfx::LGFX_Device {
   lgfx::Panel_ILI9341 _panel_instance;
@@ -106,12 +100,14 @@ public:
 LGFX display;
 LGFX_Sprite canvas(&display);      // frame buffer utama (full screen)
 LGFX_Sprite canvasApp(&display);   // buffer khusus app Canvas (drawing)
+
 // =============================================
-// ORIENTASI — inti dari layout relatif
+// ORIENTASI
 // =============================================
 Orientation currentOrient = ORIENT_LANDSCAPE;
 int SCR_W = 320, SCR_H = 240;
-#define STATUS_H 22   // tinggi status bar, sama di kedua orientasi
+#define STATUS_H 22   // tinggi status bar
+
 void saveOrientPref() {
   Preferences p; p.begin("ui", false);
   p.putInt("orient", (int)currentOrient);
@@ -123,14 +119,14 @@ Orientation loadOrientPref() {
   p.end();
   return (v == (int)ORIENT_PORTRAIT) ? ORIENT_PORTRAIT : ORIENT_LANDSCAPE;
 }
-// forward decls yang dibutuhkan applyOrientation()
+
 void loadCanvas();
 void saveCanvas();
 int  canvasAppHeight();
 void needRedrawNow();
+
 void applyOrientation(Orientation o, bool doSave) {
   currentOrient = o;
-  // rotation 1 = landscape, rotation 0 = portrait (native panel 240x320)
   display.setRotation(o == ORIENT_LANDSCAPE ? 1 : 0);
   SCR_W = display.width();
   SCR_H = display.height();
@@ -141,10 +137,11 @@ void applyOrientation(Orientation o, bool doSave) {
   canvasApp.setPsram(true);
   canvasApp.createSprite(SCR_W, canvasAppHeight());
   canvasApp.fillSprite(T().bg);
-  loadCanvas(); // load file yang cocok utk orientasi ini (kalau ada)
+  loadCanvas();
   if (doSave) saveOrientPref();
   needRedrawNow();
 }
+
 // =============================================
 // WIFI & NTP
 // =============================================
@@ -154,6 +151,7 @@ const long  GMT_OFFSET=7*3600;
 const int   DST_OFFSET=0;
 bool wifiConnected=false, ntpSynced=false;
 bool airplaneMode=false;
+
 void loadWifiCreds(){
   Preferences p; p.begin("wifi",true);
   p.getString("ssid","").toCharArray(WIFI_SSID,64);
@@ -186,6 +184,7 @@ void toggleAirplaneMode(){
   if(airplaneMode) disconnectWifi();
   else connectWifi();
 }
+
 // =============================================
 // SD CARD
 // =============================================
@@ -194,6 +193,7 @@ void toggleAirplaneMode(){
 #define SD_PIN_D0  40
 bool sdReady=false;
 const char* NOTE_FILE="/notepad.txt";
+
 void initSD(){
   SD_MMC.setPins(SD_PIN_CLK,SD_PIN_CMD,SD_PIN_D0);
   sdReady=SD_MMC.begin("/sdcard",true);
@@ -209,10 +209,9 @@ void saveNote(){
   File f=SD_MMC.open(NOTE_FILE,FILE_WRITE);
   if(f){f.print(noteText);f.close();}
 }
-// Canvas app: file terpisah per orientasi karena ukuran buffer beda
+
 int canvasAppHeight(){
-  // area gambar = tinggi layar - status bar - toolbar bawah
-  return SCR_H - STATUS_H - 46;
+  return SCR_H - STATUS_H - 44;
 }
 const char* canvasFileFor(Orientation o){
   return o==ORIENT_LANDSCAPE ? "/canvas_land.bin" : "/canvas_port.bin";
@@ -230,6 +229,7 @@ void saveCanvas(){
   File f=SD_MMC.open(canvasFileFor(currentOrient),FILE_WRITE);
   if(f){ f.write((uint8_t*)canvasApp.getBuffer(), need); f.close(); }
 }
+
 // =============================================
 // TOUCH CALIBRATION
 // =============================================
@@ -254,26 +254,29 @@ void loadOrRunCalibration(){
   }
   p.end();
 }
+
 // =============================================
 // STATE GLOBAL / LIFECYCLE
 // =============================================
 int brightness=200;
 bool needRedraw=true;
 void needRedrawNow(){ needRedraw=true; }
-bool locked = true;              // mulai dari lock screen
+bool locked = true;
 bool controlCenterOpen = false;
-bool dndMode = false;            // Do Not Disturb: bungkam toast
+bool dndMode = false;
 bool kbVisible=false;
 String* kbTarget=nullptr;
 KbMode kbMode=KB_LOWER;
+
 // -------- Navigation stack --------
 #define NAV_MAX 8
 Screen navStack[NAV_MAX];
 int navDepth=0;
 Screen curScreen(){ return navDepth>0 ? navStack[navDepth-1] : SCR_HOME; }
-// forward decl app lifecycle dispatch (didefinisikan setelah AppDef[])
+
 void appOnEnter(Screen s);
 void appOnExit(Screen s);
+
 void navPush(Screen s){
   appOnExit(curScreen());
   if(navDepth<NAV_MAX) navStack[navDepth++]=s;
@@ -294,8 +297,9 @@ void navBack(){
   kbVisible=false; kbTarget=nullptr;
   needRedraw=true;
 }
+
 // =============================================
-// VIRTUAL KEYBOARD (posisi relatif ke SCR_W/SCR_H)
+// VIRTUAL KEYBOARD
 // =============================================
 const char* kbL[3][10]={
   {"q","w","e","r","t","y","u","i","o","p"},
@@ -310,6 +314,7 @@ const char* kbN[3][10]={
   {"-","=","[","]","/","'","\"","<",">","\\"},
   {"~","!","@","#","$","%","^","&","*","("}};
 const char* (*kbMaps[3])[10]={kbL,kbU,kbN};
+
 int kbKeyW(){ return (SCR_W-8)/10 - 2; }
 int kbKeyH(){ return 22; }
 int kbY(){ return SCR_H - 4*(kbKeyH()+2) - 4; }
@@ -319,6 +324,7 @@ int kbOffCol(int row){
   if(row==2) base += (kbKeyW()+2);
   return base;
 }
+
 void drawKb(LGFX_Sprite& s){
   int y0=kbY();
   s.fillRect(0,y0-2,SCR_W,SCR_H-y0+2,T().surface);
@@ -346,6 +352,7 @@ void drawKb(LGFX_Sprite& s){
   s.fillRoundRect(SCR_W-88,cy,84,kh,3,T().danger);
   s.setTextColor(0xFFFF);s.setCursor(SCR_W-70,cy+kh/2-4);s.print("<--");
 }
+
 void kbTouch(int x,int y){
   if(!kbVisible||!kbTarget) return;
   int y0=kbY();
@@ -359,6 +366,7 @@ void kbTouch(int x,int y){
     else if(x>=96&&x<=96+spaceW) *kbTarget+=" ";
     else if(x>=SCR_W-88&&kbTarget->length()>0)
       *kbTarget=kbTarget->substring(0,kbTarget->length()-1);
+    needRedraw=true;
     return;
   }
   auto* lay=kbMaps[(int)kbMode];
@@ -371,12 +379,14 @@ void kbTouch(int x,int y){
         if(x>=kx&&x<=kx+kw){
           *kbTarget+=lay[r][c];
           if(kbMode==KB_UPPER)kbMode=KB_LOWER;
+          needRedraw=true;
           return;
         }
       }
     }
   }
 }
+
 // =============================================
 // TOAST
 // =============================================
@@ -395,6 +405,7 @@ void drawToast(LGFX_Sprite& s){
   s.setTextColor(T().bg);s.setTextSize(1);
   s.setCursor(tx+8,ty+7);s.print(toastMsg.c_str());
 }
+
 // =============================================
 // STATUS BAR
 // =============================================
@@ -420,6 +431,7 @@ void drawStatusBar(LGFX_Sprite& s){
     s.fillRoundRect(SCR_W/2-12,STATUS_H+2,24,3,2,T().divider);
   }
 }
+
 // =============================================
 // BACK BUTTON
 // =============================================
@@ -427,15 +439,18 @@ void drawStatusBar(LGFX_Sprite& s){
 #define BACK_H 24
 int backX(){ return 4; }
 int backY(){ return SCR_H-BACK_H-3; }
+
 void drawBack(LGFX_Sprite& s){
   if(kbVisible)return;
   s.fillRoundRect(backX(),backY(),BACK_W,BACK_H,6,T().surface2);
   s.setTextColor(T().accent);s.setTextSize(1);
   s.setCursor(backX()+10,backY()+8);s.print("< Back");
 }
+
 bool isBack(int x,int y){
-  return !kbVisible&&x>=backX()&&x<=backX()+BACK_W&&y>=backY()&&y<=backY()+BACK_H;
+  return !kbVisible && x>=backX() && x<=backX()+BACK_W && y>=backY() && y<=backY()+BACK_H;
 }
+
 // =============================================
 // LOCK SCREEN
 // =============================================
@@ -462,6 +477,7 @@ void drawLockScreen(LGFX_Sprite& s){
   s.setCursor(SCR_W/2-strlen(hint)*3, SCR_H-24);
   s.print(hint);
 }
+
 void lockScreenInput(bool touched,bool newT,int tx,int ty){
   static int startY=0;
   if(newT){ startY=ty; lockDragging=true; lockDragY=0; needRedraw=true; }
@@ -475,6 +491,7 @@ void lockScreenInput(bool touched,bool newT,int tx,int ty){
     lockDragY=0; needRedraw=true;
   }
 }
+
 // =============================================
 // CONTROL CENTER
 // =============================================
@@ -484,7 +501,7 @@ bool  ccAnimatingOpen=false, ccAnimatingClose=false;
 void openControlCenter(){ controlCenterOpen=true; ccAnimatingOpen=true; needRedraw=true; }
 void closeControlCenter(){ ccAnimatingOpen=false; ccAnimatingClose=true; needRedraw=true; }
 int ccPanelH(){ return (int)(SCR_H*CC_PANEL_H_FRAC); }
-struct CCToggle{ const char* label; bool* state; void(*action)(); };
+
 void ccActWifi(){ if(wifiConnected) disconnectWifi(); else connectWifi(); }
 void ccActAirplane(){ toggleAirplaneMode(); }
 void ccActDnd(){ dndMode=!dndMode; }
@@ -492,6 +509,7 @@ void ccActTheme(){ themeIdx=(themeIdx+1)%THEME_COUNT; saveTheme(); }
 void ccActOrient(){
   applyOrientation(currentOrient==ORIENT_LANDSCAPE?ORIENT_PORTRAIT:ORIENT_LANDSCAPE, true);
 }
+
 void drawControlCenter(LGFX_Sprite& s){
   int ph = (int)ccOffset;
   if(ph<=0) return;
@@ -532,6 +550,7 @@ void drawControlCenter(LGFX_Sprite& s){
   }
   drawToast(s);
 }
+
 void ccTouch(int x,int y){
   int ph=(int)ccOffset;
   if(y> ph-10 && y<=ph+4){ closeControlCenter(); return; }
@@ -560,8 +579,9 @@ void ccTouch(int x,int y){
     needRedraw=true;
   }
 }
+
 // =============================================
-// HOME SCREEN
+// HOME SCREEN & APP INTERFACE
 // =============================================
 struct AppDef {
   const char* name; char sym; uint16_t color;
@@ -570,6 +590,7 @@ struct AppDef {
   void(*touch)(int,int,bool,bool);
   Screen screen;
 };
+
 void clockEnter(); void clockExit();
 void drawClock(LGFX_Sprite&); void clockTouch(int,int,bool,bool);
 void calcEnter(); void calcExit();
@@ -582,6 +603,7 @@ void notepadEnter(); void notepadExit();
 void drawNotepad(LGFX_Sprite&); void notepadTouch(int,int,bool,bool);
 void canvasEnter(); void canvasExit();
 void drawCanvasScreen(LGFX_Sprite&); void canvasTouch(int,int,bool,bool);
+
 AppDef apps[6] = {
   { "Jam",        'J', 0, clockEnter,    clockExit,    drawClock,        clockTouch,    SCR_CLOCK },
   { "Kalkulator", '+', 0, calcEnter,     calcExit,     drawCalc,         calcTouch,     SCR_CALC },
@@ -590,27 +612,31 @@ AppDef apps[6] = {
   { "Notepad",    'N', 0, notepadEnter,  notepadExit,  drawNotepad,      notepadTouch,  SCR_NOTEPAD },
   { "Canvas",     'C', 0, canvasEnter,   canvasExit,   drawCanvasScreen, canvasTouch,   SCR_CANVAS },
 };
+
 void initAppColors(){
   apps[0].color=T().accent;   apps[1].color=T().accent2;
   apps[2].color=0x07FF;       apps[3].color=0xF81F;
   apps[4].color=0xFFE0;       apps[5].color=T().good;
 }
+
 int appIndexForScreen(Screen s){
   for(int i=0;i<6;i++) if(apps[i].screen==s) return i;
   return -1;
 }
 void appOnEnter(Screen s){ int i=appIndexForScreen(s); if(i>=0 && apps[i].onEnter) apps[i].onEnter(); }
 void appOnExit(Screen s){  int i=appIndexForScreen(s); if(i>=0 && apps[i].onExit)  apps[i].onExit(); }
+
 float homeScrollY=0, homeScrollVel=0;
 int homeCols(){ return currentOrient==ORIENT_LANDSCAPE ? 3 : 2; }
 int homeCardW(){ int cols=homeCols(); return (SCR_W - (cols+1)*6)/cols; }
 int homeCardH(){ return 60; }
 int homeDockY(){ return SCR_H-38-6; }
+
 void drawHome(LGFX_Sprite& s,float sc){
   s.fillSprite(T().bg);
   drawStatusBar(s);
   struct tm t; bool ok=ntpSynced&&getLocalTime(&t);
-  s.setTextColor(T().text);s.setTextSize(currentOrient==ORIENT_LANDSCAPE?3:3);
+  s.setTextColor(T().text);s.setTextSize(3);
   char tb[6]; if(ok)sprintf(tb,"%02d:%02d",t.tm_hour,t.tm_min);else strcpy(tb,"--:--");
   int tw=strlen(tb)*18;
   s.setCursor(SCR_W/2-tw/2,26);s.print(tb);
@@ -644,6 +670,7 @@ void drawHome(LGFX_Sprite& s,float sc){
   }
   drawToast(s);
 }
+
 Screen homeCheck(int x,int y,float sc){
   int dockY=homeDockY();
   if(y>=dockY&&y<=dockY+38){
@@ -663,6 +690,7 @@ Screen homeCheck(int x,int y,float sc){
   }
   return SCR_HOME;
 }
+
 int homeMaxScroll(){
   int cols=homeCols();
   int rows=(6+cols-1)/cols;
@@ -670,6 +698,7 @@ int homeMaxScroll(){
   int needed = gridTop + rows*(ch+gap) - homeDockY();
   return max(0, needed);
 }
+
 // =============================================
 // APP: JAM
 // =============================================
@@ -695,8 +724,9 @@ void drawClock(LGFX_Sprite& s){
 void clockTouch(int x,int y,bool held,bool isNew){
   if(isNew && isBack(x,y)) navBack();
 }
+
 // =============================================
-// APP: KALKULATOR
+// APP: KALKULATOR (FIXED GRID & BACK BUTTON)
 // =============================================
 String calcInput="0";float calcA=0;char calcOp=0;bool calcNew=true;
 const char* calcLabels[5][4] = {
@@ -707,11 +737,13 @@ const char* calcLabels[5][4] = {
   {"0",".","=","="}
 };
 void calcEnter(){} void calcExit(){}
+
 void calcBtnRect(int r,int c,int& x,int& y,int& w,int& h){
-  int top = STATUS_H + 30;
+  int top = STATUS_H + 34;
+  int bottom = backY() - 6;
   int gap = 4;
   int gridW = SCR_W - 8;
-  int gridH = SCR_H - top - 4 - (currentOrient==ORIENT_PORTRAIT?30:0);
+  int gridH = bottom - top;
   int rows=5, cols=4;
   int cw = (gridW-(cols-1)*gap)/cols;
   int ch = (gridH-(rows-1)*gap)/rows;
@@ -723,13 +755,14 @@ void calcBtnRect(int r,int c,int& x,int& y,int& w,int& h){
   x = 4 + c*(cw+gap);
   w = cw;
 }
+
 void drawCalc(LGFX_Sprite& s){
   s.fillSprite(T().bg);drawStatusBar(s);
-  s.setTextColor(T().accent);s.setTextSize(1);s.setCursor(8,28);s.print("Kalkulator");
-  s.fillRoundRect(4,STATUS_H+12,SCR_W-8,16,4,T().surface);
+  s.setTextColor(T().accent);s.setTextSize(1);s.setCursor(8,25);s.print("Kalkulator");
+  s.fillRoundRect(4,STATUS_H+8,SCR_W-8,22,4,T().surface);
   s.setTextColor(T().text);s.setTextSize(2);
   int tw2=calcInput.length()*12;
-  s.setCursor(max(8,SCR_W-12-tw2),STATUS_H+14);s.print(calcInput);
+  s.setCursor(max(8,SCR_W-12-tw2),STATUS_H+11);s.print(calcInput);
   for(int r=0;r<5;r++){
     for(int c=0;c<4;c++){
       int x,y,w,h; calcBtnRect(r,c,x,y,w,h);
@@ -744,8 +777,10 @@ void drawCalc(LGFX_Sprite& s){
       int lw=strlen(l)*12;s.setCursor(x+w/2-lw/2,y+h/2-8);s.print(l);
     }
   }
+  drawBack(s);
   drawToast(s);
 }
+
 void calcApplyLabel(const char* l){
   if(!strcmp(l,"C")){calcInput="0";calcA=0;calcOp=0;calcNew=true;}
   else if(!strcmp(l,"+/-"))calcInput=String(calcInput.toFloat()*-1);
@@ -768,16 +803,23 @@ void calcApplyLabel(const char* l){
   }
   if(calcInput.length()>12)calcInput=calcInput.substring(0,12);
 }
+
 void calcTouch(int x,int y,bool held,bool isNew){
   if(!isNew) return;
+  if(isBack(x,y)){ navBack(); return; }
   for(int r=0;r<5;r++){
     for(int c=0;c<4;c++){
       int bx,by,bw,bh; calcBtnRect(r,c,bx,by,bw,bh);
       if(bw==0) continue;
-      if(x>=bx&&x<=bx+bw&&y>=by&&y<=by+bh){ calcApplyLabel(calcLabels[r][c]); return; }
+      if(x>=bx&&x<=bx+bw&&y>=by&&y<=by+bh){ 
+        calcApplyLabel(calcLabels[r][c]); 
+        needRedraw=true; 
+        return; 
+      }
     }
   }
 }
+
 // =============================================
 // APP: SENSOR
 // =============================================
@@ -807,45 +849,55 @@ void drawSensor(LGFX_Sprite& s){
 void sensorTouch(int x,int y,bool held,bool isNew){
   if(isNew && isBack(x,y)) navBack();
 }
+
 // =============================================
-// APP: SETTINGS
+// APP: SETTINGS (FIXED LAYOUT & RE-CALIBRATION MOVED RIGHT)
 // =============================================
 String settSSID="",settPass="";
 bool settShowPass=false;int settFocus=-1;
 void settingsEnter(){ settSSID=String(WIFI_SSID); settPass=String(WIFI_PASSWORD); }
 void settingsExit(){}
+
 void drawSettings(LGFX_Sprite& s){
   s.fillSprite(T().bg);drawStatusBar(s);
-  s.setTextColor(T().good);s.setTextSize(1);s.setCursor(8,28);s.print("Pengaturan");
-  int rowY = STATUS_H+14;
+  s.setTextColor(T().good);s.setTextSize(1);s.setCursor(8,26);s.print("Pengaturan");
+  int rowY = STATUS_H+12;
   int rowW = SCR_W-16;
-  s.fillRoundRect(8,rowY,rowW,32,8,T().surface);
+  
+  // Row 1: Brightness
+  s.fillRoundRect(8,rowY,rowW,30,8,T().surface);
   s.setTextColor(T().text);s.setCursor(18,rowY+8);s.print("Kecerahan");
-  s.fillRoundRect(18,rowY+20,rowW-70,8,4,T().divider);
-  s.fillRoundRect(19,rowY+21,map(brightness,0,255,0,rowW-72),6,3,T().accent);
+  s.fillRoundRect(18,rowY+18,rowW-70,7,4,T().divider);
+  s.fillRoundRect(19,rowY+19,map(brightness,0,255,0,rowW-72),5,3,T().accent);
   char bb[6];sprintf(bb,"%d%%",brightness*100/255);
-  s.setTextColor(T().subtext);s.setCursor(rowW-40,rowY+20);s.print(bb);
-  rowY+=38;
+  s.setTextColor(T().subtext);s.setCursor(rowW-40,rowY+17);s.print(bb);
+  
+  // Row 2: Theme
+  rowY+=34;
   s.fillRoundRect(8,rowY,rowW,28,8,T().surface);
   s.setTextColor(T().text);s.setCursor(18,rowY+8);s.print("Tema:");
-  int tbtnW=(rowW-60)/THEME_COUNT;
+  int tbtnW=(rowW-50)/THEME_COUNT;
   for(int i=0;i<THEME_COUNT;i++){
     uint16_t bg=(i==themeIdx)?T().accent:T().surface2;
     uint16_t fg=(i==themeIdx)?T().bg:T().text;
-    int tx=60+i*tbtnW;
+    int tx=54+i*tbtnW;
     s.fillRoundRect(tx,rowY+2,tbtnW-4,24,6,bg);
     s.setTextColor(fg);s.setTextSize(1);
     int nl=strlen(themes[i].name)*6;
     s.setCursor(tx+(tbtnW-4)/2-nl/2,rowY+8);s.print(themes[i].name);
   }
-  rowY+=34;
+  
+  // Row 3: SSID
+  rowY+=32;
   s.fillRoundRect(8,rowY,rowW,26,6,settFocus==0?T().surface2:T().surface);
   s.setTextColor(T().subtext);s.setCursor(18,rowY+8);s.print("SSID:");
   s.setTextColor(T().text);s.setCursor(64,rowY+8);
   String sd2=settSSID.length()?settSSID:"(ketuk)";
   if(sd2.length()>22)sd2=sd2.substring(0,22)+"..";
   s.print(sd2.c_str());
-  rowY+=32;
+  
+  // Row 4: Pass
+  rowY+=30;
   s.fillRoundRect(8,rowY,rowW-32,26,6,settFocus==1?T().surface2:T().surface);
   s.setTextColor(T().subtext);s.setCursor(18,rowY+8);s.print("Pass:");
   s.setTextColor(T().text);s.setCursor(64,rowY+8);
@@ -855,149 +907,221 @@ void drawSettings(LGFX_Sprite& s){
   } else s.print("(ketuk)");
   s.fillRoundRect(8+rowW-28,rowY,28,26,4,T().surface2);
   s.setTextColor(T().accent);s.setCursor(8+rowW-22,rowY+8);s.print(settShowPass?"H":"S");
-  rowY+=32;
+  
+  // Row 5: Action Buttons (Sambungkan di kiri, Kalibrasi Ulang di kanan)
+  rowY+=30;
   int btnW=(rowW-8)/2;
+  // Sambungkan (Kiri)
   s.fillRoundRect(8,rowY,btnW,26,8,T().accent);
-  s.setTextColor(T().bg);s.setCursor(20,rowY+8);s.print("Sambungkan");
-  rowY+=32;
+  s.setTextColor(T().bg);s.setCursor(16,rowY+8);s.print("Sambungkan");
+  // Kalibrasi Ulang (Kanan — tidak menabrak Back!)
+  s.fillRoundRect(SCR_W/2+4,rowY,btnW,26,8,T().surface2);
+  s.setTextColor(T().text);s.setCursor(SCR_W/2+10,rowY+8);s.print("Kalibrasi Ulang");
+
+  // Status WiFi
+  rowY+=28;
   s.setTextColor(wifiConnected?T().good:T().danger);
-  String ws=wifiConnected?String(WiFi.SSID()):"Tdk terhubung";
-  s.setCursor(8,rowY);s.print(ws.substring(0,26).c_str());
-  rowY+=18;
-  s.fillRoundRect(8,rowY,btnW,26,8,T().surface2);
-  s.setTextColor(T().text);s.setCursor(18,rowY+8);s.print("Kalibrasi Ulang");
+  String ws=wifiConnected?String("WiFi: ")+WiFi.SSID():"Status: Disconnected";
+  s.setCursor(8,rowY);s.print(ws.substring(0,34).c_str());
+  
   if(kbVisible)drawKb(s);else drawBack(s);
   drawToast(s);
 }
+
 void settingsTouch(int x,int y,bool held,bool isNew){
   if(kbVisible){
     if(!isNew) return;
     int y0=kbY();
     if(y<y0-2){kbVisible=false;kbTarget=nullptr;settFocus=-1;}
     else kbTouch(x,y);
+    needRedraw=true;
     return;
   }
   if(!isNew) return;
-  int rowY = STATUS_H+14;
+  
+  if(isBack(x,y)){ navBack(); return; }
+
   int rowW = SCR_W-16;
-  if(x>=18&&x<=18+rowW-70&&y>=rowY&&y<=rowY+32){
-    brightness=constrain(map(x-18,0,rowW-70,0,255),10,255);
-    display.setBrightness(brightness);return;
+  int rowY = STATUS_H+12;
+  if(x>=18&&x<=18+rowW-70&&y>=rowY&&y<=rowY+30){
+    brightness=constrain(map(x-18,0,rowW-70,10,255),10,255);
+    display.setBrightness(brightness);
+    needRedraw=true;
+    return;
   }
-  rowY+=38;
-  int tbtnW=(rowW-60)/THEME_COUNT;
+  rowY+=34;
+  int tbtnW=(rowW-50)/THEME_COUNT;
   if(y>=rowY&&y<=rowY+28){
     for(int i=0;i<THEME_COUNT;i++){
-      int tx=60+i*tbtnW;
+      int tx=54+i*tbtnW;
       if(x>=tx&&x<=tx+tbtnW-4){
         themeIdx=i;saveTheme();initAppColors();
         showToast("Tema diganti");needRedraw=true;return;
       }
     }
   }
-  rowY+=34;
-  if(y>=rowY&&y<=rowY+26){ settFocus=0;kbTarget=&settSSID;kbVisible=true;kbMode=KB_LOWER;return; }
   rowY+=32;
+  if(y>=rowY&&y<=rowY+26){ settFocus=0;kbTarget=&settSSID;kbVisible=true;kbMode=KB_LOWER;needRedraw=true;return; }
+  rowY+=30;
   if(y>=rowY&&y<=rowY+26){
-    if(x>=8+rowW-28){ settShowPass=!settShowPass; return; }
-    settFocus=1;kbTarget=&settPass;kbVisible=true;kbMode=KB_LOWER;return;
+    if(x>=8+rowW-28){ settShowPass=!settShowPass; needRedraw=true; return; }
+    settFocus=1;kbTarget=&settPass;kbVisible=true;kbMode=KB_LOWER;needRedraw=true;return;
   }
-  rowY+=32;
+  rowY+=30;
   int btnW=(rowW-8)/2;
-  if(x>=8&&x<=8+btnW&&y>=rowY&&y<=rowY+26){
-    settSSID.toCharArray(WIFI_SSID,64);
-    settPass.toCharArray(WIFI_PASSWORD,64);
-    saveWifiCreds();connectWifi();
-    showToast(wifiConnected?"WiFi OK":"Gagal connect");return;
+  if(y>=rowY&&y<=rowY+26){
+    // Left: Sambungkan
+    if(x>=8&&x<=8+btnW){
+      settSSID.toCharArray(WIFI_SSID,64);
+      settPass.toCharArray(WIFI_PASSWORD,64);
+      saveWifiCreds();connectWifi();
+      showToast(wifiConnected?"WiFi OK":"Gagal connect");
+      needRedraw=true;
+      return;
+    }
+    // Right: Kalibrasi Ulang
+    if(x>=SCR_W/2+4 && x<=SCR_W/2+4+btnW){
+      Preferences p;p.begin("touch_cal",false);p.putBool("done",false);p.end();
+      ESP.restart();
+      return;
+    }
   }
-  rowY+=32+18;
-  if(x>=8&&x<=8+btnW&&y>=rowY&&y<=rowY+26){
-    Preferences p;p.begin("touch_cal",false);p.putBool("done",false);p.end();ESP.restart();
-  }
-  if(isBack(x,y)) navBack();
 }
+
 // =============================================
-// APP: NOTEPAD
+// APP: NOTEPAD (FIXED VIRTUAL KEYBOARD & REDRAW)
 // =============================================
 void notepadEnter(){} void notepadExit(){ saveNote(); }
+
 void drawNotepad(LGFX_Sprite& s){
   s.fillSprite(T().bg);drawStatusBar(s);
-  s.setTextColor(T().accent);s.setTextSize(1);s.setCursor(8,28);s.print("Notepad");
-  s.fillRoundRect(SCR_W-80,24,76,18,4,T().danger);
-  s.setTextColor(0xFFFF);s.setCursor(SCR_W-64,29);s.print("Hapus");
-  int bot = kbVisible ? kbY()-4 : backY()-4;
+  s.setTextColor(T().accent);s.setTextSize(1);s.setCursor(8,26);s.print("Notepad");
+  
+  s.fillRoundRect(SCR_W-70,24,62,18,4,T().danger);
+  s.setTextColor(0xFFFF);s.setCursor(SCR_W-56,29);s.print("Hapus");
+  
+  int bot = kbVisible ? kbY()-4 : backY()-6;
   s.fillRoundRect(4,44,SCR_W-8,bot-44,6,T().surface);
   s.setTextColor(T().text);s.setTextSize(1);s.setTextWrap(true);
   s.setCursor(10,50);s.print((noteText+"|").c_str());
+  
   if(kbVisible)drawKb(s);else drawBack(s);
   drawToast(s);
 }
+
 void notepadTouch(int x,int y,bool held,bool isNew){
   if(kbVisible){
     if(!isNew) return;
     int y0=kbY();
     if(y<y0-2){kbVisible=false;kbTarget=nullptr;saveNote();}
     else kbTouch(x,y);
+    needRedraw=true;
     return;
   }
   if(!isNew) return;
-  if(x>=SCR_W-80&&x<=SCR_W-4&&y>=24&&y<=42){noteText="";saveNote();showToast("Dihapus");return;}
+  
+  if(x>=SCR_W-70&&x<=SCR_W-4&&y>=24&&y<=42){
+    noteText="";saveNote();showToast("Dihapus");
+    needRedraw=true;
+    return;
+  }
+  
   if(isBack(x,y)){ navBack(); return; }
-  if(y>=44&&y<=backY()-4){kbTarget=&noteText;kbVisible=true;kbMode=KB_LOWER;}
+  
+  int textBot = backY()-6;
+  if(y>=44&&y<=textBot){
+    kbTarget=&noteText;
+    kbVisible=true;
+    kbMode=KB_LOWER;
+    needRedraw=true;
+  }
 }
+
 // =============================================
-// APP: CANVAS
+// APP: CANVAS (FIXED TOOLBAR LAYOUT & BACK TOUCH)
 // =============================================
-uint16_t palette[]={0xFFFF,0xF800,0x07E0,0x001F,0xFFE0,0x07FF,0xF81F,0xFD40,0x0000};
+uint16_t palette[]={0x0000,0xF800,0x07E0,0x001F,0xFFE0,0x07FF,0xF81F,0xFD40,0xFFFF};
 #define PAL_N 9
 uint16_t drawColor=0xFFFF;
 int brushSize=3;
 int lastDX=-1,lastDY=-1;
+
 int canvasCapY(){ return STATUS_H+2; }
-int canvasToolY(){ return SCR_H-42; }
+int canvasToolY(){ return SCR_H-44; }
+
 void canvasEnter(){ lastDX=-1; }
 void canvasExit(){ saveCanvas(); }
+
 void drawCanvasScreen(LGFX_Sprite& s){
   s.fillSprite(T().bg);
   drawStatusBar(s);
   s.setTextColor(T().good);s.setTextSize(1);s.setCursor(8,14);s.print("Canvas");
+  
+  // Push buffer gambar
   canvasApp.pushSprite(&s,0,canvasCapY());
+  
+  // Area Toolbar bawah
   int ty=canvasToolY();
   s.fillRect(0,ty,SCR_W,SCR_H-ty,T().surface);
   s.drawFastHLine(0,ty,SCR_W,T().divider);
+  
+  // Row 1 Toolbar: Palette Warna
   int palGap = (SCR_W-8)/PAL_N;
   for(int i=0;i<PAL_N;i++){
     int px=4+i*palGap;
-    s.fillCircle(px+8,ty+14,8,palette[i]);
-    if(palette[i]==drawColor)s.drawCircle(px+8,ty+14,10,T().text);
+    s.fillCircle(px+palGap/2,ty+10,7,palette[i]);
+    if(palette[i]==drawColor) s.drawCircle(px+palGap/2,ty+10,9,T().text);
   }
-  int by=ty+28;
-  s.fillRoundRect(4,by,SCR_W/2-8,18,4,T().surface2);
-  s.setTextColor(T().text);char bs[6];sprintf(bs,"B:%d",brushSize);
-  s.setCursor(10,by+5);s.print(bs);
-  s.fillRoundRect(SCR_W/2+4,by,SCR_W/2-8,18,4,T().danger);
-  s.setTextColor(0xFFFF);s.setCursor(SCR_W/2+12,by+5);s.print("CLR");
-  s.fillRoundRect(backX(),backY(),BACK_W,BACK_H,6,T().surface2);
-  s.setTextColor(T().accent);s.setCursor(backX()+10,backY()+8);s.print("< Back");
+  
+  // Row 2 Toolbar: Tombol Back, Ukuran Brush, dan Clear
+  int r2Y = ty + 22;
+  // Tombol Back di kiri bawah toolbar
+  s.fillRoundRect(4,r2Y,56,18,4,T().surface2);
+  s.setTextColor(T().accent);s.setCursor(10,r2Y+5);s.print("< Back");
+  
+  // Ukuran Brush (Tengah)
+  s.fillRoundRect(66,r2Y,60,18,4,T().surface2);
+  s.setTextColor(T().text);char bs[8];sprintf(bs,"B:%d",brushSize);
+  s.setCursor(76,r2Y+5);s.print(bs);
+  
+  // Tombol Clear (Kanan)
+  s.fillRoundRect(SCR_W-64,r2Y,60,18,4,T().danger);
+  s.setTextColor(0xFFFF);s.setCursor(SCR_W-52,r2Y+5);s.print("CLR");
+  
   drawToast(s);
 }
+
 void canvasTouch(int x,int y,bool held,bool isNew){
   int ty=canvasToolY();
+  
+  // Touch di area toolbar
   if(y>=ty){
     if(isNew){
-      int palGap=(SCR_W-8)/PAL_N;
-      for(int i=0;i<PAL_N;i++){int px=4+i*palGap;if(x>=px&&x<=px+16){drawColor=palette[i];lastDX=-1;return;}}
-      int by=ty+28;
-      if(y>=by&&y<=by+18){
-        if(x>=4&&x<=SCR_W/2-4){ brushSize=(brushSize%8)+1; lastDX=-1; return; }
-        if(x>=SCR_W/2+4){ canvasApp.fillSprite(T().bg); lastDX=-1; saveCanvas(); showToast("Dibersihkan"); return; }
+      int r2Y = ty + 22;
+      // 1. Cek Back button dulu
+      if(x>=4 && x<=60 && y>=r2Y){ navBack(); return; }
+      
+      // 2. Cek Palette (Row 1 toolbar)
+      if(y>=ty && y<r2Y){
+        int palGap=(SCR_W-8)/PAL_N;
+        for(int i=0;i<PAL_N;i++){
+          int px=4+i*palGap;
+          if(x>=px && x<px+palGap){ drawColor=palette[i]; lastDX=-1; needRedraw=true; return; }
+        }
+      }
+      
+      // 3. Cek Brush & Clear (Row 2 toolbar)
+      if(y>=r2Y){
+        if(x>=66 && x<=126){ brushSize=(brushSize%8)+1; lastDX=-1; needRedraw=true; return; }
+        if(x>=SCR_W-64 && x<=SCR_W-4){ canvasApp.fillSprite(T().bg); lastDX=-1; saveCanvas(); showToast("Dibersihkan"); needRedraw=true; return; }
       }
     }
     return;
   }
-  if(isNew && isBack(x,y)){ navBack(); return; }
+  
+  // Touch di area gambar
   int capY=canvasCapY();
-  if(y>=capY&&y<ty){
+  if(y>=capY && y<ty){
     int cy=y-capY;
     if(held&&lastDX>=0){
       canvasApp.drawLine(lastDX,lastDY,x,cy,drawColor);
@@ -1005,10 +1129,12 @@ void canvasTouch(int x,int y,bool held,bool isNew){
         canvasApp.drawLine(lastDX,lastDY+t2,x,cy+t2,drawColor);
         canvasApp.drawLine(lastDX+t2,lastDY,x+t2,cy,drawColor);
       }
-    } else canvasApp.fillCircle(x,cy,brushSize,drawColor);
+    } else canvasApp.fillCircle(x,cy,brushSize/2,drawColor);
     lastDX=x;lastDY=cy;
+    needRedraw=true;
   }
 }
+
 // =============================================
 // PUSH FRAME
 // =============================================
@@ -1024,6 +1150,7 @@ void renderCurrentFrame(){
   }
   if(!locked && controlCenterOpen) drawControlCenter(canvas);
 }
+
 // =============================================
 // SETUP
 // =============================================
@@ -1032,6 +1159,7 @@ int  touchStartX=0,touchStartY=0,touchLastY=0;
 bool isSwiping=false;
 unsigned long swipeStartTime=0;
 int gStartX=0,gStartY=0; bool gGestureDone=false;
+
 void setup(){
   Serial.begin(115200);
   display.init();
@@ -1053,7 +1181,7 @@ void setup(){
   loadWifiCreds();
   connectWifi();
   canvasApp.setPsram(true);
-  canvasApp.createSprite(320,240-STATUS_H-46);
+  canvasApp.createSprite(320,240-STATUS_H-44);
   canvasApp.fillSprite(T().bg);
   loadNote();
   Orientation savedOrient = loadOrientPref();
@@ -1061,6 +1189,7 @@ void setup(){
   locked = true;
   needRedraw = true;
 }
+
 // =============================================
 // LOOP
 // =============================================
@@ -1070,7 +1199,8 @@ void loop(){
   bool touched=display.getTouch(&tp);
   int tx=touched?(int)tp.x:0,ty=touched?(int)tp.y:0;
   bool newT=touched&&!wasTouched;
-  // -------- Control Center open/close animation --------
+
+  // -------- Control Center animation --------
   if(ccAnimatingOpen){
     ccOffset += (float)ccPanelH()/6.0f;
     if(ccOffset>=ccPanelH()){ ccOffset=ccPanelH(); ccAnimatingOpen=false; }
@@ -1080,19 +1210,22 @@ void loop(){
     if(ccOffset<=0){ ccOffset=0; ccAnimatingClose=false; controlCenterOpen=false; }
     needRedraw=true;
   }
-  // -------- Lock screen punya prioritas tertinggi --------
+
+  // -------- Lock Screen --------
   if(locked){
     lockScreenInput(touched,newT,tx,ty);
     if(needRedraw){ renderCurrentFrame(); push(); needRedraw=false; }
     wasTouched=touched; delay(8); return;
   }
-  // -------- Control Center sedang terbuka --------
+
+  // -------- Control Center Open --------
   if(controlCenterOpen){
     if(newT) ccTouch(tx,ty);
     if(needRedraw){ renderCurrentFrame(); push(); needRedraw=false; }
     wasTouched=touched; delay(8); return;
   }
-  // -------- Gesture global --------
+
+  // -------- Global Gestures --------
   if(newT){ gStartX=tx; gStartY=ty; gGestureDone=false; }
   if(touched && !gGestureDone && !kbVisible){
     int dy=ty-gStartY, dx=tx-gStartX;
@@ -1105,6 +1238,7 @@ void loop(){
       wasTouched=touched; delay(8); return;
     }
   }
+
   // ============ HOME ============
   if(curScreen()==SCR_HOME){
     if(touched){
@@ -1134,13 +1268,14 @@ void loop(){
       }
     }
     if(needRedraw){renderCurrentFrame();push();needRedraw=false;}
+
   // ============ APP SCREENS ============
   } else {
     int idx=appIndexForScreen(curScreen());
     if(idx>=0){
       bool held = touched&&wasTouched;
       if(curScreen()==SCR_CANVAS){
-        if(touched){ apps[idx].touch(tx,ty,held,newT); needRedraw=true; }
+        if(touched){ apps[idx].touch(tx,ty,held,newT); }
       } else {
         if(newT) apps[idx].touch(tx,ty,false,true);
         else if(touched && held) apps[idx].touch(tx,ty,true,false);
