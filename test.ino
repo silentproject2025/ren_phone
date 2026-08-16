@@ -3,10 +3,10 @@
 // ESP32-S3, ILI9341, XPT2046 touch, SD via SDIO
 //
 // PERBAIKAN BUG HTTP ERROR -1:
-//  1. Menambah Stack Size task FreeRTOS Gemini dari 8KB ke 16KB (16384 byte)
-//     karena MbedTLS SSL Handshake di ESP32-S3 butuh alokasi memori stack cukup besar.
-//  2. Menambahkan timeout socket & TLS connection handshake (15000 ms).
-//  3. Menambahkan helper http.errorToString() untuk diagnosa koneksi detail.
+//  1. Mengubah client.setTimeout(15) menjadi client.setTimeout(15000) 
+//     karena setTimeout di Arduino dihitung dalam MILIDETIK (ms).
+//  2. Menambah validasi WiFi.status() real-time sebelum request HTTP.
+//  3. Memperbaiki JSON parser balasan Gemini agar aman dari tanda kutip (\").
 // =================================================================
 #include <LovyanGFX.hpp>
 #include <Preferences.h>
@@ -478,7 +478,8 @@ String aiResponse = "";
 bool aiLoading = false;
 
 void sendGeminiRequest(String promptText) {
-  if (!wifiConnected) {
+  if (WiFi.status() != WL_CONNECTED) {
+    wifiConnected = false;
     aiResponse = "Error: WiFi belum terhubung!";
     aiLoading = false;
     needRedrawNow();
@@ -495,7 +496,7 @@ void sendGeminiRequest(String promptText) {
 
   WiFiClientSecure client;
   client.setInsecure();
-  client.setTimeout(15); // Timeout socket TLS 15 detik
+  client.setTimeout(15000); // FIX: 15000 ms (15 detik), bukan 15 ms!
 
   HTTPClient http;
   String url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=" + geminiApiKey;
@@ -506,7 +507,7 @@ void sendGeminiRequest(String promptText) {
   if (http.begin(client, url)) {
     http.addHeader("Content-Type", "application/json");
 
-    // Format & Escape JSON Payload dengan benar
+    // Format & Escape JSON Payload
     String escapedPrompt = promptText;
     escapedPrompt.replace("\\", "\\\\");
     escapedPrompt.replace("\"", "\\\"");
@@ -519,15 +520,27 @@ void sendGeminiRequest(String promptText) {
     if (httpCode > 0) {
       if (httpCode == HTTP_CODE_OK || httpCode == 200) {
         String respStr = http.getString();
-        int textIdx = respStr.indexOf("\"text\": \"");
+        int textIdx = respStr.indexOf("\"text\":");
         if (textIdx >= 0) {
-          int start = textIdx + 9;
-          int end = respStr.indexOf("\"", start);
-          if (end > start) {
-            String rawText = respStr.substring(start, end);
-            rawText.replace("\\n", "\n");
-            rawText.replace("\\\"", "\"");
-            aiResponse = rawText;
+          int start = respStr.indexOf("\"", textIdx + 7);
+          if (start >= 0) {
+            start += 1;
+            int end = start;
+            while (end < (int)respStr.length()) {
+              end = respStr.indexOf("\"", end);
+              if (end < 0) break;
+              if (respStr.charAt(end - 1) != '\\') break;
+              end++;
+            }
+            if (end > start) {
+              String rawText = respStr.substring(start, end);
+              rawText.replace("\\n", "\n");
+              rawText.replace("\\\"", "\"");
+              rawText.replace("\\\\", "\\");
+              aiResponse = rawText;
+            } else {
+              aiResponse = respStr;
+            }
           } else {
             aiResponse = respStr;
           }
@@ -560,7 +573,7 @@ void triggerGeminiAI() {
   aiLoading = true;
   aiResponse = "Menghubungi Gemini AI...";
   needRedrawNow();
-  // Gunakan stack size 16KB (16384 byte) agar MbedTLS SSL Handshake tidak stack overflow
+  // Stack size 16KB (16384 byte) agar SSL Handshake stabil
   xTaskCreate(geminiTaskFunc, "geminiTask", 16384, NULL, 1, NULL);
 }
 
