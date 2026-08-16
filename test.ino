@@ -2,6 +2,8 @@
 #include <Preferences.h>
 #include <WiFi.h>
 #include <time.h>
+#include "FS.h"
+#include "SD_MMC.h"
 
 // =============================================
 // WIFI CONFIG
@@ -11,6 +13,17 @@ char WIFI_PASSWORD[64] = "";
 const char* NTP_SERVER = "pool.ntp.org";
 const long  GMT_OFFSET = 7 * 3600;
 const int   DST_OFFSET = 0;
+
+// =============================================
+// SD CARD CONFIG (SDIO 1-bit mode)
+// =============================================
+#define SD_PIN_CLK 39
+#define SD_PIN_CMD 38
+#define SD_PIN_D0  40
+bool sdReady = false;
+
+const char* NOTE_FILE   = "/notepad.txt";
+const char* CANVAS_FILE = "/canvas.bin";
 
 // =============================================
 // WARNA
@@ -281,6 +294,20 @@ void saveWifiCreds() {
 }
 
 // =============================================
+// SD CARD (SDIO 1-bit: CLK=39, CMD=38, D0=40)
+// =============================================
+void initSD() {
+  SD_MMC.setPins(SD_PIN_CLK, SD_PIN_CMD, SD_PIN_D0);
+  // mode 1-bit (parameter kedua "true") karena cuma D0 yang dipakai
+  sdReady = SD_MMC.begin("/sdcard", true);
+  if (!sdReady) {
+    Serial.println("SD Card: gagal mount / tidak terpasang");
+  } else {
+    Serial.printf("SD Card: OK, %llu MB\n", SD_MMC.cardSize() / (1024 * 1024));
+  }
+}
+
+// =============================================
 // STATUS BAR & BACK BUTTON
 // =============================================
 void drawStatusBar(LGFX_Sprite& spr) {
@@ -302,6 +329,11 @@ void drawStatusBar(LGFX_Sprite& spr) {
   } else {
     spr.fillCircle(302, 17, 2, COL_RED);
     spr.drawLine(298, 13, 306, 21, COL_RED);
+  }
+  // Indikator SD card (hanya tampil kalau kartu terpasang & termount)
+  if (sdReady) {
+    spr.setTextColor(COL_GREEN); spr.setTextSize(1);
+    spr.setCursor(266, 8); spr.print("SD");
   }
 }
 
@@ -647,6 +679,24 @@ void settingsHandleTouch(int x, int y) {
 // =============================================
 String noteText = "";
 
+void loadNoteFromSD() {
+  if (!sdReady) return;
+  File f = SD_MMC.open(NOTE_FILE, FILE_READ);
+  if (f) {
+    noteText = f.readString();
+    f.close();
+  }
+}
+
+void saveNoteToSD() {
+  if (!sdReady) return;
+  File f = SD_MMC.open(NOTE_FILE, FILE_WRITE);
+  if (f) {
+    f.print(noteText);
+    f.close();
+  }
+}
+
 void drawNotepad(LGFX_Sprite& spr) {
   spr.fillSprite(COL_BG);
   drawStatusBar(spr);
@@ -680,7 +730,7 @@ void notepadHandleTouch(int x, int y) {
     return;
   }
   // Tombol Hapus
-  if (x>=240&&x<=316&&y>=26&&y<=44) { noteText=""; return; }
+  if (x>=240&&x<=316&&y>=26&&y<=44) { noteText=""; saveNoteToSD(); return; }
   // Area teks → buka keyboard
   if (y>=46&&y<=208) {
     kbTarget=&noteText; kbVisible=true; kbMode=KB_LOWER;
@@ -704,11 +754,35 @@ uint16_t palette[] = {
 #define CANVAS_AREA_H  190  // y 26~216
 #define TOOLBAR_Y      216
 
+// Ukuran buffer mentah RGB565: lebar 320 x tinggi CANVAS_AREA_H x 2 byte/pixel
+#define CANVAS_BUF_SIZE (320UL * CANVAS_AREA_H * 2UL)
+
+void loadCanvasFromSD() {
+  if (!sdReady) return;
+  File f = SD_MMC.open(CANVAS_FILE, FILE_READ);
+  if (f && f.size() == CANVAS_BUF_SIZE) {
+    uint8_t* buf = (uint8_t*)canvasApp.getBuffer();
+    f.read(buf, CANVAS_BUF_SIZE);
+  }
+  if (f) f.close();
+}
+
+void saveCanvasToSD() {
+  if (!sdReady) return;
+  File f = SD_MMC.open(CANVAS_FILE, FILE_WRITE);
+  if (f) {
+    uint8_t* buf = (uint8_t*)canvasApp.getBuffer();
+    f.write(buf, CANVAS_BUF_SIZE);
+    f.close();
+  }
+}
+
 void initCanvasApp() {
   if (!canvasInit) {
     canvasApp.setPsram(true);
     canvasApp.createSprite(320, CANVAS_AREA_H);
     canvasApp.fillSprite(COL_BG);
+    loadCanvasFromSD(); // auto-load gambar terakhir kalau ada di SD
     canvasInit = true;
   }
 }
@@ -762,7 +836,7 @@ void canvasHandleTouch(int x, int y, bool isHeld) {
         if (x >= px && x <= px + 20) { drawColor = palette[i]; lastDrawX = -1; return; }
       }
       if (x >= 224 && x <= 268) { brushSize = (brushSize % 8) + 1; lastDrawX = -1; return; }
-      if (x >= 272) { canvasApp.fillSprite(COL_BG); lastDrawX = -1; return; }
+      if (x >= 272) { canvasApp.fillSprite(COL_BG); lastDrawX = -1; saveCanvasToSD(); return; }
     }
     return;
   }
@@ -812,6 +886,9 @@ void setup() {
   pushFrame(); delay(1400);
 
   if (display.touch()) loadOrRunCalibration();
+
+  initSD();          // mount SD card (SDIO 1-bit: CLK=39 CMD=38 D0=40)
+  loadNoteFromSD();  // load isi notepad terakhir (kalau ada)
 
   loadWifiCreds();
   settWifiSSID = String(WIFI_SSID);
@@ -892,6 +969,7 @@ void loop() {
     if (currentScreen == SCR_CANVAS && touched) {
       // Back button di canvas
       if (newTouch && ty >= BACK_Y && tx >= BACK_X && tx <= BACK_X + BACK_W) {
+        saveCanvasToSD(); // auto-save gambar ke SD sebelum keluar
         currentScreen = SCR_HOME; needRedraw = true;
         goto endLoop;
       }
@@ -904,6 +982,7 @@ void loop() {
 
       // Back button — hanya kalau keyboard tidak aktif
       if (backButtonPressed(tx, ty)) {
+        if (currentScreen == SCR_NOTEPAD) saveNoteToSD(); // auto-save catatan ke SD
         kbVisible = false; kbTarget = nullptr;
         currentScreen = SCR_HOME; needRedraw = true;
         goto endLoop;
