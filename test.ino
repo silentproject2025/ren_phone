@@ -128,6 +128,7 @@ int  brightness    = 200;
 // Home scroll
 float homeScrollY    = 0;
 float homeScrollVel  = 0;
+int   touchStartX    = 0;
 int   touchStartY    = 0;
 int   touchLastY     = 0;
 bool  isSwiping      = false;
@@ -945,13 +946,15 @@ void loop() {
   if (currentScreen == SCR_HOME) {
     if (touched) {
       if (!wasTouched) {
+        touchStartX = tx;
         touchStartY = ty;
         touchLastY  = ty;
         isSwiping   = false;
         swipeStartTime = millis();
       } else {
         int dy = touchLastY - ty;
-        if (abs(dy) > 3) isSwiping = true;
+        int totalDy = abs(ty - touchStartY);
+        if (totalDy > 12) isSwiping = true;
         if (isSwiping) {
           homeScrollVel = dy * 0.8f;
           homeScrollY  += dy;
@@ -962,11 +965,9 @@ void loop() {
         touchLastY = ty;
       }
     } else if (wasTouched) {
-      // Tap (bukan swipe)
-      if (!isSwiping && millis() - swipeStartTime < 300) {
-        Screen next = homeTouchCheck(touchStartY > 0 ? tx : tx, touchStartY > 0 ? touchStartY : ty, homeScrollY);
-        // Pakai touchStartY untuk Y
-        next = homeTouchCheck(tx, touchStartY, homeScrollY);
+      // Tap (bukan swipe) - pakai koordinat START
+      if (!isSwiping && millis() - swipeStartTime < 400) {
+        Screen next = homeTouchCheck(touchStartX, touchStartY, homeScrollY);
         if (next != SCR_HOME) {
           currentScreen = next;
           kbVisible = false; kbTarget = nullptr;
