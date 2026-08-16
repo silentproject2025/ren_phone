@@ -1,16 +1,10 @@
 // =================================================================
-// ren_phone v4 — "OS" rewrite (WITH FILE EXPLORER & WEB FILE MANAGER)
+// ren_phone v4 — "OS" rewrite (HUMAN READABLE GEMINI_KEY.TXT)
 // ESP32-S3, ILI9341, XPT2046 touch, SD via SDIO
 //
 // FITUR BARU:
-//  1. Web File Manager (WiFi): Akses & Upload File dari HP/PC via Browser!
-//     Buka IP ESP32 (misal: http://192.168.1.100) di browser HP untuk
-//     upload, download, dan hapus file di SD Card secara wireless.
-//  2. File Explorer App (Layar ESP32): Aplikasi penjelajah file di HP ESP32.
-//     Bisa melihat daftar file SD Card, membaca isi file teks, menghapus file,
-//     dan menampilkan URL Server Web WiFi untuk upload dari HP.
-//  3. Gemini AI Chat App dengan auto-create /gemini_key.txt di SD Card.
-//  4. Auto Scan WiFi & perbaikan bug layout layar.
+//  File /gemini_key.txt di SD Card dibuat dengan format ramah manusia (human readable)
+//  dilengkapi petunjuk & cara mendapatkan API Key gratis dari Google AI Studio.
 // =================================================================
 #include <LovyanGFX.hpp>
 #include <Preferences.h>
@@ -177,14 +171,28 @@ void loadGeminiKey(){
   if(!SD_MMC.exists(GEMINI_KEY_FILE)){
     File f = SD_MMC.open(GEMINI_KEY_FILE, FILE_WRITE);
     if(f){
-      f.print("YOUR_GEMINI_API_KEY_HERE");
+      f.println("# =============================================");
+      f.println("# GEMINI API KEY CONFIGURATION (ESP32-S3)");
+      f.println("# Dapatkan API key gratis dari Google AI Studio:");
+      f.println("# https://aistudio.google.com/app/apikey");
+      f.println("#");
+      f.println("# Tempel API Key kamu di baris tanpa tanda '#':");
+      f.println("# =============================================");
+      f.println("YOUR_GEMINI_API_KEY_HERE");
       f.close();
     }
   }
   File f = SD_MMC.open(GEMINI_KEY_FILE, FILE_READ);
   if(f){
-    geminiApiKey = f.readString();
-    geminiApiKey.trim();
+    geminiApiKey = "";
+    while(f.available()){
+      String line = f.readStringUntil('\n');
+      line.trim();
+      if(line.length() > 0 && !line.startsWith("#")){
+        geminiApiKey = line;
+        break;
+      }
+    }
     f.close();
   }
 }
@@ -192,7 +200,12 @@ void saveGeminiKey(){
   if(!sdReady) return;
   File f = SD_MMC.open(GEMINI_KEY_FILE, FILE_WRITE);
   if(f){
-    f.print(geminiApiKey);
+    f.println("# =============================================");
+    f.println("# GEMINI API KEY CONFIGURATION (ESP32-S3)");
+    f.println("# Dapatkan API key gratis dari Google AI Studio:");
+    f.println("# https://aistudio.google.com/app/apikey");
+    f.println("# =============================================");
+    f.println(geminiApiKey);
     f.close();
   }
 }
@@ -218,7 +231,7 @@ void saveCanvas(){
 }
 
 // =============================================
-// WEB SERVER (WIFI FILE MANAGER / UPLOADER FROM PHONE)
+// WEB SERVER (FILE MANAGER & INLINE TEXT EDITOR)
 // =============================================
 WebServer webServer(80);
 bool webServerRunning = false;
@@ -227,9 +240,9 @@ File uploadFile;
 void handleWebRoot() {
   String html = "<!DOCTYPE html><html><head><meta name='viewport' content='width=device-width, initial-scale=1'>";
   html += "<title>ESP32 File Manager</title>";
-  html += "<style>body{font-family:sans-serif;background:#121212;color:#fff;padding:15px;max-width:600px;margin:auto;}";
+  html += "<style>body{font-family:sans-serif;background:#121212;color:#fff;padding:15px;max-width:650px;margin:auto;}";
   html += ".card{background:#1e1e1e;padding:15px;border-radius:10px;margin-bottom:15px;box-shadow:0 4px 6px rgba(0,0,0,0.3);}";
-  html += "a{color:#00e5ff;text-decoration:none;} .btn{background:#e91e63;color:#fff;padding:8px 14px;border:none;border-radius:6px;cursor:pointer;font-weight:bold;}";
+  html += "a{color:#00e5ff;text-decoration:none;margin-right:5px;} .btn{background:#e91e63;color:#fff;padding:8px 14px;border:none;border-radius:6px;cursor:pointer;font-weight:bold;}";
   html += "table{width:100%;border-collapse:collapse;margin-top:10px;} td,th{padding:10px;text-align:left;border-bottom:1px solid #333;}</style>";
   html += "</head><body><h2>ESP32 Web File Manager</h2>";
   
@@ -251,8 +264,13 @@ void handleWebRoot() {
         count++;
         String fname = String(f.name());
         if (!fname.startsWith("/")) fname = "/" + fname;
-        html += "<tr><td>" + fname + "</td><td>" + String(f.size()) + " B</td>";
-        html += "<td><a href='/download?file=" + fname + "'>Download</a> | ";
+        html += "<tr><td>" + fname + "</td><td>" + String(f.size()) + " B</td><td>";
+        
+        if (fname.endsWith(".txt") || fname.endsWith(".bin") == false) {
+          html += "<a href='/edit?file=" + fname + "' style='color:#ffca28;'>Edit</a> | ";
+        }
+        
+        html += "<a href='/download?file=" + fname + "'>Download</a> | ";
         html += "<a href='/delete?file=" + fname + "' style='color:#ff5252' onclick=\"return confirm('Hapus file " + fname + "?')\">Hapus</a></td></tr>";
       }
       f = root.openNextFile();
@@ -264,6 +282,56 @@ void handleWebRoot() {
   html += "</table></div></body></html>";
 
   webServer.send(200, "text/html", html);
+}
+
+void handleWebEditGet() {
+  if (!webServer.hasArg("file")) {
+    webServer.send(400, "text/plain", "Missing file parameter");
+    return;
+  }
+  String fname = webServer.arg("file");
+  if (!fname.startsWith("/")) fname = "/" + fname;
+  String content = "";
+  if (sdReady && SD_MMC.exists(fname)) {
+    File f = SD_MMC.open(fname, FILE_READ);
+    if (f) { content = f.readString(); f.close(); }
+  }
+
+  String html = "<!DOCTYPE html><html><head><meta name='viewport' content='width=device-width, initial-scale=1'>";
+  html += "<title>Edit " + fname + "</title>";
+  html += "<style>body{font-family:sans-serif;background:#121212;color:#fff;padding:15px;max-width:600px;margin:auto;}";
+  html += "textarea{width:100%;height:260px;background:#1e1e1e;color:#00e5ff;border:1px solid #444;border-radius:8px;padding:12px;font-size:14px;box-sizing:border-box;}";
+  html += ".btn{background:#4caf50;color:#fff;padding:10px 18px;border:none;border-radius:6px;cursor:pointer;font-weight:bold;font-size:14px;margin-top:10px;}";
+  html += ".btn-back{background:#555;color:#fff;padding:10px 18px;border-radius:6px;text-decoration:none;display:inline-block;margin-right:10px;font-size:14px;}</style>";
+  html += "</head><body><h2>Edit File: " + fname + "</h2>";
+  html += "<form method='POST' action='/save'>";
+  html += "<input type='hidden' name='file' value='" + fname + "'>";
+  html += "<textarea name='content'>" + content + "</textarea><br>";
+  html += "<a href='/' class='btn-back'>&lt; Batal</a>";
+  html += "<input type='submit' class='btn' value='Simpan File'>";
+  html += "</form></body></html>";
+
+  webServer.send(200, "text/html", html);
+}
+
+void handleWebEditPost() {
+  if (webServer.hasArg("file") && webServer.hasArg("content")) {
+    String fname = webServer.arg("file");
+    String content = webServer.arg("content");
+    if (!fname.startsWith("/")) fname = "/" + fname;
+    if (sdReady) {
+      File f = SD_MMC.open(fname, FILE_WRITE);
+      if (f) {
+        f.print(content);
+        f.close();
+        if (fname == NOTE_FILE) loadNote();
+        if (fname == GEMINI_KEY_FILE) loadGeminiKey();
+        needRedrawNow();
+      }
+    }
+  }
+  webServer.sendHeader("Location", "/");
+  webServer.send(303);
 }
 
 void handleUploadStream() {
@@ -310,6 +378,8 @@ void handleWebDownload() {
 void startWebServer(){
   if(webServerRunning) return;
   webServer.on("/", HTTP_GET, handleWebRoot);
+  webServer.on("/edit", HTTP_GET, handleWebEditGet);
+  webServer.on("/save", HTTP_POST, handleWebEditPost);
   webServer.on("/upload", HTTP_POST, [](){
     webServer.sendHeader("Location", "/");
     webServer.send(303);
@@ -385,7 +455,7 @@ void connectWifi(){
   if(wifiConnected){
     configTime(GMT_OFFSET,DST_OFFSET,NTP_SERVER);
     struct tm tm; if(getLocalTime(&tm,5000)) ntpSynced=true;
-    startWebServer(); // Jalankan Web Server File Manager saat terhubung ke WiFi
+    startWebServer();
   }
 }
 void disconnectWifi(){
@@ -911,7 +981,7 @@ void drawHome(LGFX_Sprite& s,float sc){
   }
   int dockY=homeDockY();
   s.fillRoundRect(6,dockY,SCR_W-12,38,12,T().surface2);
-  int dockIdx[4]={0,4,6,7}; // Jam, Notepad, AI Chat, Files
+  int dockIdx[4]={0,4,6,7};
   int dw=(SCR_W-12)/4;
   for(int i=0;i<4;i++){
     int di=dockIdx[i];
@@ -1122,7 +1192,6 @@ void drawSettings(LGFX_Sprite& s){
   s.fillSprite(T().bg);drawStatusBar(s);
   s.setTextColor(T().good);s.setTextSize(1);s.setCursor(8,26);s.print("Pengaturan");
   
-  // Tombol Pindai WiFi
   s.fillRoundRect(SCR_W-74,24,66,18,4,wifiScanning?T().surface2:T().accent);
   s.setTextColor(wifiScanning?T().subtext:T().bg);
   s.setCursor(SCR_W-68,29);
@@ -1131,7 +1200,6 @@ void drawSettings(LGFX_Sprite& s){
   int rowY = STATUS_H+12;
   int rowW = SCR_W-16;
   
-  // Row 1: Kecerahan
   s.fillRoundRect(8,rowY,rowW,26,6,T().surface);
   s.setTextColor(T().text);s.setCursor(14,rowY+8);s.print("Cerah:");
   s.fillRoundRect(58,rowY+9,rowW-90,7,3,T().divider);
@@ -1139,7 +1207,6 @@ void drawSettings(LGFX_Sprite& s){
   char bb[6];sprintf(bb,"%d%%",brightness*100/255);
   s.setTextColor(T().subtext);s.setCursor(rowW-28,rowY+8);s.print(bb);
   
-  // Row 2: Tema
   rowY+=28;
   s.fillRoundRect(8,rowY,rowW,26,6,T().surface);
   s.setTextColor(T().text);s.setCursor(14,rowY+8);s.print("Tema:");
@@ -1154,7 +1221,6 @@ void drawSettings(LGFX_Sprite& s){
     s.setCursor(tx+(tbtnW-3)/2-nl/2,rowY+7);s.print(themes[i].name);
   }
   
-  // Row 3: List WiFi Auto Scan
   rowY+=28;
   s.fillRoundRect(8,rowY,rowW,36,6,T().surface);
   s.setTextColor(T().subtext);s.setCursor(14,rowY+4);
@@ -1181,7 +1247,6 @@ void drawSettings(LGFX_Sprite& s){
     }
   }
 
-  // Row 4: Input SSID & Pass
   rowY+=38;
   s.fillRoundRect(8,rowY,rowW,22,4,settFocus==0?T().surface2:T().surface);
   s.setTextColor(T().subtext);s.setCursor(14,rowY+6);s.print("SSID:");
@@ -1201,7 +1266,6 @@ void drawSettings(LGFX_Sprite& s){
   s.fillRoundRect(8+rowW-24,rowY,24,22,4,T().surface2);
   s.setTextColor(T().accent);s.setCursor(8+rowW-18,rowY+6);s.print(settShowPass?"H":"S");
   
-  // Row 5: Action Buttons
   rowY+=26;
   int btnW=(rowW-8)/2;
   s.fillRoundRect(8,rowY,btnW,24,6,T().accent);
@@ -1572,7 +1636,6 @@ void drawFileExplorer(LGFX_Sprite& s){
   s.fillSprite(T().bg);drawStatusBar(s);
   s.setTextColor(0x3ADF);s.setTextSize(1);s.setCursor(8,26);s.print("File Explorer");
 
-  // Tampilkan URL Web Server File Manager di Kanan Atas
   if(wifiConnected && webServerRunning){
     s.setTextColor(T().good);s.setCursor(110,26);
     String ipStr = "Web: " + WiFi.localIP().toString();
@@ -1582,7 +1645,6 @@ void drawFileExplorer(LGFX_Sprite& s){
     s.print("Web: Off (No WiFi)");
   }
 
-  // Cek jika sedang membuka isi file tertentu
   if(expViewFileName.length() > 0){
     s.fillRoundRect(SCR_W-64,24,58,18,4,T().surface2);
     s.setTextColor(T().accent);s.setCursor(SCR_W-54,29);s.print("Tutup");
@@ -1601,7 +1663,6 @@ void drawFileExplorer(LGFX_Sprite& s){
     return;
   }
 
-  // Mode Daftar File SD Card
   int listY = 44;
   int itemH = 26;
   int itemsPerPage = 5;
@@ -1623,24 +1684,20 @@ void drawFileExplorer(LGFX_Sprite& s){
       int itemY = listY + i * (itemH + 4);
       s.fillRoundRect(4,itemY,SCR_W-8,itemH,6,T().surface);
       
-      // Icon File & Nama
       s.setTextColor(T().accent2);s.setCursor(10,itemY+8);s.print("[F]");
       s.setTextColor(T().text);s.setCursor(32,itemY+8);
       String fn = expFileNames[idx];
       if(fn.length() > 16) fn = fn.substring(0,14) + "..";
       s.print(fn.c_str());
 
-      // Tombol Buka
       s.fillRoundRect(SCR_W-84,itemY+3,36,20,4,T().surface2);
       s.setTextColor(T().good);s.setCursor(SCR_W-76,itemY+8);s.print("Buka");
 
-      // Tombol Hapus
       s.fillRoundRect(SCR_W-44,itemY+3,36,20,4,T().danger);
       s.setTextColor(0xFFFF);s.setCursor(SCR_W-38,itemY+8);s.print("Hps");
     }
   }
 
-  // Tombol Navigasi Halaman (Next/Prev)
   int pageY = backY() - 2;
   if(expScrollPage > 0){
     s.fillRoundRect(SCR_W-120,pageY,54,22,4,T().surface2);
@@ -1657,10 +1714,8 @@ void drawFileExplorer(LGFX_Sprite& s){
 void fileExpTouch(int x,int y,bool held,bool isNew){
   if(!isNew) return;
 
-  // Cek tombol Back
   if(isBack(x,y)){ navBack(); return; }
 
-  // Jika sedang membuka isi file
   if(expViewFileName.length() > 0){
     if(x>=SCR_W-64 && x<=SCR_W-4 && y>=24 && y<=42){
       expViewFileName = "";
@@ -1677,12 +1732,10 @@ void fileExpTouch(int x,int y,bool held,bool isNew){
   int itemsPerPage = 5;
   int startIdx = expScrollPage * itemsPerPage;
 
-  // Cek sentuhan pada baris file
   for(int i = 0; i < itemsPerPage && (startIdx + i) < expFileCount; i++){
     int idx = startIdx + i;
     int itemY = listY + i * (itemH + 4);
     if(y >= itemY && y <= itemY + itemH){
-      // Tombol Buka
       if(x >= SCR_W-84 && x <= SCR_W-48){
         expViewFileName = expFileNames[idx];
         File f = SD_MMC.open(expViewFileName, FILE_READ);
@@ -1691,7 +1744,6 @@ void fileExpTouch(int x,int y,bool held,bool isNew){
         needRedraw = true;
         return;
       }
-      // Tombol Hapus
       if(x >= SCR_W-44 && x <= SCR_W-8){
         SD_MMC.remove(expFileNames[idx]);
         showToast("File Dihapus");
@@ -1702,7 +1754,6 @@ void fileExpTouch(int x,int y,bool held,bool isNew){
     }
   }
 
-  // Tombol Next / Prev Halaman
   int pageY = backY() - 2;
   if(expScrollPage > 0 && x>=SCR_W-120 && x<=SCR_W-66 && y>=pageY){
     expScrollPage--; needRedraw = true; return;
@@ -1773,7 +1824,6 @@ void setup(){
 // =============================================
 unsigned long lastClk=0,lastSen=0;
 void loop(){
-  // Handle HTTP request dari browser HP (Web File Manager)
   if(wifiConnected && webServerRunning){
     webServer.handleClient();
   }
@@ -1783,7 +1833,6 @@ void loop(){
   int tx=touched?(int)tp.x:0,ty=touched?(int)tp.y:0;
   bool newT=touched&&!wasTouched;
 
-  // -------- Control Center animation --------
   if(ccAnimatingOpen){
     ccOffset += (float)ccPanelH()/6.0f;
     if(ccOffset>=ccPanelH()){ ccOffset=ccPanelH(); ccAnimatingOpen=false; }
@@ -1794,21 +1843,18 @@ void loop(){
     needRedraw=true;
   }
 
-  // -------- Lock Screen --------
   if(locked){
     lockScreenInput(touched,newT,tx,ty);
     if(needRedraw){ renderCurrentFrame(); push(); needRedraw=false; }
     wasTouched=touched; delay(8); return;
   }
 
-  // -------- Control Center Open --------
   if(controlCenterOpen){
     if(newT) ccTouch(tx,ty);
     if(needRedraw){ renderCurrentFrame(); push(); needRedraw=false; }
     wasTouched=touched; delay(8); return;
   }
 
-  // -------- Global Gestures --------
   if(newT){ gStartX=tx; gStartY=ty; gGestureDone=false; }
   if(touched && !gGestureDone && !kbVisible){
     int dy=ty-gStartY, dx=tx-gStartX;
@@ -1822,7 +1868,6 @@ void loop(){
     }
   }
 
-  // ============ HOME ============
   if(curScreen()==SCR_HOME){
     if(touched){
       if(!wasTouched){
@@ -1852,7 +1897,6 @@ void loop(){
     }
     if(needRedraw){renderCurrentFrame();push();needRedraw=false;}
 
-  // ============ APP SCREENS ============
   } else {
     int idx=appIndexForScreen(curScreen());
     if(idx>=0){
