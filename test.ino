@@ -126,11 +126,11 @@ void lvglTouchReadCb(lv_indev_drv_t* drv, lv_indev_data_t* data) {
 // =============================================
 // SISTEM TEMA — 4 preset, disimpan di Preferences
 // =============================================
-struct AppTheme {
+typedef struct AppTheme {
   const char* name;
   lv_color_t bg, surface, surface2, accent, accent2, text, subtext, danger, good;
   bool dark;
-};
+} AppTheme;
 
 AppTheme themes[] = {
   { "Dark",   lv_color_hex(0x10141c), lv_color_hex(0x1e2430), lv_color_hex(0x2c3444),
@@ -148,7 +148,7 @@ AppTheme themes[] = {
 };
 #define THEME_COUNT 4
 int currentThemeIdx = 0;
-AppTheme& T() { return themes[currentThemeIdx]; }
+struct AppTheme& T() { return themes[currentThemeIdx]; }
 
 void saveThemePref() {
   Preferences p; p.begin("ui", false);

@@ -25,11 +25,14 @@ jobs:
           arduino-cli core update-index
           arduino-cli core install esp32:esp32
           arduino-cli lib install "LovyanGFX"
+          arduino-cli lib install "lvgl@8.3.11"
 
       - name: Compile Sketch
         run: |
           mkdir -p build_sketch
           cp test.ino build_sketch/
+          cp lv_conf.h build_sketch/
+          cp build_opt.h build_sketch/
           mv build_sketch/test.ino build_sketch/build_sketch.ino
           arduino-cli compile --fqbn esp32:esp32:esp32s3 build_sketch --output-dir build
 
