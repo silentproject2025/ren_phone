@@ -539,7 +539,7 @@ bool doGeminiHttpRequest(const String& promptText, String& outResponse) {
   http.setConnectTimeout(15000);
   http.useHTTP10(true); // bantu stabilitas parsing response besar di ESP32
 
-  String url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=" + geminiApiKey;
+  String url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=" + geminiApiKey;
 
   Serial.printf("[Gemini] Free heap sebelum request: %u\n", ESP.getFreeHeap());
 
