@@ -1,14 +1,18 @@
 // =================================================================
-// ren_phone v4 — "OS" rewrite (FIXED GEMINI AI STUCK/HANG BUG)
+// ren_phone v4 — "OS" rewrite (FIXED GEMINI AI OUT-OF-MEMORY BUG)
 // ESP32-S3, ILI9341, XPT2046 touch, SD via SDIO
 //
-// PERBAIKAN BUG STUCK "Sedang berpikir..." (v3):
-//  1. HAPUS http.useHTTP10(true) -> ini penyebab utama macet permanen
-//     karena Gemini API pakai chunked transfer encoding (butuh HTTP/1.1).
-//  2. Tambah WATCHDOG TIMEOUT di loop(): soft-timeout (paksa putus socket)
-//     & hard-timeout (paksa hapus task) agar UI tidak pernah stuck lagi.
-//  3. Cek return value xTaskCreate() & free heap sebelum membuat task AI.
-//  4. Parser file gemini_key.txt tetap aman dari BOM/CRLF/kutip.
+// PERBAIKAN BUG "Memori tidak cukup" (v4):
+//  1. Stack task AI (32KB) SEKARANG DIALOKASIKAN DI PSRAM
+//     (bukan DRAM internal) via heap_caps_malloc(MALLOC_CAP_SPIRAM)
+//     + xTaskCreateStaticPinnedToCore. Ini membebaskan DRAM internal
+//     yang sangat dibutuhkan mbedTLS/HTTPS utk buffer TLS.
+//  2. Pengecekan memori sekarang fokus ke DRAM internal saja
+//     (heap_caps_get_free_size(MALLOC_CAP_INTERNAL)) + largest free
+//     block, bukan ESP.getFreeHeap() yg ambang batasnya terlalu tinggi.
+//  3. Buffer stack di-reuse (dialokasikan sekali, dipakai berulang)
+//     supaya tidak alloc/dealloc PSRAM tiap kali chat.
+//  4. Tetap ada watchdog anti-stuck (soft/hard timeout) dari fix sebelumnya.
 // =================================================================
 #include <LovyanGFX.hpp>
 #include <Preferences.h>
@@ -19,6 +23,7 @@
 #include <time.h>
 #include "FS.h"
 #include "SD_MMC.h"
+#include "esp_heap_caps.h"
 
 // =============================================
 // TYPE DEFINITIONS
@@ -170,7 +175,6 @@ void saveNote(){
   if(f){f.print(noteText);f.close();}
 }
 
-// ---------- Sanitasi 1 baris key (buang BOM, CR, kutip, spasi) ----------
 String sanitizeKeyLine(String line) {
   if (line.length() >= 3 &&
       (uint8_t)line[0]==0xEF && (uint8_t)line[1]==0xBB && (uint8_t)line[2]==0xBF) {
@@ -514,46 +518,50 @@ void toggleAirplaneMode(){
 
 // =============================================
 // GEMINI AI HTTP CLIENT & FREERTOS TASK
-// (FIXED: HAPUS useHTTP10 + WATCHDOG TIMEOUT ANTI-STUCK)
+// (FIXED v4: STACK TASK DI PSRAM, BEBAS DARI ERROR "MEMORI TIDAK CUKUP")
 // =============================================
 String aiPrompt = "";
 String aiResponse = "";
 volatile bool aiLoading = false;
 
 TaskHandle_t geminiTaskHandle = NULL;
-WiFiClientSecure* aiClientPtr = nullptr;      // pointer ke client aktif, utk watchdog
+WiFiClientSecure* aiClientPtr = nullptr;
 volatile unsigned long aiRequestStartMillis = 0;
 const unsigned long AI_SOFT_TIMEOUT_MS = 15000; // 15s -> paksa putus socket
-const unsigned long AI_HARD_TIMEOUT_MS = 30000; // 30s -> paksa hapus task (last resort)
+const unsigned long AI_HARD_TIMEOUT_MS = 30000; // 30s -> paksa hapus task
 volatile bool aiSoftStopTriggered = false;
+
+// ---------- FIXED: Stack task dialokasikan di PSRAM, bukan DRAM internal ----------
+#define AI_TASK_STACK_WORDS (32*1024/sizeof(StackType_t)) // 32KB stack
+static StackType_t* aiTaskStackBuf = nullptr; // buffer stack, tinggal di PSRAM
+static StaticTask_t aiTaskTCB;                // control block task (di DRAM, kecil ~ok)
 
 bool doGeminiHttpRequest(const String& promptText, String& outResponse) {
   bool ok = false;
   WiFiClientSecure client;
   client.setInsecure();
-  client.setTimeout(15000); // ms
-  aiClientPtr = &client; // agar bisa di-stop() paksa dari loop() kalau macet
+  client.setTimeout(15000);
+  aiClientPtr = &client;
 
   HTTPClient http;
   http.setTimeout(15000);
   http.setConnectTimeout(15000);
-  // PENTING: JANGAN pakai http.useHTTP10(true) di sini!
-  // Response Gemini API pakai chunked transfer-encoding (HTTP/1.1),
-  // kalau dipaksa HTTP/1.0 maka client tidak pernah tahu kapan response
-  // selesai -> http.POST() BISA STUCK SELAMANYA. Ini akar bug "stuck".
+  // JANGAN pakai http.useHTTP10(true) -> bikin macet krn chunked encoding.
 
   String url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=" + geminiApiKey;
 
-  Serial.printf("[Gemini] Free heap sebelum request: %u\n", ESP.getFreeHeap());
+  Serial.printf("[Gemini] DRAM internal bebas: %u bytes (blok terbesar: %u)\n",
+                heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
 
   if (!http.begin(client, url)) {
-    outResponse = "Gagal inisialisasi HTTPClient (begin() gagal).";
+    outResponse = "Gagal inisialisasi HTTPClient (begin() gagal, cek memori/URL).";
     aiClientPtr = nullptr;
     return false;
   }
 
   http.addHeader("Content-Type", "application/json");
-  http.addHeader("Connection", "close"); // pastikan server tutup socket setelah selesai
+  http.addHeader("Connection", "close");
 
   String escapedPrompt = promptText;
   escapedPrompt.replace("\\", "\\\\");
@@ -641,7 +649,6 @@ void sendGeminiRequest(String promptText) {
   String resp;
   bool ok = doGeminiHttpRequest(promptText, resp);
   if (!ok && !aiSoftStopTriggered) {
-    // kalau bukan karena dipaksa stop oleh watchdog, coba retry sekali
     Serial.println("[Gemini] Percobaan pertama gagal, retry sekali...");
     delay(500);
     if (WiFi.status() == WL_CONNECTED) {
@@ -658,17 +665,34 @@ void sendGeminiRequest(String promptText) {
 
 void geminiTaskFunc(void* parameter) {
   sendGeminiRequest(aiPrompt);
-  geminiTaskHandle = NULL; // clear handle sebelum task menghapus dirinya sendiri
+  geminiTaskHandle = NULL;
   vTaskDelete(NULL);
 }
 
+// ---------- FIXED: buat task dgn stack di PSRAM ----------
 void triggerGeminiAI() {
   if (aiPrompt.length() == 0 || aiLoading) return;
 
-  // Cek heap dulu supaya tidak silent-fail saat bikin task
-  uint32_t freeHeap = ESP.getFreeHeap();
-  if (freeHeap < 40000) {
-    aiResponse = "Error: Memori tidak cukup utk request AI (heap rendah). Coba restart.";
+  // Alokasikan buffer stack di PSRAM SEKALI SAJA, dipakai berulang selanjutnya
+  if (aiTaskStackBuf == nullptr) {
+    aiTaskStackBuf = (StackType_t*) heap_caps_malloc(
+        AI_TASK_STACK_WORDS * sizeof(StackType_t), MALLOC_CAP_SPIRAM);
+    if (aiTaskStackBuf == nullptr) {
+      Serial.println("[Gemini] Gagal alokasi stack di PSRAM!");
+      aiResponse = "Error: Gagal alokasi memori PSRAM utk proses AI.";
+      needRedrawNow();
+      return;
+    }
+  }
+
+  // Cek DRAM internal (bukan PSRAM) karena inilah yang dipakai TLS/mbedTLS
+  size_t freeInternal   = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+  size_t largestBlock    = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
+  Serial.printf("[Gemini] Sebelum request -> freeInternal=%u largestBlock=%u freePsram=%u\n",
+                freeInternal, largestBlock, ESP.getFreePsram());
+
+  if (freeInternal < 20000 || largestBlock < 16000) {
+    aiResponse = "Error: DRAM internal terlalu rendah utk koneksi HTTPS. Coba tutup app lain / restart.";
     needRedrawNow();
     return;
   }
@@ -679,36 +703,40 @@ void triggerGeminiAI() {
   aiRequestStartMillis = millis();
   needRedrawNow();
 
-  BaseType_t res = xTaskCreatePinnedToCore(
-      geminiTaskFunc, "geminiTask", 32768, NULL, 1, &geminiTaskHandle, 1);
+  geminiTaskHandle = xTaskCreateStaticPinnedToCore(
+      geminiTaskFunc,
+      "geminiTask",
+      AI_TASK_STACK_WORDS,
+      NULL,
+      1,
+      aiTaskStackBuf,
+      &aiTaskTCB,
+      1
+  );
 
-  if (res != pdPASS) {
-    // Gagal membuat task -> JANGAN biarkan UI stuck loading selamanya
-    Serial.println("[Gemini] xTaskCreate GAGAL!");
+  if (geminiTaskHandle == NULL) {
+    Serial.println("[Gemini] xTaskCreateStaticPinnedToCore GAGAL!");
     aiLoading = false;
     aiRequestStartMillis = 0;
-    geminiTaskHandle = NULL;
-    aiResponse = "Error: Gagal membuat proses AI (memori tidak cukup).";
+    aiResponse = "Error: Gagal membuat proses AI.";
     needRedrawNow();
   }
 }
 
-// ---------- FIXED: Watchdog anti-stuck, dipanggil tiap loop() ----------
+// ---------- Watchdog anti-stuck, dipanggil tiap loop() ----------
 void checkAiWatchdog() {
   if (!aiLoading || aiRequestStartMillis == 0) return;
 
   unsigned long elapsed = millis() - aiRequestStartMillis;
 
-  // Soft timeout: paksa putus koneksi socket, biarkan task keluar wajar
   if (!aiSoftStopTriggered && elapsed > AI_SOFT_TIMEOUT_MS) {
     Serial.println("[Gemini][Watchdog] Soft-timeout tercapai, memutus koneksi paksa...");
     aiSoftStopTriggered = true;
     if (aiClientPtr) {
-      aiClientPtr->stop(); // ini akan membuat blocking read/write di dalam task gagal & keluar
+      aiClientPtr->stop();
     }
   }
 
-  // Hard timeout: kalau task masih belum selesai juga -> paksa hapus task (last resort)
   if (elapsed > AI_HARD_TIMEOUT_MS) {
     Serial.println("[Gemini][Watchdog] Hard-timeout tercapai, memaksa hapus task!");
     if (geminiTaskHandle != NULL) {
@@ -1707,7 +1735,6 @@ void drawAiChat(LGFX_Sprite& s){
     s.setTextColor(T().text);s.setTextWrap(true);
     if(aiLoading){
       s.setTextColor(T().good);
-      // tampilkan sisa waktu sebelum watchdog memaksa berhenti
       unsigned long elapsed = aiRequestStartMillis ? (millis()-aiRequestStartMillis) : 0;
       long remain = (long)(AI_HARD_TIMEOUT_MS - elapsed) / 1000;
       if (remain < 0) remain = 0;
@@ -1999,6 +2026,9 @@ void setup(){
   applyOrientation(savedOrient, false);
   locked = true;
   needRedraw = true;
+
+  Serial.printf("[Boot] FreePsram=%u FreeInternal=%u\n",
+                ESP.getFreePsram(), heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
 }
 
 // =============================================
@@ -2010,7 +2040,6 @@ void loop(){
     webServer.handleClient();
   }
 
-  // ---------- FIXED: Watchdog anti-stuck AI, dicek tiap loop ----------
   checkAiWatchdog();
 
   lgfx::touch_point_t tp;
@@ -2095,7 +2124,6 @@ void loop(){
     }
     if(curScreen()==SCR_CLOCK && millis()-lastClk>500){ needRedraw=true; lastClk=millis(); }
     if(curScreen()==SCR_SENSOR && millis()-lastSen>1000){ needRedraw=true; lastSen=millis(); }
-    // Auto-redraw kalau sedang loading AI, supaya countdown timer di layar update
     if(curScreen()==SCR_AICHAT && aiLoading){ needRedraw=true; }
     if(needRedraw){renderCurrentFrame();push();needRedraw=false;}
   }
