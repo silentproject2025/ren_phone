@@ -942,6 +942,3 @@ void loop() {
   wasTouched = touched;
   delay(8);
 }
-ENDOFFILE
-echo "Done: $(wc -l < /mnt/user-data/outputs/esp32_phone.ino) baris"
-Output
