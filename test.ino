@@ -1,35 +1,40 @@
 // =================================================================
-// ren_phone v4 — "OS" rewrite (WITH GEMINI AI CHAT & AUTO WIFI SCAN)
+// ren_phone v4 — "OS" rewrite (WITH FILE EXPLORER & WEB FILE MANAGER)
 // ESP32-S3, ILI9341, XPT2046 touch, SD via SDIO
 //
-// FITUR BARU AI CHAT (GEMINI):
-//  1. Otomatis cek file /gemini_key.txt di SD Card. Jika belum ada,
-//     file otomatis dibuatkan di SD Card.
-//  2. API Key bisa diisi di SD Card atau diedit langsung via layar HP!
-//  3. Menggunakan Gemini 1.5 Flash REST API via HTTPS.
-//  4. Panggilan API berjalan di FreeRTOS background task sehingga
-//     tampilan layar tetap smooth (tidak freeze saat memproses jawaban).
-//  5. Auto Scan WiFi di Settings & perbaikan bug pada versi sebelumnya.
+// FITUR BARU:
+//  1. Web File Manager (WiFi): Akses & Upload File dari HP/PC via Browser!
+//     Buka IP ESP32 (misal: http://192.168.1.100) di browser HP untuk
+//     upload, download, dan hapus file di SD Card secara wireless.
+//  2. File Explorer App (Layar ESP32): Aplikasi penjelajah file di HP ESP32.
+//     Bisa melihat daftar file SD Card, membaca isi file teks, menghapus file,
+//     dan menampilkan URL Server Web WiFi untuk upload dari HP.
+//  3. Gemini AI Chat App dengan auto-create /gemini_key.txt di SD Card.
+//  4. Auto Scan WiFi & perbaikan bug layout layar.
 // =================================================================
 #include <LovyanGFX.hpp>
 #include <Preferences.h>
 #include <WiFi.h>
+#include <WebServer.h>
 #include <HTTPClient.h>
 #include <WiFiClientSecure.h>
 #include <time.h>
 #include "FS.h"
 #include "SD_MMC.h"
+
 // =============================================
 // TYPE DEFINITIONS
 // =============================================
 enum Screen { SCR_HOME, SCR_CLOCK, SCR_CALC, SCR_SENSOR,
-              SCR_SETTINGS, SCR_NOTEPAD, SCR_CANVAS, SCR_AICHAT };
+              SCR_SETTINGS, SCR_NOTEPAD, SCR_CANVAS, SCR_AICHAT, SCR_FILEEXPLORER };
 enum Orientation { ORIENT_LANDSCAPE = 0, ORIENT_PORTRAIT = 1 };
+
 struct Theme {
   const char* name;
   uint16_t bg, surface, surface2, accent, accent2,
            text, subtext, divider, good, danger;
 };
+
 Theme themes[] = {
   { "Dark",   0x1084,0x2104,0x31A6,0xFD40,0x04FF,0xFFFF,0x8C51,0x2965,0x07E0,0xF800 },
   { "AMOLED", 0x0000,0x1082,0x2104,0xFD40,0x04FF,0xFFFF,0x8C51,0x2104,0x07E0,0xF800 },
@@ -39,13 +44,16 @@ Theme themes[] = {
 #define THEME_COUNT 4
 int themeIdx = 0;
 Theme& T() { return themes[themeIdx]; }
+
 void saveTheme(){ Preferences p; p.begin("ui",false); p.putInt("theme",themeIdx); p.end(); }
 void loadTheme(){
   Preferences p; p.begin("ui",true);
   themeIdx = p.getInt("theme",0); p.end();
   if(themeIdx<0||themeIdx>=THEME_COUNT) themeIdx=0;
 }
+
 enum KbMode { KB_LOWER, KB_UPPER, KB_NUM };
+
 // =============================================
 // LGFX CONFIG
 // =============================================
@@ -94,12 +102,14 @@ public:
 LGFX display;
 LGFX_Sprite canvas(&display);      // frame buffer utama (full screen)
 LGFX_Sprite canvasApp(&display);   // buffer khusus app Canvas (drawing)
+
 // =============================================
 // ORIENTASI
 // =============================================
 Orientation currentOrient = ORIENT_LANDSCAPE;
 int SCR_W = 320, SCR_H = 240;
 #define STATUS_H 22   // tinggi status bar
+
 void saveOrientPref() {
   Preferences p; p.begin("ui", false);
   p.putInt("orient", (int)currentOrient);
@@ -111,10 +121,12 @@ Orientation loadOrientPref() {
   p.end();
   return (v == (int)ORIENT_PORTRAIT) ? ORIENT_PORTRAIT : ORIENT_LANDSCAPE;
 }
+
 void loadCanvas();
 void saveCanvas();
 int  canvasAppHeight();
 void needRedrawNow();
+
 void applyOrientation(Orientation o, bool doSave) {
   currentOrient = o;
   display.setRotation(o == ORIENT_LANDSCAPE ? 1 : 0);
@@ -131,79 +143,7 @@ void applyOrientation(Orientation o, bool doSave) {
   if (doSave) saveOrientPref();
   needRedrawNow();
 }
-// =============================================
-// WIFI & NTP & AUTO SCAN
-// =============================================
-char WIFI_SSID[64]="", WIFI_PASSWORD[64]="";
-const char* NTP_SERVER="pool.ntp.org";
-const long  GMT_OFFSET=7*3600;
-const int   DST_OFFSET=0;
-bool wifiConnected=false, ntpSynced=false;
-bool airplaneMode=false;
-// State Auto Scan WiFi
-bool wifiScanning = false;
-struct ScannedWifi {
-  String ssid;
-  int rssi;
-  bool isEncrypted;
-};
-#define MAX_SCANNED_WIFI 8
-ScannedWifi scannedWifis[MAX_SCANNED_WIFI];
-int scannedWifiNum = 0;
-void startWifiScan() {
-  WiFi.scanDelete();
-  WiFi.scanNetworks(true); // Asynchronous scan (non-blocking)
-  wifiScanning = true;
-  scannedWifiNum = 0;
-  needRedrawNow();
-}
-void checkWifiScanComplete() {
-  if (!wifiScanning) return;
-  int n = WiFi.scanComplete();
-  if (n >= 0) {
-    wifiScanning = false;
-    scannedWifiNum = min(n, MAX_SCANNED_WIFI);
-    for (int i = 0; i < scannedWifiNum; i++) {
-      scannedWifis[i].ssid = WiFi.SSID(i);
-      scannedWifis[i].rssi = WiFi.RSSI(i);
-      scannedWifis[i].isEncrypted = (WiFi.encryptionType(i) != WIFI_AUTH_OPEN);
-    }
-    WiFi.scanDelete();
-    needRedrawNow();
-  }
-}
-void loadWifiCreds(){
-  Preferences p; p.begin("wifi",true);
-  p.getString("ssid","").toCharArray(WIFI_SSID,64);
-  p.getString("pass","").toCharArray(WIFI_PASSWORD,64);
-  p.end();
-}
-void saveWifiCreds(){
-  Preferences p; p.begin("wifi",false);
-  p.putString("ssid",WIFI_SSID);
-  p.putString("pass",WIFI_PASSWORD);
-  p.end();
-}
-void connectWifi(){
-  if(airplaneMode || !strlen(WIFI_SSID)) return;
-  WiFi.begin(WIFI_SSID,WIFI_PASSWORD);
-  int t=0;
-  while(WiFi.status()!=WL_CONNECTED&&t<20){delay(300);t++;}
-  wifiConnected=(WiFi.status()==WL_CONNECTED);
-  if(wifiConnected){
-    configTime(GMT_OFFSET,DST_OFFSET,NTP_SERVER);
-    struct tm tm; if(getLocalTime(&tm,5000)) ntpSynced=true;
-  }
-}
-void disconnectWifi(){
-  WiFi.disconnect(true);
-  wifiConnected=false;
-}
-void toggleAirplaneMode(){
-  airplaneMode=!airplaneMode;
-  if(airplaneMode) disconnectWifi();
-  else connectWifi();
-}
+
 // =============================================
 // SD CARD & GEMINI API KEY STORAGE
 // =============================================
@@ -213,7 +153,9 @@ void toggleAirplaneMode(){
 bool sdReady=false;
 const char* NOTE_FILE="/notepad.txt";
 const char* GEMINI_KEY_FILE="/gemini_key.txt";
+
 String geminiApiKey = "";
+
 void initSD(){
   SD_MMC.setPins(SD_PIN_CLK,SD_PIN_CMD,SD_PIN_D0);
   sdReady=SD_MMC.begin("/sdcard",true);
@@ -229,7 +171,7 @@ void saveNote(){
   File f=SD_MMC.open(NOTE_FILE,FILE_WRITE);
   if(f){f.print(noteText);f.close();}
 }
-// Auto Load / Create Gemini API Key di SD Card
+
 void loadGeminiKey(){
   if(!sdReady) return;
   if(!SD_MMC.exists(GEMINI_KEY_FILE)){
@@ -254,6 +196,7 @@ void saveGeminiKey(){
     f.close();
   }
 }
+
 int canvasAppHeight(){
   return SCR_H - STATUS_H - 44;
 }
@@ -273,12 +216,195 @@ void saveCanvas(){
   File f=SD_MMC.open(canvasFileFor(currentOrient),FILE_WRITE);
   if(f){ f.write((uint8_t*)canvasApp.getBuffer(), need); f.close(); }
 }
+
+// =============================================
+// WEB SERVER (WIFI FILE MANAGER / UPLOADER FROM PHONE)
+// =============================================
+WebServer webServer(80);
+bool webServerRunning = false;
+File uploadFile;
+
+void handleWebRoot() {
+  String html = "<!DOCTYPE html><html><head><meta name='viewport' content='width=device-width, initial-scale=1'>";
+  html += "<title>ESP32 File Manager</title>";
+  html += "<style>body{font-family:sans-serif;background:#121212;color:#fff;padding:15px;max-width:600px;margin:auto;}";
+  html += ".card{background:#1e1e1e;padding:15px;border-radius:10px;margin-bottom:15px;box-shadow:0 4px 6px rgba(0,0,0,0.3);}";
+  html += "a{color:#00e5ff;text-decoration:none;} .btn{background:#e91e63;color:#fff;padding:8px 14px;border:none;border-radius:6px;cursor:pointer;font-weight:bold;}";
+  html += "table{width:100%;border-collapse:collapse;margin-top:10px;} td,th{padding:10px;text-align:left;border-bottom:1px solid #333;}</style>";
+  html += "</head><body><h2>ESP32 Web File Manager</h2>";
+  
+  // Upload Form
+  html += "<div class='card'><h3>Upload File ke ESP32 SD Card</h3>";
+  html += "<form method='POST' action='/upload' enctype='multipart/form-data'>";
+  html += "<input type='file' name='upload' required style='margin-bottom:10px;'><br>";
+  html += "<input type='submit' class='btn' value='Upload File'>";
+  html += "</form></div>";
+
+  // File List
+  html += "<div class='card'><h3>Daftar File SD Card</h3><table><tr><th>Nama File</th><th>Ukuran</th><th>Aksi</th></tr>";
+  if (sdReady) {
+    File root = SD_MMC.open("/");
+    File f = root.openNextFile();
+    int count = 0;
+    while (f) {
+      if (!f.isDirectory()) {
+        count++;
+        String fname = String(f.name());
+        if (!fname.startsWith("/")) fname = "/" + fname;
+        html += "<tr><td>" + fname + "</td><td>" + String(f.size()) + " B</td>";
+        html += "<td><a href='/download?file=" + fname + "'>Download</a> | ";
+        html += "<a href='/delete?file=" + fname + "' style='color:#ff5252' onclick=\"return confirm('Hapus file " + fname + "?')\">Hapus</a></td></tr>";
+      }
+      f = root.openNextFile();
+    }
+    if(count==0) html += "<tr><td colspan='3'>SD Card Kosong</td></tr>";
+  } else {
+    html += "<tr><td colspan='3'>SD Card Tidak Terdeteksi</td></tr>";
+  }
+  html += "</table></div></body></html>";
+
+  webServer.send(200, "text/html", html);
+}
+
+void handleUploadStream() {
+  HTTPUpload& upload = webServer.upload();
+  if (upload.status == UPLOAD_FILE_START) {
+    String filename = upload.filename;
+    if (!filename.startsWith("/")) filename = "/" + filename;
+    uploadFile = SD_MMC.open(filename, FILE_WRITE);
+  } else if (upload.status == UPLOAD_FILE_WRITE) {
+    if (uploadFile) {
+      uploadFile.write(upload.buf, upload.currentSize);
+    }
+  } else if (upload.status == UPLOAD_FILE_END) {
+    if (uploadFile) uploadFile.close();
+    needRedrawNow();
+  }
+}
+
+void handleWebDelete() {
+  if (webServer.hasArg("file")) {
+    String path = webServer.arg("file");
+    if (SD_MMC.exists(path)) {
+      SD_MMC.remove(path);
+      needRedrawNow();
+    }
+  }
+  webServer.sendHeader("Location", "/");
+  webServer.send(303);
+}
+
+void handleWebDownload() {
+  if (webServer.hasArg("file")) {
+    String path = webServer.arg("file");
+    if (SD_MMC.exists(path)) {
+      File f = SD_MMC.open(path, FILE_READ);
+      webServer.streamFile(f, "application/octet-stream");
+      f.close();
+      return;
+    }
+  }
+  webServer.send(404, "text/plain", "File Not Found");
+}
+
+void startWebServer(){
+  if(webServerRunning) return;
+  webServer.on("/", HTTP_GET, handleWebRoot);
+  webServer.on("/upload", HTTP_POST, [](){
+    webServer.sendHeader("Location", "/");
+    webServer.send(303);
+  }, handleUploadStream);
+  webServer.on("/delete", HTTP_GET, handleWebDelete);
+  webServer.on("/download", HTTP_GET, handleWebDownload);
+  webServer.begin();
+  webServerRunning = true;
+}
+
+// =============================================
+// WIFI & NTP & AUTO SCAN
+// =============================================
+char WIFI_SSID[64]="", WIFI_PASSWORD[64]="";
+const char* NTP_SERVER="pool.ntp.org";
+const long  GMT_OFFSET=7*3600;
+const int   DST_OFFSET=0;
+bool wifiConnected=false, ntpSynced=false;
+bool airplaneMode=false;
+
+bool wifiScanning = false;
+struct ScannedWifi {
+  String ssid;
+  int rssi;
+  bool isEncrypted;
+};
+#define MAX_SCANNED_WIFI 8
+ScannedWifi scannedWifis[MAX_SCANNED_WIFI];
+int scannedWifiNum = 0;
+
+void startWifiScan() {
+  WiFi.scanDelete();
+  WiFi.scanNetworks(true);
+  wifiScanning = true;
+  scannedWifiNum = 0;
+  needRedrawNow();
+}
+
+void checkWifiScanComplete() {
+  if (!wifiScanning) return;
+  int n = WiFi.scanComplete();
+  if (n >= 0) {
+    wifiScanning = false;
+    scannedWifiNum = min(n, MAX_SCANNED_WIFI);
+    for (int i = 0; i < scannedWifiNum; i++) {
+      scannedWifis[i].ssid = WiFi.SSID(i);
+      scannedWifis[i].rssi = WiFi.RSSI(i);
+      scannedWifis[i].isEncrypted = (WiFi.encryptionType(i) != WIFI_AUTH_OPEN);
+    }
+    WiFi.scanDelete();
+    needRedrawNow();
+  }
+}
+
+void loadWifiCreds(){
+  Preferences p; p.begin("wifi",true);
+  p.getString("ssid","").toCharArray(WIFI_SSID,64);
+  p.getString("pass","").toCharArray(WIFI_PASSWORD,64);
+  p.end();
+}
+void saveWifiCreds(){
+  Preferences p; p.begin("wifi",false);
+  p.putString("ssid",WIFI_SSID);
+  p.putString("pass",WIFI_PASSWORD);
+  p.end();
+}
+void connectWifi(){
+  if(airplaneMode || !strlen(WIFI_SSID)) return;
+  WiFi.begin(WIFI_SSID,WIFI_PASSWORD);
+  int t=0;
+  while(WiFi.status()!=WL_CONNECTED&&t<20){delay(300);t++;}
+  wifiConnected=(WiFi.status()==WL_CONNECTED);
+  if(wifiConnected){
+    configTime(GMT_OFFSET,DST_OFFSET,NTP_SERVER);
+    struct tm tm; if(getLocalTime(&tm,5000)) ntpSynced=true;
+    startWebServer(); // Jalankan Web Server File Manager saat terhubung ke WiFi
+  }
+}
+void disconnectWifi(){
+  WiFi.disconnect(true);
+  wifiConnected=false;
+}
+void toggleAirplaneMode(){
+  airplaneMode=!airplaneMode;
+  if(airplaneMode) disconnectWifi();
+  else connectWifi();
+}
+
 // =============================================
 // GEMINI AI HTTP CLIENT & FREERTOS TASK
 // =============================================
 String aiPrompt = "";
 String aiResponse = "";
 bool aiLoading = false;
+
 void sendGeminiRequest(String promptText) {
   if (!wifiConnected) {
     aiResponse = "Error: WiFi belum terhubung!";
@@ -292,17 +418,21 @@ void sendGeminiRequest(String promptText) {
     needRedrawNow();
     return;
   }
+
   WiFiClientSecure client;
-  client.setInsecure(); // Skip verifikasi sertifikat SSL untuk performa ESP32
+  client.setInsecure();
+
   HTTPClient http;
-  String url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=" + geminiApiKey;
+  String url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=" + geminiApiKey;
+
   if (http.begin(client, url)) {
     http.addHeader("Content-Type", "application/json");
     http.setTimeout(12000);
-    // Formating JSON payload
+
     promptText.replace("\"", "\\\"");
     promptText.replace("\n", " ");
     String jsonPayload = "{\"contents\":[{\"parts\":[{\"text\":\"" + promptText + "\"}]}]}";
+
     int httpCode = http.POST(jsonPayload);
     if (httpCode == HTTP_CODE_OK || httpCode == 200) {
       String respStr = http.getString();
@@ -328,13 +458,16 @@ void sendGeminiRequest(String promptText) {
   } else {
     aiResponse = "Gagal terhubung ke Gemini Server.";
   }
+
   aiLoading = false;
   needRedrawNow();
 }
+
 void geminiTaskFunc(void* parameter) {
   sendGeminiRequest(aiPrompt);
   vTaskDelete(NULL);
 }
+
 void triggerGeminiAI() {
   if (aiPrompt.length() == 0 || aiLoading) return;
   aiLoading = true;
@@ -342,6 +475,7 @@ void triggerGeminiAI() {
   needRedrawNow();
   xTaskCreate(geminiTaskFunc, "geminiTask", 8192, NULL, 1, NULL);
 }
+
 // =============================================
 // TOUCH CALIBRATION
 // =============================================
@@ -366,6 +500,7 @@ void loadOrRunCalibration(){
   }
   p.end();
 }
+
 // =============================================
 // STATE GLOBAL / LIFECYCLE
 // =============================================
@@ -378,13 +513,16 @@ bool dndMode = false;
 bool kbVisible=false;
 String* kbTarget=nullptr;
 KbMode kbMode=KB_LOWER;
+
 // -------- Navigation stack --------
 #define NAV_MAX 8
 Screen navStack[NAV_MAX];
 int navDepth=0;
 Screen curScreen(){ return navDepth>0 ? navStack[navDepth-1] : SCR_HOME; }
+
 void appOnEnter(Screen s);
 void appOnExit(Screen s);
+
 void navPush(Screen s){
   appOnExit(curScreen());
   if(navDepth<NAV_MAX) navStack[navDepth++]=s;
@@ -405,6 +543,7 @@ void navBack(){
   kbVisible=false; kbTarget=nullptr;
   needRedraw=true;
 }
+
 // =============================================
 // VIRTUAL KEYBOARD
 // =============================================
@@ -421,6 +560,7 @@ const char* kbN[3][10]={
   {"-","=","[","]","/","'","\"","<",">","\\"},
   {"~","!","@","#","$","%","^","&","*","("}};
 const char* (*kbMaps[3])[10]={kbL,kbU,kbN};
+
 int kbKeyW(){ return (SCR_W-8)/10 - 2; }
 int kbKeyH(){ return 22; }
 int kbY(){ return SCR_H - 4*(kbKeyH()+2) - 4; }
@@ -430,6 +570,7 @@ int kbOffCol(int row){
   if(row==2) base += (kbKeyW()+2);
   return base;
 }
+
 void drawKb(LGFX_Sprite& s){
   int y0=kbY();
   s.fillRect(0,y0-2,SCR_W,SCR_H-y0+2,T().surface);
@@ -457,6 +598,7 @@ void drawKb(LGFX_Sprite& s){
   s.fillRoundRect(SCR_W-88,cy,84,kh,3,T().danger);
   s.setTextColor(0xFFFF);s.setCursor(SCR_W-70,cy+kh/2-4);s.print("<--");
 }
+
 void kbTouch(int x,int y){
   if(!kbVisible||!kbTarget) return;
   int y0=kbY();
@@ -490,6 +632,7 @@ void kbTouch(int x,int y){
     }
   }
 }
+
 // =============================================
 // TOAST
 // =============================================
@@ -508,6 +651,7 @@ void drawToast(LGFX_Sprite& s){
   s.setTextColor(T().bg);s.setTextSize(1);
   s.setCursor(tx+8,ty+7);s.print(toastMsg.c_str());
 }
+
 // =============================================
 // STATUS BAR
 // =============================================
@@ -533,6 +677,7 @@ void drawStatusBar(LGFX_Sprite& s){
     s.fillRoundRect(SCR_W/2-12,STATUS_H+2,24,3,2,T().divider);
   }
 }
+
 // =============================================
 // BACK BUTTON
 // =============================================
@@ -540,15 +685,18 @@ void drawStatusBar(LGFX_Sprite& s){
 #define BACK_H 24
 int backX(){ return 4; }
 int backY(){ return SCR_H-BACK_H-3; }
+
 void drawBack(LGFX_Sprite& s){
   if(kbVisible)return;
   s.fillRoundRect(backX(),backY(),BACK_W,BACK_H,6,T().surface2);
   s.setTextColor(T().accent);s.setTextSize(1);
   s.setCursor(backX()+10,backY()+8);s.print("< Back");
 }
+
 bool isBack(int x,int y){
   return !kbVisible && x>=backX() && x<=backX()+BACK_W && y>=backY() && y<=backY()+BACK_H;
 }
+
 // =============================================
 // LOCK SCREEN
 // =============================================
@@ -575,6 +723,7 @@ void drawLockScreen(LGFX_Sprite& s){
   s.setCursor(SCR_W/2-strlen(hint)*3, SCR_H-24);
   s.print(hint);
 }
+
 void lockScreenInput(bool touched,bool newT,int tx,int ty){
   static int startY=0;
   if(newT){ startY=ty; lockDragging=true; lockDragY=0; needRedraw=true; }
@@ -588,6 +737,7 @@ void lockScreenInput(bool touched,bool newT,int tx,int ty){
     lockDragY=0; needRedraw=true;
   }
 }
+
 // =============================================
 // CONTROL CENTER
 // =============================================
@@ -597,6 +747,7 @@ bool  ccAnimatingOpen=false, ccAnimatingClose=false;
 void openControlCenter(){ controlCenterOpen=true; ccAnimatingOpen=true; needRedraw=true; }
 void closeControlCenter(){ ccAnimatingOpen=false; ccAnimatingClose=true; needRedraw=true; }
 int ccPanelH(){ return (int)(SCR_H*CC_PANEL_H_FRAC); }
+
 void ccActWifi(){ if(wifiConnected) disconnectWifi(); else connectWifi(); }
 void ccActAirplane(){ toggleAirplaneMode(); }
 void ccActDnd(){ dndMode=!dndMode; }
@@ -604,6 +755,7 @@ void ccActTheme(){ themeIdx=(themeIdx+1)%THEME_COUNT; saveTheme(); }
 void ccActOrient(){
   applyOrientation(currentOrient==ORIENT_LANDSCAPE?ORIENT_PORTRAIT:ORIENT_LANDSCAPE, true);
 }
+
 void drawControlCenter(LGFX_Sprite& s){
   int ph = (int)ccOffset;
   if(ph<=0) return;
@@ -644,6 +796,7 @@ void drawControlCenter(LGFX_Sprite& s){
   }
   drawToast(s);
 }
+
 void ccTouch(int x,int y){
   int ph=(int)ccOffset;
   if(y> ph-10 && y<=ph+4){ closeControlCenter(); return; }
@@ -672,6 +825,7 @@ void ccTouch(int x,int y){
     needRedraw=true;
   }
 }
+
 // =============================================
 // HOME SCREEN & APP INTERFACE
 // =============================================
@@ -682,6 +836,7 @@ struct AppDef {
   void(*touch)(int,int,bool,bool);
   Screen screen;
 };
+
 void clockEnter(); void clockExit();
 void drawClock(LGFX_Sprite&); void clockTouch(int,int,bool,bool);
 void calcEnter(); void calcExit();
@@ -696,7 +851,10 @@ void canvasEnter(); void canvasExit();
 void drawCanvasScreen(LGFX_Sprite&); void canvasTouch(int,int,bool,bool);
 void aiEnter(); void aiExit();
 void drawAiChat(LGFX_Sprite&); void aiTouch(int,int,bool,bool);
-AppDef apps[7] = {
+void fileExpEnter(); void fileExpExit();
+void drawFileExplorer(LGFX_Sprite&); void fileExpTouch(int,int,bool,bool);
+
+AppDef apps[8] = {
   { "Jam",        'J', 0, clockEnter,    clockExit,    drawClock,        clockTouch,    SCR_CLOCK },
   { "Kalkulator", '+', 0, calcEnter,     calcExit,     drawCalc,         calcTouch,     SCR_CALC },
   { "Sensor",     '~', 0, sensorEnter,   sensorExit,   drawSensor,       sensorTouch,   SCR_SENSOR },
@@ -704,24 +862,29 @@ AppDef apps[7] = {
   { "Notepad",    'N', 0, notepadEnter,  notepadExit,  drawNotepad,      notepadTouch,  SCR_NOTEPAD },
   { "Canvas",     'C', 0, canvasEnter,   canvasExit,   drawCanvasScreen, canvasTouch,   SCR_CANVAS },
   { "AI Chat",    'A', 0, aiEnter,       aiExit,       drawAiChat,       aiTouch,       SCR_AICHAT },
+  { "Files",      'F', 0, fileExpEnter,  fileExpExit,  drawFileExplorer, fileExpTouch,  SCR_FILEEXPLORER },
 };
+
 void initAppColors(){
   apps[0].color=T().accent;   apps[1].color=T().accent2;
   apps[2].color=0x07FF;       apps[3].color=0xF81F;
   apps[4].color=0xFFE0;       apps[5].color=T().good;
-  apps[6].color=0xFD40;
+  apps[6].color=0xFD40;       apps[7].color=0x3ADF;
 }
+
 int appIndexForScreen(Screen s){
-  for(int i=0;i<7;i++) if(apps[i].screen==s) return i;
+  for(int i=0;i<8;i++) if(apps[i].screen==s) return i;
   return -1;
 }
 void appOnEnter(Screen s){ int i=appIndexForScreen(s); if(i>=0 && apps[i].onEnter) apps[i].onEnter(); }
 void appOnExit(Screen s){  int i=appIndexForScreen(s); if(i>=0 && apps[i].onExit)  apps[i].onExit(); }
+
 float homeScrollY=0, homeScrollVel=0;
 int homeCols(){ return currentOrient==ORIENT_LANDSCAPE ? 3 : 2; }
 int homeCardW(){ int cols=homeCols(); return (SCR_W - (cols+1)*6)/cols; }
 int homeCardH(){ return 60; }
 int homeDockY(){ return SCR_H-38-6; }
+
 void drawHome(LGFX_Sprite& s,float sc){
   s.fillSprite(T().bg);
   drawStatusBar(s);
@@ -732,7 +895,7 @@ void drawHome(LGFX_Sprite& s,float sc){
   s.setCursor(SCR_W/2-tw/2,26);s.print(tb);
   int cols=homeCols(), cw=homeCardW(), ch=homeCardH();
   int gap=6, gridTop=72;
-  for(int i=0;i<7;i++){
+  for(int i=0;i<8;i++){
     int col=i%cols, row=i/cols;
     int x=gap+col*(cw+gap), y=gridTop+row*(ch+gap)-(int)sc;
     if(y+ch<STATUS_H+2||y>homeDockY()-4)continue;
@@ -748,7 +911,7 @@ void drawHome(LGFX_Sprite& s,float sc){
   }
   int dockY=homeDockY();
   s.fillRoundRect(6,dockY,SCR_W-12,38,12,T().surface2);
-  int dockIdx[4]={0,4,6,3}; // Jam, Notepad, AI Chat, Setting
+  int dockIdx[4]={0,4,6,7}; // Jam, Notepad, AI Chat, Files
   int dw=(SCR_W-12)/4;
   for(int i=0;i<4;i++){
     int di=dockIdx[i];
@@ -760,10 +923,11 @@ void drawHome(LGFX_Sprite& s,float sc){
   }
   drawToast(s);
 }
+
 Screen homeCheck(int x,int y,float sc){
   int dockY=homeDockY();
   if(y>=dockY&&y<=dockY+38){
-    int dockIdx[4]={0,4,6,3};
+    int dockIdx[4]={0,4,6,7};
     int dw=(SCR_W-12)/4;
     for(int i=0;i<4;i++){
       int cx=6+i*dw+dw/2;
@@ -772,20 +936,22 @@ Screen homeCheck(int x,int y,float sc){
   }
   int cols=homeCols(), cw=homeCardW(), ch=homeCardH();
   int gap=6, gridTop=72;
-  for(int i=0;i<7;i++){
+  for(int i=0;i<8;i++){
     int col=i%cols,row=i/cols;
     int ax=gap+col*(cw+gap), ay=gridTop+row*(ch+gap)-(int)sc;
     if(x>=ax&&x<=ax+cw&&y>=ay&&y<=ay+ch) return apps[i].screen;
   }
   return SCR_HOME;
 }
+
 int homeMaxScroll(){
   int cols=homeCols();
-  int rows=(7+cols-1)/cols;
+  int rows=(8+cols-1)/cols;
   int ch=homeCardH(), gap=6, gridTop=72;
   int needed = gridTop + rows*(ch+gap) - homeDockY();
   return max(0, needed);
 }
+
 // =============================================
 // APP: JAM
 // =============================================
@@ -811,6 +977,7 @@ void drawClock(LGFX_Sprite& s){
 void clockTouch(int x,int y,bool held,bool isNew){
   if(isNew && isBack(x,y)) navBack();
 }
+
 // =============================================
 // APP: KALKULATOR
 // =============================================
@@ -823,6 +990,7 @@ const char* calcLabels[5][4] = {
   {"0",".","=","="}
 };
 void calcEnter(){} void calcExit(){}
+
 void calcBtnRect(int r,int c,int& x,int& y,int& w,int& h){
   int top = STATUS_H + 34;
   int bottom = backY() - 6;
@@ -840,6 +1008,7 @@ void calcBtnRect(int r,int c,int& x,int& y,int& w,int& h){
   x = 4 + c*(cw+gap);
   w = cw;
 }
+
 void drawCalc(LGFX_Sprite& s){
   s.fillSprite(T().bg);drawStatusBar(s);
   s.setTextColor(T().accent);s.setTextSize(1);s.setCursor(8,25);s.print("Kalkulator");
@@ -864,6 +1033,7 @@ void drawCalc(LGFX_Sprite& s){
   drawBack(s);
   drawToast(s);
 }
+
 void calcApplyLabel(const char* l){
   if(!strcmp(l,"C")){calcInput="0";calcA=0;calcOp=0;calcNew=true;}
   else if(!strcmp(l,"+/-"))calcInput=String(calcInput.toFloat()*-1);
@@ -886,6 +1056,7 @@ void calcApplyLabel(const char* l){
   }
   if(calcInput.length()>12)calcInput=calcInput.substring(0,12);
 }
+
 void calcTouch(int x,int y,bool held,bool isNew){
   if(!isNew) return;
   if(isBack(x,y)){ navBack(); return; }
@@ -901,6 +1072,7 @@ void calcTouch(int x,int y,bool held,bool isNew){
     }
   }
 }
+
 // =============================================
 // APP: SENSOR
 // =============================================
@@ -930,19 +1102,23 @@ void drawSensor(LGFX_Sprite& s){
 void sensorTouch(int x,int y,bool held,bool isNew){
   if(isNew && isBack(x,y)) navBack();
 }
+
 // =============================================
 // APP: SETTINGS
 // =============================================
 String settSSID="",settPass="";
 bool settShowPass=false;int settFocus=-1;
+
 void settingsEnter(){ 
   settSSID=String(WIFI_SSID); 
   settPass=String(WIFI_PASSWORD); 
   startWifiScan();
 }
 void settingsExit(){}
+
 void drawSettings(LGFX_Sprite& s){
   checkWifiScanComplete();
+
   s.fillSprite(T().bg);drawStatusBar(s);
   s.setTextColor(T().good);s.setTextSize(1);s.setCursor(8,26);s.print("Pengaturan");
   
@@ -951,6 +1127,7 @@ void drawSettings(LGFX_Sprite& s){
   s.setTextColor(wifiScanning?T().subtext:T().bg);
   s.setCursor(SCR_W-68,29);
   s.print(wifiScanning?"Memindai":"Pindai");
+
   int rowY = STATUS_H+12;
   int rowW = SCR_W-16;
   
@@ -982,6 +1159,7 @@ void drawSettings(LGFX_Sprite& s){
   s.fillRoundRect(8,rowY,rowW,36,6,T().surface);
   s.setTextColor(T().subtext);s.setCursor(14,rowY+4);
   s.print("Daftar WiFi (ketuk utk pilih):");
+
   if(wifiScanning){
     s.setTextColor(T().accent);s.setCursor(14,rowY+18);
     s.print("Memindai jaringan sekitar...");
@@ -1002,6 +1180,7 @@ void drawSettings(LGFX_Sprite& s){
       s.print(dispSSID.c_str());
     }
   }
+
   // Row 4: Input SSID & Pass
   rowY+=38;
   s.fillRoundRect(8,rowY,rowW,22,4,settFocus==0?T().surface2:T().surface);
@@ -1029,9 +1208,11 @@ void drawSettings(LGFX_Sprite& s){
   s.setTextColor(T().bg);s.setCursor(16,rowY+7);s.print("Sambungkan");
   s.fillRoundRect(SCR_W/2+4,rowY,btnW,24,6,T().surface2);
   s.setTextColor(T().text);s.setCursor(SCR_W/2+10,rowY+7);s.print("Kalibrasi Ulang");
+
   if(kbVisible)drawKb(s);else drawBack(s);
   drawToast(s);
 }
+
 void settingsTouch(int x,int y,bool held,bool isNew){
   if(kbVisible){
     if(!isNew) return;
@@ -1044,18 +1225,22 @@ void settingsTouch(int x,int y,bool held,bool isNew){
   if(!isNew) return;
   
   if(isBack(x,y)){ navBack(); return; }
+
   if(x>=SCR_W-74 && x<=SCR_W-8 && y>=24 && y<=42){
     if(!wifiScanning){ startWifiScan(); showToast("Memindai..."); }
     return;
   }
+
   int rowW = SCR_W-16;
   int rowY = STATUS_H+12;
+
   if(x>=58&&x<=58+rowW-90&&y>=rowY&&y<=rowY+26){
     brightness=constrain(map(x-58,0,rowW-90,10,255),10,255);
     display.setBrightness(brightness);
     needRedraw=true;
     return;
   }
+
   rowY+=28;
   int tbtnW=(rowW-50)/THEME_COUNT;
   if(y>=rowY&&y<=rowY+26){
@@ -1067,6 +1252,7 @@ void settingsTouch(int x,int y,bool held,bool isNew){
       }
     }
   }
+
   rowY+=28;
   if(y>=rowY+14 && y<=rowY+34 && !wifiScanning && scannedWifiNum>0){
     int wifiPillW=(rowW-12)/3;
@@ -1082,16 +1268,19 @@ void settingsTouch(int x,int y,bool held,bool isNew){
       }
     }
   }
+
   rowY+=38;
   if(y>=rowY&&y<=rowY+22){ 
     settFocus=0;kbTarget=&settSSID;kbVisible=true;kbMode=KB_LOWER;
     needRedraw=true;return; 
   }
+
   rowY+=24;
   if(y>=rowY&&y<=rowY+22){
     if(x>=8+rowW-24){ settShowPass=!settShowPass; needRedraw=true; return; }
     settFocus=1;kbTarget=&settPass;kbVisible=true;kbMode=KB_LOWER;needRedraw=true;return;
   }
+
   rowY+=26;
   int btnW=(rowW-8)/2;
   if(y>=rowY&&y<=rowY+24){
@@ -1110,10 +1299,12 @@ void settingsTouch(int x,int y,bool held,bool isNew){
     }
   }
 }
+
 // =============================================
 // APP: NOTEPAD
 // =============================================
 void notepadEnter(){} void notepadExit(){ saveNote(); }
+
 void drawNotepad(LGFX_Sprite& s){
   s.fillSprite(T().bg);drawStatusBar(s);
   s.setTextColor(T().accent);s.setTextSize(1);s.setCursor(8,26);s.print("Notepad");
@@ -1129,6 +1320,7 @@ void drawNotepad(LGFX_Sprite& s){
   if(kbVisible)drawKb(s);else drawBack(s);
   drawToast(s);
 }
+
 void notepadTouch(int x,int y,bool held,bool isNew){
   if(kbVisible){
     if(!isNew) return;
@@ -1156,6 +1348,7 @@ void notepadTouch(int x,int y,bool held,bool isNew){
     needRedraw=true;
   }
 }
+
 // =============================================
 // APP: CANVAS
 // =============================================
@@ -1164,10 +1357,13 @@ uint16_t palette[]={0x0000,0xF800,0x07E0,0x001F,0xFFE0,0x07FF,0xF81F,0xFD40,0xFF
 uint16_t drawColor=0xFFFF;
 int brushSize=3;
 int lastDX=-1,lastDY=-1;
+
 int canvasCapY(){ return STATUS_H+2; }
 int canvasToolY(){ return SCR_H-44; }
+
 void canvasEnter(){ lastDX=-1; }
 void canvasExit(){ saveCanvas(); }
+
 void drawCanvasScreen(LGFX_Sprite& s){
   s.fillSprite(T().bg);
   drawStatusBar(s);
@@ -1199,6 +1395,7 @@ void drawCanvasScreen(LGFX_Sprite& s){
   
   drawToast(s);
 }
+
 void canvasTouch(int x,int y,bool held,bool isNew){
   int ty=canvasToolY();
   
@@ -1237,29 +1434,30 @@ void canvasTouch(int x,int y,bool held,bool isNew){
     needRedraw=true;
   }
 }
+
 // =============================================
-// APP: AI CHAT (GEMINI)
+// APP: AI CHAT
 // =============================================
 void aiEnter(){} void aiExit(){}
+
 void drawAiChat(LGFX_Sprite& s){
   s.fillSprite(T().bg);drawStatusBar(s);
   s.setTextColor(T().accent);s.setTextSize(1);s.setCursor(8,26);s.print("AI Chat (Gemini)");
   
-  // Indicator Status API Key di Kanan Atas
   bool hasKey = (geminiApiKey.length() > 0 && geminiApiKey != "YOUR_GEMINI_API_KEY_HERE");
   s.fillRoundRect(SCR_W-72,24,68,18,4,hasKey?T().good:T().danger);
   s.setTextColor(0xFFFF);s.setCursor(SCR_W-66,29);
   s.print(hasKey?"Key: OK":"Key: Edit");
+
   int contentBot = kbVisible ? kbY()-4 : backY()-32;
   
-  // Box Tanya (User Prompt)
   s.fillRoundRect(4,44,SCR_W-8,30,6,T().surface);
   s.setTextColor(T().accent);s.setCursor(10,48);s.print("Tanya: ");
   s.setTextColor(T().text);
   String pText = aiPrompt.length() ? aiPrompt : "(ketuk area bawah utk ketik)";
   if(pText.length()>32) pText = pText.substring(0,32) + "..";
   s.print(pText.c_str());
-  // Box Respon Gemini AI
+
   int respH = contentBot - 80;
   if(respH > 20){
     s.fillRoundRect(4,78,SCR_W-8,respH,6,T().surface2);
@@ -1277,24 +1475,24 @@ void drawAiChat(LGFX_Sprite& s){
       s.print("Ketik pertanyaan lalu tekan [Kirim].");
     }
   }
-  // Baris Input Prompt & Tombol Kirim (Jika keyboard tutup)
+
   if(!kbVisible){
     int inputY = backY() - 26;
-    // Input Box
     s.fillRoundRect(4,inputY,SCR_W-64,22,4,T().surface);
     s.setTextColor(T().subtext);s.setCursor(10,inputY+6);
     String ipDisp = aiPrompt.length() ? aiPrompt : "Ketik pertanyaan...";
     if(ipDisp.length()>24) ipDisp = ipDisp.substring(0,24)+"..";
     s.print(ipDisp.c_str());
     
-    // Tombol Kirim
     s.fillRoundRect(SCR_W-56,inputY,52,22,4,aiLoading?T().surface2:T().accent);
     s.setTextColor(aiLoading?T().subtext:T().bg);s.setCursor(SCR_W-48,inputY+6);
     s.print("Kirim");
   }
+
   if(kbVisible) drawKb(s); else drawBack(s);
   drawToast(s);
 }
+
 void aiTouch(int x,int y,bool held,bool isNew){
   if(kbVisible){
     if(!isNew) return;
@@ -1307,7 +1505,7 @@ void aiTouch(int x,int y,bool held,bool isNew){
   if(!isNew) return;
   
   if(isBack(x,y)){ navBack(); return; }
-  // 1. Edit API Key di Kanan Atas
+
   if(x>=SCR_W-72 && x<=SCR_W-4 && y>=24 && y<=42){
     kbTarget = &geminiApiKey;
     kbVisible = true;
@@ -1316,9 +1514,9 @@ void aiTouch(int x,int y,bool held,bool isNew){
     needRedraw = true;
     return;
   }
+
   int inputY = backY() - 26;
   
-  // 2. Ketuk Box Pertanyaan / Input
   if((y>=44 && y<=74) || (y>=inputY && y<=inputY+22 && x<=SCR_W-60)){
     kbTarget = &aiPrompt;
     kbVisible = true;
@@ -1326,13 +1524,194 @@ void aiTouch(int x,int y,bool held,bool isNew){
     needRedraw = true;
     return;
   }
-  // 3. Tombol Kirim
+
   if(x>=SCR_W-56 && x<=SCR_W-4 && y>=inputY && y<=inputY+22){
-    saveGeminiKey(); // Simpan API Key ke SD Card jika ada perubahan
+    saveGeminiKey();
     triggerGeminiAI();
     return;
   }
 }
+
+// =============================================
+// APP: FILE EXPLORER (DENGAN WEB UPLOADER)
+// =============================================
+#define MAX_EXP_FILES 20
+String expFileNames[MAX_EXP_FILES];
+uint32_t expFileSizes[MAX_EXP_FILES];
+int expFileCount = 0;
+int expScrollPage = 0;
+String expViewContent = "";
+String expViewFileName = "";
+
+void scanSdFiles() {
+  expFileCount = 0;
+  if (!sdReady) return;
+  File root = SD_MMC.open("/");
+  File f = root.openNextFile();
+  while (f && expFileCount < MAX_EXP_FILES) {
+    if (!f.isDirectory()) {
+      String fname = String(f.name());
+      if (!fname.startsWith("/")) fname = "/" + fname;
+      expFileNames[expFileCount] = fname;
+      expFileSizes[expFileCount] = f.size();
+      expFileCount++;
+    }
+    f = root.openNextFile();
+  }
+}
+
+void fileExpEnter(){
+  expViewContent = "";
+  expViewFileName = "";
+  expScrollPage = 0;
+  scanSdFiles();
+}
+void fileExpExit(){}
+
+void drawFileExplorer(LGFX_Sprite& s){
+  s.fillSprite(T().bg);drawStatusBar(s);
+  s.setTextColor(0x3ADF);s.setTextSize(1);s.setCursor(8,26);s.print("File Explorer");
+
+  // Tampilkan URL Web Server File Manager di Kanan Atas
+  if(wifiConnected && webServerRunning){
+    s.setTextColor(T().good);s.setCursor(110,26);
+    String ipStr = "Web: " + WiFi.localIP().toString();
+    s.print(ipStr.c_str());
+  } else {
+    s.setTextColor(T().subtext);s.setCursor(120,26);
+    s.print("Web: Off (No WiFi)");
+  }
+
+  // Cek jika sedang membuka isi file tertentu
+  if(expViewFileName.length() > 0){
+    s.fillRoundRect(SCR_W-64,24,58,18,4,T().surface2);
+    s.setTextColor(T().accent);s.setCursor(SCR_W-54,29);s.print("Tutup");
+
+    s.fillRoundRect(4,44,SCR_W-8,backY()-50,6,T().surface);
+    s.setTextColor(T().accent2);s.setCursor(10,50);s.print("File: ");
+    s.setTextColor(T().text);s.print(expViewFileName.c_str());
+    s.drawFastHLine(10,64,SCR_W-20,T().divider);
+
+    s.setTextColor(T().text);s.setTextWrap(true);s.setCursor(10,70);
+    String vDisp = expViewContent;
+    if(vDisp.length() > 220) vDisp = vDisp.substring(0,220) + "...";
+    s.print(vDisp.c_str());
+
+    drawBack(s);drawToast(s);
+    return;
+  }
+
+  // Mode Daftar File SD Card
+  int listY = 44;
+  int itemH = 26;
+  int itemsPerPage = 5;
+  int startIdx = expScrollPage * itemsPerPage;
+
+  if(!sdReady){
+    s.setTextColor(T().danger);s.setTextSize(2);s.setCursor(20,80);
+    s.print("SD Card Tdk Siap");
+    drawBack(s);drawToast(s);
+    return;
+  }
+
+  if(expFileCount == 0){
+    s.setTextColor(T().subtext);s.setTextSize(1);s.setCursor(20,80);
+    s.print("SD Card Kosong / Belum ada file.");
+  } else {
+    for(int i = 0; i < itemsPerPage && (startIdx + i) < expFileCount; i++){
+      int idx = startIdx + i;
+      int itemY = listY + i * (itemH + 4);
+      s.fillRoundRect(4,itemY,SCR_W-8,itemH,6,T().surface);
+      
+      // Icon File & Nama
+      s.setTextColor(T().accent2);s.setCursor(10,itemY+8);s.print("[F]");
+      s.setTextColor(T().text);s.setCursor(32,itemY+8);
+      String fn = expFileNames[idx];
+      if(fn.length() > 16) fn = fn.substring(0,14) + "..";
+      s.print(fn.c_str());
+
+      // Tombol Buka
+      s.fillRoundRect(SCR_W-84,itemY+3,36,20,4,T().surface2);
+      s.setTextColor(T().good);s.setCursor(SCR_W-76,itemY+8);s.print("Buka");
+
+      // Tombol Hapus
+      s.fillRoundRect(SCR_W-44,itemY+3,36,20,4,T().danger);
+      s.setTextColor(0xFFFF);s.setCursor(SCR_W-38,itemY+8);s.print("Hps");
+    }
+  }
+
+  // Tombol Navigasi Halaman (Next/Prev)
+  int pageY = backY() - 2;
+  if(expScrollPage > 0){
+    s.fillRoundRect(SCR_W-120,pageY,54,22,4,T().surface2);
+    s.setTextColor(T().text);s.setCursor(SCR_W-110,pageY+6);s.print("< Prev");
+  }
+  if((expScrollPage + 1) * itemsPerPage < expFileCount){
+    s.fillRoundRect(SCR_W-60,pageY,54,22,4,T().surface2);
+    s.setTextColor(T().text);s.setCursor(SCR_W-52,pageY+6);s.print("Next >");
+  }
+
+  drawBack(s);drawToast(s);
+}
+
+void fileExpTouch(int x,int y,bool held,bool isNew){
+  if(!isNew) return;
+
+  // Cek tombol Back
+  if(isBack(x,y)){ navBack(); return; }
+
+  // Jika sedang membuka isi file
+  if(expViewFileName.length() > 0){
+    if(x>=SCR_W-64 && x<=SCR_W-4 && y>=24 && y<=42){
+      expViewFileName = "";
+      expViewContent = "";
+      needRedraw = true;
+    }
+    return;
+  }
+
+  if(!sdReady) return;
+
+  int listY = 44;
+  int itemH = 26;
+  int itemsPerPage = 5;
+  int startIdx = expScrollPage * itemsPerPage;
+
+  // Cek sentuhan pada baris file
+  for(int i = 0; i < itemsPerPage && (startIdx + i) < expFileCount; i++){
+    int idx = startIdx + i;
+    int itemY = listY + i * (itemH + 4);
+    if(y >= itemY && y <= itemY + itemH){
+      // Tombol Buka
+      if(x >= SCR_W-84 && x <= SCR_W-48){
+        expViewFileName = expFileNames[idx];
+        File f = SD_MMC.open(expViewFileName, FILE_READ);
+        if(f){ expViewContent = f.readString(); f.close(); }
+        else expViewContent = "Gagal membaca isi file.";
+        needRedraw = true;
+        return;
+      }
+      // Tombol Hapus
+      if(x >= SCR_W-44 && x <= SCR_W-8){
+        SD_MMC.remove(expFileNames[idx]);
+        showToast("File Dihapus");
+        scanSdFiles();
+        needRedraw = true;
+        return;
+      }
+    }
+  }
+
+  // Tombol Next / Prev Halaman
+  int pageY = backY() - 2;
+  if(expScrollPage > 0 && x>=SCR_W-120 && x<=SCR_W-66 && y>=pageY){
+    expScrollPage--; needRedraw = true; return;
+  }
+  if((expScrollPage + 1) * itemsPerPage < expFileCount && x>=SCR_W-60 && x<=SCR_W-6 && y>=pageY){
+    expScrollPage++; needRedraw = true; return;
+  }
+}
+
 // =============================================
 // PUSH FRAME
 // =============================================
@@ -1348,6 +1727,7 @@ void renderCurrentFrame(){
   }
   if(!locked && controlCenterOpen) drawControlCenter(canvas);
 }
+
 // =============================================
 // SETUP
 // =============================================
@@ -1356,6 +1736,7 @@ int  touchStartX=0,touchStartY=0,touchLastY=0;
 bool isSwiping=false;
 unsigned long swipeStartTime=0;
 int gStartX=0,gStartY=0; bool gGestureDone=false;
+
 void setup(){
   Serial.begin(115200);
   display.init();
@@ -1377,7 +1758,7 @@ void setup(){
   loadWifiCreds();
   connectWifi();
   loadNote();
-  loadGeminiKey(); // Deteksi / buat file /gemini_key.txt di SD Card otomatis
+  loadGeminiKey();
   canvasApp.setPsram(true);
   canvasApp.createSprite(320,240-STATUS_H-44);
   canvasApp.fillSprite(T().bg);
@@ -1386,15 +1767,22 @@ void setup(){
   locked = true;
   needRedraw = true;
 }
+
 // =============================================
 // LOOP
 // =============================================
 unsigned long lastClk=0,lastSen=0;
 void loop(){
+  // Handle HTTP request dari browser HP (Web File Manager)
+  if(wifiConnected && webServerRunning){
+    webServer.handleClient();
+  }
+
   lgfx::touch_point_t tp;
   bool touched=display.getTouch(&tp);
   int tx=touched?(int)tp.x:0,ty=touched?(int)tp.y:0;
   bool newT=touched&&!wasTouched;
+
   // -------- Control Center animation --------
   if(ccAnimatingOpen){
     ccOffset += (float)ccPanelH()/6.0f;
@@ -1405,18 +1793,21 @@ void loop(){
     if(ccOffset<=0){ ccOffset=0; ccAnimatingClose=false; controlCenterOpen=false; }
     needRedraw=true;
   }
+
   // -------- Lock Screen --------
   if(locked){
     lockScreenInput(touched,newT,tx,ty);
     if(needRedraw){ renderCurrentFrame(); push(); needRedraw=false; }
     wasTouched=touched; delay(8); return;
   }
+
   // -------- Control Center Open --------
   if(controlCenterOpen){
     if(newT) ccTouch(tx,ty);
     if(needRedraw){ renderCurrentFrame(); push(); needRedraw=false; }
     wasTouched=touched; delay(8); return;
   }
+
   // -------- Global Gestures --------
   if(newT){ gStartX=tx; gStartY=ty; gGestureDone=false; }
   if(touched && !gGestureDone && !kbVisible){
@@ -1430,6 +1821,7 @@ void loop(){
       wasTouched=touched; delay(8); return;
     }
   }
+
   // ============ HOME ============
   if(curScreen()==SCR_HOME){
     if(touched){
@@ -1459,6 +1851,7 @@ void loop(){
       }
     }
     if(needRedraw){renderCurrentFrame();push();needRedraw=false;}
+
   // ============ APP SCREENS ============
   } else {
     int idx=appIndexForScreen(curScreen());
