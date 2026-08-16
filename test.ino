@@ -93,6 +93,15 @@ LGFX display;
 int brightness = 200;
 
 // =============================================
+// SISTEM TEMA — 4 preset, disimpan di Preferences
+// =============================================
+struct AppTheme {
+  const char* name;
+  lv_color_t bg, surface, surface2, accent, accent2, text, subtext, danger, good;
+  bool dark;
+};
+
+// =============================================
 // JEMBATAN LVGL <-> LovyanGFX
 // =============================================
 #define LV_BUF_LINES 40   // buffer gambar 320 x 40 baris, cukup & hemat RAM
@@ -122,15 +131,6 @@ void lvglTouchReadCb(lv_indev_drv_t* drv, lv_indev_data_t* data) {
     data->point.y = tp.y;
   }
 }
-
-// =============================================
-// SISTEM TEMA — 4 preset, disimpan di Preferences
-// =============================================
-struct AppTheme {
-  const char* name;
-  lv_color_t bg, surface, surface2, accent, accent2, text, subtext, danger, good;
-  bool dark;
-};
 
 AppTheme themes[] = {
   { "Dark",   lv_color_hex(0x10141c), lv_color_hex(0x1e2430), lv_color_hex(0x2c3444),
