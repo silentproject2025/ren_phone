@@ -36,7 +36,7 @@ const char* NOTE_FILE   = "/notepad.txt";
 const char* CANVAS_FILE = "/canvas.bin";
 
 // =============================================
-// LGFX DRIVER (panel + touch) — sama seperti versi sebelumnya
+// LGFX DRIVER (panel + touch)
 // =============================================
 class LGFX : public lgfx::LGFX_Device {
   lgfx::Panel_ILI9341 _panel_instance;
@@ -173,6 +173,7 @@ void loadOrRunCalibration() {
     uint16_t calData[8];
     prefs.getBytes("data", calData, sizeof(calData));
     display.setTouchCalibrate(calData);
+    Serial.println("[CAL] Data kalibrasi dimuat dari NVS");
   } else {
     display.fillScreen(TFT_BLACK);
     display.setTextColor(TFT_WHITE); display.setTextSize(2);
@@ -181,10 +182,19 @@ void loadOrRunCalibration() {
     display.setCursor(20, 130); display.println("Sentuh tanda di setiap sudut");
     uint16_t calData[8];
     display.calibrateTouch(calData, TFT_WHITE, TFT_BLACK, 15);
+    // FIX: Terapkan hasil kalibrasi setelah calibrateTouch selesai
+    display.setTouchCalibrate(calData);
     prefs.putBytes("data", calData, sizeof(calData));
     prefs.putBool("done", true);
+    Serial.println("[CAL] Kalibrasi selesai & disimpan");
   }
   prefs.end();
+
+  // FIX: Bersihkan layar & pastikan state display bersih setelah kalibrasi
+  //      agar tidak mengganggu rendering LVGL selanjutnya
+  display.endWrite();
+  display.fillScreen(TFT_BLACK);
+  Serial.println("[CAL] Display state dibersihkan");
 }
 
 // =============================================
@@ -879,13 +889,22 @@ void buildCanvasScreen() {
   lv_obj_clear_flag(scrCanvas, LV_OBJ_FLAG_SCROLLABLE);
   makeTitle(scrCanvas, "Canvas", T().good);
 
-  canvasWidget = lv_canvas_create(scrCanvas);
-  lv_canvas_set_buffer(canvasWidget, canvasBuf, CANVAS_W, CANVAS_H, LV_IMG_CF_TRUE_COLOR);
-  lv_obj_set_pos(canvasWidget, 0, 26);
-  lv_obj_add_flag(canvasWidget, LV_OBJ_FLAG_CLICKABLE);
-  lv_obj_add_event_cb(canvasWidget, canvasPressCb, LV_EVENT_PRESSING, nullptr);
-  lv_obj_add_event_cb(canvasWidget, canvasReleaseCb, LV_EVENT_RELEASED, nullptr);
-  lv_obj_add_event_cb(canvasWidget, canvasReleaseCb, LV_EVENT_PRESS_LOST, nullptr);
+  // FIX: Hanya buat canvas widget jika buffer berhasil dialokasi
+  if (canvasBuf) {
+    canvasWidget = lv_canvas_create(scrCanvas);
+    lv_canvas_set_buffer(canvasWidget, canvasBuf, CANVAS_W, CANVAS_H, LV_IMG_CF_TRUE_COLOR);
+    lv_obj_set_pos(canvasWidget, 0, 26);
+    lv_obj_add_flag(canvasWidget, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(canvasWidget, canvasPressCb, LV_EVENT_PRESSING, nullptr);
+    lv_obj_add_event_cb(canvasWidget, canvasReleaseCb, LV_EVENT_RELEASED, nullptr);
+    lv_obj_add_event_cb(canvasWidget, canvasReleaseCb, LV_EVENT_PRESS_LOST, nullptr);
+  } else {
+    canvasWidget = nullptr;
+    lv_obj_t* errLbl = lv_label_create(scrCanvas);
+    lv_label_set_text(errLbl, "Canvas tidak tersedia\n(memori tidak cukup)");
+    lv_obj_set_style_text_color(errLbl, T().danger, 0);
+    lv_obj_align(errLbl, LV_ALIGN_CENTER, 0, 0);
+  }
 
   // Toolbar bawah
   lv_obj_t* toolbar = lv_obj_create(scrCanvas);
@@ -910,8 +929,8 @@ void buildCanvasScreen() {
   }
 
   lblBrush = lv_label_create(toolbar);
-  char bb[8]; sprintf(bb, "B:%d", brushSize);
-  lv_label_set_text(lblBrush, bb);
+  char bbb[8]; sprintf(bbb, "B:%d", brushSize);
+  lv_label_set_text(lblBrush, bbb);
   lv_obj_set_style_text_color(lblBrush, T().text, 0);
   lv_obj_align(lblBrush, LV_ALIGN_RIGHT_MID, -70, 0);
   lv_obj_add_flag(lblBrush, LV_OBJ_FLAG_CLICKABLE);
@@ -1081,11 +1100,24 @@ void rebuildUI() {
 // =============================================
 void setup() {
   Serial.begin(115200);
+  delay(100); // beri waktu Serial stabil
+
+  // FIX: Log info memori untuk debugging
+  Serial.println("\n=== ren_phone boot ===");
+  Serial.printf("Free heap : %u bytes\n", ESP.getFreeHeap());
+  Serial.printf("Free PSRAM: %u bytes\n", ESP.getFreePsram());
+
   display.init();
   display.setRotation(1);
   display.setBrightness(brightness);
+  Serial.println("[BOOT] Display init OK");
 
-  if (display.touch()) loadOrRunCalibration();
+  if (display.touch()) {
+    Serial.println("[BOOT] Touch terdeteksi, mulai kalibrasi...");
+    loadOrRunCalibration();
+  } else {
+    Serial.println("[BOOT] Tidak ada touch controller");
+  }
 
   loadThemePref();
   initSD();
@@ -1093,16 +1125,45 @@ void setup() {
   loadNoteFromSD();
   connectWifi();
 
-  // Buffer canvas persisten di PSRAM
+  // Buffer canvas — coba PSRAM dulu, fallback ke internal RAM
   canvasBuf = (lv_color_t*)heap_caps_malloc(CANVAS_BUF_BYTES, MALLOC_CAP_SPIRAM);
+  if (!canvasBuf) {
+    Serial.println("[WARN] Canvas PSRAM gagal, coba internal RAM...");
+    canvasBuf = (lv_color_t*)malloc(CANVAS_BUF_BYTES);
+  }
   if (canvasBuf) {
+    Serial.println("[BOOT] Canvas buffer OK");
     for (uint32_t i = 0; i < (uint32_t)CANVAS_W*CANVAS_H; i++) canvasBuf[i] = T().bg;
     loadCanvasFromSD();
+  } else {
+    Serial.println("[WARN] Canvas buffer gagal dialokasi, fitur Canvas dinonaktifkan");
   }
 
   // Init LVGL
   lv_init();
+  Serial.println("[BOOT] LVGL init OK");
+
+  // FIX: Alokasi buffer LVGL dengan fallback ke internal RAM jika PSRAM gagal
   lvBuf1 = (lv_color_t*)heap_caps_malloc(320 * LV_BUF_LINES * sizeof(lv_color_t), MALLOC_CAP_SPIRAM);
+  if (!lvBuf1) {
+    Serial.println("[WARN] LVGL buffer PSRAM gagal, fallback ke internal RAM...");
+    lvBuf1 = (lv_color_t*)malloc(320 * LV_BUF_LINES * sizeof(lv_color_t));
+  }
+  if (!lvBuf1) {
+    // FATAL: tidak bisa alokasi buffer sama sekali
+    Serial.println("[FATAL] LVGL buffer gagal total! Layar tidak bisa dirender.");
+    display.fillScreen(TFT_RED);
+    display.setTextColor(TFT_WHITE);
+    display.setTextSize(2);
+    display.setCursor(20, 100);
+    display.println("MEMORY ERROR");
+    display.setTextSize(1);
+    display.setCursor(20, 130);
+    display.println("Tidak cukup RAM untuk LVGL");
+    while (1) delay(1000); // halt, jangan crash loop
+  }
+  Serial.printf("[BOOT] LVGL buffer OK @ %p (%u bytes)\n", lvBuf1, 320 * LV_BUF_LINES * sizeof(lv_color_t));
+
   lv_disp_draw_buf_init(&draw_buf, lvBuf1, NULL, 320 * LV_BUF_LINES);
 
   lv_disp_drv_init(&disp_drv);
@@ -1117,6 +1178,8 @@ void setup() {
   indev_drv.read_cb = lvglTouchReadCb;
   lv_indev_drv_register(&indev_drv);
 
+  Serial.println("[BOOT] LVGL driver registered, building UI...");
+
   buildStyles();
   buildHomeScreen();
   buildClockScreen();
@@ -1130,6 +1193,12 @@ void setup() {
 
   lv_timer_create(statusTimerCb, 1000, nullptr);
   lv_timer_create(sensorTimerCb, 2000, nullptr);
+
+  // FIX: Inisialisasi lastTick agar tick pertama di loop() tidak membesar
+  extern unsigned long lastTick;
+  lastTick = millis();
+
+  Serial.println("[BOOT] Setup selesai, masuk loop");
 }
 
 // =============================================
