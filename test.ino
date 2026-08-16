@@ -1,18 +1,20 @@
 // =================================================================
-// ren_phone v4 — "OS" rewrite (FIXED GEMINI AI OUT-OF-MEMORY BUG)
+// ren_phone v4 — "OS" rewrite (FINAL FIX GEMINI AI: NO MORE PSRAM STACK)
 // ESP32-S3, ILI9341, XPT2046 touch, SD via SDIO
 //
-// PERBAIKAN BUG "Memori tidak cukup" (v4):
-//  1. Stack task AI (32KB) SEKARANG DIALOKASIKAN DI PSRAM
-//     (bukan DRAM internal) via heap_caps_malloc(MALLOC_CAP_SPIRAM)
-//     + xTaskCreateStaticPinnedToCore. Ini membebaskan DRAM internal
-//     yang sangat dibutuhkan mbedTLS/HTTPS utk buffer TLS.
-//  2. Pengecekan memori sekarang fokus ke DRAM internal saja
-//     (heap_caps_get_free_size(MALLOC_CAP_INTERNAL)) + largest free
-//     block, bukan ESP.getFreeHeap() yg ambang batasnya terlalu tinggi.
-//  3. Buffer stack di-reuse (dialokasikan sekali, dipakai berulang)
-//     supaya tidak alloc/dealloc PSRAM tiap kali chat.
-//  4. Tetap ada watchdog anti-stuck (soft/hard timeout) dari fix sebelumnya.
+// PERBAIKAN FINAL (v5):
+//  1. HAPUS pendekatan stack task di PSRAM (heap_caps_malloc SPIRAM) —
+//     ESP32 Arduino core TIDAK resmi mendukung ini tanpa sdkconfig khusus,
+//     makanya selalu gagal alokasi. Sekarang kembali ke stack DRAM biasa,
+//     tapi ukurannya dikecilkan jadi 16KB (cukup utk HTTPS) dari yg 32KB.
+//  2. HAPUS pengecekan "freeInternal < 20000" yang terlalu ketat & jadi
+//     penyebab false-positive error "memori tidak cukup".
+//  3. TETAP mempertahankan fix yang valid:
+//     - HAPUS http.useHTTP10(true) -> penyebab asli stuck permanen
+//       (Gemini pakai chunked encoding, butuh HTTP/1.1)
+//     - Watchdog timeout (soft 15s putus socket, hard 30s hapus task)
+//       supaya UI tidak pernah stuck selamanya walau ada masalah lain
+//     - Parser gemini_key.txt yang aman dari BOM/CRLF/kutip
 // =================================================================
 #include <LovyanGFX.hpp>
 #include <Preferences.h>
@@ -518,7 +520,7 @@ void toggleAirplaneMode(){
 
 // =============================================
 // GEMINI AI HTTP CLIENT & FREERTOS TASK
-// (FIXED v4: STACK TASK DI PSRAM, BEBAS DARI ERROR "MEMORI TIDAK CUKUP")
+// (FINAL FIX v5: STACK KEMBALI DI DRAM INTERNAL, TIDAK PAKAI PSRAM LAGI)
 // =============================================
 String aiPrompt = "";
 String aiResponse = "";
@@ -531,11 +533,6 @@ const unsigned long AI_SOFT_TIMEOUT_MS = 15000; // 15s -> paksa putus socket
 const unsigned long AI_HARD_TIMEOUT_MS = 30000; // 30s -> paksa hapus task
 volatile bool aiSoftStopTriggered = false;
 
-// ---------- FIXED: Stack task dialokasikan di PSRAM, bukan DRAM internal ----------
-#define AI_TASK_STACK_WORDS (32*1024/sizeof(StackType_t)) // 32KB stack
-static StackType_t* aiTaskStackBuf = nullptr; // buffer stack, tinggal di PSRAM
-static StaticTask_t aiTaskTCB;                // control block task (di DRAM, kecil ~ok)
-
 bool doGeminiHttpRequest(const String& promptText, String& outResponse) {
   bool ok = false;
   WiFiClientSecure client;
@@ -546,16 +543,17 @@ bool doGeminiHttpRequest(const String& promptText, String& outResponse) {
   HTTPClient http;
   http.setTimeout(15000);
   http.setConnectTimeout(15000);
-  // JANGAN pakai http.useHTTP10(true) -> bikin macet krn chunked encoding.
+  // PENTING: JANGAN pakai http.useHTTP10(true) -> penyebab stuck permanen
+  // karena Gemini API pakai chunked transfer-encoding (butuh HTTP/1.1).
 
   String url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=" + geminiApiKey;
 
-  Serial.printf("[Gemini] DRAM internal bebas: %u bytes (blok terbesar: %u)\n",
+  Serial.printf("[Gemini] Free DRAM internal: %u bytes (blok terbesar: %u)\n",
                 heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
                 heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
 
   if (!http.begin(client, url)) {
-    outResponse = "Gagal inisialisasi HTTPClient (begin() gagal, cek memori/URL).";
+    outResponse = "Gagal inisialisasi HTTPClient (begin() gagal).";
     aiClientPtr = nullptr;
     return false;
   }
@@ -669,30 +667,20 @@ void geminiTaskFunc(void* parameter) {
   vTaskDelete(NULL);
 }
 
-// ---------- FIXED: buat task dgn stack di PSRAM ----------
+// ---------- FIXED: kembali pakai stack DRAM biasa, ukuran wajar 16KB ----------
 void triggerGeminiAI() {
   if (aiPrompt.length() == 0 || aiLoading) return;
 
-  // Alokasikan buffer stack di PSRAM SEKALI SAJA, dipakai berulang selanjutnya
-  if (aiTaskStackBuf == nullptr) {
-    aiTaskStackBuf = (StackType_t*) heap_caps_malloc(
-        AI_TASK_STACK_WORDS * sizeof(StackType_t), MALLOC_CAP_SPIRAM);
-    if (aiTaskStackBuf == nullptr) {
-      Serial.println("[Gemini] Gagal alokasi stack di PSRAM!");
-      aiResponse = "Error: Gagal alokasi memori PSRAM utk proses AI.";
-      needRedrawNow();
-      return;
-    }
-  }
-
-  // Cek DRAM internal (bukan PSRAM) karena inilah yang dipakai TLS/mbedTLS
-  size_t freeInternal   = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
-  size_t largestBlock    = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
-  Serial.printf("[Gemini] Sebelum request -> freeInternal=%u largestBlock=%u freePsram=%u\n",
+  size_t freeInternal = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+  size_t largestBlock  = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
+  Serial.printf("[Gemini] Sebelum bikin task -> freeInternal=%u largestBlock=%u freePsram=%u\n",
                 freeInternal, largestBlock, ESP.getFreePsram());
 
-  if (freeInternal < 20000 || largestBlock < 16000) {
-    aiResponse = "Error: DRAM internal terlalu rendah utk koneksi HTTPS. Coba tutup app lain / restart.";
+  // Ambang batas realistis: 16KB stack + sisa utk TLS butuh sekitar itu juga.
+  // Kalau di titik ini saja sudah mepet, memang board sedang kekurangan RAM
+  // (misal krn banyak koneksi lain aktif) -> baru kita tolak.
+  if (largestBlock < 18000) {
+    aiResponse = "Error: RAM internal terlalu terfragmentasi/rendah. Coba restart perangkat.";
     needRedrawNow();
     return;
   }
@@ -703,22 +691,16 @@ void triggerGeminiAI() {
   aiRequestStartMillis = millis();
   needRedrawNow();
 
-  geminiTaskHandle = xTaskCreateStaticPinnedToCore(
-      geminiTaskFunc,
-      "geminiTask",
-      AI_TASK_STACK_WORDS,
-      NULL,
-      1,
-      aiTaskStackBuf,
-      &aiTaskTCB,
-      1
-  );
+  // Stack 16KB di DRAM internal (bukan PSRAM) -> proven & reliable di ESP32 Arduino.
+  BaseType_t res = xTaskCreatePinnedToCore(
+      geminiTaskFunc, "geminiTask", 16384, NULL, 1, &geminiTaskHandle, 1);
 
-  if (geminiTaskHandle == NULL) {
-    Serial.println("[Gemini] xTaskCreateStaticPinnedToCore GAGAL!");
+  if (res != pdPASS) {
+    Serial.println("[Gemini] xTaskCreatePinnedToCore GAGAL!");
     aiLoading = false;
     aiRequestStartMillis = 0;
-    aiResponse = "Error: Gagal membuat proses AI.";
+    geminiTaskHandle = NULL;
+    aiResponse = "Error: Gagal membuat proses AI. Coba restart perangkat.";
     needRedrawNow();
   }
 }
@@ -2027,8 +2009,10 @@ void setup(){
   locked = true;
   needRedraw = true;
 
-  Serial.printf("[Boot] FreePsram=%u FreeInternal=%u\n",
-                ESP.getFreePsram(), heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+  Serial.printf("[Boot] FreePsram=%u FreeInternal=%u LargestInternalBlock=%u\n",
+                ESP.getFreePsram(),
+                heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
 }
 
 // =============================================
