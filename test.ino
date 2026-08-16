@@ -1,5 +1,5 @@
 // =================================================================
-// ren_phone — versi LVGL 8.3.x + LovyanGFX
+// ren_phone — versi LVGL 8.3.x + LovyanGFX (DEBUG + BUGFIX)
 // File pendukung WAJIB (taruh SEJAJAR file ini, di folder sketch yang sama):
 //   - lv_conf.h
 //   - build_opt.h   (isi: -DLV_CONF_INCLUDE_SIMPLE)
@@ -93,6 +93,27 @@ LGFX display;
 int brightness = 200;
 
 // =============================================
+// BOOT PROGRESS — tampilkan langkah boot langsung di layar
+// =============================================
+static int bootLine = 0;
+void bootMsg(const char* msg, uint16_t color = TFT_WHITE) {
+  display.setTextColor(color, TFT_BLACK);
+  display.setTextSize(1);
+  display.setCursor(4, 4 + bootLine * 12);
+  display.print(msg);
+  Serial.println(msg);
+  bootLine++;
+}
+void bootMsgF(uint16_t color, const char* fmt, ...) {
+  char buf[80];
+  va_list args;
+  va_start(args, fmt);
+  vsnprintf(buf, sizeof(buf), fmt, args);
+  va_end(args);
+  bootMsg(buf, color);
+}
+
+// =============================================
 // SISTEM TEMA — 4 preset, disimpan di Preferences
 // =============================================
 struct AppTheme {
@@ -104,13 +125,16 @@ struct AppTheme {
 // =============================================
 // JEMBATAN LVGL <-> LovyanGFX
 // =============================================
-#define LV_BUF_LINES 40   // buffer gambar 320 x 40 baris, cukup & hemat RAM
+#define LV_BUF_LINES 40
 static lv_disp_draw_buf_t draw_buf;
 static lv_color_t* lvBuf1;
 static lv_disp_drv_t disp_drv;
 static lv_indev_drv_t indev_drv;
 
+static volatile bool flushCalled = false; // debug flag
+
 void lvglFlushCb(lv_disp_drv_t* drv, const lv_area_t* area, lv_color_t* color_p) {
+  flushCalled = true;
   uint32_t w = (area->x2 - area->x1 + 1);
   uint32_t h = (area->y2 - area->y1 + 1);
   display.startWrite();
@@ -163,7 +187,7 @@ void loadThemePref() {
 }
 
 // =============================================
-// TOUCH CALIBRATION (langsung lewat LGFX, sebelum LVGL aktif)
+// TOUCH CALIBRATION
 // =============================================
 void loadOrRunCalibration() {
   Preferences prefs;
@@ -171,10 +195,18 @@ void loadOrRunCalibration() {
   bool done = prefs.getBool("done", false);
   if (done) {
     uint16_t calData[8];
-    prefs.getBytes("data", calData, sizeof(calData));
-    display.setTouchCalibrate(calData);
-    Serial.println("[CAL] Data kalibrasi dimuat dari NVS");
-  } else {
+    size_t len = prefs.getBytes("data", calData, sizeof(calData));
+    if (len == sizeof(calData)) {
+      display.setTouchCalibrate(calData);
+      bootMsg("[CAL] Loaded OK", TFT_GREEN);
+    } else {
+      // Data kalibrasi rusak, ulang kalibrasi
+      bootMsg("[CAL] Data rusak, ulang...", TFT_RED);
+      done = false; // fallthrough ke kalibrasi
+    }
+  }
+
+  if (!done) {
     display.fillScreen(TFT_BLACK);
     display.setTextColor(TFT_WHITE); display.setTextSize(2);
     display.setCursor(20, 100); display.println("Kalibrasi Touch");
@@ -182,19 +214,16 @@ void loadOrRunCalibration() {
     display.setCursor(20, 130); display.println("Sentuh tanda di setiap sudut");
     uint16_t calData[8];
     display.calibrateTouch(calData, TFT_WHITE, TFT_BLACK, 15);
-    // FIX: Terapkan hasil kalibrasi setelah calibrateTouch selesai
     display.setTouchCalibrate(calData);
     prefs.putBytes("data", calData, sizeof(calData));
     prefs.putBool("done", true);
-    Serial.println("[CAL] Kalibrasi selesai & disimpan");
+
+    // Bersihkan layar setelah kalibrasi, reset boot progress line
+    display.fillScreen(TFT_BLACK);
+    bootLine = 0;
+    bootMsg("[CAL] Selesai & disimpan", TFT_GREEN);
   }
   prefs.end();
-
-  // FIX: Bersihkan layar & pastikan state display bersih setelah kalibrasi
-  //      agar tidak mengganggu rendering LVGL selanjutnya
-  display.endWrite();
-  display.fillScreen(TFT_BLACK);
-  Serial.println("[CAL] Display state dibersihkan");
 }
 
 // =============================================
@@ -226,12 +255,12 @@ void saveWifiCreds() {
 }
 
 // =============================================
-// SD CARD: init + storage notepad & canvas
+// SD CARD
 // =============================================
 void initSD() {
   SD_MMC.setPins(SD_PIN_CLK, SD_PIN_CMD, SD_PIN_D0);
-  sdReady = SD_MMC.begin("/sdcard", true); // 1-bit mode
-  if (!sdReady) Serial.println("SD Card: gagal mount / tidak terpasang");
+  sdReady = SD_MMC.begin("/sdcard", true);
+  if (!sdReady) Serial.println("SD Card: gagal mount");
   else Serial.printf("SD Card: OK, %llu MB\n", SD_MMC.cardSize() / (1024 * 1024));
 }
 
@@ -249,7 +278,7 @@ void saveNoteToSD() {
 
 #define CANVAS_W 320
 #define CANVAS_H 190
-static lv_color_t* canvasBuf = nullptr; // buffer persisten (PSRAM), bertahan lintas rebuild tema
+static lv_color_t* canvasBuf = nullptr;
 #define CANVAS_BUF_BYTES ((uint32_t)CANVAS_W * CANVAS_H * sizeof(lv_color_t))
 
 void loadCanvasFromSD() {
@@ -265,7 +294,7 @@ void saveCanvasToSD() {
 }
 
 // =============================================
-// STYLE GLOBAL (dibangun ulang tiap ganti tema)
+// STYLE GLOBAL
 // =============================================
 static lv_style_t style_card;
 static lv_style_t style_dock;
@@ -393,7 +422,7 @@ void showToast(const char* msg, bool isError = false) {
 }
 
 // =============================================
-// STATUS BAR (di lv_layer_top -> otomatis nempel di semua layar)
+// STATUS BAR
 // =============================================
 void buildStatusBar() {
   lv_obj_clean(lv_layer_top());
@@ -470,7 +499,6 @@ void openApp(lv_obj_t* scr) {
   lv_scr_load_anim(scr, LV_SCR_LOAD_ANIM_MOVE_LEFT, 180, 0, false);
 }
 
-// Tombol back generik dipasang di tiap app (kecuali Canvas, dia punya sendiri di toolbar)
 lv_obj_t* makeBackBtn(lv_obj_t* parent) {
   lv_obj_t* btn = lv_btn_create(parent);
   lv_obj_add_style(btn, &style_btn_neutral, 0);
@@ -521,7 +549,7 @@ void buildClockScreen() {
 }
 
 // =============================================
-// APP: KALKULATOR (lv_btnmatrix)
+// APP: KALKULATOR
 // =============================================
 static const char* calc_map[] = {
   "C", "+/-", "%", "/", "\n",
@@ -686,7 +714,6 @@ void buildSettingsScreen() {
   lv_obj_clear_flag(scrSettings, LV_OBJ_FLAG_SCROLLABLE);
   makeTitle(scrSettings, "Pengaturan", T().good);
 
-  // Kecerahan
   lv_obj_t* cardB = lv_obj_create(scrSettings);
   lv_obj_add_style(cardB, &style_card, 0);
   lv_obj_set_size(cardB, 304, 40);
@@ -710,7 +737,6 @@ void buildSettingsScreen() {
   lv_obj_set_style_text_color(lblBrightVal, T().subtext, 0);
   lv_obj_align(lblBrightVal, LV_ALIGN_BOTTOM_RIGHT, -2, -2);
 
-  // Tema
   lv_obj_t* cardT = lv_obj_create(scrSettings);
   lv_obj_add_style(cardT, &style_card, 0);
   lv_obj_set_size(cardT, 304, 36);
@@ -727,7 +753,6 @@ void buildSettingsScreen() {
   lv_obj_align(ddTheme, LV_ALIGN_RIGHT_MID, -2, 0);
   lv_obj_add_event_cb(ddTheme, themeDropdownCb, LV_EVENT_VALUE_CHANGED, nullptr);
 
-  // SSID
   taSSID = lv_textarea_create(scrSettings);
   lv_textarea_set_one_line(taSSID, true);
   lv_textarea_set_placeholder_text(taSSID, "SSID WiFi");
@@ -736,7 +761,6 @@ void buildSettingsScreen() {
   lv_obj_align(taSSID, LV_ALIGN_TOP_MID, 0, 126);
   lv_obj_add_event_cb(taSSID, taFocusCb, LV_EVENT_FOCUSED, nullptr);
 
-  // Password
   taPass = lv_textarea_create(scrSettings);
   lv_textarea_set_one_line(taPass, true);
   lv_textarea_set_password_mode(taPass, true);
@@ -746,7 +770,6 @@ void buildSettingsScreen() {
   lv_obj_align(taPass, LV_ALIGN_TOP_MID, 0, 162);
   lv_obj_add_event_cb(taPass, taFocusCb, LV_EVENT_FOCUSED, nullptr);
 
-  // Tombol connect + status
   lv_obj_t* btnConn = lv_btn_create(scrSettings);
   lv_obj_add_style(btnConn, &style_btn_accent, 0);
   lv_obj_set_size(btnConn, 120, 28);
@@ -761,7 +784,6 @@ void buildSettingsScreen() {
   lv_obj_set_style_text_color(lblWifiStat, wifiConnected ? T().good : T().danger, 0);
   lv_obj_align(lblWifiStat, LV_ALIGN_TOP_LEFT, 136, 206);
 
-  // Kalibrasi ulang
   lv_obj_t* btnCal = lv_btn_create(scrSettings);
   lv_obj_add_style(btnCal, &style_btn_neutral, 0);
   lv_obj_set_size(btnCal, 150, 26);
@@ -774,7 +796,6 @@ void buildSettingsScreen() {
 
   makeBackBtn(scrSettings);
 
-  // Keyboard (hidden by default)
   kbSettings = lv_keyboard_create(scrSettings);
   lv_obj_add_flag(kbSettings, LV_OBJ_FLAG_HIDDEN);
   lv_obj_add_event_cb(kbSettings, kbSettingsCb, LV_EVENT_ALL, nullptr);
@@ -832,7 +853,7 @@ void buildNotepadScreen() {
 }
 
 // =============================================
-// APP: CANVAS (lv_canvas)
+// APP: CANVAS
 // =============================================
 lv_color_t canvasPalette[] = {
   lv_color_white(), lv_color_hex(0xff4444), lv_color_hex(0x35d07f), lv_color_hex(0x08bfff),
@@ -841,6 +862,7 @@ lv_color_t canvasPalette[] = {
 #define CANVAS_PAL_COUNT 8
 
 void canvasPressCb(lv_event_t* e) {
+  if (!canvasWidget) return;
   lv_indev_t* indev = lv_indev_get_act();
   if (!indev) return;
   lv_point_t p; lv_indev_get_point(indev, &p);
@@ -872,6 +894,7 @@ void canvasPressCb(lv_event_t* e) {
 void canvasReleaseCb(lv_event_t* e) { canvasHasLast = false; }
 
 void canvasClearCb(lv_event_t* e) {
+  if (!canvasWidget) return;
   lv_canvas_fill_bg(canvasWidget, T().bg, LV_OPA_COVER);
   saveCanvasToSD();
   showToast("Canvas dibersihkan");
@@ -889,7 +912,6 @@ void buildCanvasScreen() {
   lv_obj_clear_flag(scrCanvas, LV_OBJ_FLAG_SCROLLABLE);
   makeTitle(scrCanvas, "Canvas", T().good);
 
-  // FIX: Hanya buat canvas widget jika buffer berhasil dialokasi
   if (canvasBuf) {
     canvasWidget = lv_canvas_create(scrCanvas);
     lv_canvas_set_buffer(canvasWidget, canvasBuf, CANVAS_W, CANVAS_H, LV_IMG_CF_TRUE_COLOR);
@@ -906,7 +928,6 @@ void buildCanvasScreen() {
     lv_obj_align(errLbl, LV_ALIGN_CENTER, 0, 0);
   }
 
-  // Toolbar bawah
   lv_obj_t* toolbar = lv_obj_create(scrCanvas);
   lv_obj_add_style(toolbar, &style_dock, 0);
   lv_obj_set_size(toolbar, 320, 24);
@@ -945,7 +966,6 @@ void buildCanvasScreen() {
   lv_obj_center(lblClr);
   lv_obj_add_event_cb(btnClr, canvasClearCb, LV_EVENT_CLICKED, nullptr);
 
-  // Back untuk canvas (posisi khusus, di atas toolbar)
   lv_obj_t* btnBack = lv_btn_create(scrCanvas);
   lv_obj_add_style(btnBack, &style_btn_neutral, 0);
   lv_obj_set_size(btnBack, 50, 22);
@@ -960,7 +980,7 @@ void buildCanvasScreen() {
 }
 
 // =============================================
-// HOME SCREEN — clock widget + grid app + dock
+// HOME SCREEN
 // =============================================
 struct AppDef { const char* name; char sym; lv_color_t color; };
 AppDef appDefs[6] = {
@@ -975,7 +995,7 @@ AppDef appDefs[6] = {
 void homeAppClickCb(lv_event_t* e) {
   int idx = (int)(intptr_t)lv_event_get_user_data(e);
   lv_obj_t* targets[6] = { scrClock, scrCalc, scrSensor, scrSettings, scrNotepad, scrCanvas };
-  if (idx == 5) loadCanvasFromSD(); // pastikan canvas termuat sebelum dibuka (aman dipanggil berkali-kali)
+  if (idx == 5) loadCanvasFromSD();
   openApp(targets[idx]);
 }
 
@@ -1021,14 +1041,12 @@ void buildHomeScreen() {
   lv_obj_add_style(scrHome, &style_scr_bg, 0);
   lv_obj_clear_flag(scrHome, LV_OBJ_FLAG_SCROLLABLE);
 
-  // Widget jam digital besar di atas
   lblHomeClock = lv_label_create(scrHome);
   lv_obj_set_style_text_font(lblHomeClock, &lv_font_montserrat_28, 0);
   lv_obj_set_style_text_color(lblHomeClock, T().text, 0);
   lv_label_set_text(lblHomeClock, "--:--");
   lv_obj_align(lblHomeClock, LV_ALIGN_TOP_MID, 0, 28);
 
-  // Grid app (3 kolom x 2 baris)
   lv_obj_t* grid = lv_obj_create(scrHome);
   lv_obj_remove_style_all(grid);
   lv_obj_set_size(grid, 312, 108);
@@ -1038,7 +1056,6 @@ void buildHomeScreen() {
   lv_obj_clear_flag(grid, LV_OBJ_FLAG_SCROLLABLE);
   for (int i = 0; i < 6; i++) makeAppIcon(grid, i, 96, 50);
 
-  // Dock bawah (favorit tetap): Jam, Notepad, Canvas, Settings
   lv_obj_t* dock = lv_obj_create(scrHome);
   lv_obj_add_style(dock, &style_dock, 0);
   lv_obj_set_size(dock, 300, 40);
@@ -1065,13 +1082,12 @@ void buildHomeScreen() {
 }
 
 // =============================================
-// REBUILD SEMUA LAYAR (dipanggil saat ganti tema)
+// REBUILD UI (ganti tema)
 // =============================================
 void rebuildUI() {
   lv_obj_t* oldHome=scrHome, *oldClock=scrClock, *oldCalc=scrCalc, *oldSensor=scrSensor;
   lv_obj_t* oldSettings=scrSettings, *oldNotepad=scrNotepad, *oldCanvas=scrCanvas;
 
-  // Simpan state teks notepad sebelum layar lama dihapus
   if (taNotepad) noteText = String(lv_textarea_get_text(taNotepad));
 
   buildStyles();
@@ -1096,109 +1112,224 @@ void rebuildUI() {
 }
 
 // =============================================
-// SETUP
+// SETUP — dengan visual boot progress di layar
 // =============================================
 void setup() {
   Serial.begin(115200);
-  delay(100); // beri waktu Serial stabil
+  delay(200);
+  Serial.println("\n======== ren_phone BOOT ========");
 
-  // FIX: Log info memori untuk debugging
-  Serial.println("\n=== ren_phone boot ===");
-  Serial.printf("Free heap : %u bytes\n", ESP.getFreeHeap());
-  Serial.printf("Free PSRAM: %u bytes\n", ESP.getFreePsram());
+  // ---- Deteksi boot loop ----
+  {
+    Preferences bp; bp.begin("bootchk", false);
+    int bc = bp.getInt("cnt", 0);
+    bp.putInt("cnt", bc + 1);
+    bp.end();
+    if (bc >= 4) {
+      // Sudah restart 4x berturut-turut = crash loop!
+      // Hapus kalibrasi agar bisa mulai fresh
+      Preferences clr;
+      clr.begin("touch_cal", false); clr.clear(); clr.end();
+      clr.begin("bootchk", false);   clr.putInt("cnt", 0); clr.end();
+      Serial.println("!!! BOOT LOOP TERDETEKSI — NVS kalibrasi dihapus !!!");
+      // Jangan block di sini, biarkan boot normal dengan kalibrasi ulang
+    }
+  }
 
+  // ---- Display init ----
   display.init();
   display.setRotation(1);
   display.setBrightness(brightness);
-  Serial.println("[BOOT] Display init OK");
+  display.fillScreen(TFT_BLACK);
+  bootLine = 0;
 
+  bootMsgF(TFT_GREEN, "Display OK (320x240 rot=1)");
+  bootMsgF(TFT_WHITE, "Heap:%u  PSRAM:%u", ESP.getFreeHeap(), ESP.getFreePsram());
+
+  // ---- Touch calibration ----
   if (display.touch()) {
-    Serial.println("[BOOT] Touch terdeteksi, mulai kalibrasi...");
+    bootMsg("Touch detected, calibrating...");
     loadOrRunCalibration();
+    // Setelah kalibrasi, reset layar untuk boot progress baru
+    display.fillScreen(TFT_BLACK);
+    bootLine = 0;
+    bootMsg("[POST-CAL] Display OK", TFT_GREEN);
   } else {
-    Serial.println("[BOOT] Tidak ada touch controller");
+    bootMsg("No touch controller!", TFT_RED);
   }
 
+  // ---- Load preferences ----
+  bootMsg("Loading theme...");
   loadThemePref();
+  bootMsgF(TFT_CYAN, "Theme: %s", themes[currentThemeIdx].name);
+
+  // ---- SD Card ----
+  bootMsg("Init SD card...");
   initSD();
+  bootMsgF(sdReady ? TFT_GREEN : TFT_YELLOW, "SD: %s", sdReady ? "OK" : "Not found");
+
+  // ---- WiFi ----
+  bootMsg("Loading WiFi creds...");
   loadWifiCreds();
   loadNoteFromSD();
-  connectWifi();
-
-  // Buffer canvas — coba PSRAM dulu, fallback ke internal RAM
-  canvasBuf = (lv_color_t*)heap_caps_malloc(CANVAS_BUF_BYTES, MALLOC_CAP_SPIRAM);
-  if (!canvasBuf) {
-    Serial.println("[WARN] Canvas PSRAM gagal, coba internal RAM...");
-    canvasBuf = (lv_color_t*)malloc(CANVAS_BUF_BYTES);
+  if (strlen(WIFI_SSID) > 0) {
+    bootMsgF(TFT_WHITE, "Connecting to %s...", WIFI_SSID);
+    connectWifi();
+    bootMsgF(wifiConnected ? TFT_GREEN : TFT_RED, "WiFi: %s", wifiConnected ? "Connected" : "Failed");
+  } else {
+    bootMsg("WiFi: No SSID configured", TFT_YELLOW);
   }
+
+  // ---- Canvas buffer ----
+  bootMsg("Allocating canvas buffer...");
+  canvasBuf = (lv_color_t*)heap_caps_malloc(CANVAS_BUF_BYTES, MALLOC_CAP_SPIRAM);
+  if (!canvasBuf) canvasBuf = (lv_color_t*)malloc(CANVAS_BUF_BYTES);
   if (canvasBuf) {
-    Serial.println("[BOOT] Canvas buffer OK");
     for (uint32_t i = 0; i < (uint32_t)CANVAS_W*CANVAS_H; i++) canvasBuf[i] = T().bg;
     loadCanvasFromSD();
+    bootMsgF(TFT_GREEN, "Canvas buf OK (%u bytes)", CANVAS_BUF_BYTES);
   } else {
-    Serial.println("[WARN] Canvas buffer gagal dialokasi, fitur Canvas dinonaktifkan");
+    bootMsg("Canvas buf FAIL (disabled)", TFT_RED);
   }
 
-  // Init LVGL
+  // ---- LVGL Init ----
+  bootMsg("lv_init()...");
   lv_init();
-  Serial.println("[BOOT] LVGL init OK");
+  bootMsg("lv_init() OK", TFT_GREEN);
 
-  // FIX: Alokasi buffer LVGL dengan fallback ke internal RAM jika PSRAM gagal
-  lvBuf1 = (lv_color_t*)heap_caps_malloc(320 * LV_BUF_LINES * sizeof(lv_color_t), MALLOC_CAP_SPIRAM);
+  // ---- LVGL display buffer ----
+  bootMsg("Allocating LVGL buffer...");
+  uint32_t lvBufSize = 320 * LV_BUF_LINES;
+  lvBuf1 = (lv_color_t*)heap_caps_malloc(lvBufSize * sizeof(lv_color_t), MALLOC_CAP_SPIRAM);
+  if (!lvBuf1) lvBuf1 = (lv_color_t*)malloc(lvBufSize * sizeof(lv_color_t));
   if (!lvBuf1) {
-    Serial.println("[WARN] LVGL buffer PSRAM gagal, fallback ke internal RAM...");
-    lvBuf1 = (lv_color_t*)malloc(320 * LV_BUF_LINES * sizeof(lv_color_t));
+    bootMsg("!!! LVGL BUFFER GAGAL !!!", TFT_RED);
+    bootMsg("Tidak cukup memori.", TFT_RED);
+    bootMsg("Cek LV_MEM_SIZE di lv_conf.h", TFT_YELLOW);
+    // Reset boot counter agar tidak dianggap loop
+    Preferences bp; bp.begin("bootchk", false); bp.putInt("cnt", 0); bp.end();
+    while (1) delay(1000);
   }
-  if (!lvBuf1) {
-    // FATAL: tidak bisa alokasi buffer sama sekali
-    Serial.println("[FATAL] LVGL buffer gagal total! Layar tidak bisa dirender.");
-    display.fillScreen(TFT_RED);
-    display.setTextColor(TFT_WHITE);
-    display.setTextSize(2);
-    display.setCursor(20, 100);
-    display.println("MEMORY ERROR");
-    display.setTextSize(1);
-    display.setCursor(20, 130);
-    display.println("Tidak cukup RAM untuk LVGL");
-    while (1) delay(1000); // halt, jangan crash loop
-  }
-  Serial.printf("[BOOT] LVGL buffer OK @ %p (%u bytes)\n", lvBuf1, 320 * LV_BUF_LINES * sizeof(lv_color_t));
+  bootMsgF(TFT_GREEN, "LVGL buf OK @ 0x%08X", (uint32_t)lvBuf1);
 
-  lv_disp_draw_buf_init(&draw_buf, lvBuf1, NULL, 320 * LV_BUF_LINES);
+  lv_disp_draw_buf_init(&draw_buf, lvBuf1, NULL, lvBufSize);
 
+  // ---- Register display driver ----
+  bootMsg("Registering LVGL display...");
   lv_disp_drv_init(&disp_drv);
-  disp_drv.hor_res = 320;
-  disp_drv.ver_res = 240;
+  disp_drv.hor_res  = 320;
+  disp_drv.ver_res  = 240;
   disp_drv.flush_cb = lvglFlushCb;
   disp_drv.draw_buf = &draw_buf;
-  lv_disp_drv_register(&disp_drv);
+  lv_disp_t* dispPtr = lv_disp_drv_register(&disp_drv);
+  if (!dispPtr) {
+    bootMsg("!!! DISPLAY REGISTER GAGAL !!!", TFT_RED);
+    Preferences bp; bp.begin("bootchk", false); bp.putInt("cnt", 0); bp.end();
+    while (1) delay(1000);
+  }
+  bootMsg("Display driver OK", TFT_GREEN);
 
+  // ---- Register input driver ----
   lv_indev_drv_init(&indev_drv);
-  indev_drv.type = LV_INDEV_TYPE_POINTER;
+  indev_drv.type    = LV_INDEV_TYPE_POINTER;
   indev_drv.read_cb = lvglTouchReadCb;
   lv_indev_drv_register(&indev_drv);
+  bootMsg("Input driver OK", TFT_GREEN);
 
-  Serial.println("[BOOT] LVGL driver registered, building UI...");
+  // ---- LVGL RENDER TEST ----
+  // Buat layar test sederhana sebelum build UI kompleks
+  // untuk memastikan LVGL -> display pipeline berfungsi
+  bootMsg("LVGL render test...");
+  {
+    lv_obj_t* testScr = lv_obj_create(NULL);
+    lv_obj_set_style_bg_color(testScr, lv_color_hex(0x0000FF), 0); // biru
+    lv_obj_set_style_bg_opa(testScr, LV_OPA_COVER, 0);
+    lv_obj_t* testLbl = lv_label_create(testScr);
+    lv_label_set_text(testLbl, "LVGL TEST OK");
+    lv_obj_set_style_text_color(testLbl, lv_color_white(), 0);
+    lv_obj_set_style_text_font(testLbl, &lv_font_montserrat_20, 0);
+    lv_obj_center(testLbl);
 
+    lv_scr_load(testScr);
+
+    // Jalankan LVGL sekali untuk flush ke layar
+    flushCalled = false;
+    unsigned long t0 = millis();
+    lv_tick_inc(16);
+    lv_timer_handler();
+
+    if (flushCalled) {
+      Serial.println("[TEST] Flush callback DIPANGGIL -> pipeline OK!");
+      // Layar harusnya biru dengan tulisan "LVGL TEST OK"
+      // Tahan 1.5 detik agar user bisa lihat
+      delay(1500);
+    } else {
+      Serial.println("[TEST] Flush callback TIDAK dipanggil!");
+      // Coba paksa refresh
+      lv_obj_invalidate(testScr);
+      lv_tick_inc(16);
+      lv_timer_handler();
+      delay(1500);
+      if (!flushCalled) {
+        // Pipeline LVGL benar-benar tidak berfungsi
+        display.fillScreen(TFT_RED);
+        display.setTextColor(TFT_WHITE);
+        display.setTextSize(2);
+        display.setCursor(10, 50);
+        display.println("LVGL FLUSH GAGAL!");
+        display.setTextSize(1);
+        display.setCursor(10, 80);
+        display.println("Flush callback tidak pernah");
+        display.setCursor(10, 92);
+        display.println("dipanggil oleh LVGL.");
+        display.setCursor(10, 114);
+        display.println("Cek lv_conf.h:");
+        display.setCursor(10, 126);
+        display.println("- LV_COLOR_DEPTH = 16");
+        display.setCursor(10, 138);
+        display.println("- LV_MEM_SIZE >= 48*1024");
+        display.setCursor(10, 150);
+        display.println("- LV_DISP_DEF_REFR_PERIOD = 16");
+        Preferences bp; bp.begin("bootchk", false); bp.putInt("cnt", 0); bp.end();
+        while(1) delay(1000);
+      }
+    }
+
+    // Hapus test screen
+    lv_obj_del(testScr);
+  }
+
+  // ---- Build full UI ----
+  Serial.println("[BOOT] Building full UI...");
   buildStyles();
-  buildHomeScreen();
-  buildClockScreen();
-  buildCalcScreen();
-  buildSensorScreen();
-  buildSettingsScreen();
-  buildNotepadScreen();
-  buildCanvasScreen();
-  buildStatusBar();
+  buildHomeScreen();        Serial.println("  Home OK");
+  buildClockScreen();       Serial.println("  Clock OK");
+  buildCalcScreen();        Serial.println("  Calc OK");
+  buildSensorScreen();      Serial.println("  Sensor OK");
+  buildSettingsScreen();    Serial.println("  Settings OK");
+  buildNotepadScreen();     Serial.println("  Notepad OK");
+  buildCanvasScreen();      Serial.println("  Canvas OK");
+  buildStatusBar();         Serial.println("  StatusBar OK");
+
   lv_scr_load(scrHome);
+  Serial.println("[BOOT] Home screen loaded");
+
+  // Paksa render pertama
+  lv_tick_inc(16);
+  lv_timer_handler();
+  Serial.println("[BOOT] First render done");
 
   lv_timer_create(statusTimerCb, 1000, nullptr);
   lv_timer_create(sensorTimerCb, 2000, nullptr);
 
-  // FIX: Inisialisasi lastTick agar tick pertama di loop() tidak membesar
-  extern unsigned long lastTick;
-  lastTick = millis();
+  // Reset boot loop counter — kita berhasil sampai sini tanpa crash
+  {
+    Preferences bp; bp.begin("bootchk", false);
+    bp.putInt("cnt", 0);
+    bp.end();
+  }
 
-  Serial.println("[BOOT] Setup selesai, masuk loop");
+  Serial.printf("[BOOT] DONE! Free heap: %u\n", ESP.getFreeHeap());
 }
 
 // =============================================
@@ -1207,6 +1338,7 @@ void setup() {
 unsigned long lastTick = 0;
 void loop() {
   unsigned long now = millis();
+  if (lastTick == 0) lastTick = now; // safety untuk tick pertama
   lv_tick_inc(now - lastTick);
   lastTick = now;
   lv_timer_handler();
