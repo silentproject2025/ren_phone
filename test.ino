@@ -498,7 +498,7 @@ void sendGeminiRequest(String promptText) {
   client.setTimeout(15); // Timeout socket TLS 15 detik
 
   HTTPClient http;
-  String url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=" + geminiApiKey;
+  String url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=" + geminiApiKey;
 
   http.setTimeout(15000);
   http.setConnectTimeout(15000);
