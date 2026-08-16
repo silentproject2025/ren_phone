@@ -295,7 +295,7 @@ void sendGeminiRequest(String promptText) {
   WiFiClientSecure client;
   client.setInsecure(); // Skip verifikasi sertifikat SSL untuk performa ESP32
   HTTPClient http;
-  String url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=" + geminiApiKey;
+  String url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=" + geminiApiKey;
   if (http.begin(client, url)) {
     http.addHeader("Content-Type", "application/json");
     http.setTimeout(12000);
