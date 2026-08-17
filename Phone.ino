@@ -32,6 +32,7 @@
 #include "SD_MMC.h"
 #include "esp_heap_caps.h"
 #include <Update.h>   // OTA: flashing firmware baru (dari SD lokal atau WiFi)
+#include <math.h>     // dipakai boot sequence (cosf/sinf utk animasi logo)
 
 // ---- MJPEG PLAYER: dependensi tambahan ----
 #include <JPEGDEC.h>
@@ -133,9 +134,10 @@ void saveOrientPref() {
 }
 Orientation loadOrientPref() {
   Preferences p; p.begin("ui", true);
-  int v = p.getInt("orient", (int)ORIENT_LANDSCAPE);
+  // Default orientasi = PORTRAIT (vertikal), sesuai permintaan.
+  int v = p.getInt("orient", (int)ORIENT_PORTRAIT);
   p.end();
-  return (v == (int)ORIENT_PORTRAIT) ? ORIENT_PORTRAIT : ORIENT_LANDSCAPE;
+  return (v == (int)ORIENT_LANDSCAPE) ? ORIENT_LANDSCAPE : ORIENT_PORTRAIT;
 }
 
 void loadCanvas();
@@ -536,6 +538,8 @@ void toggleAirplaneMode(){
 String aiPrompt = "";
 String aiResponse = "";
 volatile bool aiLoading = false;
+float aiRespScrollY = 0;   // posisi scroll layar AI Chat (dipakai jg oleh triggerGeminiAI utk reset)
+int   aiRespMaxScroll = 0;
 
 TaskHandle_t geminiTaskHandle = NULL;
 WiFiClientSecure* aiClientPtr = nullptr;
@@ -700,6 +704,7 @@ void triggerGeminiAI() {
   aiSoftStopTriggered = false;
   aiResponse = "Menghubungi Gemini AI...";
   aiRequestStartMillis = millis();
+  aiRespScrollY = 0; // pertanyaan baru -> mulai baca dari atas lagi
   needRedrawNow();
 
   BaseType_t res = xTaskCreatePinnedToCore(
@@ -790,6 +795,10 @@ Screen curScreen(){ return navDepth>0 ? navStack[navDepth-1] : SCR_HOME; }
 void appOnEnter(Screen s);
 void appOnExit(Screen s);
 
+// -------- Notepad: cek perubahan blm tersimpan (dipakai navigasi) --------
+bool notepadNeedsConfirm();          // true = ada perubahan blm disimpan, tahan navigasi
+void notepadRequestConfirm(int act); // act: 1=Back, 2=Home -> tampilkan dialog Simpan/Buang
+
 void navPush(Screen s){
   appOnExit(curScreen());
   if(navDepth<NAV_MAX) navStack[navDepth++]=s;
@@ -798,12 +807,14 @@ void navPush(Screen s){
   needRedraw=true;
 }
 void navGoHome(){
+  if(notepadNeedsConfirm()){ notepadRequestConfirm(2); return; }
   appOnExit(curScreen());
   navDepth=0;
   kbVisible=false; kbTarget=nullptr;
   needRedraw=true;
 }
 void navBack(){
+  if(notepadNeedsConfirm()){ notepadRequestConfirm(1); return; }
   appOnExit(curScreen());
   if(navDepth>0) navDepth--;
   if(navDepth>0) appOnEnter(navStack[navDepth-1]);
@@ -1010,10 +1021,31 @@ void lockScreenInput(bool touched,bool newT,int tx,int ty){
 // =============================================
 float ccOffset = 0;
 bool  ccAnimatingOpen=false, ccAnimatingClose=false;
-#define CC_PANEL_H_FRAC 0.62f
+#define CC_COLS 3
+#define CC_ROWS 2
 void openControlCenter(){ controlCenterOpen=true; ccAnimatingOpen=true; needRedraw=true; }
 void closeControlCenter(){ ccAnimatingOpen=false; ccAnimatingClose=true; needRedraw=true; }
-int ccPanelH(){ return (int)(SCR_H*CC_PANEL_H_FRAC); }
+
+// ---- Layout dihitung dinamis (BUKAN persentase tetap) supaya 6 kartu +
+// slider brightness SELALU muat & terlihat penuh, di landscape maupun
+// portrait. drawControlCenter() dan ccTouch() memakai fungsi yg SAMA
+// persis di bawah ini, jadi area yg digambar dan area yg bisa disentuh
+// tidak akan pernah meleset lagi (dulu inilah sebab "area kosong Tema"
+// ke-tap dan mengubah tema, karena baris ke-2 kartu tidak digambar tapi
+// koordinat sentuhnya tetap aktif).
+int ccGap(){ return 6; }
+int ccCardH(){ return currentOrient==ORIENT_LANDSCAPE ? 38 : 52; } // lbh pendek di landscape biar muat
+int ccCardW(){ return (SCR_W - ccGap()*(CC_COLS+1))/CC_COLS; }
+int ccGridTop(){ return STATUS_H+8; }
+int ccGridH(){ return CC_ROWS*ccCardH() + (CC_ROWS-1)*ccGap(); }
+int ccSliderLabelY(){ return ccGridTop()+ccGridH()+10; }
+int ccSliderTrackY(){ return ccSliderLabelY()+12; }
+int ccContentBottom(){ return ccSliderTrackY()+18; }
+int ccPanelH(){
+  int needed = ccContentBottom()+14;   // + ruang utk drag-handle di bawah
+  int maxAvail = SCR_H-8;              // jgn sampai nutup 1 layar penuh
+  return needed<maxAvail? needed : maxAvail;
+}
 
 void ccActWifi(){ if(wifiConnected) disconnectWifi(); else connectWifi(); }
 void ccActAirplane(){ toggleAirplaneMode(); }
@@ -1026,12 +1058,9 @@ void ccActOrient(){
 void drawControlCenter(LGFX_Sprite& s){
   int ph = (int)ccOffset;
   if(ph<=0) return;
-  int panelY = 0;
-  s.fillRoundRect(0,panelY,SCR_W,ph,0,T().surface);
+  s.fillRoundRect(0,0,SCR_W,ph,0,T().surface);
   s.fillRoundRect(SCR_W/2-16,ph-10,32,4,2,T().divider);
-  int gap=8, cols=3;
-  int cw=(SCR_W-gap*(cols+1))/cols;
-  int ch=54;
+
   const char* labels[6]={
     wifiConnected?"WiFi: ON":"WiFi: OFF",
     airplaneMode?"Airplane: ON":"Airplane: OFF",
@@ -1041,10 +1070,11 @@ void drawControlCenter(LGFX_Sprite& s){
     "Kunci Layar"
   };
   bool activeState[6]={wifiConnected,airplaneMode,dndMode,false,false,false};
-  for(int i=0;i<6 && (STATUS_H+8+(i/cols+1)*(ch+gap)) < ph-8; i++){
-    int col=i%cols, row=i/cols;
+  int cw=ccCardW(), ch=ccCardH(), gap=ccGap(), top=ccGridTop();
+  for(int i=0;i<6;i++){
+    int col=i%CC_COLS, row=i/CC_COLS;
     int x=gap+col*(cw+gap);
-    int y=STATUS_H+8+row*(ch+gap);
+    int y=top+row*(ch+gap);
     uint16_t bg = activeState[i]? T().accent : T().surface2;
     uint16_t fg = activeState[i]? T().bg : T().text;
     s.fillRoundRect(x,y,cw,ch,8,bg);
@@ -1053,14 +1083,13 @@ void drawControlCenter(LGFX_Sprite& s){
     s.setCursor(x+cw/2-lw/2, y+ch/2-4);
     s.print(labels[i]);
   }
-  int sliderY = STATUS_H+8+2*(ch+gap)+6;
-  if(sliderY+30 < ph-8){
-    s.setTextColor(T().subtext); s.setTextSize(1);
-    s.setCursor(gap, sliderY); s.print("Brightness");
-    int sx=gap, sw=SCR_W-gap*2, sy=sliderY+12;
-    s.fillRoundRect(sx,sy,sw,10,5,T().divider);
-    s.fillRoundRect(sx,sy,map(brightness,0,255,0,sw),10,5,T().accent);
-  }
+
+  s.setTextColor(T().subtext); s.setTextSize(1);
+  s.setCursor(gap, ccSliderLabelY()); s.print("Brightness");
+  int sx=gap, sw=SCR_W-gap*2, sy=ccSliderTrackY();
+  s.fillRoundRect(sx,sy,sw,10,5,T().divider);
+  s.fillRoundRect(sx,sy,map(brightness,0,255,0,sw),10,5,T().accent);
+
   drawToast(s);
 }
 
@@ -1068,14 +1097,13 @@ void ccTouch(int x,int y){
   int ph=(int)ccOffset;
   if(y> ph-10 && y<=ph+4){ closeControlCenter(); return; }
   if(y>ph) { closeControlCenter(); return; }
-  int gap=8, cols=3;
-  int cw=(SCR_W-gap*(cols+1))/cols;
-  int ch=54;
+
+  int cw=ccCardW(), ch=ccCardH(), gap=ccGap(), top=ccGridTop();
   void(*actions[6])() = { ccActWifi, ccActAirplane, ccActDnd, ccActTheme, ccActOrient, nullptr };
   for(int i=0;i<6;i++){
-    int col=i%cols, row=i/cols;
+    int col=i%CC_COLS, row=i/CC_COLS;
     int bx=gap+col*(cw+gap);
-    int by=STATUS_H+8+row*(ch+gap);
+    int by=top+row*(ch+gap);
     if(x>=bx&&x<=bx+cw&&y>=by&&y<=by+ch){
       if(i==5){ locked=true; closeControlCenter(); return; }
       if(actions[i]) actions[i]();
@@ -1083,9 +1111,8 @@ void ccTouch(int x,int y){
       return;
     }
   }
-  int sliderY = STATUS_H+8+2*(ch+gap)+6;
-  int sy=sliderY+12;
-  if(y>=sy-6 && y<=sy+16){
+  int sy=ccSliderTrackY();
+  if(y>=sy-8 && y<=sy+18){
     int sx=gap, sw=SCR_W-gap*2;
     brightness=constrain(map(x-sx,0,sw,0,255),10,255);
     display.setBrightness(brightness);
@@ -1575,7 +1602,28 @@ void settingsTouch(int x,int y,bool held,bool isNew){
 // =============================================
 // APP: NOTEPAD
 // =============================================
-void notepadEnter(){} void notepadExit(){ saveNote(); }
+bool   notepadConfirmActive = false;
+int    notepadConfirmAction = 0;   // 1 = mau Back, 2 = mau Home
+String notepadSavedText = "";      // snapshot isi terakhir yg tersimpan di SD
+
+void notepadEnter(){
+  notepadSavedText = noteText;
+  notepadConfirmActive = false;
+  notepadConfirmAction = 0;
+}
+void notepadExit(){ saveNote(); }
+
+// Dipanggil dari navBack()/navGoHome(): true kalau ada perubahan yg
+// belum disimpan, supaya navigasi ditahan & dialog Simpan/Buang muncul.
+bool notepadNeedsConfirm(){
+  return curScreen()==SCR_NOTEPAD && !notepadConfirmActive && noteText != notepadSavedText;
+}
+void notepadRequestConfirm(int act){
+  notepadConfirmAction = act;
+  notepadConfirmActive = true;
+  kbVisible = false; kbTarget = nullptr;
+  needRedraw = true;
+}
 
 void drawNotepad(LGFX_Sprite& s){
   s.fillSprite(T().bg);drawStatusBar(s);
@@ -1590,14 +1638,51 @@ void drawNotepad(LGFX_Sprite& s){
   s.setCursor(10,50);s.print((noteText+"|").c_str());
   
   if(kbVisible)drawKb(s);else drawBack(s);
+
+  // ---- Kotak peringatan Simpan/Buang saat keluar dg perubahan blm tersimpan ----
+  if(notepadConfirmActive){
+    s.fillRect(0,0,SCR_W,SCR_H,0x0000); // dim overlay
+    int dw = min(SCR_W-40, 220), dh=104;
+    int dx=(SCR_W-dw)/2, dy=(SCR_H-dh)/2;
+    s.fillRoundRect(dx,dy,dw,dh,8,T().surface);
+    s.drawRoundRect(dx,dy,dw,dh,8,T().divider);
+    s.setTextColor(T().text); s.setTextSize(1);
+    s.setCursor(dx+12,dy+14); s.print("Simpan perubahan");
+    s.setCursor(dx+12,dy+28); s.print("catatan ini?");
+    int bw=(dw-24)/2, bh=30, by=dy+dh-40;
+    s.fillRoundRect(dx+8,by,bw,bh,6,T().good);
+    s.setTextColor(0xFFFF); s.setCursor(dx+8+bw/2-24,by+bh/2-4); s.print("Simpan");
+    s.fillRoundRect(dx+16+bw,by,bw,bh,6,T().danger);
+    s.setCursor(dx+16+bw+bw/2-20,by+bh/2-4); s.print("Buang");
+  }
+
   drawToast(s);
 }
 
 void notepadTouch(int x,int y,bool held,bool isNew){
+  if(notepadConfirmActive){
+    if(!isNew) return;
+    int dw = min(SCR_W-40, 220), dh=104;
+    int dx=(SCR_W-dw)/2, dy=(SCR_H-dh)/2;
+    int bw=(dw-24)/2, bh=30, by=dy+dh-40;
+    if(y>=by && y<=by+bh){
+      int act = notepadConfirmAction;
+      if(x>=dx+8 && x<=dx+8+bw){                 // Simpan
+        saveNote(); notepadSavedText = noteText;
+      } else if(x>=dx+16+bw && x<=dx+16+bw+bw){   // Buang
+        noteText = notepadSavedText;
+      } else return;
+      notepadConfirmActive = false;
+      notepadConfirmAction = 0;
+      if(act==2) navGoHome(); else navBack();
+    }
+    return; // tahan semua sentuhan lain selagi dialog terbuka
+  }
+
   if(kbVisible){
     if(!isNew) return;
     int y0=kbY();
-    if(y<y0-2){kbVisible=false;kbTarget=nullptr;saveNote();}
+    if(y<y0-2){kbVisible=false;kbTarget=nullptr;}
     else kbTouch(x,y);
     needRedraw=true;
     return;
@@ -1605,7 +1690,7 @@ void notepadTouch(int x,int y,bool held,bool isNew){
   if(!isNew) return;
   
   if(x>=SCR_W-70&&x<=SCR_W-4&&y>=24&&y<=42){
-    noteText="";saveNote();showToast("Dihapus");
+    noteText="";saveNote();notepadSavedText="";showToast("Dihapus");
     needRedraw=true;
     return;
   }
@@ -1710,10 +1795,45 @@ void canvasTouch(int x,int y,bool held,bool isNew){
 // =============================================
 // APP: AI CHAT
 // =============================================
-void aiEnter(){} void aiExit(){}
+#define AI_CHAT_TOP 46
+#define AI_MAX_LINES 400
+struct AiLine { String text; uint16_t color; };
+AiLine aiLinesBuf[AI_MAX_LINES];
+
+void aiEnter(){ aiRespScrollY = 0; }
+void aiExit(){}
+
+// Word-wrap manual (font default = ~6px/karakter) supaya kita tahu persis
+// tinggi total konten -> bisa dibatasi scroll-nya & di-clip dgn benar.
+int aiWrapAppend(AiLine* buf,int cap,int count,const String& text,uint16_t color,int maxChars){
+  if(maxChars<4) maxChars=4;
+  int start=0, len=text.length();
+  if(len==0){ if(count<cap){ buf[count].text=""; buf[count].color=color; count++; } return count; }
+  while(start<len && count<cap){
+    int nl = text.indexOf('\n', start);
+    int segEnd = (nl==-1)? len : nl;
+    String seg = text.substring(start, segEnd);
+    if(seg.length()==0){
+      buf[count].text=""; buf[count].color=color; count++;
+    } else {
+      while((int)seg.length() > maxChars && count<cap){
+        int cut = maxChars, sp = -1;
+        for(int k=maxChars;k>0;k--){ if(seg[k]==' '){ sp=k; break; } }
+        if(sp>0) cut=sp;
+        buf[count].text = seg.substring(0,cut); buf[count].color=color; count++;
+        seg = seg.substring(cut);
+        while(seg.length() && seg[0]==' ') seg = seg.substring(1);
+      }
+      if(count<cap){ buf[count].text=seg; buf[count].color=color; count++; }
+    }
+    start = segEnd+1;
+  }
+  return count;
+}
 
 void drawAiChat(LGFX_Sprite& s){
   s.fillSprite(T().bg);drawStatusBar(s);
+  s.setTextWrap(false);
   s.setTextColor(T().accent);s.setTextSize(1);s.setCursor(8,26);s.print("AI Chat (Gemini)");
   
   bool hasKey = (geminiApiKey.length() > 0 && geminiApiKey != "YOUR_GEMINI_API_KEY_HERE");
@@ -1721,43 +1841,70 @@ void drawAiChat(LGFX_Sprite& s){
   s.setTextColor(0xFFFF);s.setCursor(SCR_W-66,29);
   s.print(hasKey?"Key: OK":"Key: Edit");
 
-  int contentBot = kbVisible ? kbY()-4 : backY()-32;
-  
-  s.fillRoundRect(4,44,SCR_W-8,30,6,T().surface);
-  s.setTextColor(T().accent);s.setCursor(10,48);s.print("Tanya: ");
-  s.setTextColor(T().text);
-  // FIX v7: teks pertanyaan TIDAK dipotong lagi (dulu dibatasi 32 char + "..")
-  String pText = aiPrompt.length() ? aiPrompt : "(ketuk area bawah utk ketik)";
-  s.print(pText.c_str());
+  int inputY  = backY() - 26;
+  int chatTop = AI_CHAT_TOP;
+  int chatBot = kbVisible ? kbY()-4 : inputY-6;
+  int chatH   = chatBot - chatTop;
 
-  int respH = contentBot - 80;
-  if(respH > 20){
-    s.fillRoundRect(4,78,SCR_W-8,respH,6,T().surface2);
-    s.setTextColor(T().accent2);s.setCursor(10,84);s.print("Gemini: ");
-    s.setTextColor(T().text);s.setTextWrap(true);
-    if(aiLoading){
-      s.setTextColor(T().good);
-      unsigned long elapsed = aiRequestStartMillis ? (millis()-aiRequestStartMillis) : 0;
-      long remain = (long)(AI_HARD_TIMEOUT_MS - elapsed) / 1000;
-      if (remain < 0) remain = 0;
-      s.printf("Sedang berpikir & menghubungi Gemini API...\n(timeout otomatis dlm %lds)", remain);
-    } else if(aiResponse.length()){
-      // FIX v7: jawaban Gemini ditampilkan PENUH, tidak dipotong 180 karakter lagi.
-      // Kotak akan meluber ke bawah kalau jawabannya panjang, tapi tidak ada lagi
-      // teks yang hilang / dipotong paksa oleh kode.
-      s.print(aiResponse.c_str());
-    } else {
-      s.setTextColor(T().subtext);
-      s.print("Ketik pertanyaan lalu tekan [Kirim].");
-    }
+  // ---- Satu area chat gabungan (Kamu + Gemini), dibungkus & discroll ----
+  s.fillRoundRect(4,chatTop,SCR_W-8,chatH,6,T().surface);
+
+  int lineH = 10;
+  int innerX = 10, innerW = (SCR_W-8) - 12;
+  int maxChars = innerW/6; if(maxChars<6) maxChars=6;
+
+  int n=0;
+  n = aiWrapAppend(aiLinesBuf,AI_MAX_LINES,n,"Kamu:",T().accent,maxChars);
+  String qText = aiPrompt.length() ? aiPrompt : "(ketuk kotak input di bawah utk mengetik)";
+  n = aiWrapAppend(aiLinesBuf,AI_MAX_LINES,n,qText,T().text,maxChars);
+  n = aiWrapAppend(aiLinesBuf,AI_MAX_LINES,n,"",T().text,maxChars);
+  n = aiWrapAppend(aiLinesBuf,AI_MAX_LINES,n,"Gemini:",T().accent2,maxChars);
+  if(aiLoading){
+    unsigned long elapsed = aiRequestStartMillis ? (millis()-aiRequestStartMillis) : 0;
+    long remain = (long)(AI_HARD_TIMEOUT_MS - elapsed) / 1000;
+    if(remain<0) remain=0;
+    char buf[80];
+    snprintf(buf,sizeof(buf),"Sedang berpikir & menghubungi Gemini API... (timeout %lds)",remain);
+    n = aiWrapAppend(aiLinesBuf,AI_MAX_LINES,n,buf,T().good,maxChars);
+  } else if(aiResponse.length()){
+    n = aiWrapAppend(aiLinesBuf,AI_MAX_LINES,n,aiResponse,T().text,maxChars);
+  } else {
+    n = aiWrapAppend(aiLinesBuf,AI_MAX_LINES,n,"Ketik pertanyaan lalu tekan [Kirim].",T().subtext,maxChars);
+  }
+
+  int contentH = n*lineH;
+  int viewH = chatH-8;
+  aiRespMaxScroll = contentH-viewH; if(aiRespMaxScroll<0) aiRespMaxScroll=0;
+  if(aiRespScrollY>aiRespMaxScroll) aiRespScrollY=aiRespMaxScroll;
+  if(aiRespScrollY<0) aiRespScrollY=0;
+
+  // FIX: pakai clip rect -> teks TIDAK PERNAH lagi meluber keluar kotak
+  // (dulu ini yg bikin tulisan menutupi kotak pertanyaan/Kirim/Back).
+  s.setClipRect(4,chatTop,SCR_W-8,chatH);
+  s.setTextWrap(false);
+  for(int i=0;i<n;i++){
+    int ly = chatTop+4+i*lineH-(int)aiRespScrollY;
+    if(ly+lineH < chatTop || ly > chatBot) continue;
+    s.setTextColor(aiLinesBuf[i].color);
+    s.setCursor(innerX,ly);
+    s.print(aiLinesBuf[i].text.c_str());
+  }
+  s.clearClipRect();
+
+  // Indikator scrollbar tipis di kanan, muncul kalau kontennya lebih panjang dari kotak
+  if(aiRespMaxScroll>0){
+    int trackX=SCR_W-8, trackY=chatTop+4, trackH=chatH-8;
+    int thumbH = max(14, (int)((float)viewH/contentH*trackH));
+    int thumbY = trackY + (int)((float)aiRespScrollY/aiRespMaxScroll*(trackH-thumbH));
+    s.fillRoundRect(trackX,trackY,3,trackH,1,T().divider);
+    s.fillRoundRect(trackX,thumbY,3,thumbH,1,T().accent);
   }
 
   if(!kbVisible){
-    int inputY = backY() - 26;
     s.fillRoundRect(4,inputY,SCR_W-64,22,4,T().surface);
     s.setTextColor(T().subtext);s.setCursor(10,inputY+6);
-    // FIX v7: preview input juga tidak dipotong paksa lagi
     String ipDisp = aiPrompt.length() ? aiPrompt : "Ketik pertanyaan...";
+    if((int)ipDisp.length()>maxChars) ipDisp = ipDisp.substring(0, maxChars>3?maxChars-3:maxChars) + "..";
     s.print(ipDisp.c_str());
     
     s.fillRoundRect(SCR_W-56,inputY,52,22,4,aiLoading?T().surface2:T().accent);
@@ -1770,6 +1917,8 @@ void drawAiChat(LGFX_Sprite& s){
 }
 
 void aiTouch(int x,int y,bool held,bool isNew){
+  static int dragLastY=0;
+
   if(kbVisible){
     if(!isNew) return;
     int y0=kbY();
@@ -1778,33 +1927,54 @@ void aiTouch(int x,int y,bool held,bool isNew){
     needRedraw=true;
     return;
   }
-  if(!isNew) return;
-  
-  if(isBack(x,y)){ navBack(); return; }
 
-  if(x>=SCR_W-72 && x<=SCR_W-4 && y>=24 && y<=42){
-    kbTarget = &geminiApiKey;
-    kbVisible = true;
-    kbMode = KB_LOWER;
-    showToast("Edit API Key");
-    needRedraw = true;
+  int inputY  = backY() - 26;
+  int chatTop = AI_CHAT_TOP;
+  int chatBot = inputY-6;
+
+  if(isNew){
+    if(isBack(x,y)){ navBack(); return; }
+
+    if(x>=SCR_W-72 && x<=SCR_W-4 && y>=24 && y<=42){
+      kbTarget = &geminiApiKey;
+      kbVisible = true;
+      kbMode = KB_LOWER;
+      showToast("Edit API Key");
+      needRedraw = true;
+      return;
+    }
+
+    // FIX: menyentuh area chat SEKARANG dipakai utk geser/scroll isi
+    // (dulu tidak bisa discroll sama sekali).
+    if(y>=chatTop && y<=chatBot){
+      dragLastY = y;
+      return;
+    }
+
+    if(y>=inputY && y<=inputY+22 && x<=SCR_W-60){
+      kbTarget = &aiPrompt;
+      kbVisible = true;
+      kbMode = KB_LOWER;
+      needRedraw = true;
+      return;
+    }
+
+    if(x>=SCR_W-56 && x<=SCR_W-4 && y>=inputY && y<=inputY+22){
+      saveGeminiKey();
+      triggerGeminiAI();
+      return;
+    }
     return;
   }
 
-  int inputY = backY() - 26;
-  
-  if((y>=44 && y<=74) || (y>=inputY && y<=inputY+22 && x<=SCR_W-60)){
-    kbTarget = &aiPrompt;
-    kbVisible = true;
-    kbMode = KB_LOWER;
-    needRedraw = true;
-    return;
-  }
-
-  if(x>=SCR_W-56 && x<=SCR_W-4 && y>=inputY && y<=inputY+22){
-    saveGeminiKey();
-    triggerGeminiAI();
-    return;
+  // Frame lanjutan selagi jari masih ditahan -> geser scroll
+  if(held && y>=chatTop-20 && y<=chatBot+20){
+    int dy = dragLastY - y;
+    if(dy!=0){
+      aiRespScrollY = constrain(aiRespScrollY + dy, 0.0f, (float)aiRespMaxScroll);
+      dragLastY = y;
+      needRedraw = true;
+    }
   }
 }
 
@@ -2655,6 +2825,127 @@ void renderCurrentFrame(){
 }
 
 // =============================================
+// BOOT SEQUENCE — "Ren Phone" lalu logo OS "SanzX OS", baru transisi ke UI
+// (selalu jalan dalam mode potret/vertikal, sesuai orientasi default)
+// =============================================
+void bootFade(int fromB,int toB,int steps,int stepMs){
+  if(steps<1) steps=1;
+  for(int i=0;i<=steps;i++){
+    int b = fromB + (toB-fromB)*i/steps;
+    if(b<0)b=0; if(b>255)b=255;
+    display.setBrightness((uint8_t)b);
+    delay(stepMs);
+  }
+}
+
+void bootDrawParticleRing(int cx,int cy,int r,int count,uint16_t color,float phase){
+  for(int i=0;i<count;i++){
+    float ang = (float)i/count*2.0f*PI + phase;
+    int px = cx + (int)(cosf(ang)*r);
+    int py = cy + (int)(sinf(ang)*r);
+    canvas.fillCircle(px,py,2,color);
+  }
+}
+
+void bootStageRenPhone(int w,int h){
+  int cx=w/2, cy=h/2-24;
+  uint16_t accent=0xFD40; // oranye khas brand "Ren"
+  for(int f=0; f<=20; f++){
+    float p=f/20.0f;
+    canvas.fillSprite(0x0000);
+    bootDrawParticleRing(cx,cy,60+(int)(10*p),10,0x2965,p*4.0f);
+    int boxSize=(int)(20+46*p);
+    canvas.fillRoundRect(cx-boxSize/2,cy-boxSize/2,boxSize,boxSize,boxSize/4,accent);
+    canvas.setTextColor(0x0000); canvas.setTextSize(3);
+    canvas.setCursor(cx-9,cy-12); canvas.print("R");
+    if(p>0.5f){
+      canvas.setTextColor(0xFFFF); canvas.setTextSize(2);
+      const char* title="REN PHONE";
+      int tw=strlen(title)*12;
+      canvas.setCursor(cx-tw/2,cy+50); canvas.print(title);
+    }
+    push();
+    delay(16);
+  }
+  canvas.setTextColor(0x8C51); canvas.setTextSize(1);
+  const char* tag="Simplicity, Redefined.";
+  int tgw=strlen(tag)*6;
+  canvas.setCursor(cx-tgw/2,cy+76); canvas.print(tag);
+  push();
+  delay(900);
+}
+
+void bootStageSanzXOS(int w,int h){
+  int cx=w/2, cy=h/2-10;
+  uint16_t hexColor=0x04FF; // biru cyan khas "SanzX OS"
+  for(int f=0; f<=20; f++){
+    float p=f/20.0f;
+    canvas.fillSprite(0x0000);
+    float r=34*p;
+    int hx[6],hy[6];
+    for(int i=0;i<6;i++){
+      float ang=PI/6+i*PI/3;
+      hx[i]=cx+(int)(cosf(ang)*r); hy[i]=cy+(int)(sinf(ang)*r);
+    }
+    for(int i=0;i<6;i++) canvas.drawLine(hx[i],hy[i],hx[(i+1)%6],hy[(i+1)%6],hexColor);
+    canvas.setTextColor(hexColor); canvas.setTextSize(2);
+    canvas.setCursor(cx-8,cy-8); canvas.print("S");
+    if(p>0.5f){
+      canvas.setTextColor(0xFFFF); canvas.setTextSize(2);
+      const char* title="SanzX OS";
+      int tw=strlen(title)*12;
+      canvas.setCursor(cx-tw/2,cy+48); canvas.print(title);
+    }
+    push();
+    delay(16);
+  }
+  // titik loading berjalan, kesan "menyiapkan sistem"
+  for(int loop2=0; loop2<3; loop2++){
+    for(int i=0;i<3;i++){
+      canvas.fillSprite(0x0000);
+      int hexR=34; int hx[6],hy[6];
+      for(int k=0;k<6;k++){
+        float ang=PI/6+k*PI/3;
+        hx[k]=cx+(int)(cosf(ang)*hexR); hy[k]=cy+(int)(sinf(ang)*hexR);
+      }
+      for(int k=0;k<6;k++) canvas.drawLine(hx[k],hy[k],hx[(k+1)%6],hy[(k+1)%6],hexColor);
+      canvas.setTextColor(hexColor); canvas.setTextSize(2);
+      canvas.setCursor(cx-8,cy-8); canvas.print("S");
+      canvas.setTextColor(0xFFFF); canvas.setTextSize(2);
+      const char* title="SanzX OS";
+      int tw=strlen(title)*12;
+      canvas.setCursor(cx-tw/2,cy+48); canvas.print(title);
+      for(int d=0; d<3; d++){
+        uint16_t dc=(d==i)? 0xFFFF : 0x2965;
+        canvas.fillCircle(cx-16+d*16,cy+74,3,dc);
+      }
+      push();
+      delay(150);
+    }
+  }
+}
+
+void runBootSequence(){
+  int w=display.width(), h=display.height();
+  display.setBrightness(0);
+  canvas.fillSprite(0x0000);
+  push();
+
+  bootFade(0,255,18,12);      // fade masuk gelap -> terang
+  bootStageRenPhone(w,h);     // 1) logo "Ren Phone"
+  bootFade(255,0,14,10);      // fade keluar gelap
+  delay(120);
+
+  canvas.fillSprite(0x0000); push();
+  bootFade(0,255,18,12);
+  bootStageSanzXOS(w,h);      // 2) logo OS "SanzX OS"
+  bootFade(255,0,14,10);
+  delay(120);
+
+  bootFade(0,brightness,16,10); // 3) transisi akhir, fade masuk ke UI utama
+}
+
+// =============================================
 // SETUP
 // =============================================
 bool wasTouched=false;
@@ -2666,16 +2957,13 @@ int gStartX=0,gStartY=0; bool gGestureDone=false;
 void setup(){
   Serial.begin(115200);
   display.init();
-  display.setRotation(1);
-  display.setBrightness(brightness);
+  display.setRotation(0); // portrait (vertikal) = orientasi default
   canvas.setPsram(true);
-  canvas.createSprite(320,240);
-  canvas.fillSprite(0x1084);
-  canvas.setTextColor(0xFD40);canvas.setTextSize(3);
-  canvas.setCursor(50,80);canvas.print("ESP Phone");
-  canvas.setTextColor(0x8C51);canvas.setTextSize(1);
-  canvas.setCursor(60,130);canvas.print("Powered by ESP32-S3 + LGFX");
-  push();delay(1200);
+  canvas.createSprite(display.width(),display.height());
+
+  runBootSequence(); // "Ren Phone" -> logo "SanzX OS" -> transisi ke UI
+
+  display.setBrightness(brightness);
   if(display.touch())loadOrRunCalibration();
   loadTheme();
   initAppColors();
