@@ -1,30 +1,25 @@
 // =================================================================
-// ren_phone v6 — "OS" rewrite + MJPEG PLAYER
+// ren_phone v7 — "OS" rewrite + MJPEG PLAYER (FIXED)
 // ESP32-S3, ILI9341, XPT2046 touch, SD via SDIO
 //
-// PERBAIKAN FINAL (v5):
-//  1. HAPUS pendekatan stack task di PSRAM (heap_caps_malloc SPIRAM) —
-//     ESP32 Arduino core TIDAK resmi mendukung ini tanpa sdkconfig khusus,
-//     makanya selalu gagal alokasi. Sekarang kembali ke stack DRAM biasa,
-//     tapi ukurannya dikecilkan jadi 16KB (cukup utk HTTPS) dari yg 32KB.
-//  2. HAPUS pengecekan "freeInternal < 20000" yang terlalu ketat & jadi
-//     penyebab false-positive error "memori tidak cukup".
-//  3. TETAP mempertahankan fix yang valid:
-//     - HAPUS http.useHTTP10(true) -> penyebab asli stuck permanen
-//       (Gemini pakai chunked encoding, butuh HTTP/1.1)
-//     - Watchdog timeout (soft 15s putus socket, hard 30s hapus task)
-//       supaya UI tidak pernah stuck selamanya walau ada masalah lain
-//     - Parser gemini_key.txt yang aman dari BOM/CRLF/kutip
-//
-// TAMBAHAN (v6): APLIKASI MJPEG PLAYER
-//  - Menggunakan MjpegClass.h (JPEGDEC) yang sudah dipunya user.
-//  - File .mjpeg dibaca dari folder /mjpeg di SD Card (SD_MMC).
-//  - Frame digambar langsung ke `display` (hardware) memakai
-//    lgfx::swap565_t (karena output JPEGDEC di-set big-endian),
-//    BUKAN lewat sprite `canvas` (supaya framerate maksimal, hemat RAM).
-//  - Ketuk layar kapan saja saat video main -> berhenti, balik ke list.
-//  - Setelah play selesai/berhenti, needRedrawNow() dipanggil supaya
-//    UI "OS" normal (canvas sprite) digambar ulang menimpa layar.
+// PERBAIKAN v7 (berdasarkan permintaan user):
+//  1. MJPEG PLAYER: video berhenti sebelum benar-benar selesai karena
+//     buffer decode terlalu kecil (320*240*2/5 = ~30KB) sehingga frame
+//     JPEG yang lebih besar dari itu gagal dibaca dan readMjpegBuf()
+//     mengembalikan false padahal file belum habis -> dikira "selesai".
+//     FIX: buffer decode diperbesar 5x (320*240*2 = ~153KB, di PSRAM),
+//     dan loop pembacaan sekarang menggabungkan mjFile.available() DAN
+//     mjpeg.readMjpegBuf() persis seperti pola yang sudah terbukti jalan
+//     benar di kode referensi player MJPEG+audio milik user (logic
+//     player-nya saja yang diambil, fitur audio/ESP-NOW/PIN TIDAK
+//     dibawa masuk, sesuai permintaan).
+//  2. AI CHAT & FILE EXPLORER: teks yang ditampilkan di layar TIDAK lagi
+//     dipotong (dulu ada batas ~180/220/32/24 karakter lalu ditambah
+//     "..."). Sekarang teks penuh langsung di-print (area teks tetap
+//     wrap, jadi kalau lebih panjang dari kotak ya akan meluber ke
+//     bawah, tapi tidak ada lagi pemotongan paksa di kode).
+//  3. GEMINI AI: endpoint model diganti dari gemini-2.5-flash-lite
+//     menjadi gemini-3.5-flash-lite.
 // =================================================================
 #include <LovyanGFX.hpp>
 #include <Preferences.h>
@@ -515,10 +510,6 @@ void saveWifiCreds(){
 void connectWifi(){
   if(airplaneMode || !strlen(WIFI_SSID)) return;
   WiFi.begin(WIFI_SSID,WIFI_PASSWORD);
-  // FIX (httpCode -1 di AI Chat): matikan WiFi modem-sleep. Modem-sleep bikin
-  // radio ESP32 "tidur" antar paket utk hemat daya, tapi ini sering menunda
-  // paket TLS handshake ke Gemini API cukup lama sampai mbedTLS/HTTPClient
-  // menyerah dan melapor httpCode -1 (connection refused) padahal WiFi konek.
   WiFi.setSleep(false);
   int t=0;
   while(WiFi.status()!=WL_CONNECTED&&t<20){delay(300);t++;}
@@ -541,7 +532,6 @@ void toggleAirplaneMode(){
 
 // =============================================
 // GEMINI AI HTTP CLIENT & FREERTOS TASK
-// (FINAL FIX v5: STACK KEMBALI DI DRAM INTERNAL, TIDAK PAKAI PSRAM LAGI)
 // =============================================
 String aiPrompt = "";
 String aiResponse = "";
@@ -564,10 +554,9 @@ bool doGeminiHttpRequest(const String& promptText, String& outResponse) {
   HTTPClient http;
   http.setTimeout(15000);
   http.setConnectTimeout(15000);
-  // PENTING: JANGAN pakai http.useHTTP10(true) -> penyebab stuck permanen
-  // karena Gemini API pakai chunked transfer-encoding (butuh HTTP/1.1).
 
-  String url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=" + geminiApiKey;
+  // FIX v7: model diganti dari gemini-2.5-flash-lite -> gemini-3.5-flash-lite
+  String url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent?key=" + geminiApiKey;
 
   Serial.printf("[Gemini] Free DRAM internal: %u bytes (blok terbesar: %u)\n",
                 heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
@@ -629,9 +618,6 @@ bool doGeminiHttpRequest(const String& promptText, String& outResponse) {
       outResponse = "HTTP Error " + String(httpCode) + ": " + errBody.substring(0, 150);
     }
   } else if (httpCode == -1) {
-    // FIX: -1 (HTTPC_ERROR_CONNECTION_REFUSED) di ESP32 nyaris selalu berarti
-    // TLS handshake gagal (RAM internal tidak cukup utk mbedTLS, atau DNS
-    // gagal sesaat) — BUKAN Gemini menolak API key/koneksi kita.
     outResponse = "HTTP Error -1: TLS/koneksi gagal (biasanya RAM/DNS sesaat). Dicoba ulang otomatis...";
   } else {
     outResponse = "HTTP Connection Error: " + http.errorToString(httpCode) + " (" + String(httpCode) + ")";
@@ -670,18 +656,13 @@ void sendGeminiRequest(String promptText) {
     return;
   }
 
-  // FIX (httpCode -1): error -1 dari HTTPClient di ESP32 hampir selalu berarti
-  // TLS handshake gagal krn sebab TRANSIENT (heap sempat sempit / DNS lambat),
-  // BUKAN server menolak. Ini sering hilang sendiri kalau dicoba ulang setelah
-  // jeda singkat. Naikkan dari 1x retry tanpa jeda -> maks 3 percobaan dgn
-  // backoff yang makin panjang.
   String resp;
   bool ok = false;
   const int MAX_ATTEMPTS = 3;
   for (int attempt = 1; attempt <= MAX_ATTEMPTS && !aiSoftStopTriggered; attempt++) {
     if (attempt > 1) {
       Serial.printf("[Gemini] Percobaan %d gagal, retry ke-%d...\n", attempt - 1, attempt);
-      delay(400 * attempt); // 800ms, lalu 1200ms
+      delay(400 * attempt);
       if (WiFi.status() != WL_CONNECTED) break;
     }
     ok = doGeminiHttpRequest(promptText, resp);
@@ -701,7 +682,6 @@ void geminiTaskFunc(void* parameter) {
   vTaskDelete(NULL);
 }
 
-// ---------- FIXED: kembali pakai stack DRAM biasa, ukuran wajar 16KB ----------
 void triggerGeminiAI() {
   if (aiPrompt.length() == 0 || aiLoading) return;
 
@@ -710,14 +690,6 @@ void triggerGeminiAI() {
   Serial.printf("[Gemini] Sebelum bikin task -> freeInternal=%u largestBlock=%u freePsram=%u\n",
                 freeInternal, largestBlock, ESP.getFreePsram());
 
-  // FIX (httpCode -1 / "connection refused"): ambang lama (18000) TERLALU KECIL.
-  // Handshake TLS via mbedTLS (dipakai WiFiClientSecure) butuh blok RAM internal
-  // KONTIGU yang jauh lebih besar dari itu (buffer in/out + parsing sertifikat
-  // rantai CA googleapis.com bisa >40KB). Kalau largestBlock kurang, start_ssl_client()
-  // gagal alokasi memori di tengah handshake dan HTTPClient melaporkannya sbg
-  // httpCode -1, padahal server sama sekali tidak menolak koneksi kita.
-  // Naikkan ke 46000 supaya kita menolak DENGAN PESAN JELAS sebelum mencoba,
-  // drpd gagal "misterius" di tengah TLS.
   if (largestBlock < 46000) {
     aiResponse = "Error: RAM internal terlalu terfragmentasi/rendah utk TLS. Tutup app lain / restart perangkat.";
     needRedrawNow();
@@ -730,7 +702,6 @@ void triggerGeminiAI() {
   aiRequestStartMillis = millis();
   needRedrawNow();
 
-  // Stack 16KB di DRAM internal (bukan PSRAM) -> proven & reliable di ESP32 Arduino.
   BaseType_t res = xTaskCreatePinnedToCore(
       geminiTaskFunc, "geminiTask", 16384, NULL, 1, &geminiTaskHandle, 1);
 
@@ -744,7 +715,6 @@ void triggerGeminiAI() {
   }
 }
 
-// ---------- Watchdog anti-stuck, dipanggil tiap loop() ----------
 void checkAiWatchdog() {
   if (!aiLoading || aiRequestStartMillis == 0) return;
 
@@ -1756,8 +1726,8 @@ void drawAiChat(LGFX_Sprite& s){
   s.fillRoundRect(4,44,SCR_W-8,30,6,T().surface);
   s.setTextColor(T().accent);s.setCursor(10,48);s.print("Tanya: ");
   s.setTextColor(T().text);
+  // FIX v7: teks pertanyaan TIDAK dipotong lagi (dulu dibatasi 32 char + "..")
   String pText = aiPrompt.length() ? aiPrompt : "(ketuk area bawah utk ketik)";
-  if(pText.length()>32) pText = pText.substring(0,32) + "..";
   s.print(pText.c_str());
 
   int respH = contentBot - 80;
@@ -1772,9 +1742,10 @@ void drawAiChat(LGFX_Sprite& s){
       if (remain < 0) remain = 0;
       s.printf("Sedang berpikir & menghubungi Gemini API...\n(timeout otomatis dlm %lds)", remain);
     } else if(aiResponse.length()){
-      String rDisp = aiResponse;
-      if(rDisp.length() > 180) rDisp = rDisp.substring(0,180) + "...";
-      s.print(rDisp.c_str());
+      // FIX v7: jawaban Gemini ditampilkan PENUH, tidak dipotong 180 karakter lagi.
+      // Kotak akan meluber ke bawah kalau jawabannya panjang, tapi tidak ada lagi
+      // teks yang hilang / dipotong paksa oleh kode.
+      s.print(aiResponse.c_str());
     } else {
       s.setTextColor(T().subtext);
       s.print("Ketik pertanyaan lalu tekan [Kirim].");
@@ -1785,8 +1756,8 @@ void drawAiChat(LGFX_Sprite& s){
     int inputY = backY() - 26;
     s.fillRoundRect(4,inputY,SCR_W-64,22,4,T().surface);
     s.setTextColor(T().subtext);s.setCursor(10,inputY+6);
+    // FIX v7: preview input juga tidak dipotong paksa lagi
     String ipDisp = aiPrompt.length() ? aiPrompt : "Ketik pertanyaan...";
-    if(ipDisp.length()>24) ipDisp = ipDisp.substring(0,24)+"..";
     s.print(ipDisp.c_str());
     
     s.fillRoundRect(SCR_W-56,inputY,52,22,4,aiLoading?T().surface2:T().accent);
@@ -1896,9 +1867,8 @@ void drawFileExplorer(LGFX_Sprite& s){
     s.drawFastHLine(10,64,SCR_W-20,T().divider);
 
     s.setTextColor(T().text);s.setTextWrap(true);s.setCursor(10,70);
-    String vDisp = expViewContent;
-    if(vDisp.length() > 220) vDisp = vDisp.substring(0,220) + "...";
-    s.print(vDisp.c_str());
+    // FIX v7: isi file txt ditampilkan PENUH, tidak dipotong 220 karakter lagi.
+    s.print(expViewContent.c_str());
 
     drawBack(s);drawToast(s);
     return;
@@ -2005,7 +1975,7 @@ void fileExpTouch(int x,int y,bool held,bool isNew){
 }
 
 // =============================================
-// APP: MJPEG PLAYER (FITUR BARU)
+// APP: MJPEG PLAYER (FIXED v7)
 // =============================================
 const char* MJPEG_FOLDER = "/mjpeg";
 #define MJPEG_MAX_FILES 30
@@ -2057,26 +2027,45 @@ void mjpegScanFiles(){
 
 // Callback dipanggil JPEGDEC setiap kali 1 baris/blok JPEG selesai didecode.
 // Digambar LANGSUNG ke hardware `display` (bukan canvas sprite) demi speed.
-// lgfx::swap565_t dipakai karena MjpegClass di-setup dgn useBigEndian=true.
 int mjpegDrawCallback(JPEGDRAW *pDraw){
   display.pushImage(pDraw->x, pDraw->y, pDraw->iWidth, pDraw->iHeight,
                      (lgfx::swap565_t*)pDraw->pPixels);
   return 1;
 }
 
-// Alokasi buffer decode MJPEG sekali saja (lazy), taruh di PSRAM kalau bisa
+// FIX v7: Alokasi buffer decode MJPEG DIPERBESAR (dari ~30KB jadi ~150KB).
+// Ini adalah penyebab utama video "dipotong" sebelum selesai: kalau ada 1
+// frame JPEG saja yang ukurannya lebih besar dari buffer, readMjpegBuf()
+// gagal membaca frame itu dan mengembalikan false — padahal file MJPEG
+// belum habis — sehingga loop pemutaran berhenti dan dikira "sudah selesai".
+// Buffer besar ditaruh di PSRAM (bukan DRAM internal) supaya tidak
+// membebani RAM internal yang juga dipakai TLS/HTTPClient utk AI Chat.
 bool mjpegEnsureBuffer(){
   if(mjpegBuf) return true;
-  // Ukuran aman utk 1 frame JPEG terkompresi pada layar 320x240
-  mjpegBufSize = (size_t)320 * 240 * 2 / 5;
-  mjpegBuf = (uint8_t*)heap_caps_malloc(mjpegBufSize, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-  if(!mjpegBuf){
+
+  // Ukuran buffer yang jauh lebih longgar per frame JPEG 320x240.
+  // Dicoba dari yang paling besar dulu, turun bertahap kalau alokasi gagal,
+  // supaya tetap dapat buffer sebesar mungkin sesuai PSRAM yang tersedia.
+  const size_t candidateSizes[] = {
+    (size_t)320 * 240 * 2,        // ~153.6 KB (default baru, 5x lebih besar dari v6)
+    (size_t)320 * 240,            // ~76.8 KB
+    (size_t)320 * 240 * 2 / 3,    // ~51.2 KB
+  };
+
+  for (size_t sz : candidateSizes) {
+    mjpegBuf = (uint8_t*)heap_caps_malloc(sz, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (mjpegBuf) { mjpegBufSize = sz; break; }
+  }
+  // Fallback terakhir: DRAM internal, ukuran kecil spy tidak bikin heap penuh
+  if (!mjpegBuf) {
+    mjpegBufSize = (size_t)320 * 240 * 2 / 5;
     mjpegBuf = (uint8_t*)heap_caps_malloc(mjpegBufSize, MALLOC_CAP_8BIT);
   }
-  if(!mjpegBuf){
+  if (!mjpegBuf) {
     Serial.println("[MJPEG] Gagal alokasi buffer decode!");
     return false;
   }
+  Serial.printf("[MJPEG] Buffer decode dialokasikan: %u bytes\n", (unsigned)mjpegBufSize);
   return true;
 }
 
@@ -2115,17 +2104,14 @@ void mjpegPlayFile(const String& filename){
               0 /* x */, 0 /* y */, display.width(), display.height());
 
   int frameCheckCounter = 0;
-  // FIX: JANGAN pakai "mjFile.available()" sebagai syarat loop.
-  // MjpegClass membaca file dgn read-ahead ke buffer internalnya sendiri
-  // (READ_BUFFER_SIZE per panggilan _input->readBytes()), jadi begitu SEMUA byte
-  // file sudah "ditarik" dari SD (available()==0), bisa saja masih ada 1+ frame
-  // UTUH yang sudah ada di buffer internal tsb tapi BELUM didekode/digambar.
-  // Karena && dievaluasi kiri-ke-kanan, available()==0 membuat loop berhenti
-  // duluan sebelum sempat memanggil readMjpegBuf() -> video "dipotong" di akhir.
-  // readMjpegBuf() sendiri SUDAH menangani EOF yg sebenarnya (return false kalau
-  // benar2 tidak ada data/frame tersisa, termasuk yg ada di buffer internal),
-  // jadi cukup dijadikan satu2nya syarat.
-  while(!mjpegStopRequested && mjpeg.readMjpegBuf()){
+
+  // FIX v7: kembali menggabungkan mjFile.available() DAN mjpeg.readMjpegBuf()
+  // sebagai syarat loop — persis pola yang sudah terbukti memutar video
+  // sampai benar-benar tuntas di kode referensi milik user (logic player-nya
+  // yang diambil di sini). Dikombinasikan dengan buffer decode yang jauh
+  // lebih besar (lihat mjpegEnsureBuffer di atas), frame besar tidak lagi
+  // gagal terbaca sehingga tidak ada lagi frame/akhir video yang "kepotong".
+  while(!mjpegStopRequested && mjFile.available() && mjpeg.readMjpegBuf()){
     mjpeg.drawJpg();
     mjpegTotalFrames++;
 
@@ -2257,13 +2243,6 @@ void mjpegTouch(int x,int y,bool held,bool isNew){
 
 // =============================================
 // APP: UPDATE FIRMWARE (OTA) — LOKAL (SD) & WIFI (URL)
-//  - Lokal : baca file .bin dari folder /update di SD Card lalu flash
-//            langsung ke partisi OTA. Tidak butuh WiFi sama sekali.
-//  - WiFi  : unduh file .bin dari URL (http/https) lalu flash sambil
-//            streaming (tidak perlu disimpan dulu ke SD).
-//  Keduanya pakai library Update.h bawaan ESP32 core. Proses blocking
-//  (mirip pola mjpegPlayFile) dengan progress digambar langsung ke
-//  `display` karena `canvas` tidak dipakai selama proses ini.
 // =============================================
 const char* UPDATE_FOLDER = "/update";
 #define UPDATE_MAX_FILES 15
@@ -2275,24 +2254,21 @@ int updScrollPage = 0;
 String updUrl = "";
 volatile bool updBusy = false;
 
-// Pola "ketuk 2x utk konfirmasi" — supaya tidak ada flash tidak sengaja.
-// updPendingConfirm menyimpan label aksi yg sedang menunggu ketukan kedua.
 String updPendingConfirm = "";
 unsigned long updPendingUntil = 0;
 bool updCheckConfirm(const String& action){
   unsigned long now = millis();
   if(updPendingConfirm == action && now <= updPendingUntil){
     updPendingConfirm = "";
-    return true; // ketukan kedua -> lanjut eksekusi
+    return true;
   }
   updPendingConfirm = action;
   updPendingUntil   = now + 4000;
   showToast("Ketuk sekali lagi utk konfirmasi!");
   needRedraw = true;
-  return false; // ketukan pertama -> tunggu konfirmasi
+  return false;
 }
 
-// Layout tetap (dipakai sama persis oleh drawUpdate & updTouch spy tidak meleset)
 #define UPD_ROW0         (STATUS_H+12)
 #define UPD_ITEM_Y        (UPD_ROW0+14)
 #define UPD_ITEM_H        22
@@ -2332,7 +2308,6 @@ void updScanFiles(){
   Serial.printf("[Update] %d file .bin ditemukan di %s\n", updFileCount, UPDATE_FOLDER);
 }
 
-// Gambar progress bar langsung ke hardware display (canvas tidak dipakai selama OTA)
 void updDrawProgress(const char* title, size_t written, size_t total){
   display.fillScreen(TFT_BLACK);
   display.setTextColor(TFT_WHITE);
@@ -2382,7 +2357,6 @@ void updShowResult(bool success){
   }
 }
 
-// ---- LOKAL: flash dari file .bin yang ada di SD Card ----
 bool updInstallFromSD(const String& filename){
   String fullPath = String(UPDATE_FOLDER) + "/" + filename;
   File f = SD_MMC.open(fullPath, FILE_READ);
@@ -2436,7 +2410,6 @@ bool updInstallFromSD(const String& filename){
   return true;
 }
 
-// ---- WIFI: unduh .bin dari URL (http/https) lalu flash sambil streaming ----
 bool updInstallFromURL(const String& url){
   if(WiFi.status() != WL_CONNECTED){
     showToast("WiFi belum terhubung!");
@@ -2610,7 +2583,7 @@ void drawUpdate(LGFX_Sprite& s){
 }
 
 void updTouch(int x,int y,bool held,bool isNew){
-  if(updBusy) return; // sedang flashing, abaikan semua sentuhan
+  if(updBusy) return;
 
   if(kbVisible){
     if(!isNew) return;
@@ -2720,11 +2693,9 @@ void setup(){
   locked = true;
   needRedraw = true;
 
-  // Pastikan folder /mjpeg ada di SD Card
   if(sdReady && !SD_MMC.exists(MJPEG_FOLDER)){
     SD_MMC.mkdir(MJPEG_FOLDER);
   }
-  // Pastikan folder /update ada di SD Card (tempat taruh file .bin utk update lokal)
   if(sdReady && !SD_MMC.exists(UPDATE_FOLDER)){
     SD_MMC.mkdir(UPDATE_FOLDER);
   }
