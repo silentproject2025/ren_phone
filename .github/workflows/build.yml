@@ -32,7 +32,7 @@ jobs:
           mkdir -p build_sketch
           cp test.ino build_sketch/
           cp MjpegClass.h build_sketch/
-          mv build_sketch/test.ino build_sketch/build_sketch.ino
+          mv build_sketch/phone.ino build_sketch/build_sketch.ino
           arduino-cli compile --fqbn esp32:esp32:esp32s3 \
             --board-options "FlashSize=16M,PSRAM=opi" \
             build_sketch --output-dir build
