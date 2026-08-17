@@ -1,5 +1,5 @@
 // =================================================================
-// ren_phone v7 — "OS" rewrite + MJPEG PLAYER (FIXED)
+// ren_phone v7 — "OS" rewrite + MJPEG PLAYER (FIXED) 
 // ESP32-S3, ILI9341, XPT2046 touch, SD via SDIO
 //
 // PERBAIKAN v7 (berdasarkan permintaan user):
