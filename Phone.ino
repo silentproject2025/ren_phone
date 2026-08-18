@@ -1,25 +1,30 @@
 // =================================================================
-// ren_phone v7 — "OS" rewrite + MJPEG PLAYER (FIXED) 
+// ren_phone v8 — FIX bug orientasi MPU6050 (auto-rotate) + APP BARU: Baterai
 // ESP32-S3, ILI9341, XPT2046 touch, SD via SDIO
 //
-// PERBAIKAN v7 (berdasarkan permintaan user):
-//  1. MJPEG PLAYER: video berhenti sebelum benar-benar selesai karena
-//     buffer decode terlalu kecil (320*240*2/5 = ~30KB) sehingga frame
-//     JPEG yang lebih besar dari itu gagal dibaca dan readMjpegBuf()
-//     mengembalikan false padahal file belum habis -> dikira "selesai".
-//     FIX: buffer decode diperbesar 5x (320*240*2 = ~153KB, di PSRAM),
-//     dan loop pembacaan sekarang menggabungkan mjFile.available() DAN
-//     mjpeg.readMjpegBuf() persis seperti pola yang sudah terbukti jalan
-//     benar di kode referensi player MJPEG+audio milik user (logic
-//     player-nya saja yang diambil, fitur audio/ESP-NOW/PIN TIDAK
-//     dibawa masuk, sesuai permintaan).
-//  2. AI CHAT & FILE EXPLORER: teks yang ditampilkan di layar TIDAK lagi
-//     dipotong (dulu ada batas ~180/220/32/24 karakter lalu ditambah
-//     "..."). Sekarang teks penuh langsung di-print (area teks tetap
-//     wrap, jadi kalau lebih panjang dari kotak ya akan meluber ke
-//     bawah, tapi tidak ada lagi pemotongan paksa di kode).
-//  3. GEMINI AI: endpoint model diganti dari gemini-2.5-flash-lite
-//     menjadi gemini-3.5-flash-lite.
+// PERBAIKAN v8 (berdasarkan permintaan user):
+//  4. AUTO-ROTATE MPU6050: mapping sumbu accelerometer -> orientasi layar
+//     TERBALIK dari cara sensor terpasang secara fisik di board user,
+//     sehingga HP yang dipegang tegak (portrait) malah dibaca sebagai
+//     landscape, dan sebaliknya. FIX: ditukar hasil assignment
+//     ORIENT_LANDSCAPE <-> ORIENT_PORTRAIT di dalam autoRotateUpdate().
+//     Selain itu, autoRotateUpdate() SEKARANG TIDAK dijalankan sama
+//     sekali selagi layar masih locked (ditambah "if(locked) return;"
+//     di baris pertama fungsinya) — supaya lock screen tidak pernah
+//     tiba-tiba "kebalik" orientasinya gara-gara auto-rotate. Ini juga
+//     yang jadi akar penyebab keluhan "lock screen tidak bisa diusap
+//     ke atas": karena layar diam-diam berubah ke landscape padahal HP
+//     dipegang portrait, usapan fisik ke atas terbaca sebagai gerakan
+//     menyamping oleh kode, bukan gerakan vertikal (dy) yang dicek
+//     lockScreenInput().
+//  5. APLIKASI BARU "Baterai": menampilkan ikon baterai + persen besar,
+//     tegangan saat ini, rentang tegangan (3.0-4.2V), kapasitas baterai
+//     (2300 mAh sesuai baterai yang dipakai user), estimasi sisa mAh,
+//     dan status (Baik/Cukup/Lemah/Kritis). Ada tombol Refresh utk
+//     memaksa baca ulang ADC baterai.
+//
+// (Semua perbaikan v7 sebelumnya -- MJPEG player, teks AI Chat & File
+// Explorer tidak dipotong, model Gemini -- tetap dipertahankan di sini.)
 // =================================================================
 #include <LovyanGFX.hpp>
 #include <Preferences.h>
@@ -44,7 +49,7 @@
 // =============================================
 enum Screen { SCR_HOME, SCR_CLOCK, SCR_CALC, SCR_SENSOR,
               SCR_SETTINGS, SCR_NOTEPAD, SCR_CANVAS, SCR_AICHAT, SCR_FILEEXPLORER,
-              SCR_MJPEG, SCR_UPDATE };
+              SCR_MJPEG, SCR_UPDATE, SCR_BATTERY };
 enum Orientation { ORIENT_LANDSCAPE = 0, ORIENT_PORTRAIT = 1 };
 
 // Dipindah ke atas (sebelum semua definisi fungsi) supaya prototype otomatis
@@ -1220,8 +1225,11 @@ void drawMjpegPlayer(LGFX_Sprite&); void mjpegTouch(int,int,bool,bool);
 // ---- UPDATE (OTA): forward declarations ----
 void updEnter(); void updExit();
 void drawUpdate(LGFX_Sprite&); void updTouch(int,int,bool,bool);
+// ---- BATERAI: forward declarations (BARU di v8) ----
+void battEnter(); void battExit();
+void drawBatteryApp(LGFX_Sprite&); void battTouch(int,int,bool,bool);
 
-AppDef apps[10] = {
+AppDef apps[11] = {
   { "Jam",        'J', 0, clockEnter,    clockExit,    drawClock,        clockTouch,    SCR_CLOCK },
   { "Kalkulator", '+', 0, calcEnter,     calcExit,     drawCalc,         calcTouch,     SCR_CALC },
   { "Orientasi3D", '3', 0, sensorEnter,   sensorExit,   drawSensor,       sensorTouch,   SCR_SENSOR },
@@ -1232,8 +1240,9 @@ AppDef apps[10] = {
   { "Files",      'F', 0, fileExpEnter,  fileExpExit,  drawFileExplorer, fileExpTouch,  SCR_FILEEXPLORER },
   { "MJPEG",      'M', 0, mjpegEnter,    mjpegExit,    drawMjpegPlayer,  mjpegTouch,    SCR_MJPEG },
   { "Update",     'U', 0, updEnter,      updExit,      drawUpdate,       updTouch,      SCR_UPDATE },
+  { "Baterai",    'B', 0, battEnter,     battExit,     drawBatteryApp,   battTouch,     SCR_BATTERY },
 };
-#define APP_COUNT 10
+#define APP_COUNT 11
 
 void initAppColors(){
   apps[0].color=T().accent;   apps[1].color=T().accent2;
@@ -1242,6 +1251,7 @@ void initAppColors(){
   apps[6].color=0xFD40;       apps[7].color=0x3ADF;
   apps[8].color=0xFBE0; // MJPEG player - warna oranye
   apps[9].color=0xF800; // Update FW - warna merah (menonjol/perlu perhatian)
+  apps[10].color=0x07E0; // Baterai - warna hijau (BARU di v8)
 }
 
 int appIndexForScreen(Screen s){
@@ -3197,15 +3207,32 @@ bool loadAutoRotatePref(){ Preferences p; p.begin("ui",true); bool v=p.getBool("
 Orientation  pendingOrient      = ORIENT_PORTRAIT;
 unsigned long pendingOrientSince = 0;
 
+// =====================================================================
+// FIX v8 (BUG #1 - orientasi MPU6050 terbalik):
+//   Sebelumnya "ax dominan -> LANDSCAPE, ay dominan -> PORTRAIT". Ini
+//   terbalik dari cara MPU6050 terpasang secara fisik di board user,
+//   sehingga HP yang dipegang tegak (portrait) malah dibaca landscape
+//   dan sebaliknya. Sekarang ditukar: "ax dominan -> PORTRAIT,
+//   ay dominan -> LANDSCAPE".
+//
+// FIX v8 (BUG #2 - lock screen tidak bisa diusap):
+//   Ditambah "if(locked) return;" di baris pertama, supaya orientasi
+//   layar TIDAK PERNAH berubah otomatis selagi masih di lock screen.
+//   Sebelumnya, kombinasi dengan bug #1 bisa membuat lock screen
+//   diam-diam berubah ke landscape padahal HP dipegang portrait, jadi
+//   usapan fisik ke atas terbaca sebagai gerakan menyamping (bukan dy)
+//   dan unlock tidak pernah ter-trigger.
+// =====================================================================
 void autoRotateUpdate(){
+  if(locked) return;                          // <-- FIX v8: jangan auto-rotate saat lock screen
   if(!autoRotateEnabled || !mpuReady) return;
   float ax=mpuAx, ay=mpuAy;
   float mag = sqrtf(ax*ax+ay*ay);
   if(mag < 0.35f) return; // HP hampir rebah datar -> jangan ganti orientasi
   const float HYST = 0.15f;
   Orientation suggestion = currentOrient;
-  if(fabsf(ax) > fabsf(ay) + HYST) suggestion = ORIENT_LANDSCAPE;
-  else if(fabsf(ay) > fabsf(ax) + HYST) suggestion = ORIENT_PORTRAIT;
+  if(fabsf(ax) > fabsf(ay) + HYST) suggestion = ORIENT_PORTRAIT;    // FIX v8: ditukar (dulu LANDSCAPE)
+  else if(fabsf(ay) > fabsf(ax) + HYST) suggestion = ORIENT_LANDSCAPE; // FIX v8: ditukar (dulu PORTRAIT)
   else return; // di zona abu-abu (dekat 45 derajat), biarkan dulu
 
   if(suggestion != pendingOrient){
@@ -3251,9 +3278,11 @@ void mpuUpdate(){
 
 // =================================================================
 // BATERAI: voltage divider 10k+10k di GPIO4 (rasio 1:2), Li-ion 1 sel 3.0V-4.2V
+// Kapasitas baterai yang dipakai: 2300 mAh (BARU di v8, dipakai app Baterai)
 // =================================================================
 #define BATT_ADC_PIN 4
 #define BATT_DIVIDER_RATIO 2.0f   // 10k+10k sama besar -> Vbat = Vadc * 2
+#define BATTERY_CAPACITY_MAH 2300 // kapasitas baterai yang dipakai user (BARU di v8)
 float battVoltage = 3.7f;
 int   battPercent = 100;
 bool  battWarnedLow = false, battWarnedCritical = false;
@@ -3274,6 +3303,102 @@ void battUpdate(){
     showToast("Baterai lemah, segera cas.");
   } else if(battPercent > 25){
     battWarnedLow = false; battWarnedCritical = false; // reset biar bisa warning lagi kalau turun lagi
+  }
+}
+
+// =============================================
+// APP: BATERAI (BARU di v8)
+// =============================================
+void battEnter(){ battUpdate(); }
+void battExit(){}
+
+void drawBatteryApp(LGFX_Sprite& s){
+  s.fillSprite(T().bg);
+  drawStatusBar(s);
+  s.setTextColor(0x07E0);s.setTextSize(1);s.setCursor(8,26);s.print("Baterai");
+
+  s.fillRoundRect(SCR_W-70,24,64,18,4,T().surface2);
+  s.setTextColor(T().accent);s.setCursor(SCR_W-62,29);s.print("Refresh");
+
+  // --- Ikon baterai besar, terisi sesuai persen ---
+  int iconW = 90, iconH = 44;
+  int iconX = SCR_W/2 - iconW/2;
+  int iconY = STATUS_H + 20;
+  uint16_t battColor = (battPercent<=15)?T().danger:(battPercent<=35)?T().accent:T().good;
+
+  s.drawRoundRect(iconX,iconY,iconW,iconH,6,T().text);
+  s.drawRoundRect(iconX+1,iconY+1,iconW-2,iconH-2,5,T().text);
+  s.fillRoundRect(iconX+iconW,iconY+iconH/2-7,7,14,3,T().text); // kutub positif baterai
+
+  int innerPad=5;
+  int innerW = iconW - innerPad*2;
+  int innerH = iconH - innerPad*2;
+  int fillW = constrain((innerW*battPercent)/100,0,innerW);
+  if(fillW>0) s.fillRoundRect(iconX+innerPad,iconY+innerPad,fillW,innerH,3,battColor);
+
+  // --- Persen besar ---
+  char pctBuf[8]; sprintf(pctBuf,"%d%%",battPercent);
+  s.setTextColor(battColor); s.setTextSize(3);
+  int pw = strlen(pctBuf)*18;
+  s.setCursor(SCR_W/2-pw/2, iconY+iconH+14);
+  s.print(pctBuf);
+
+  // --- Detail teknis ---
+  int ty = iconY+iconH+52;
+  int lh = 14;
+  char buf[64];
+  s.setTextSize(1);
+
+  s.setTextColor(T().subtext); s.setCursor(14,ty); s.print("Tegangan saat ini:");
+  s.setTextColor(T().text);
+  sprintf(buf,"%.2f V", battVoltage);
+  s.setCursor(SCR_W-14-(int)strlen(buf)*6, ty); s.print(buf);
+  ty += lh;
+
+  s.setTextColor(T().subtext); s.setCursor(14,ty); s.print("Rentang tegangan:");
+  s.setTextColor(T().text); s.setCursor(SCR_W-14-11*6, ty); s.print("3.0 - 4.2 V");
+  ty += lh;
+
+  s.setTextColor(T().subtext); s.setCursor(14,ty); s.print("Kapasitas baterai:");
+  s.setTextColor(T().text);
+  sprintf(buf,"%d mAh", BATTERY_CAPACITY_MAH);
+  s.setCursor(SCR_W-14-(int)strlen(buf)*6, ty); s.print(buf);
+  ty += lh;
+
+  s.setTextColor(T().subtext); s.setCursor(14,ty); s.print("Estimasi sisa daya:");
+  s.setTextColor(T().text);
+  int remainMah = (int)(BATTERY_CAPACITY_MAH * battPercent / 100.0f);
+  sprintf(buf,"~%d mAh", remainMah);
+  s.setCursor(SCR_W-14-(int)strlen(buf)*6, ty); s.print(buf);
+  ty += lh;
+
+  s.setTextColor(T().subtext); s.setCursor(14,ty); s.print("Status:");
+  s.setTextColor(battColor);
+  const char* statusTxt = (battPercent<=5)?"Kritis, segera cas!" :
+                           (battPercent<=15)?"Lemah, segera cas" :
+                           (battPercent<=35)?"Cukup" : "Baik";
+  s.setCursor(14+7*6, ty); s.print(statusTxt);
+  ty += lh+4;
+
+  s.drawFastHLine(10,ty,SCR_W-20,T().divider);
+  ty += 8;
+  s.setTextColor(T().subtext); s.setTextWrap(true);
+  s.setCursor(10,ty);
+  s.print("Catatan: estimasi dihitung dari pembacaan tegangan (voltage divider), bukan fuel-gauge IC, jadi persen & sisa mAh di atas perkiraan kasar, bukan angka presisi.");
+  s.setTextWrap(false);
+
+  drawBack(s);
+  drawToast(s);
+}
+
+void battTouch(int x,int y,bool held,bool isNew){
+  if(!isNew) return;
+  if(isBack(x,y)){ navBack(); return; }
+  if(x>=SCR_W-70 && x<=SCR_W-6 && y>=24 && y<=42){
+    battUpdate();
+    showToast("Data baterai diperbarui");
+    needRedraw=true;
+    return;
   }
 }
 
