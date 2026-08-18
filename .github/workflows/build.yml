@@ -34,9 +34,10 @@ jobs:
           cp MjpegClass.h build_sketch/
           mv build_sketch/Phone.ino build_sketch/build_sketch.ino
           arduino-cli compile --fqbn esp32:esp32:esp32s3 \
-            --board-options "FlashSize=16M,PSRAM=opi,LTO=O2" \
-            --build-property compiler.c.extra_flags="-Os -fno-strict-aliasing" \
-            --build-property compiler.cpp.extra_flags="-Os -fno-strict-aliasing" \
+            --board-options "FlashSize=16M,PSRAM=opi" \
+            --build-property compiler.c.extra_flags="-Os -flto=full -fno-strict-aliasing" \
+            --build-property compiler.cpp.extra_flags="-Os -flto=full -fno-strict-aliasing" \
+            --build-property compiler.c.elf.flags="-flto=full" \
             build_sketch --output-dir build
 
       - name: Upload Binary Artifacts
