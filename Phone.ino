@@ -1,30 +1,47 @@
 // =================================================================
-// ren_phone v8 — FIX bug orientasi MPU6050 (auto-rotate) + APP BARU: Baterai
+// ren_phone v9 — FIX bug lock screen tidak bisa diusap ke atas
+// (kalibrasi touch & rotasi layar sekarang SELALU sinkron)
 // ESP32-S3, ILI9341, XPT2046 touch, SD via SDIO
 //
-// PERBAIKAN v8 (berdasarkan permintaan user):
-//  4. AUTO-ROTATE MPU6050: mapping sumbu accelerometer -> orientasi layar
-//     TERBALIK dari cara sensor terpasang secara fisik di board user,
-//     sehingga HP yang dipegang tegak (portrait) malah dibaca sebagai
-//     landscape, dan sebaliknya. FIX: ditukar hasil assignment
-//     ORIENT_LANDSCAPE <-> ORIENT_PORTRAIT di dalam autoRotateUpdate().
-//     Selain itu, autoRotateUpdate() SEKARANG TIDAK dijalankan sama
-//     sekali selagi layar masih locked (ditambah "if(locked) return;"
-//     di baris pertama fungsinya) — supaya lock screen tidak pernah
-//     tiba-tiba "kebalik" orientasinya gara-gara auto-rotate. Ini juga
-//     yang jadi akar penyebab keluhan "lock screen tidak bisa diusap
-//     ke atas": karena layar diam-diam berubah ke landscape padahal HP
-//     dipegang portrait, usapan fisik ke atas terbaca sebagai gerakan
-//     menyamping oleh kode, bukan gerakan vertikal (dy) yang dicek
-//     lockScreenInput().
-//  5. APLIKASI BARU "Baterai": menampilkan ikon baterai + persen besar,
-//     tegangan saat ini, rentang tegangan (3.0-4.2V), kapasitas baterai
-//     (2300 mAh sesuai baterai yang dipakai user), estimasi sisa mAh,
-//     dan status (Baik/Cukup/Lemah/Kritis). Ada tombol Refresh utk
-//     memaksa baca ulang ADC baterai.
+// PERBAIKAN v9 (berdasarkan laporan user: "abis kalibrasi, lock screen
+// gak bisa diusap ke atas"):
+//  1. AKAR MASALAH DITEMUKAN: di v8 (dan versi2 sebelumnya), urutan di
+//     setup() itu display.setRotation(0) (paksa PORTRAIT) -> KALIBRASI
+//     TOUCH dijalankan di rotasi portrait itu -> baru BELAKANGAN
+//     loadOrientPref()+applyOrientation() menerapkan orientasi yang
+//     SEBENARNYA tersimpan di NVS (yang bisa saja LANDSCAPE, misalnya
+//     peninggalan dari firmware versi lama yang defaultnya landscape,
+//     atau dari sesi sebelumnya waktu user pernah pindah ke landscape
+//     lewat Control Center). Kalau itu terjadi: kalibrasi terekam utk
+//     rotasi portrait, tapi device jalan di rotasi landscape. XPT2046
+//     di LovyanGFX itu pemetaan sumbu X/Y-nya terikat ke rotasi yang
+//     aktif SAAT kalibrasi dilakukan -> begitu rotasi runtime beda dari
+//     rotasi kalibrasi, sumbu X/Y touch jadi tertukar. Akibatnya usapan
+//     FISIK ke atas di lock screen malah kebaca sebagai gerakan
+//     menyamping oleh kode (krn lockScreenInput() cuma mengecek
+//     dy = startY-ty), jadi swipe-to-unlock tidak pernah ter-trigger.
+//     Inilah kenapa di kode lama (yang SELALU setRotation(1)/landscape
+//     DULU baru kalibrasi, dengan default orientasi landscape juga)
+//     bug ini tidak pernah muncul: rotasi kalibrasi & rotasi runtime
+//     selalu sama persis, di orientasi apapun user berada.
+//  2. FIX: setup() sekarang membaca loadOrientPref() DI PALING AWAL,
+//     lalu langsung display.setRotation() sesuai orientasi tersimpan
+//     itu SEBELUM boot sequence & SEBELUM kalibrasi touch dijalankan.
+//     Dengan ini, kalibrasi SELALU terjadi tepat di rotasi yang bakal
+//     dipakai saat runtime -- baik portrait maupun landscape -- jadi
+//     tidak akan pernah mismatch lagi. Ini juga sekalian membenahi efek
+//     samping kecil: dulu animasi boot SELALU main di portrait dulu baru
+//     "dibanting" ke landscape sesaat setelahnya kalau orientasi
+//     tersimpannya landscape; sekarang boot sequence langsung main di
+//     orientasi yang benar dari awal. applyOrientation() tetap dipanggil
+//     belakangan seperti biasa, sekarang cuma tugasnya merapikan ukuran
+//     canvas/canvasApp & memuat isi Canvas app -- bukan lagi penentu
+//     rotasi yang dipakai saat kalibrasi.
 //
-// (Semua perbaikan v7 sebelumnya -- MJPEG player, teks AI Chat & File
-// Explorer tidak dipotong, model Gemini -- tetap dipertahankan di sini.)
+// (Semua perbaikan v7 & v8 sebelumnya -- MJPEG player, teks AI Chat &
+// File Explorer tidak dipotong, model Gemini, auto-rotate MPU6050 yang
+// sumbunya sudah dibetulkan + tidak aktif saat lock screen, app Baterai
+// -- tetap dipertahankan di sini.)
 // =================================================================
 #include <LovyanGFX.hpp>
 #include <Preferences.h>
@@ -1251,7 +1268,7 @@ void initAppColors(){
   apps[6].color=0xFD40;       apps[7].color=0x3ADF;
   apps[8].color=0xFBE0; // MJPEG player - warna oranye
   apps[9].color=0xF800; // Update FW - warna merah (menonjol/perlu perhatian)
-  apps[10].color=0x07E0; // Baterai - warna hijau (BARU di v8)
+  apps[10].color=0x07E0; // Baterai - warna hijau
 }
 
 int appIndexForScreen(Screen s){
@@ -3011,7 +3028,9 @@ void renderCurrentFrame(){
 
 // =============================================
 // BOOT SEQUENCE — "Ren Phone" lalu logo OS "SanzX OS", baru transisi ke UI
-// (selalu jalan dalam mode potret/vertikal, sesuai orientasi default)
+// (sekarang main persis di orientasi yang tersimpan/dipilih user, karena
+// rotasi sudah di-set SEBELUM boot sequence dipanggil di setup() -- lihat
+// FIX v9 di bagian setup())
 // =============================================
 void bootFade(int fromB,int toB,int steps,int stepMs){
   if(steps<1) steps=1;
@@ -3215,13 +3234,14 @@ unsigned long pendingOrientSince = 0;
 //   dan sebaliknya. Sekarang ditukar: "ax dominan -> PORTRAIT,
 //   ay dominan -> LANDSCAPE".
 //
-// FIX v8 (BUG #2 - lock screen tidak bisa diusap):
+// FIX v8 (BUG #2 - lock screen tidak bisa diusap, kasus AUTO-ROTATE):
 //   Ditambah "if(locked) return;" di baris pertama, supaya orientasi
 //   layar TIDAK PERNAH berubah otomatis selagi masih di lock screen.
-//   Sebelumnya, kombinasi dengan bug #1 bisa membuat lock screen
-//   diam-diam berubah ke landscape padahal HP dipegang portrait, jadi
-//   usapan fisik ke atas terbaca sebagai gerakan menyamping (bukan dy)
-//   dan unlock tidak pernah ter-trigger.
+//   (Catatan: ada JUGA penyebab lain utk keluhan "lock screen tidak
+//   bisa diusap" yang TIDAK ada hubungannya dgn MPU6050/auto-rotate
+//   sama sekali -- yaitu mismatch antara rotasi saat kalibrasi touch
+//   dilakukan vs rotasi runtime. Itu dibenahi terpisah di FIX v9,
+//   lihat komentar di fungsi setup().)
 // =====================================================================
 void autoRotateUpdate(){
   if(locked) return;                          // <-- FIX v8: jangan auto-rotate saat lock screen
@@ -3278,11 +3298,11 @@ void mpuUpdate(){
 
 // =================================================================
 // BATERAI: voltage divider 10k+10k di GPIO4 (rasio 1:2), Li-ion 1 sel 3.0V-4.2V
-// Kapasitas baterai yang dipakai: 2300 mAh (BARU di v8, dipakai app Baterai)
+// Kapasitas baterai yang dipakai: 2300 mAh
 // =================================================================
 #define BATT_ADC_PIN 4
 #define BATT_DIVIDER_RATIO 2.0f   // 10k+10k sama besar -> Vbat = Vadc * 2
-#define BATTERY_CAPACITY_MAH 2300 // kapasitas baterai yang dipakai user (BARU di v8)
+#define BATTERY_CAPACITY_MAH 2300 // kapasitas baterai yang dipakai user
 float battVoltage = 3.7f;
 int   battPercent = 100;
 bool  battWarnedLow = false, battWarnedCritical = false;
@@ -3307,7 +3327,7 @@ void battUpdate(){
 }
 
 // =============================================
-// APP: BATERAI (BARU di v8)
+// APP: BATERAI
 // =============================================
 void battEnter(){ battUpdate(); }
 void battExit(){}
@@ -3405,14 +3425,47 @@ void battTouch(int x,int y,bool held,bool isNew){
 void setup(){
   Serial.begin(115200);
   display.init();
-  display.setRotation(0); // portrait (vertikal) = orientasi default
+
+  // =============================================================
+  // FIX v9 (BUG: lock screen tidak bisa diusap ke atas setelah kalibrasi)
+  // -----------------------------------------------------------------
+  // AKAR MASALAH: sebelumnya display.setRotation() SELALU dipaksa ke
+  // rotasi 0 (portrait) di titik ini, lalu KALIBRASI TOUCH dijalankan
+  // dalam rotasi portrait tsb. Orientasi "final" yang benar-benar
+  // dipakai perangkat (dibaca lewat loadOrientPref() dari NVS) baru
+  // diterapkan BELAKANGAN lewat applyOrientation(). Kalau ternyata
+  // orientasi tersimpan == LANDSCAPE (mis. peninggalan dari sesi atau
+  // firmware sebelumnya yang defaultnya landscape), maka: kalibrasi
+  // terjadi di rotasi 0, tapi tampilan (termasuk lock screen) berjalan
+  // di rotasi 1. Kalibrasi XPT2046 di LovyanGFX terikat ke rotasi yang
+  // aktif SAAT kalibrasi dilakukan, jadi mismatch ini bikin sumbu X/Y
+  // touch tertukar -> usapan fisik ke ATAS di lock screen malah
+  // terbaca sebagai gerakan ke SAMPING oleh lockScreenInput() (yang
+  // cuma mengecek dy), sehingga unlock tidak pernah ter-trigger.
+  // Persis seperti kode lama (v6) yang SELALU setRotation(1) dulu
+  // SEBELUM kalibrasi, dan default orientasinya juga landscape ->
+  // rotasi kalibrasi & rotasi runtime selalu sama-sama landscape,
+  // jadi tidak pernah kena bug ini.
+  //
+  // FIX: baca dulu orientasi tersimpan (savedOrient), terapkan
+  // rotasinya SEBELUM boot sequence & kalibrasi dijalankan. Dengan
+  // begitu, apapun orientasi yang akan dipakai runtime (portrait
+  // ATAU landscape), kalibrasi SELALU terjadi persis pada rotasi
+  // yang sama -> tidak ada lagi mismatch, di orientasi apapun. Ini
+  // aman karena ganti rotasi live (mis. lewat Control Center) sudah
+  // terbukti tidak merusak hasil kalibrasi -- yang penting kalibrasi
+  // AWAL-nya match dengan rotasi yang aktif saat itu.
+  // =============================================================
+  Orientation savedOrient = loadOrientPref();
+  display.setRotation(savedOrient == ORIENT_LANDSCAPE ? 1 : 0);
+
   canvas.setPsram(true);
   canvas.createSprite(display.width(),display.height());
 
-  runBootSequence(); // "Ren Phone" -> logo "SanzX OS" -> transisi ke UI
+  runBootSequence(); // "Ren Phone" -> logo "SanzX OS" -> transisi ke UI (skrg ikut orientasi tersimpan)
 
   display.setBrightness(brightness);
-  if(display.touch())loadOrRunCalibration();
+  if(display.touch())loadOrRunCalibration(); // kalibrasi SEKARANG selalu match dgn rotasi runtime
   loadTheme();
   initAppColors();
   drawColor=T().text;
@@ -3424,8 +3477,7 @@ void setup(){
   canvasApp.setPsram(true);
   canvasApp.createSprite(320,240-STATUS_H-44);
   canvasApp.fillSprite(T().bg);
-  Orientation savedOrient = loadOrientPref();
-  applyOrientation(savedOrient, false);
+  applyOrientation(savedOrient, false); // rapikan SCR_W/H, canvas & canvasApp (rotasi sudah benar dari awal)
   locked = true;
   needRedraw = true;
 
