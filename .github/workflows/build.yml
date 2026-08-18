@@ -30,7 +30,7 @@ jobs:
       - name: Prepare sketch directory
         run: |
           mkdir -p build_sketch
-          cp Phone.ino build_sketch/Phone.ino
+          cp Phone.ino build_sketch/build_sketch.ino
           cp MjpegClass.h build_sketch/
 
       - name: Compile Sketch
