@@ -34,7 +34,7 @@ jobs:
           cp MjpegClass.h build_sketch/
           mv build_sketch/Phone.ino build_sketch/build_sketch.ino
           arduino-cli compile --fqbn esp32:esp32:esp32s3 \
-            --board-options "FlashSize=16M,PSRAM=opi,PartitionScheme=default_16MB" \
+            --board-options "FlashSize=16M,PSRAM=opi,PartitionScheme=app3M_fat9M_16MB" \
             build_sketch --output-dir build
 
       - name: Upload Binary Artifacts
