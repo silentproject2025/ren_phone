@@ -34,7 +34,7 @@ jobs:
           cp MjpegClass.h build_sketch/
           mv build_sketch/Phone.ino build_sketch/build_sketch.ino
           arduino-cli compile --fqbn esp32:esp32:esp32s3 \
-            --board-options "FlashSize=16M,PSRAM=opi,LLVM_LTO=O2" \
+            --board-options "FlashSize=16M,PSRAM=opi" \
             --build-property compiler.c.extra_flags="-Os" \
             --build-property compiler.cpp.extra_flags="-Os" \
             build_sketch --output-dir build
