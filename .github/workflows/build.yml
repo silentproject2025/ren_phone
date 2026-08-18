@@ -35,9 +35,8 @@ jobs:
           mv build_sketch/Phone.ino build_sketch/build_sketch.ino
           arduino-cli compile --fqbn esp32:esp32:esp32s3 \
             --board-options "FlashSize=16M,PSRAM=opi" \
-            --build-property compiler.c.extra_flags="-Os -flto -fno-strict-aliasing -ffunction-sections -fdata-sections" \
-            --build-property compiler.cpp.extra_flags="-Os -flto -fno-strict-aliasing -ffunction-sections -fdata-sections" \
-            --build-property compiler.c.elf.flags="-flto -Wl,--gc-sections" \
+            --build-property compiler.c.extra_flags="-Os -flto -fno-strict-aliasing" \
+            --build-property compiler.cpp.extra_flags="-Os -flto -fno-strict-aliasing" \
             build_sketch --output-dir build
 
       - name: Upload Binary Artifacts
