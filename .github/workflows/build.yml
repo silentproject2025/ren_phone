@@ -30,7 +30,7 @@ jobs:
       - name: Compile Sketch
         run: |
           mkdir -p build_sketch
-          cp Phone.ino build_sketch/
+          cp phone.ino build_sketch/
           cp MjpegClass.h build_sketch/
           mv build_sketch/phone.ino build_sketch/build_sketch.ino
           arduino-cli compile --fqbn esp32:esp32:esp32s3 \
