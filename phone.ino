@@ -48,6 +48,35 @@
 //  3. Tambah kalibrasi MPU6050 (offset accel & gyro) yang bisa
 //     dijalankan dari halaman Setting, hasilnya disimpan permanen.
 // =================================================================
+// v11 — UPDATE (permintaan user):
+//  1. Animasi "Game Booster" diganti total: yg lama kesannya ramai/norak
+//     (ring memancar, sapuan cahaya, kilat, teks besar "GAME BOOSTER").
+//     Sekarang jadi loading ring simpel & bersih dgn easing halus
+//     (pakai fungsi easing yg sama dgn transisi antar layar).
+//  2. AKAR MASALAH "logo game gak kelihatan" DITEMUKAN: initAppColors()
+//     ternyata TIDAK PERNAH mengisi warna utk index 11-15 (Snake,
+//     Flappy, 2048, TicTacToe, Breakout) -- warnanya default 0 alias
+//     HITAM. Karena lingkaran latar ikon jadi hitam total, garis vektor
+//     ikon (yg warnanya T().bg, ikut gelap) jadi nyaris tak kelihatan di
+//     atasnya. Sekarang semua game dapat warna cerah tersendiri.
+//  3. Control Center dirombak: tiap tombol sekarang pakai IKON vektor
+//     (drawCCIcon) + label singkat di bawahnya -- bukan kotak polos
+//     isi tulisan status doang. Jarak antar kartu (ccGap/ccCardH)
+//     diperbesar biar ikonnya lebih lega, gak sempit.
+//  4. Animasi buka/tutup Control Center diganti dari formula ad-hoc
+//     per-frame jadi animasi berbasis WAKTU (millis) + easing yg sama
+//     dgn transisi navigasi -> gerakannya mulus & konsisten kecepatannya
+//     berapa pun framerate loop() saat itu (dulu bisa keliatan patah2
+//     kalau loop lagi sibuk mis. pas WiFi/AI jalan).
+//  5. Scroll Home dibikin lebih smooth: kecepatan gesture di-low-pass
+//     (bukan diganti mentah tiap frame), decay momentum dibuat lbh
+//     landai, + sedikit efek elastis di ujung atas/bawah list.
+//  6. Canvas: goresan gambar dulu dibikin dgn drawLine() yg digeser-
+//     geser per pixel ketebalan -> keliatan bertangga/kotak-kotak,
+//     apalagi brush besar atau gerakan diagonal cepat. Sekarang goresan
+//     "distempel" pakai fillCircle yg diinterpolasi sepanjang jalur
+//     gerakan jari (canvasStampStroke), jadi mulus & tanpa celah.
+// =================================================================
 #include <LovyanGFX.hpp>
 #include <Preferences.h>
 #include <WiFi.h>
@@ -969,6 +998,9 @@ void renderCurrentFrame(); // forward decl - dipakai utk render frame BARU sblm 
 
 // ease-in-out cubic: mulai halus, cepat di tengah, berhenti halus - lbh
 // "premium" drpd ease-out biasa krn simetris di awal & akhir gerakan.
+// FIX v11: fungsi easing ini sekarang dipakai ULANG oleh animasi buka/tutup
+// Control Center (lihat CONTROL CENTER) & animasi Game Booster, jadi semua
+// animasi di HP ini punya "rasa" gerakan yg konsisten satu sama lain.
 float navEase(float p){
   return p<0.5f ? 4.0f*p*p*p : 1.0f-powf(-2.0f*p+2.0f,3.0f)/2.0f;
 }
@@ -1258,12 +1290,32 @@ void lockScreenInput(bool touched,bool newT,int tx,int ty){
 // CONTROL CENTER
 // =============================================
 float ccOffset = 0;
-bool  ccAnimatingOpen=false, ccAnimatingClose=false;
+// FIX v11: dulu animasi buka/tutup Control Center pakai formula ad-hoc
+// per-frame (ccOffset += (target-ccOffset)*0.4f + 1.5f) yg kecepatannya
+// ikut naik-turun sesuai framerate loop() saat itu (kadang keliatan
+// patah-patah kalau loop lagi sibuk, mis. pas WiFi/AI jalan).
+// Sekarang dibuat berbasis WAKTU (millis) + fungsi easing yg sama dgn
+// transisi antar-layar (navEase), jadi kecepatan animasinya SELALU mulus
+// & konsisten independen dari framerate.
+bool  ccAnimating=false;
+float ccAnimFromH=0, ccAnimToH=0;
+unsigned long ccAnimStartMs=0;
+const float CC_ANIM_MS = 200.0f;
 #define CC_COLS 3
 #define CC_ROWS 3
 #define CC_ITEMS 7
-void openControlCenter(){ controlCenterOpen=true; ccAnimatingOpen=true; needRedraw=true; }
-void closeControlCenter(){ ccAnimatingOpen=false; ccAnimatingClose=true; needRedraw=true; }
+int ccPanelH(); // forward decl - didefinisikan di bawah, dipakai openControlCenter()
+void openControlCenter(){
+  controlCenterOpen=true;
+  ccAnimFromH=ccOffset; ccAnimToH=(float)ccPanelH();
+  ccAnimStartMs=millis(); ccAnimating=true;
+  needRedraw=true;
+}
+void closeControlCenter(){
+  ccAnimFromH=ccOffset; ccAnimToH=0.0f;
+  ccAnimStartMs=millis(); ccAnimating=true;
+  needRedraw=true;
+}
 
 // ---- Layout dihitung dinamis (BUKAN persentase tetap) supaya 6 kartu +
 // slider brightness SELALU muat & terlihat penuh, di landscape maupun
@@ -1272,8 +1324,8 @@ void closeControlCenter(){ ccAnimatingOpen=false; ccAnimatingClose=true; needRed
 // tidak akan pernah meleset lagi (dulu inilah sebab "area kosong Tema"
 // ke-tap dan mengubah tema, karena baris ke-2 kartu tidak digambar tapi
 // koordinat sentuhnya tetap aktif).
-int ccGap(){ return 6; }
-int ccCardH(){ return currentOrient==ORIENT_LANDSCAPE ? 38 : 52; } // lbh pendek di landscape biar muat
+int ccGap(){ return 10; } // FIX v11: diperbesar (dulu 6) - antar ikon lebih lega
+int ccCardH(){ return currentOrient==ORIENT_LANDSCAPE ? 48 : 64; } // FIX v11: lbh tinggi utk ikon+label
 int ccCardW(){ return (SCR_W - ccGap()*(CC_COLS+1))/CC_COLS; }
 int ccGridTop(){ return STATUS_H+8; }
 int ccGridH(){ return CC_ROWS*ccCardH() + (CC_ROWS-1)*ccGap(); }
@@ -1304,6 +1356,65 @@ void ccActShake(){
   showToast(shakeEnabled?"Shake to Home aktif":"Shake to Home mati");
 }
 
+// FIX v11: Control Center dulu isinya kotak polos + tulisan status
+// ("WiFi: ON" dst). Sekarang tiap tombol punya IKON vektor sendiri
+// (mirip drawAppIcon di Home) + label singkat kecil di bawahnya, dan
+// kartunya dikasih ruang lebih lega (lihat ccGap/ccCardH di atas).
+void drawCCIcon(LGFX_Sprite& s, int idx, int cx, int cy, int r, bool active){
+  uint16_t ic = active ? T().bg : T().text; // kontras dgn warna latar tombol
+  switch(idx){
+    case 0: { // WiFi: titik + 2 lengkung sinyal, dicoret kalau OFF
+      s.fillCircle(cx,cy+r-8,2,ic);
+      s.drawArc(cx,cy+r-8,7,6,210,330,ic);
+      s.drawArc(cx,cy+r-8,12,11,210,330,ic);
+      if(!wifiConnected){
+        s.drawLine(cx-r+4,cy-r+4,cx+r-4,cy+r-4,ic);
+      }
+      break;
+    }
+    case 1: { // Airplane: pesawat kertas sederhana
+      s.fillTriangle(cx,cy-r+6, cx-4,cy+7, cx+4,cy+7, ic);
+      s.fillTriangle(cx-r+4,cy+9, cx+r-4,cy+9, cx,cy-2, ic);
+      break;
+    }
+    case 2: { // DND: bulan sabit
+      s.fillCircle(cx,cy,r-6,ic);
+      s.fillCircle(cx+5,cy-3,r-7, active?T().accent:T().surface2);
+      break;
+    }
+    case 3: { // Tema: palet warna (lingkaran + titik2 warna)
+      s.drawCircle(cx,cy,r-6,ic);
+      s.fillCircle(cx-5,cy-3,2, active?T().bg:T().accent);
+      s.fillCircle(cx+4,cy-5,2, active?T().bg:T().good);
+      s.fillCircle(cx+6,cy+4,2, active?T().bg:T().danger);
+      s.fillCircle(cx-3,cy+6,2, active?T().bg:T().accent2);
+      break;
+    }
+    case 4: { // Orientasi: siluet HP (ikut orientasi skrg) + panah rotasi
+      if(currentOrient==ORIENT_LANDSCAPE){
+        s.drawRoundRect(cx-10,cy-6,20,12,2,ic);
+      } else {
+        s.drawRoundRect(cx-6,cy-10,12,20,2,ic);
+      }
+      s.drawArc(cx,cy,r-1,r-2,20,300,ic);
+      s.fillTriangle(cx+r-6,cy-r+4, cx+r-1,cy-r+7, cx+r-8,cy-r+9, ic);
+      break;
+    }
+    case 5: { // Shake: garis zig-zag (getaran)
+      s.drawLine(cx-9,cy+2,cx-4,cy-6,ic);
+      s.drawLine(cx-4,cy-6,cx+1,cy+4,ic);
+      s.drawLine(cx+1,cy+4,cx+6,cy-6,ic);
+      s.drawLine(cx+6,cy-6,cx+10,cy,ic);
+      break;
+    }
+    case 6: { // Kunci layar: gembok
+      s.drawRoundRect(cx-7,cy-1,14,11,2,ic);
+      s.drawArc(cx,cy-3,6,5,180,360,ic);
+      break;
+    }
+  }
+}
+
 void drawControlCenter(LGFX_Sprite& s){
   int ph = (int)ccOffset;
   if(ph<=0) return;
@@ -1311,26 +1422,25 @@ void drawControlCenter(LGFX_Sprite& s){
   s.fillRoundRect(SCR_W/2-16,ph-10,32,4,2,T().divider);
 
   const char* labels[CC_ITEMS]={
-    wifiConnected?"WiFi: ON":"WiFi: OFF",
-    airplaneMode?"Airplane: ON":"Airplane: OFF",
-    dndMode?"DND: ON":"DND: OFF",
-    "Tema",
-    currentOrient==ORIENT_LANDSCAPE?"Orient: Land":"Orient: Port",
-    shakeEnabled?"Shake: ON":"Shake: OFF",
-    "Kunci Layar"
+    "WiFi", "Airplane", "DND", "Tema", "Orientasi", "Shake", "Kunci"
   };
   bool activeState[CC_ITEMS]={wifiConnected,airplaneMode,dndMode,false,false,shakeEnabled,false};
   int cw=ccCardW(), ch=ccCardH(), gap=ccGap(), top=ccGridTop();
+  int iconR = min(cw,ch)/2 - 8; if(iconR<12) iconR=12; if(iconR>22) iconR=22;
   for(int i=0;i<CC_ITEMS;i++){
     int col=i%CC_COLS, row=i/CC_COLS;
     int x=gap+col*(cw+gap);
     int y=top+row*(ch+gap);
     uint16_t bg = activeState[i]? T().accent : T().surface2;
-    uint16_t fg = activeState[i]? T().bg : T().text;
-    s.fillRoundRect(x,y,cw,ch,8,bg);
+    s.fillRoundRect(x,y,cw,ch,10,bg);
+
+    int iconCx = x+cw/2, iconCy = y+ch/2-7;
+    drawCCIcon(s, i, iconCx, iconCy, iconR, activeState[i]);
+
+    uint16_t fg = activeState[i]? T().bg : T().subtext;
     s.setTextColor(fg); s.setTextSize(1);
-    int lw=strlen(labels[i])*6;
-    s.setCursor(x+cw/2-lw/2, y+ch/2-4);
+    int lw=(int)strlen(labels[i])*6;
+    s.setCursor(x+cw/2-lw/2, y+ch-14);
     s.print(labels[i]);
   }
 
@@ -1578,6 +1688,18 @@ void initAppColors(){
   apps[8].color=0xFBE0; // MJPEG player - warna oranye
   apps[9].color=0xF800; // Update FW - warna merah (menonjol/perlu perhatian)
   apps[10].color=0x07E0; // Baterai - warna hijau
+  // FIX v11 - AKAR MASALAH "logo game gak kelihatan semua, kayaknya
+  // item hitam": index 11-15 (semua app GAME) dulu TIDAK PERNAH diisi
+  // di sini, jadi apps[i].color tetap default 0 alias HITAM. Efeknya,
+  // lingkaran latar ikon di Home (drawAppIcon bgCircle) jadi hitam
+  // total, dan garis vektor ikon (warnanya T().bg, ikut gelap) jadi
+  // nyaris tak kelihatan di atas lingkaran hitam itu. Sekarang tiap
+  // game dapat warna cerah tersendiri spy ikonnya kontras & jelas.
+  apps[11].color=0x1FF9; // Snake - hijau toska
+  apps[12].color=0xFC9F; // Flappy Block - pink
+  apps[13].color=0xFFD2; // 2048 - kuning keemasan
+  apps[14].color=0x861F; // TicTacToe - ungu
+  apps[15].color=0xFB40; // Breakout - oranye kemerahan
 }
 
 int appIndexForScreen(Screen s){
@@ -1655,70 +1777,53 @@ int homeMaxScroll(){
 }
 
 // =============================================
-// GAME MODE: dipanggil tiap masuk ke game apapun. Animasi "game booster"
-// singkat ala HP gaming (ring energi memancar, sapuan cahaya, kilat,
-// progress bar bertahap) + boost clock CPU ESP32-S3 ke 240MHz (maksimal)
-// + jeda polling sensor latar belakang (MPU/baterai) selama main, biar
-// loop game mulus tanpa gangguan. Balik ke clock normal (hemat daya) &
-// polling aktif lagi pas keluar game.
+// GAME MODE: dipanggil tiap masuk ke game apapun. Menjalankan animasi
+// loading singkat & bersih (ring progress muter + ikon kotak scale-in)
+// + boost clock CPU ESP32-S3 ke 240MHz (maksimal) + jeda polling sensor
+// latar belakang (MPU/baterai) selama main, biar loop game mulus tanpa
+// gangguan. Balik ke clock normal (hemat daya) & polling aktif lagi
+// pas keluar game.
 // =============================================
 #define CPU_MHZ_NORMAL 160
 #define CPU_MHZ_GAME   240
 bool gameModeActive = false;
 
-// Animasi booster: ring energi memancar + sapuan cahaya + kilat di tengah
-// + progress bar dgn label bertahap ("CPU dipacu", "Sensor dijeda", dst).
-// Dijalankan tiap kali masuk game manapun, menggantikan popup teks statis.
+// FIX v11: animasi lama ("game booster" ala HP gaming dgn ring memancar,
+// sapuan cahaya, kilat, teks besar "GAME BOOSTER") kesannya terlalu
+// ramai/norak. Diganti dgn loading indicator simpel & bersih: ring
+// progress yg terisi halus (pakai easing yg sama dgn transisi navigasi)
+// + kotak ikon kecil yg scale-in di tengahnya + 1 baris label singkat.
 void gameBoosterAnim(){
-  int cx=SCR_W/2, cy=SCR_H/2-8;
-  const int STEPS = 26;
+  int cx=SCR_W/2, cy=SCR_H/2-6;
+  const int STEPS = 18;
+  int ringR = min(SCR_W,SCR_H)/7;
+  if(ringR<24) ringR=24;
+  if(ringR>40) ringR=40;
+
   for(int f=0; f<=STEPS; f++){
-    float p = (float)f/STEPS;
-    canvas.fillSprite(0x0000);
+    float p = navEase((float)f/STEPS); // easing halus, sama dgn transisi navigasi
+    canvas.fillSprite(T().bg);
 
-    // --- Ring energi memancar dari tengah, 3 gelombang beriringan ---
-    for(int i=0;i<3;i++){
-      float rp = fmodf(p*2.0f + i*0.34f, 1.0f);
-      int rr = (int)(rp*84);
-      canvas.drawCircle(cx,cy,rr,T().accent2);
+    // Ring progress tipis, terisi searah jarum jam (2 lapis biar ada depth)
+    canvas.drawArc(cx,cy,ringR,ringR-5,-90,-90+(int)(360*p),T().divider);
+    canvas.drawArc(cx,cy,ringR,ringR-5,-90,-90+(int)(360*p*p),T().accent2);
+
+    // Kotak ikon kecil, scale-in halus di tengah ring
+    int boxSize=(int)(26*constrain(p*1.5f,0.0f,1.0f));
+    if(boxSize>2){
+      canvas.fillRoundRect(cx-boxSize/2,cy-boxSize/2,boxSize,boxSize,boxSize/4,T().accent);
     }
 
-    // --- Sapuan cahaya diagonal, kesan "boost" melintas layar ---
-    int sweepX = (int)(-60 + p*(SCR_W+140));
-    canvas.drawLine(sweepX,0,sweepX-46,SCR_H,0x2965);
-    canvas.drawLine(sweepX+5,0,sweepX-41,SCR_H,0x2965);
-
-    // --- Kilat/petir di tengah: membesar cepat lalu diam ---
-    float boltP = p<0.35f ? p/0.35f : 1.0f;
-    int bs=(int)(24*boltP);
-    if(bs>2){
-      canvas.fillTriangle(cx-2,cy-bs, cx+7,cy-2, cx-4,cy-2, 0xFFE0);
-      canvas.fillTriangle(cx+4,cy-2, cx-7,cy+bs, cx+2,cy+2, 0xFFE0);
-    }
-
-    canvas.setTextColor(T().accent2); canvas.setTextSize(2);
-    const char* title="GAME BOOSTER";
-    int tw=strlen(title)*12;
-    canvas.setCursor(cx-tw/2, cy-bs-24); canvas.print(title);
-
-    // --- Progress bar + label bertahap ---
-    int barW=SCR_W-56, barH=8, barX=28, barY=cy+46;
-    canvas.drawRoundRect(barX,barY,barW,barH,4,T().subtext);
-    canvas.fillRoundRect(barX+1,barY+1,(int)((barW-2)*p),barH-2,3,T().accent2);
-
-    canvas.setTextColor(T().subtext); canvas.setTextSize(1);
-    if(p>0.15f){ canvas.setCursor(barX,barY+14); canvas.print("CPU dipacu ke 240MHz (maksimal)"); }
-    if(p>0.45f){ canvas.setCursor(barX,barY+26); canvas.print("Sensor latar belakang dijeda"); }
-    if(p>0.7f){  canvas.setCursor(barX,barY+38); canvas.print("Membersihkan buffer & RAM..."); }
-    if(p>=0.96f){
-      canvas.setTextColor(T().good); canvas.setTextSize(1);
-      const char* ready="Siap main!";
-      canvas.setCursor(cx-(int)strlen(ready)*3, barY+52); canvas.print(ready);
+    if(p>0.45f){
+      canvas.setTextColor(T().subtext); canvas.setTextSize(1);
+      const char* label="Menyiapkan mode game...";
+      int tw=(int)strlen(label)*6;
+      canvas.setCursor(cx-tw/2, cy+ringR+16); canvas.print(label);
     }
     push();
-    delay(14);
+    delay(10);
   }
-  delay(160);
+  delay(120);
 }
 
 void enterGameMode(){
@@ -2840,6 +2945,26 @@ int canvasToolY(){ return SCR_H-44; }
 void canvasEnter(){ lastDX=-1; }
 void canvasExit(){ saveCanvas(); }
 
+// FIX v11: dulu goresan tebal digambar dgn drawLine() digeser-geser per
+// pixel ketebalan (garis utama + garis offset) - hasilnya jelas kelihatan
+// bertangga/kotak-kotak, apalagi kalau brush besar atau jari digerakkan
+// diagonal/cepat. Sekarang goresan "distempel" pakai fillCircle yg
+// diinterpolasi sepanjang jalur gerakan jari (jarak antar stempel
+// disesuaikan ukuran brush), jadi goresannya mulus & tanpa celah walau
+// jari digerakkan cepat.
+void canvasStampStroke(int x0,int y0,int x1,int y1,int size,uint16_t color){
+  int rad = max(1, size/2);
+  float dx=(float)(x1-x0), dy=(float)(y1-y0);
+  float dist=sqrtf(dx*dx+dy*dy);
+  int step = max(1, rad/2);            // jarak antar stempel - makin kecil brush, makin rapat
+  int steps = max(1, (int)(dist/step));
+  for(int i=0;i<=steps;i++){
+    float t=(float)i/steps;
+    int px=x0+(int)(dx*t+0.5f), py=y0+(int)(dy*t+0.5f);
+    canvasApp.fillCircle(px,py,rad,color);
+  }
+}
+
 void drawCanvasScreen(LGFX_Sprite& s){
   s.fillSprite(T().bg);
   drawStatusBar(s);
@@ -2900,12 +3025,10 @@ void canvasTouch(int x,int y,bool held,bool isNew){
   if(y>=capY && y<ty){
     int cy=y-capY;
     if(held&&lastDX>=0){
-      canvasApp.drawLine(lastDX,lastDY,x,cy,drawColor);
-      for(int t2=1;t2<brushSize;t2++){
-        canvasApp.drawLine(lastDX,lastDY+t2,x,cy+t2,drawColor);
-        canvasApp.drawLine(lastDX+t2,lastDY,x+t2,cy,drawColor);
-      }
-    } else canvasApp.fillCircle(x,cy,brushSize/2,drawColor);
+      canvasStampStroke(lastDX,lastDY,x,cy,brushSize,drawColor);
+    } else {
+      canvasApp.fillCircle(x,cy,max(1,brushSize/2),drawColor);
+    }
     lastDX=x;lastDY=cy;
     needRedraw=true;
   }
@@ -4576,15 +4699,17 @@ void loop(){
   int tx=touched?(int)tp.x:0,ty=touched?(int)tp.y:0;
   bool newT=touched&&!wasTouched;
 
-  if(ccAnimatingOpen){
-    // ease-out: makin dekat target makin pelan, terasa lebih halus drpd langkah linear tetap
-    float target=(float)ccPanelH();
-    ccOffset += (target-ccOffset)*0.4f + 1.5f;
-    if(ccOffset>=target-1.0f){ ccOffset=target; ccAnimatingOpen=false; }
-    needRedraw=true;
-  } else if(ccAnimatingClose){
-    ccOffset -= ccOffset*0.4f + 1.5f;
-    if(ccOffset<=1.0f){ ccOffset=0; ccAnimatingClose=false; controlCenterOpen=false; }
+  if(ccAnimating){
+    // FIX v11: animasi berbasis waktu (bukan formula per-frame ad-hoc) +
+    // easing navEase yg sama dipakai transisi antar layar -> gerakannya
+    // mulus & konsisten kecepatannya berapa pun framerate loop() saat ini.
+    float t = (millis()-ccAnimStartMs)/CC_ANIM_MS;
+    if(t>=1.0f){
+      t=1.0f;
+      ccAnimating=false;
+      if(ccAnimToH<=0.0f) controlCenterOpen=false;
+    }
+    ccOffset = ccAnimFromH + (ccAnimToH-ccAnimFromH)*navEase(t);
     needRedraw=true;
   }
 
@@ -4618,12 +4743,21 @@ void loop(){
       if(!wasTouched){
         touchStartX=tx;touchStartY=ty;touchLastY=ty;
         isSwiping=false;swipeStartTime=millis();
+        homeScrollVel=0; // FIX v11: reset residual velocity di awal sentuhan baru
       } else {
         if(abs(ty-touchStartY)>12)isSwiping=true;
         if(isSwiping){
-          homeScrollVel=(touchLastY-ty)*0.8f;
-          homeScrollY+=touchLastY-ty;
-          homeScrollY=constrain(homeScrollY,0.0f,(float)homeMaxScroll());
+          float rawDelta=(float)(touchLastY-ty);
+          // FIX v11: velocity di-low-pass (bukan diganti mentah tiap
+          // frame) supaya gerakan drag terasa lebih mulus & tidak
+          // "patah" saat jari sedikit goyang antar sample sentuhan.
+          homeScrollVel = homeScrollVel*0.5f + rawDelta*0.5f;
+          homeScrollY += rawDelta;
+          // FIX v11: sedikit efek elastis di batas atas/bawah drpd
+          // constrain keras, biar transisi ke ujung list terasa halus.
+          if(homeScrollY<0) homeScrollY*=0.5f;
+          float maxS=(float)homeMaxScroll();
+          if(homeScrollY>maxS) homeScrollY = maxS + (homeScrollY-maxS)*0.5f;
           needRedraw=true;
         }
         touchLastY=ty;
@@ -4633,11 +4767,15 @@ void loop(){
         Screen nx=homeCheck(touchStartX,touchStartY,homeScrollY);
         if(nx!=SCR_HOME) navPush(nx);
       }
+      homeScrollY=constrain(homeScrollY,0.0f,(float)homeMaxScroll());
     } else {
-      if(fabsf(homeScrollVel)>0.5f){
-        homeScrollY+=homeScrollVel;homeScrollVel*=0.85f;
+      if(fabsf(homeScrollVel)>0.3f){
+        homeScrollY+=homeScrollVel;
+        homeScrollVel*=0.92f; // FIX v11: decay lbh landai -> momentum scroll lbh smooth/panjang
         homeScrollY=constrain(homeScrollY,0.0f,(float)homeMaxScroll());
         needRedraw=true;
+      } else {
+        homeScrollVel=0;
       }
     }
     if(needRedraw){renderCurrentFrame();push();needRedraw=false;}
