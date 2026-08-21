@@ -38,10 +38,15 @@
 //     canvas/canvasApp & memuat isi Canvas app -- bukan lagi penentu
 //     rotasi yang dipakai saat kalibrasi.
 //
-// (Semua perbaikan v7 & v8 sebelumnya -- MJPEG player, teks AI Chat &
-// File Explorer tidak dipotong, model Gemini, auto-rotate MPU6050 yang
-// sumbunya sudah dibetulkan + tidak aktif saat lock screen, app Baterai
-// -- tetap dipertahankan di sini.)
+// =================================================================
+// v10 — UPDATE (permintaan user):
+//  1. Game Mode sekarang animasi "game booster" ala HP gaming (ring
+//     energi memancar, sapuan cahaya, kilat, progress bar bertahap)
+//     ketimbang cuma teks statis diam.
+//  2. Semua ikon aplikasi (termasuk game yg dulu cuma huruf polos)
+//     sekarang punya logo vektor sendiri lewat drawAppIcon().
+//  3. Tambah kalibrasi MPU6050 (offset accel & gyro) yang bisa
+//     dijalankan dari halaman Setting, hasilnya disimpan permanen.
 // =================================================================
 #include <LovyanGFX.hpp>
 #include <Preferences.h>
@@ -1366,6 +1371,138 @@ void ccTouch(int x,int y){
 }
 
 // =============================================
+// APP ICONS (vektor sederhana - bukan huruf tunggal)
+// =============================================
+// Setiap ikon digambar dgn bentuk yg berhubungan dgn fungsinya, dgn warna
+// kontras (bg = warna teks/garis, fg tetap dipakai utk latar lingkaran).
+void drawAppIcon(LGFX_Sprite& s, char sym, int cx, int cy, int r, uint16_t bgCircle){
+  s.fillCircle(cx,cy,r,bgCircle);
+  uint16_t ic = T().bg; // warna vektor ikon (kontras dgn lingkaran berwarna)
+  switch(sym){
+    case 'J': { // Jam: wajah jam + jarum
+      s.drawCircle(cx,cy,r-3,ic);
+      s.drawLine(cx,cy,cx,cy-r+6,ic);
+      s.drawLine(cx,cy,cx+r-8,cy+2,ic);
+      s.fillCircle(cx,cy,1,ic);
+      break;
+    }
+    case '+': { // Kalkulator: kotak + grid tombol
+      s.fillRoundRect(cx-r+4,cy-r+4,(r-4)*2,(r-4)*2,3,ic);
+      s.fillRect(cx-r+7,cy-r+7,(r-4)*2-6,5,bgCircle);
+      for(int i=0;i<2;i++) for(int j=0;j<3;j++)
+        s.fillRect(cx-r+8+j*7,cy-2+i*7,4,4,bgCircle);
+      break;
+    }
+    case '3': { // Orientasi 3D: kubus wireframe mini
+      int w=r-7;
+      s.drawRect(cx-w,cy-w+4,w*2-4,w*2-4,ic);
+      s.drawLine(cx-w,cy-w+4,cx-w+6,cy-w-2,ic);
+      s.drawLine(cx+w-4,cy-w+4,cx+w+2,cy-w-2,ic);
+      s.drawLine(cx-w+6,cy-w-2,cx+w+2,cy-w-2,ic);
+      s.drawLine(cx+w-4,cy-w+4,cx+w-4,cy+w-4,ic);
+      break;
+    }
+    case '@': { // Setting: gear
+      s.drawCircle(cx,cy,r-6,ic);
+      for(int i=0;i<8;i++){
+        float a=i*PI/4.0f;
+        int x1=cx+(int)(cosf(a)*(r-6)), y1=cy+(int)(sinf(a)*(r-6));
+        int x2=cx+(int)(cosf(a)*(r-1)), y2=cy+(int)(sinf(a)*(r-1));
+        s.drawLine(x1,y1,x2,y2,ic);
+      }
+      s.fillCircle(cx,cy,4,ic);
+      s.fillCircle(cx,cy,2,bgCircle);
+      break;
+    }
+    case 'N': { // Notepad: kertas bergaris
+      s.fillRoundRect(cx-r+6,cy-r+4,(r-6)*2,(r-4)*2,2,ic);
+      for(int i=0;i<3;i++) s.drawFastHLine(cx-r+10,cy-r+10+i*6,(r-6)*2-8,bgCircle);
+      break;
+    }
+    case 'C': { // Canvas: kuas lukis
+      s.fillCircle(cx-4,cy-4,4,ic);
+      s.drawLine(cx-1,cy-1,cx+7,cy+7,ic);
+      s.drawLine(cx+2,cy-2,cx+8,cy+4,ic);
+      s.fillCircle(cx+8,cy+7,2,ic);
+      break;
+    }
+    case 'A': { // AI Chat: gelembung percakapan
+      s.fillRoundRect(cx-r+5,cy-r+7,(r-5)*2,(r-7)*2-2,4,ic);
+      s.fillTriangle(cx-4,cy+r-9,cx+2,cy+r-9,cx-6,cy+r-2,ic);
+      s.fillCircle(cx-5,cy-2,1,bgCircle); s.fillCircle(cx,cy-2,1,bgCircle); s.fillCircle(cx+5,cy-2,1,bgCircle);
+      break;
+    }
+    case 'F': { // Files: folder
+      s.fillRoundRect(cx-r+5,cy-r+6,14,6,2,ic);
+      s.fillRoundRect(cx-r+5,cy-r+10,(r-5)*2,(r-10)*2,2,ic);
+      break;
+    }
+    case 'M': { // MJPEG: tombol play
+      s.fillTriangle(cx-6,cy-8,cx-6,cy+8,cx+9,cy,ic);
+      break;
+    }
+    case 'U': { // Update: panah unduh
+      s.fillRect(cx-3,cy-9,6,10,ic);
+      s.fillTriangle(cx-8,cy,cx+8,cy,cx,cy+10,ic);
+      break;
+    }
+    case 'B': { // Baterai
+      s.drawRoundRect(cx-r+6,cy-8,(r-6)*2-4,16,3,ic);
+      s.fillRect(cx+r-8,cy-4,3,8,ic);
+      s.fillRect(cx-r+9,cy-5,(r-6)*2-10,10,ic);
+      break;
+    }
+    // ---------------- GAME ----------------
+    case 'S': { // Snake
+      s.fillCircle(cx-8,cy+6,4,ic);
+      s.fillCircle(cx-2,cy+2,4,ic);
+      s.fillCircle(cx+3,cy-4,4,ic);
+      s.fillCircle(cx+8,cy-8,5,ic);      // kepala
+      s.fillCircle(cx+9,cy-9,1,bgCircle); // mata
+      break;
+    }
+    case 'V': { // Flappy Block: burung
+      s.fillCircle(cx-2,cy,7,ic);
+      s.fillTriangle(cx+5,cy-2,cx+5,cy+2,cx+12,cy,ic);   // paruh
+      s.fillTriangle(cx-9,cy-2,cx-2,cy-6,cx-2,cy+2,ic);  // sayap
+      s.fillCircle(cx+2,cy-3,1,bgCircle); // mata
+      break;
+    }
+    case '2': { // 2048: grid 2x2
+      int gw=r-4;
+      s.fillRoundRect(cx-gw,cy-gw,gw-2,gw-2,2,ic);
+      s.fillRoundRect(cx+2,cy-gw,gw-2,gw-2,2,ic);
+      s.fillRoundRect(cx-gw,cy+2,gw-2,gw-2,2,ic);
+      s.fillRoundRect(cx+2,cy+2,gw-2,gw-2,2,ic);
+      break;
+    }
+    case 'X': { // Tic-Tac-Toe: grid + X/O
+      s.drawFastVLine(cx-4,cy-9,18,ic);
+      s.drawFastVLine(cx+4,cy-9,18,ic);
+      s.drawFastHLine(cx-9,cy-4,18,ic);
+      s.drawFastHLine(cx-9,cy+4,18,ic);
+      s.drawLine(cx-8,cy-8,cx-2,cy-2,ic);
+      s.drawLine(cx-8,cy-2,cx-2,cy-8,ic);
+      s.drawCircle(cx+5,cy+5,3,ic);
+      break;
+    }
+    case 'K': { // Breakout: bricks + paddle + bola
+      s.fillRect(cx-8,cy-9,6,4,ic);
+      s.fillRect(cx-1,cy-9,6,4,ic);
+      s.fillRect(cx+6,cy-9,4,4,ic);
+      s.fillCircle(cx-2,cy+1,2,ic);
+      s.fillRoundRect(cx-9,cy+7,18,4,2,ic);
+      break;
+    }
+    default: {
+      s.setTextColor(ic); s.setTextSize(2);
+      char b[2]={sym,0};
+      s.setCursor(cx-6,cy-8); s.print(b);
+    }
+  }
+}
+
+// =============================================
 // HOME SCREEN & APP INTERFACE
 // =============================================
 struct AppDef {
@@ -1471,10 +1608,7 @@ void drawHome(LGFX_Sprite& s,float sc){
     int x=gap+col*(cw+gap), y=gridTop+row*(ch+gap)-(int)sc;
     if(y+ch<STATUS_H+2||y>homeDockY()-4)continue;
     s.fillRoundRect(x,y,cw,ch,10,T().surface);
-    s.fillCircle(x+cw/2,y+18,14,apps[i].color);
-    s.setTextColor(T().bg);s.setTextSize(2);
-    char sym[2]={apps[i].sym,0};
-    s.setCursor(x+cw/2-6,y+11);s.print(sym);
+    drawAppIcon(s, apps[i].sym, x+cw/2, y+18, 14, apps[i].color);
     s.setTextColor(T().text);s.setTextSize(1);
     int nl=strlen(apps[i].name)*6;
     s.setCursor(x+cw/2-nl/2,y+ch-12);
@@ -1487,10 +1621,7 @@ void drawHome(LGFX_Sprite& s,float sc){
   for(int i=0;i<4;i++){
     int di=dockIdx[i];
     int cx=6+i*dw+dw/2;
-    s.fillCircle(cx,dockY+19,15,apps[di].color);
-    s.setTextColor(T().bg);s.setTextSize(2);
-    char sym[2]={apps[di].sym,0};
-    s.setCursor(cx-6,dockY+12);s.print(sym);
+    drawAppIcon(s, apps[di].sym, cx, dockY+19, 15, apps[di].color);
   }
   drawToast(s);
 }
@@ -1524,40 +1655,78 @@ int homeMaxScroll(){
 }
 
 // =============================================
-// GAME MODE: dipanggil tiap masuk ke game apapun. Popup singkat + boost
-// clock CPU ESP32-S3 ke 240MHz (maksimal) + jeda polling sensor latar
-// belakang (MPU/baterai) selama main, biar loop game mulus tanpa gangguan.
-// Balik ke clock normal (hemat daya) & polling aktif lagi pas keluar game.
+// GAME MODE: dipanggil tiap masuk ke game apapun. Animasi "game booster"
+// singkat ala HP gaming (ring energi memancar, sapuan cahaya, kilat,
+// progress bar bertahap) + boost clock CPU ESP32-S3 ke 240MHz (maksimal)
+// + jeda polling sensor latar belakang (MPU/baterai) selama main, biar
+// loop game mulus tanpa gangguan. Balik ke clock normal (hemat daya) &
+// polling aktif lagi pas keluar game.
 // =============================================
 #define CPU_MHZ_NORMAL 160
 #define CPU_MHZ_GAME   240
 bool gameModeActive = false;
+
+// Animasi booster: ring energi memancar + sapuan cahaya + kilat di tengah
+// + progress bar dgn label bertahap ("CPU dipacu", "Sensor dijeda", dst).
+// Dijalankan tiap kali masuk game manapun, menggantikan popup teks statis.
+void gameBoosterAnim(){
+  int cx=SCR_W/2, cy=SCR_H/2-8;
+  const int STEPS = 26;
+  for(int f=0; f<=STEPS; f++){
+    float p = (float)f/STEPS;
+    canvas.fillSprite(0x0000);
+
+    // --- Ring energi memancar dari tengah, 3 gelombang beriringan ---
+    for(int i=0;i<3;i++){
+      float rp = fmodf(p*2.0f + i*0.34f, 1.0f);
+      int rr = (int)(rp*84);
+      canvas.drawCircle(cx,cy,rr,T().accent2);
+    }
+
+    // --- Sapuan cahaya diagonal, kesan "boost" melintas layar ---
+    int sweepX = (int)(-60 + p*(SCR_W+140));
+    canvas.drawLine(sweepX,0,sweepX-46,SCR_H,0x2965);
+    canvas.drawLine(sweepX+5,0,sweepX-41,SCR_H,0x2965);
+
+    // --- Kilat/petir di tengah: membesar cepat lalu diam ---
+    float boltP = p<0.35f ? p/0.35f : 1.0f;
+    int bs=(int)(24*boltP);
+    if(bs>2){
+      canvas.fillTriangle(cx-2,cy-bs, cx+7,cy-2, cx-4,cy-2, 0xFFE0);
+      canvas.fillTriangle(cx+4,cy-2, cx-7,cy+bs, cx+2,cy+2, 0xFFE0);
+    }
+
+    canvas.setTextColor(T().accent2); canvas.setTextSize(2);
+    const char* title="GAME BOOSTER";
+    int tw=strlen(title)*12;
+    canvas.setCursor(cx-tw/2, cy-bs-24); canvas.print(title);
+
+    // --- Progress bar + label bertahap ---
+    int barW=SCR_W-56, barH=8, barX=28, barY=cy+46;
+    canvas.drawRoundRect(barX,barY,barW,barH,4,T().subtext);
+    canvas.fillRoundRect(barX+1,barY+1,(int)((barW-2)*p),barH-2,3,T().accent2);
+
+    canvas.setTextColor(T().subtext); canvas.setTextSize(1);
+    if(p>0.15f){ canvas.setCursor(barX,barY+14); canvas.print("CPU dipacu ke 240MHz (maksimal)"); }
+    if(p>0.45f){ canvas.setCursor(barX,barY+26); canvas.print("Sensor latar belakang dijeda"); }
+    if(p>0.7f){  canvas.setCursor(barX,barY+38); canvas.print("Membersihkan buffer & RAM..."); }
+    if(p>=0.96f){
+      canvas.setTextColor(T().good); canvas.setTextSize(1);
+      const char* ready="Siap main!";
+      canvas.setCursor(cx-(int)strlen(ready)*3, barY+52); canvas.print(ready);
+    }
+    push();
+    delay(14);
+  }
+  delay(160);
+}
 
 void enterGameMode(){
   if(!gameModeActive){
     gameModeActive = true;
     setCpuFrequencyMhz(CPU_MHZ_GAME);
   }
-  // Popup "Game Mode" - muncul tiap kali masuk game manapun
-  canvas.fillSprite(0x0000);
-  int pw=SCR_W-40, ph=104;
-  int px=(SCR_W-pw)/2, py=(SCR_H-ph)/2;
-  canvas.fillRoundRect(px,py,pw,ph,14,T().surface);
-  canvas.drawRoundRect(px,py,pw,ph,14,T().accent);
-  canvas.setTextColor(T().accent); canvas.setTextSize(2);
-  const char* title="GAME MODE";
-  int tw=strlen(title)*12;
-  canvas.setCursor(SCR_W/2-tw/2,py+16); canvas.print(title);
-  canvas.setTextColor(T().subtext); canvas.setTextSize(1);
-  char l1[40]; sprintf(l1,"CPU dipacu ke %dMHz (maksimal)",CPU_MHZ_GAME);
-  const char* l2="Sensor latar belakang dijeda";
-  canvas.setCursor(SCR_W/2-(int)strlen(l1)*3,py+50); canvas.print(l1);
-  canvas.setCursor(SCR_W/2-(int)strlen(l2)*3,py+64); canvas.print(l2);
-  canvas.setTextColor(T().good);
-  const char* l3="Siap main!";
-  canvas.setCursor(SCR_W/2-(int)strlen(l3)*3,py+82); canvas.print(l3);
-  push();
-  delay(850);
+  gameBoosterAnim();
 }
 void exitGameMode(){
   if(!gameModeActive) return;
@@ -2429,6 +2598,13 @@ void drawSettings(LGFX_Sprite& s){
   s.fillRoundRect(SCR_W/2+4,rowY,btnW,24,6,T().surface2);
   s.setTextColor(T().text);s.setCursor(SCR_W/2+10,rowY+7);s.print("Kalibrasi Ulang");
 
+  // ---- BARU: Kalibrasi sensor gerak MPU6050 ----
+  rowY+=28;
+  s.fillRoundRect(8,rowY,rowW,24,6, mpuReady?T().accent2:T().surface2);
+  s.setTextColor(mpuReady?T().bg:T().subtext);s.setTextSize(1);
+  s.setCursor(14,rowY+8);
+  s.print(mpuReady?"Kalibrasi Sensor Gerak (MPU6050)":"MPU6050 tidak terdeteksi");
+
   if(kbVisible)drawKb(s);else drawBack(s);
   drawToast(s);
 }
@@ -2527,6 +2703,18 @@ void settingsTouch(int x,int y,bool held,bool isNew){
       ESP.restart();
       return;
     }
+  }
+
+  // ---- BARU: tombol Kalibrasi Sensor Gerak (MPU6050) ----
+  rowY+=28;
+  if(y>=rowY&&y<=rowY+24){
+    if(mpuReady){
+      calibrateMPU();
+      needRedraw=true;
+    } else {
+      showToast("Sensor MPU6050 tidak terdeteksi");
+    }
+    return;
   }
 }
 
@@ -3942,10 +4130,33 @@ int gStartX=0,gStartY=0; bool gGestureDone=false;
 #define MPU_ADDR    0x68
 
 bool  mpuReady   = false;
-float mpuAx=0, mpuAy=0, mpuAz=1.0f;      // percepatan, satuan g
-float mpuGx=0, mpuGy=0, mpuGz=0;         // kecepatan sudut, derajat/detik
+float mpuAx=0, mpuAy=0, mpuAz=1.0f;      // percepatan, satuan g (sudah dikoreksi offset)
+float mpuGx=0, mpuGy=0, mpuGz=0;         // kecepatan sudut, derajat/detik (sudah dikoreksi offset)
 float mpuTempC   = 0;
 float smoothRoll = 0, smoothPitch = 0;   // sudut kemiringan halus (derajat) - dipakai app Orientasi 3D
+
+// ---- BARU: offset kalibrasi MPU6050, disimpan permanen di NVS ----
+// Tanpa kalibrasi, accel/gyro mentah biasanya punya bias kecil bawaan
+// pabrik (mis. gyro tidak persis 0 saat diam, accel Z tidak persis 1g
+// saat rata). Offset ini dikurangkan dari pembacaan mentah di
+// mpuReadRaw() supaya app Orientasi 3D, auto-rotate, shake-detect, dan
+// kontrol Breakout jadi lebih akurat & stabil.
+float mpuOffAx=0, mpuOffAy=0, mpuOffAz=0;
+float mpuOffGx=0, mpuOffGy=0, mpuOffGz=0;
+
+void saveMpuCal(){
+  Preferences p; p.begin("mpucal",false);
+  p.putFloat("ax",mpuOffAx); p.putFloat("ay",mpuOffAy); p.putFloat("az",mpuOffAz);
+  p.putFloat("gx",mpuOffGx); p.putFloat("gy",mpuOffGy); p.putFloat("gz",mpuOffGz);
+  p.putBool("done",true);
+  p.end();
+}
+void loadMpuCal(){
+  Preferences p; p.begin("mpucal",true);
+  mpuOffAx=p.getFloat("ax",0); mpuOffAy=p.getFloat("ay",0); mpuOffAz=p.getFloat("az",0);
+  mpuOffGx=p.getFloat("gx",0); mpuOffGy=p.getFloat("gy",0); mpuOffGz=p.getFloat("gz",0);
+  p.end();
+}
 
 bool mpuWriteReg(uint8_t reg, uint8_t val){
   Wire.beginTransmission(MPU_ADDR);
@@ -3985,10 +4196,64 @@ bool mpuReadRaw(){
   int16_t rax=(buf[0]<<8)|buf[1], ray=(buf[2]<<8)|buf[3], raz=(buf[4]<<8)|buf[5];
   int16_t rtemp=(buf[6]<<8)|buf[7];
   int16_t rgx=(buf[8]<<8)|buf[9], rgy=(buf[10]<<8)|buf[11], rgz=(buf[12]<<8)|buf[13];
-  mpuAx = rax/16384.0f; mpuAy = ray/16384.0f; mpuAz = raz/16384.0f; // +-2g -> 16384 LSB/g
-  mpuGx = rgx/131.0f;   mpuGy = rgy/131.0f;   mpuGz = rgz/131.0f;   // +-250dps -> 131 LSB/(deg/s)
+  // FIX v10: offset kalibrasi (mpuOffAx..mpuOffGz) dikurangkan di sini,
+  // jadi SEMUA konsumen sensor (auto-rotate, shake, Breakout, Orientasi 3D)
+  // otomatis ikut lebih akurat begitu user selesai kalibrasi di Setting.
+  mpuAx = rax/16384.0f - mpuOffAx; mpuAy = ray/16384.0f - mpuOffAy; mpuAz = raz/16384.0f - mpuOffAz; // +-2g -> 16384 LSB/g
+  mpuGx = rgx/131.0f   - mpuOffGx; mpuGy = rgy/131.0f   - mpuOffGy; mpuGz = rgz/131.0f   - mpuOffGz;   // +-250dps -> 131 LSB/(deg/s)
   mpuTempC = rtemp/340.0f + 36.53f;
   return true;
+}
+
+// =================================================================
+// KALIBRASI MPU6050 (BARU di v10)
+// Dipanggil dari halaman Setting. HP HARUS diam & rata (layar menghadap
+// ke atas) selama proses ini berjalan (~1 detik). Fungsi ini mengambil
+// rata-rata sejumlah sampel mentah, lalu menghitung offset supaya:
+//  - gyro (X/Y/Z) terbaca 0 dps saat diam (bias giro dihilangkan)
+//  - accel X/Y terbaca 0g dan accel Z terbaca 1g saat rata (bias accel
+//    & sedikit ketidaklurusan pemasangan chip dikompensasi)
+// Hasilnya disimpan permanen ke NVS lewat saveMpuCal(), jadi tetap
+// berlaku walau perangkat direstart.
+// =================================================================
+void calibrateMPU(){
+  if(!mpuReady) return;
+
+  showToast("Kalibrasi... taruh HP rata & diam!",2500);
+  renderCurrentFrame();
+  push();
+  delay(400); // beri waktu user meletakkan HP sebelum sampling dimulai
+
+  const int N = 200;
+  double sax=0,say=0,saz=0,sgx=0,sgy=0,sgz=0;
+  int got=0;
+  for(int i=0;i<N;i++){
+    if(mpuReadRaw()){ // note: mpuReadRaw() sudah mengurangi offset LAMA -
+                       // gpp, kita hanya pakai ini utk cari offset BARU relatif thd nilai ini
+      sax+=mpuAx; say+=mpuAy; saz+=mpuAz;
+      sgx+=mpuGx; sgy+=mpuGy; sgz+=mpuGz;
+      got++;
+    }
+    delay(5);
+  }
+
+  if(got<10){
+    showToast("Kalibrasi gagal, coba lagi");
+    return;
+  }
+
+  // Offset baru = offset lama + rata-rata error yg baru terukur, supaya
+  // hasil akhir kumulatif membuat pembacaan pas di titik nol/1g yg benar.
+  mpuOffAx += sax/got;
+  mpuOffAy += say/got;
+  mpuOffAz += (saz/got) - 1.0f; // asumsi HP rata, layar ke atas -> Z seharusnya 1g
+  mpuOffGx += sgx/got;
+  mpuOffGy += sgy/got;
+  mpuOffGz += sgz/got;
+
+  saveMpuCal();
+  showToast("Kalibrasi MPU6050 selesai!");
+  needRedrawNow();
 }
 
 // ---- Auto-rotate: layar ikut kemiringan HP ----
@@ -4270,6 +4535,7 @@ void setup(){
   needRedraw = true;
 
   mpuInit();                                // MPU6050 (SDA=15, SCL=7)
+  loadMpuCal();                              // BARU v10: muat offset kalibrasi tersimpan (kalau ada)
   autoRotateEnabled = loadAutoRotatePref();
   shakeEnabled = loadShakePref();
   analogReadResolution(12);
