@@ -162,7 +162,7 @@
 //     didefinisikan di TENGAH file, dekat kode Trivia -- PERSIS pola bug
 //     yang sudah pernah dialami & didokumentasikan sebelumnya utk AiLine,
 //     Vec3f, dan NavAnim (lihat komentar di dekat definisi struct2 itu di
-//     atas). arduino-cli men-generate prototype fungsi utk SEMUA fungsi di
+//     atas). arduino-cli men-generate prototype utk SEMUA fungsi di
 //     puncak file SEBELUM badan kode lain terbaca. Karena prototype
 //     "TriviaLayout triviaCalcLayout();" ikut digenerate di puncak file
 //     padahal struct TriviaLayout-nya sendiri baru didefinisikan jauh di
@@ -182,6 +182,39 @@
 //     Dengan ini seluruh blok prototype otomatis kembali valid dari awal
 //     sampai akhir, dan error diNotify() ikut hilang tanpa perlu diubah
 //     sama sekali (diNotify tidak pernah salah dari awal).
+// =================================================================
+// v16 — FIX BUILD (root cause & perbaikan, KALI INI diNotify() SUNGGUHAN
+// yang salah -- v15 salah diagnosa soal ini):
+//  1. AKAR MASALAH: build masih gagal dgn error yang SAMA PERSIS spt
+//     sebelum v15 ("'diNotify' was not declared in this scope" di
+//     sendGeminiRequest() & triggerGeminiAI()), padahal struct
+//     TriviaLayout sudah dipindah ke puncak file di v15. Ini membuktikan
+//     penyebab errornya BUKAN cascading dari TriviaLayout (itu memang
+//     valid utk dibenahi, tapi bukan akar masalah diNotify).
+//     PENYEBAB SEBENARNYA: fungsi diNotify() adalah SATU-SATUNYA fungsi
+//     di seluruh file ini yang parameter terakhirnya punya DEFAULT VALUE
+//     (const String& badge=""). arduino-cli memakai ctags utk men-scan &
+//     meng-generate prototype semua fungsi secara otomatis di puncak
+//     file SEBELUM badan definisi aslinya terbaca -- tapi ctags versi yg
+//     dipakai gagal mem-parse signature fungsi yang punya default
+//     parameter bertipe referensi dgn literal string (=""), sehingga
+//     prototype "void diNotify(...)" itu SATU-SATUNYA yang gagal
+//     digenerate, sementara fungsi lain (diLink, diHide, dst - yang
+//     TIDAK punya default parameter) tetap berhasil ter-generate dgn
+//     benar. Makanya errornya SELALU spesifik ke diNotify() saja, tidak
+//     pernah ke fungsi Dynamic Island lainnya, di versi manapun dari v14
+//     sampai v15.
+//  2. FIX: tambahkan forward declaration MANUAL utk diNotify() di puncak
+//     file (persis di bawah definisi struct2 AiLine/Vec3f/TriviaLayout),
+//     lengkap dengan default value-nya. Dengan deklarasi manual ini,
+//     compiler sudah mengenal signature diNotify() (termasuk default
+//     value badge) jauh sebelum sendGeminiRequest()/triggerGeminiAI()
+//     memanggilnya -- tidak lagi bergantung pada prototype otomatis
+//     ctags yang terbukti gagal utk kasus ini. Default value ""
+//     dihapus dari definisi ASLI diNotify() di bagian DYNAMIC ISLAND
+//     (tetap di deklarasi saja), karena C++ melarang default argument
+//     yang sama dideklarasikan dua kali (di forward declaration DAN di
+//     definisi) -- aturan standar C++, bukan hal spesifik proyek ini.
 // =================================================================
 #include <LovyanGFX.hpp>
 #include <Preferences.h>
@@ -239,6 +272,23 @@ struct Vec3f { float x,y,z; };
 // sendGeminiRequest()/triggerGeminiAI() walau diNotify sendiri benar).
 // Pindahkan ke sini -> masalah selesai dari akarnya.
 struct TriviaLayout{ int diffY, amtY, startY, catBottom; };
+
+// v16 FIX: forward declaration MANUAL untuk diNotify() -- lihat catatan
+// lengkap "v16" di paling atas file. Singkatnya: diNotify() adalah
+// SATU-SATUNYA fungsi di file ini dengan default parameter
+// (const String& badge=""), dan itu bikin ctags (dipakai arduino-cli utk
+// auto-generate prototype fungsi di puncak file) gagal mem-parse &
+// men-generate prototype KHUSUS untuk fungsi ini -- fungsi lain yang
+// tidak punya default parameter (diLink, diHide, dst) tetap berhasil
+// ter-generate otomatis seperti biasa. Karena prototype-nya tidak pernah
+// ada, sendGeminiRequest()/triggerGeminiAI() (dipanggil jauh lebih awal
+// di file, sebelum definisi asli diNotify() di bagian DYNAMIC ISLAND)
+// gagal mengenali fungsi ini -> error "was not declared in this scope".
+// Dengan deklarasi manual di sini (lengkap dgn default value badge=""),
+// compiler sudah kenal signature diNotify() dari awal, jadi tidak lagi
+// bergantung pada prototype otomatis yang terbukti gagal utk kasus ini.
+void diNotify(char icon, const String& title, const String& subtitle, uint16_t color,
+              unsigned long expandMs, bool keepAliveCompact, const String& badge = "");
 
 struct Theme {
   const char* name;
@@ -1419,8 +1469,12 @@ void diBeginAnim(){ diAnimFromW=diCurW; diAnimFromH=diCurH; diAnimStartMs=millis
 // MENGECIL ke COMPACT & terus berdenyut (dipakai selama activity latar msh
 // jalan, mis. AI msh mikir / kuis msh berlangsung); false -> pil MENGHILANG
 // TOTAL setelah expandMs (notifikasi sekali-tembak spt benar/salah/hasil).
+// v16 FIX: default value "" utk parameter 'badge' SUDAH dideklarasikan di
+// forward declaration diNotify() di puncak file -- TIDAK boleh ditulis lagi
+// di sini (definisi asli), karena C++ melarang default argument yang sama
+// dideklarasikan dua kali. Signature di bawah ini sengaja TANPA "=\"\"".
 void diNotify(char icon, const String& title, const String& subtitle, uint16_t color,
-              unsigned long expandMs, bool keepAliveCompact, const String& badge=""){
+              unsigned long expandMs, bool keepAliveCompact, const String& badge){
   diIcon=icon; diTitle=title; diSubtitle=subtitle; diColor=color;
   diPulse=keepAliveCompact; diBadge=badge; diProgress=-1; diHasLink=false;
   diExpandedUntil = millis()+expandMs;
