@@ -1194,7 +1194,7 @@ float navEase(float p){
 // persis -> transisi TIDAK PERNAH kerasa "molor"/lambat, cuma kerasa
 // sedikit kurang mulus di kondisi terburuk. Ini yg dimaksud "smooth" yg
 // konsisten di kondisi apapun, bukan cuma smooth pas kondisi ideal.
-const float NAV_TRANS_MS = 170.0f;
+const float NAV_TRANS_MS = 230.0f;
 void playNavTransition(NavAnim anim){
   canvas.pushSprite(&transShot,0,0); // simpan frame LAMA (canvas msh berisi layar sblm pindah)
   renderCurrentFrame();              // gambar frame BARU ke canvas (state navigasi sudah berubah)
