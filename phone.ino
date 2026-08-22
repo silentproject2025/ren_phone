@@ -155,6 +155,34 @@
 //     doGeminiHttpRequest(). Skor & feedback tiap jawaban nongol di
 //     Dynamic Island.
 // =================================================================
+// v15 — FIX BUILD (root cause & perbaikan):
+//  1. AKAR MASALAH build gagal ("'TriviaLayout' does not name a type" lalu
+//     diikuti "'diNotify' was not declared in this scope"): struct
+//     TriviaLayout (dipakai sbg TIPE RETURN fungsi triviaCalcLayout())
+//     didefinisikan di TENGAH file, dekat kode Trivia -- PERSIS pola bug
+//     yang sudah pernah dialami & didokumentasikan sebelumnya utk AiLine,
+//     Vec3f, dan NavAnim (lihat komentar di dekat definisi struct2 itu di
+//     atas). arduino-cli men-generate prototype fungsi utk SEMUA fungsi di
+//     puncak file SEBELUM badan kode lain terbaca. Karena prototype
+//     "TriviaLayout triviaCalcLayout();" ikut digenerate di puncak file
+//     padahal struct TriviaLayout-nya sendiri baru didefinisikan jauh di
+//     bawah, baris prototype itu gagal dikompilasi ("does not name a
+//     type"). Kegagalan pada satu baris di blok prototype yang digenerate
+//     itu membuat parser gagal memproses lanjutan blok prototype dengan
+//     benar (efek domino/cascading), sehingga prototype fungsi lain yang
+//     seharusnya valid -- termasuk diNotify() -- ikut tidak ter-generate,
+//     makanya sendGeminiRequest()/triggerGeminiAI() yang memanggil
+//     diNotify() sebelum definisi aslinya jadi error "was not declared".
+//  2. FIX: struct TriviaLayout dipindahkan ke PUNCAK FILE, tepat setelah
+//     definisi struct Vec3f (bergabung dgn AiLine/Vec3f yang memang sudah
+//     ditaruh di sana justru karena alasan yang sama). Definisi struct
+//     yang lama di bagian APP: TRIVIA QUIZ dihapus (tidak didefinisikan
+//     dua kali), fungsi triviaCalcLayout() di lokasi aslinya tetap sama,
+//     cuma tinggal memakai struct yang sudah dikenal dari puncak file.
+//     Dengan ini seluruh blok prototype otomatis kembali valid dari awal
+//     sampai akhir, dan error diNotify() ikut hilang tanpa perlu diubah
+//     sama sekali (diNotify tidak pernah salah dari awal).
+// =================================================================
 #include <LovyanGFX.hpp>
 #include <Preferences.h>
 #include <WiFi.h>
@@ -199,6 +227,18 @@ struct AiLine { String text; uint16_t color; };
 // "Orientasi 3D", jadi HARUS didefinisikan di sini (bukan di dekat fungsinya)
 // supaya prototype otomatis arduino-cli tidak gagal.
 struct Vec3f { float x,y,z; };
+
+// v15 FIX: sama persis dgn AiLine/Vec3f di atas -- struct TriviaLayout
+// dipakai sbg TIPE RETURN fungsi triviaCalcLayout() (app Trivia Quiz).
+// Sebelumnya struct ini didefinisikan di tengah file (dekat kodenya di
+// bagian APP: TRIVIA QUIZ), sehingga prototype otomatis
+// "TriviaLayout triviaCalcLayout();" yang digenerate arduino-cli di
+// PUNCAK file gagal dikompilasi ("TriviaLayout does not name a type"),
+// dan itu bikin sisa blok prototype ikut gagal ter-generate dgn benar
+// (termasuk prototype diNotify() yang jadi keliatan "not declared" di
+// sendGeminiRequest()/triggerGeminiAI() walau diNotify sendiri benar).
+// Pindahkan ke sini -> masalah selesai dari akarnya.
+struct TriviaLayout{ int diffY, amtY, startY, catBottom; };
 
 struct Theme {
   const char* name;
@@ -5228,7 +5268,10 @@ TaskHandle_t triviaTaskHandle=NULL;
 
 // ---- Layout (dihitung dari BAWAH ke ATAS, satu sumber kebenaran dipakai
 // bareng oleh fungsi gambar & fungsi hit-test sentuhan -> gak bisa ketuker) ----
-struct TriviaLayout{ int diffY, amtY, startY, catBottom; };
+// v15 FIX: struct TriviaLayout dipindahkan ke PUNCAK FILE (dekat AiLine/
+// Vec3f) karena dipakai sbg TIPE RETURN fungsi di bawah ini -- lihat
+// komentar "v15 — FIX BUILD" di paling atas file utk penjelasan lengkap
+// akar masalahnya. Definisi struct tidak lagi ada di sini, cukup dipakai.
 TriviaLayout triviaCalcLayout(){
   TriviaLayout L;
   L.startY = backY()-6-28;
