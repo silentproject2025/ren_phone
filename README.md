@@ -1,345 +1,239 @@
-<div align="center">
+# Ren Phone — SanzX OS
 
-# 📱 Ren Phone
+Firmware "sistem operasi" DIY untuk HP buatan sendiri berbasis **ESP32-S3**, layar **ILI9341** (320×240, resistif touch **XPT2046**), dan **SD Card via SDIO (SD_MMC)**. Ditulis sebagai satu file `.ino` dengan UI custom bergaya smartphone modern: home screen dengan grid app, status bar, lock screen dengan swipe-to-unlock, Control Center gaya iOS, Dynamic Island, transisi antar-app yang di-animasi, dan belasan aplikasi bawaan — mulai dari kalkulator sampai chatbot AI dan pengamat langit.
 
-### Custom smartphone OS untuk ESP32-S3 — dari layar sentuh biasa jadi pengalaman "HP" beneran
-
-![Platform](https://img.shields.io/badge/platform-ESP32--S3-black?style=for-the-badge&logo=espressif&logoColor=white)
-![Framework](https://img.shields.io/badge/framework-Arduino-00979D?style=for-the-badge&logo=arduino&logoColor=white)
-![Display](https://img.shields.io/badge/display-ILI9341%20%2B%20XPT2046-blue?style=for-the-badge)
-![Status](https://img.shields.io/badge/status-active%20development-brightgreen?style=for-the-badge)
-
-**Ren Phone** menjalankan **SanzX OS** — sebuah "sistem operasi" custom yang dibangun
-dari nol di atas [LovyanGFX](https://github.com/lovyan03/LovyanGFX): lock screen dengan
-swipe-to-unlock, home screen dengan grid app & scroll momentum, Control Center gaya
-quick-settings dengan tombol bulat, sistem tema, hingga game — semuanya dianimasikan
-dengan easing & timing berbasis waktu supaya terasa mulus di hardware manapun.
-
-</div>
+Nama tampil di boot sequence: **"Ren Phone"** (brand perangkat) → **"SanzX OS"** (brand sistem operasi), dengan tagline *"Simplicity, Redefined."*
 
 ---
 
-## 📋 Daftar Isi
+## Daftar Isi
 
-- [Kenapa proyek ini ada](#-kenapa-proyek-ini-ada)
-- [Fitur Sistem](#-fitur-sistem)
-- [Gestur & Navigasi](#-gestur--navigasi)
-- [Aplikasi Bawaan](#-aplikasi-bawaan)
-- [Tema](#-tema)
-- [Di Balik Layar: Animation Engine](#-di-balik-layar-animation-engine)
-- [Hardware](#-hardware)
-- [Wiring](#-wiring)
-- [Dependensi](#-dependensi-arduino-library)
-- [Build & Flash](#-build--flash)
-- [Konfigurasi WiFi & AI Chat](#-konfigurasi-wifi--ai-chat)
-- [Web File Manager](#-web-file-manager)
-- [Struktur Folder SD Card](#-struktur-folder-sd-card)
-- [Monitoring Baterai](#-monitoring-baterai)
-- [Catatan Teknis & Gotcha](#-catatan-teknis--gotcha)
-- [Changelog](#-changelog)
-- [Lisensi](#-lisensi)
+- [Ringkasan Fitur](#ringkasan-fitur)
+- [Hardware & Wiring](#hardware--wiring)
+- [Struktur Sistem / UI](#struktur-sistem--ui)
+- [Daftar Aplikasi](#daftar-aplikasi)
+- [Integrasi Layanan Online](#integrasi-layanan-online)
+- [Struktur File di SD Card](#struktur-file-di-sd-card)
+- [Cara Setup & Flashing](#cara-setup--flashing)
+- [Library yang Dibutuhkan](#library-yang-dibutuhkan)
+- [Preferensi Tersimpan (NVS)](#preferensi-tersimpan-nvs)
+- [Filosofi & Catatan Desain](#filosofi--catatan-desain)
+- [Known Limitations](#known-limitations)
 
 ---
 
-## 💡 Kenapa proyek ini ada
+## Ringkasan Fitur
 
-Kebanyakan proyek TFT+ESP32 berhenti di "tampilkan teks di layar" atau "satu app
-doang". Ren Phone dibangun sebagai eksperimen: seberapa jauh sebuah mikrokontroler
-kelas hobi bisa dibuat terasa seperti smartphone sungguhan — lengkap dengan multi-app,
-sistem navigasi bertumpuk (stack-based, bisa back), gesture, animasi bertenaga easing,
-sampai OTA update dan AI chat — tanpa OS eksternal (murni di atas Arduino core).
+- **UI ala smartphone modern**: home screen scrollable dengan grid ikon + dock 4 app favorit, status bar (jam, baterai, WiFi, SD, DND), lock screen dengan jam besar + swipe-to-unlock.
+- **Control Center** (gaya iOS, diusap dari atas layar): toggle WiFi, Airplane Mode, DND, ganti Tema, ganti Orientasi, Shake-to-Home, kunci layar, slider brightness.
+- **Dynamic Island**: pil hitam mengambang di tengah atas layar yang bermorfing untuk menampilkan notifikasi singkat (mis. status Game Mode, hasil aksi Control Center).
+- **Transisi antar-app dianimasi** (slide + easing cubic) untuk Push/Back/Home, dengan pacing yang konsisten di kondisi hardware apa pun.
+- **Auto-rotate & Shake-to-Home** via sensor **MPU6050** (accelerometer + gyroscope).
+- **4 tema warna**: Dark, AMOLED, Light, Pastel.
+- **Web File Manager** bawaan (akses dari browser PC/HP lain di jaringan WiFi yang sama) untuk upload/download/edit/hapus file di SD Card.
+- **OTA Update firmware** — dari file `.bin` di SD Card maupun unduh langsung dari URL lewat WiFi.
+- **12 aplikasi built-in** (lihat [Daftar Aplikasi](#daftar-aplikasi)), termasuk chatbot AI (Gemini), pemutar video MJPEG, editor gambar (Canvas), kuis trivia online, dan pengamat Astronomy Picture of the Day NASA dengan auto-translate.
+- **5 game**: Snake (wrap-around), Flappy Bird-style, 2048, Tic-Tac-Toe (vs CPU / PvP, papan hingga 5×5), Breakout (kontrol drag jari / kemiringan HP) — semua dengan "Game Mode" (boost CPU ke 240MHz + jeda polling sensor background).
 
-## ✨ Fitur Sistem
+---
 
-| Fitur | Detail |
-|---|---|
-| 🔒 **Lock Screen** | Swipe ke atas untuk unlock, dengan animasi drag yang mengikuti jari |
-| 🏠 **Home Screen** | Grid ikon aplikasi (16 app), scroll vertikal dengan momentum + efek elastis di ujung atas/bawah |
-| 🎛️ **Control Center** | Swipe dari tepi atas layar — tombol **bulat** (bukan kotak) untuk WiFi, Airplane Mode, DND, Tema, Orientasi, Shake to Home, dan Kunci layar, plus slider Brightness dengan handle bulat |
-| 🎨 **4 Tema Warna** | Dark, AMOLED, Light, Pastel — bisa diganti langsung dari Control Center |
-| 🔄 **Auto-Rotate** | Landscape ⇄ Portrait otomatis via MPU6050, atau manual dari Control Center — kalibrasi touch selalu disinkronkan ke rotasi aktif |
-| 📳 **Shake to Home** | Goyangkan perangkat untuk langsung kembali ke Home |
-| 🌙 **Do Not Disturb** | Menonaktifkan toast notifikasi sementara |
-| ✈️ **Airplane Mode** | Memutus WiFi sepenuhnya |
-| 🔋 **Battery Monitoring** | Pembacaan tegangan baterai real-time via voltage divider, dengan peringatan baterai lemah/kritis |
-| 📶 **Status Bar** | Jam (NTP), indikator koneksi, dll — selalu tampil di atas |
-| ⬆️ **OTA Update** | Flash firmware baru langsung dari file `.bin` di SD card, tanpa perlu USB |
-| 🌐 **Web File Manager** | Server web bawaan untuk kelola isi SD card dari browser laptop/HP lain |
+## Hardware & Wiring
 
-## 👆 Gestur & Navigasi
-
-| Gestur | Aksi |
-|---|---|
-| Swipe ke atas dari lock screen | Unlock |
-| Swipe ke bawah dari tepi **atas** layar | Buka Control Center |
-| Swipe handle Control Center ke bawah / tap area kosong di bawah panel | Tutup Control Center |
-| Swipe ke atas dari tepi **bawah** layar (di luar Home) | Kembali ke Home |
-| Tap ikon app di Home | Buka app (transisi *push*, geser dari kanan) |
-| Tombol Back di dalam app | Kembali ke layar sebelumnya (transisi *back*, geser ke kanan) |
-| Drag vertikal di Home | Scroll grid app, dengan momentum & efek elastis |
-| Drag di slider Brightness | Atur kecerahan layar langsung |
-
-## 📱 Aplikasi Bawaan
-
-<table>
-<tr><th>App</th><th>Deskripsi</th><th>Kontrol</th></tr>
-<tr><td>🕐 <b>Jam</b></td><td>Jam digital, sinkron NTP saat WiFi tersambung</td><td>—</td></tr>
-<tr><td>🧮 <b>Kalkulator</b></td><td>Kalkulator dasar dgn keypad on-screen</td><td>Tap tombol</td></tr>
-<tr><td>🧭 <b>Orientasi 3D</b></td><td>Visualisasi real-time orientasi perangkat dari MPU6050</td><td>Miringkan perangkat</td></tr>
-<tr><td>⚙️ <b>Setting</b></td><td>WiFi, ganti tema, orientasi, kalibrasi sensor gerak, dll</td><td>Tap menu</td></tr>
-<tr><td>📝 <b>Notepad</b></td><td>Catatan teks, tersimpan ke SD card</td><td>Keyboard on-screen</td></tr>
-<tr><td>🎨 <b>Canvas</b></td><td>Kanvas gambar bebas — goresan "distempel" (fillCircle diinterpolasi) supaya mulus tanpa celah</td><td>Gambar dgn jari</td></tr>
-<tr><td>🤖 <b>AI Chat</b></td><td>Chat dgn Gemini API (butuh WiFi + API key)</td><td>Keyboard on-screen, scroll momentum di respons</td></tr>
-<tr><td>📁 <b>Files</b></td><td>File explorer SD card, isi file teks bisa dibaca & di-scroll (wrap otomatis)</td><td>Tap file, drag utk scroll</td></tr>
-<tr><td>🎬 <b>MJPEG</b></td><td>Pemutar video format MJPEG dari SD card</td><td>Tap kontrol</td></tr>
-<tr><td>⬆️ <b>Update</b></td><td>Pilih file <code>.bin</code> di SD card lalu flash (OTA)</td><td>Tap file, konfirmasi</td></tr>
-<tr><td>🔋 <b>Baterai</b></td><td>Detail voltase & persentase baterai</td><td>—</td></tr>
-<tr><td>🐍 <b>Snake</b></td><td>Game ular klasik</td><td>Tap di sekitar kepala ular sesuai arah tujuan</td></tr>
-<tr><td>🐤 <b>Flappy Block</b></td><td>Hindari pipa, terbang terus-menerus</td><td>Tap layar utk "terbang"</td></tr>
-<tr><td>🔢 <b>2048</b></td><td>Puzzle angka klasik</td><td>Swipe 4 arah</td></tr>
-<tr><td>❌⭕ <b>TicTacToe</b></td><td>Lawan AI sederhana (menang → blok → tengah → acak)</td><td>Tap kotak</td></tr>
-<tr><td>🧱 <b>Breakout</b></td><td>Pantulkan bola pecahkan balok</td><td>Miringkan perangkat (MPU6050) — fallback drag jari kalau sensor tak terdeteksi</td></tr>
-</table>
-
-## 🎨 Tema
-
-| Tema | Aksen | Karakter |
+| Komponen | Pin ESP32-S3 | Keterangan |
 |---|---|---|
-| **Dark** | Oranye + Cyan | Default, gelap netral |
-| **AMOLED** | Oranye + Cyan | Hitam pekat, hemat daya di panel OLED |
-| **Light** | Biru | Terang, kontras tinggi |
-| **Pastel** | Ungu muda | Warna lembut, tone-on-tone |
+| **Layar ILI9341 (SPI)** | | Bus SPI2_HOST, 40MHz write / 16MHz read, DMA aktif |
+| &nbsp;&nbsp;SCLK | GPIO 12 | |
+| &nbsp;&nbsp;MOSI | GPIO 11 | |
+| &nbsp;&nbsp;MISO | GPIO 13 | |
+| &nbsp;&nbsp;DC | GPIO 2 | |
+| &nbsp;&nbsp;CS | GPIO 10 | |
+| &nbsp;&nbsp;RST | GPIO 14 | |
+| &nbsp;&nbsp;Backlight (PWM) | GPIO 21 | |
+| **Touch XPT2046 (SPI terpisah)** | | Bus SPI3_HOST, 2MHz |
+| &nbsp;&nbsp;SCLK | GPIO 6 | |
+| &nbsp;&nbsp;MOSI | GPIO 5 | |
+| &nbsp;&nbsp;MISO | GPIO 4 | ⚠️ Jangan dipakai pin lain (lihat catatan Baterai di bawah) |
+| &nbsp;&nbsp;CS | GPIO 9 | |
+| **SD Card (SDIO / SD_MMC)** | | |
+| &nbsp;&nbsp;CLK | GPIO 39 | |
+| &nbsp;&nbsp;CMD | GPIO 38 | |
+| &nbsp;&nbsp;D0 | GPIO 40 | |
+| **MPU6050 (I2C, accel+gyro)** | | Alamat I2C `0x68`, clock 400kHz |
+| &nbsp;&nbsp;SDA | GPIO 15 | |
+| &nbsp;&nbsp;SCL | GPIO 7 | |
+| **Baterai (voltage divider 10k+10k)** | | |
+| &nbsp;&nbsp;ADC output | GPIO 8 | ⚠️ **Bukan GPIO4** — GPIO4 bentrok dgn pin MISO touch XPT2046 (`analogRead()` mengubah mode pin itu jadi ADC dan merusak pembacaan sentuh). Pastikan divider disambung ke GPIO8. |
 
-Ganti tema kapan saja lewat tombol **Tema** di Control Center (langsung apply ke
-semua layar) atau dari menu Setting.
+Panel: `memory_width=240, memory_height=320` (native portrait 240×320, di-rotate software untuk landscape 320×240). Kalibrasi touch dilakukan sekali di awal (tersimpan di NVS) dan **selalu dijalankan di rotasi yang akan dipakai runtime** — penting karena kalibrasi XPT2046 terikat ke rotasi saat kalibrasi dilakukan.
 
-## 🚀 Di Balik Layar: Animation Engine
+Baterai: Li-ion 1 sel, rentang tegangan **3.0V–4.2V**, kapasitas yang dipakai di kalkulasi estimasi **2300 mAh** (ubah `BATTERY_CAPACITY_MAH` kalau baterai fisikmu beda). Estimasi persen/sisa daya dihitung murni dari pembacaan tegangan (bukan fuel-gauge IC), jadi perkiraan kasar — bukan angka presisi.
 
-Yang bikin Ren Phone terasa "smooth" bukan cuma delay pendek — tapi sistem animasi
-yang sengaja dirancang konsisten:
+---
 
-- **Easing terpusat** — satu fungsi `navEase()` (ease-in-out cubic) dipakai ulang di
-  *semua* animasi: transisi antar layar, buka/tutup Control Center, boot sequence,
-  bahkan animasi "Game Booster". Semua animasi jadi punya "rasa" gerak yang sama.
-- **Berbasis waktu, bukan jumlah frame** — animasi dihitung dari `millis()` terhadap
-  durasi target (mis. transisi layar ~170ms), bukan loop N-frame dengan delay tetap.
-  Efeknya: durasi animasi **selalu konsisten** walau render sedang berat (WiFi/AI
-  jalan bersamaan) — di hardware lambat animasinya sedikit kurang halus, tapi tidak
-  pernah kerasa "molor".
-- **Momentum scroll** — scroll Home, AI Chat, dan File Explorer memakai *low-pass
-  velocity* + decay, bukan mengikuti jari 1:1 lalu berhenti mendadak. Ada efek
-  elastis ringan di ujung atas/bawah list.
-- **Goresan Canvas mulus** — bukan `drawLine()` bergeser per piksel (bertangga di
-  brush besar/diagonal), tapi "distempel" pakai `fillCircle` yang diinterpolasi
-  sepanjang jalur gerakan jari.
-- **Boot sequence sinematik** — logo membesar dgn easing, halo/glow berlapis,
-  gradient background halus, judul fade-in, loader titik berdenyut (wave pulse) —
-  palet warnanya sengaja dijaga monokrom gelap (bukan warna-warni) supaya kesannya
-  premium & senada tema dark, bukan "ramai".
+## Struktur Sistem / UI
 
-## 🔧 Hardware
+### Navigasi
+- **Home**: grid app (2 kolom di portrait, 3 kolom di landscape) + dock 4 app favorit (Jam, Notepad, AI Chat, Files) di bagian bawah, bisa di-scroll dengan momentum.
+- **Swipe dari tepi atas layar** (di dalam app manapun) → buka Control Center.
+- **Swipe ke atas dari tepi bawah** → pulang ke Home (kecuali sudah di Home).
+- **Tombol "< Back"** di pojok kiri-bawah tiap app → kembali ke layar sebelumnya (navigation stack, maks. 8 level).
+- Semua transisi (Push/Back/Home) dianimasi slide dengan easing, dibungkus satu transaksi SPI (`startWrite`/`endWrite`) supaya gerakannya tidak tersendat.
 
-| Komponen | Spesifikasi |
-|---|---|
-| **MCU** | ESP32-S3 — Flash 16MB (N16), PSRAM OPI 8MB |
-| **Layar** | TFT ILI9341, 240×320, antarmuka SPI |
-| **Touchscreen** | XPT2046 resistif, SPI **terpisah** dari layar (bus independen) |
-| **Sensor gerak** | MPU6050 (accelerometer + gyroscope), I2C |
-| **Penyimpanan** | microSD via SDIO (`SD_MMC`, mode 1-bit) |
-| **Monitoring baterai** | ADC + voltage divider (2× 10kΩ) |
+### Lock Screen
+Jam + tanggal besar, diusap ke atas (≥50px) untuk membuka. Kalibrasi touch & auto-rotate dinonaktifkan otomatis saat masih terkunci supaya swipe tidak salah baca arah.
 
-## 🔌 Wiring
+### Status Bar
+Jam (NTP-synced), indikator DND, SD, WiFi (atau ikon pesawat/tanda-X), dan baterai (ikon + persen, warna berubah sesuai level: hijau → oranye ≤35% → merah ≤15%).
 
-### Layar TFT — `SPI2_HOST`
+### Control Center
+7 kartu (WiFi, Airplane, DND, Tema, Orientasi, Shake-to-Home, Kunci Layar) + slider Brightness. Dibuka dengan swipe dari tepi atas, animasi buka/tutup pakai easing yang sama dengan transisi nav (`navEase`) supaya "rasa" gerakannya konsisten di seluruh sistem.
 
-| Pin Layar | ESP32-S3 |
-|---|---|
-| VCC | **5V** (wajib — J1 terbuka) |
-| GND | GND |
-| CS | GPIO 10 |
-| RESET | GPIO 14 |
-| DC | GPIO 2 |
-| SDI (MOSI) | GPIO 11 |
-| SCK | GPIO 12 |
-| SDO (MISO) | GPIO 13 |
-| LED (backlight, PWM) | GPIO 21 |
+### Keyboard Virtual
+QWERTY custom (lower/UPPER/angka-simbol), dipakai di semua field teks (Notepad, WiFi SSID/Password, AI Chat, dll).
 
-### Touchscreen XPT2046 — `SPI3_HOST` (bus independen, `bus_shared=false`)
+### Tema
+4 preset warna (Dark/AMOLED/Light/Pastel), berlaku ke seluruh UI secara real-time lewat struct `Theme` global (`T()`).
 
-| Pin Touch | ESP32-S3 |
-|---|---|
-| T_CLK | GPIO 6 |
-| T_DIN (MOSI) | GPIO 5 |
-| T_DO (MISO) | GPIO 4 |
-| T_CS | GPIO 9 |
-| T_IRQ | GPIO 1 *(opsional, tidak dipakai — polling)* |
+---
 
-### MPU6050 — I2C
+## Daftar Aplikasi
 
-| Pin | ESP32-S3 |
-|---|---|
-| SDA | GPIO 15 |
-| SCL | GPIO 7 |
-| VCC | 3.3V |
-| GND | GND |
-| Alamat I2C | `0x68` |
+| Ikon | Nama | Ringkasan |
+|---|---|---|
+| J | **Jam** | Jam digital real-time + tanggal, status sinkronisasi NTP |
+| + | **Kalkulator** | Operasi dasar +−×÷, persen, +/− |
+| 3 | **Orientasi 3D** | Visualisasi wireframe 3D bodi HP yang berputar real-time mengikuti kemiringan (roll/pitch) dari MPU6050, plus data mentah accel/gyro/suhu |
+| @ | **Setting** | Kecerahan, ganti tema, scan & sambung WiFi, auto-rotate toggle, kalibrasi ulang touch |
+| N | **Notepad** | Catatan teks tersimpan di SD, dengan dialog konfirmasi "Simpan/Buang" kalau keluar dengan perubahan belum tersimpan |
+| C | **Canvas** | Kanvas gambar jari dengan palet 9 warna & ukuran kuas, otomatis tersimpan ke SD per-orientasi |
+| A | **AI Chat** | Chatbot berbasis **Google Gemini API**, dengan memori percakapan persisten (SD) & tombol Hapus cepat |
+| F | **Files** | File explorer SD Card + **web uploader** (akses dari browser lewat WiFi) |
+| M | **MJPEG** | Pemutar video Motion-JPEG dari file `.mjpeg` di folder `/mjpeg` |
+| U | **Update** | OTA update firmware dari file `.bin` di SD (folder `/update`) atau unduh dari URL via WiFi |
+| B | **Baterai** | Detail tegangan, estimasi persen & sisa mAh, status kesehatan |
+| S | **Snake** | Klasik, kontrol arah dengan ketuk layar, **wrap-around** menembus tepi layar |
+| V | **Flappy** | Ketuk untuk terbang, hindari pipa dengan celah yang dijamin selalu valid |
+| 2 | **2048** | Kontrol swipe 4 arah |
+| X | **TicTacToe** | vs CPU (AI heuristik) **atau** PvP 2 pemain lokal, papan 3×3/4×4/5×5 (ukuran = tingkat kesulitan) |
+| K | **Breakout** | Kontrol paddle drag jari (utama) atau kemiringan HP (kalau MPU6050 terpasang) |
+| Q | **Trivia** | Kuis pilihan ganda real-time dari **Open Trivia Database**, 12 kategori, 3 tingkat kesulitan + acak, 5/10/15 soal |
+| ★ | **Astronomi** | **NASA Astronomy Picture of the Day** — gambar + penjelasan (auto-translate EN→ID), lihat [detail di bawah](#nasa-apod--astronomi) |
 
-### microSD — SDIO (`SD_MMC`)
+---
 
-| Pin | ESP32-S3 |
-|---|---|
-| CLK | GPIO 39 |
-| CMD | GPIO 38 |
-| D0 | GPIO 40 |
+## Integrasi Layanan Online
 
-### Sensor Baterai — ADC
+Semua fitur di bawah butuh WiFi tersambung (lewat app **Setting**).
 
-| Pin | ESP32-S3 |
-|---|---|
-| Vbat (lewat divider 10k+10k) | GPIO 8 |
+### Google Gemini (AI Chat)
+- Model: `gemini-3.5-flash-lite`
+- API key disimpan di `/gemini_key.txt` di SD Card (dibuat otomatis dengan instruksi kalau belum ada). Isi baris tanpa tanda `#` dengan key dari [Google AI Studio](https://aistudio.google.com/app/apikey).
+- Riwayat percakapan (`/ai_memory.txt`) disuntikkan otomatis ke setiap prompt baru supaya AI "ingat" konteks obrolan sebelumnya — maksimum 12 entri tanya-jawab disimpan, entri lama otomatis dipangkas.
+- Request dijalankan di FreeRTOS task terpisah (bukan blocking UI), dengan watchdog soft-timeout (15 detik) & hard-timeout (30 detik).
 
-> ⚠️ Wiring di atas mengikuti konfigurasi `LGFX CONFIG` di kode. Kalau board kamu
-> beda, sesuaikan langsung di bagian itu (kelas `LGFX` di awal file `.ino`).
+### Open Trivia Database (Trivia)
+- Endpoint: `opentdb.com/api.php`, data diminta dalam **base64** khusus untuk menghindari isu tanda kutip di parser JSON manual.
+- 12 kategori: Umum, Sains & Alam, Komputer, Olahraga, Geografi, Sejarah, Film, Musik, Video Game, Hewan, Anime & Manga, Mitologi.
+- Tingkat kesulitan: Mudah / Sedang / Sulit / Acak. Jumlah soal: 5 / 10 / 15.
 
-## 📦 Dependensi (Arduino Library)
+### NASA APOD — Astronomi
+Alur kerja lengkap tiap buka tanggal baru:
+1. **Ambil JSON** dari `api.nasa.gov/planetary/apod` (default = "hari ini", ditentukan server — bukan RTC lokal HP, supaya tidak tergantung status sinkronisasi NTP).
+2. Kalau media-nya foto: **unduh URL gambar** dan **stream langsung ke SD Card** sebagai cache (`/apod_cache/<tanggal>.jpg`) — tidak perlu diunduh ulang kalau tanggal yang sama dibuka lagi.
+3. **Decode & render** file JPG dari cache ke layar pakai `JPEGDEC`, otomatis diskalakan (½/¼/⅛) supaya gambar besar tetap muat di layar 320×240.
+4. Teks `explanation` (Inggris) **diterjemahkan ke Indonesia** lewat **MyMemory Translation API** (`api.mymemory.translated.net`, gratis tanpa key, ~5000 karakter/hari per-IP), dipecah per ±450 karakter karena ada batas panjang per-query. Hasil terjemahan **juga di-cache** ke SD (`_id.txt`) supaya kuota tidak terbuang buat tanggal yang sudah pernah dibuka.
+- Navigasi hari sebelumnya/berikutnya (`<` `>`), toggle lihat teks asli EN vs terjemahan ID, kredit foto ditampilkan kalau ada.
+- Kalau konten hari itu berupa video (bukan foto), ditampilkan pesan alih-alih error.
+- API key NASA opsional, disimpan di `/nasa_key.txt` (pola sama seperti Gemini) — default `DEMO_KEY` tetap jalan tapi jatah request per jam lebih kecil. Daftar gratis di [api.nasa.gov](https://api.nasa.gov).
 
-| Library | Fungsi |
-|---|---|
-| [LovyanGFX](https://github.com/lovyan03/LovyanGFX) | Driver layar ILI9341 + touch XPT2046, sprite/double-buffering |
-| [JPEGDEC](https://github.com/bitbank2/JPEGDEC) | Dekoder JPEG untuk pemutar MJPEG |
-| `MjpegClass` | Wrapper pemutaran MJPEG di atas JPEGDEC |
-| `Preferences` | Penyimpanan setting persisten (NVS) — tema, orientasi, dll |
-| `WiFi`, `WiFiClientSecure`, `HTTPClient` | Koneksi WiFi & request HTTPS (Gemini API) |
-| `WebServer` | Web file manager bawaan |
-| `Update` | OTA flashing firmware dari `.bin` |
-| `Wire` | I2C untuk MPU6050 |
-| `FS`, `SD_MMC` | Akses microSD |
+### Web File Manager (app Files)
+Server HTTP (port 80) otomatis jalan begitu WiFi tersambung. Alamat IP ditampilkan di app Files. Bisa upload, download, edit (inline textarea), dan hapus file di SD Card dari browser HP/PC lain di jaringan yang sama.
 
-## 🛠️ Build & Flash
+---
 
-Firmware ini dikompilasi dengan **arduino-cli** untuk board:
-
-```
-esp32:esp32:esp32s3
-```
-
-**Board settings yang dipakai:**
-- Flash Size: **16MB (N16)**
-- Partition Scheme: default N16 (App + SPIFFS/FAT sesuai kebutuhan)
-- PSRAM: **OPI PSRAM**, 8MB
-
-### Opsi 1 — Build manual dengan arduino-cli
-
-```bash
-# Install core ESP32 (kalau belum)
-arduino-cli core update-index
-arduino-cli core install esp32:esp32
-
-# Install library yang dibutuhkan
-arduino-cli lib install "LovyanGFX"
-# JPEGDEC + MjpegClass biasanya perlu diinstal manual/dari .zip
-
-# Compile
-arduino-cli compile --fqbn esp32:esp32:esp32s3 \
-  --board-options FlashSize=16M,PSRAM=opi \
-  .
-
-# Upload lewat USB
-arduino-cli upload -p <PORT> --fqbn esp32:esp32:esp32s3 .
-```
-
-### Opsi 2 — GitHub Actions (otomatis)
-
-Repo ini di-build otomatis lewat workflow `build.yml` setiap ada push — memakai
-`arduino-cli` dengan konfigurasi board yang sama seperti di atas. Hasil compile
-(`.bin`) tersedia sebagai **artifact** di tab Actions, siap:
-1. Diflash langsung lewat USB (`esptool.py` / arduino-cli), **atau**
-2. Ditaruh di folder `/update` pada SD card, lalu diflash **OTA** langsung dari
-   menu **Update** di perangkat — tanpa kabel sama sekali.
-
-## 🔑 Konfigurasi WiFi & AI Chat
-
-**WiFi** — masukkan SSID & password lewat menu **Setting** di perangkat (tersimpan
-persisten via `Preferences`/NVS, otomatis konek ulang tiap boot).
-
-**AI Chat (Gemini API)** — saat pertama kali boot, firmware otomatis membuat file
-`gemini_key.txt` di root SD card kalau belum ada, isinya:
-
-```
-# GEMINI API KEY CONFIGURATION (ESP32-S3)
-YOUR_GEMINI_API_KEY_HERE
-```
-
-Ganti baris terakhir dengan API key Gemini kamu — bisa lewat:
-- Edit langsung file di SD card (cabut, edit di komputer), **atau**
-- Menu **Setting** di perangkat (keyboard on-screen), **atau**
-- Web File Manager (lihat bawah) setelah WiFi tersambung
-
-## 🌐 Web File Manager
-
-Setelah WiFi tersambung, buka `http://<IP-perangkat>/` dari browser laptop/HP lain
-untuk kelola isi SD card tanpa cabut kartu:
-
-| Endpoint | Fungsi |
-|---|---|
-| `GET /` | Daftar file & folder |
-| `GET /edit` | Buka editor teks utk sebuah file |
-| `POST /save` | Simpan hasil edit |
-| `POST /upload` | Upload file baru ke SD card |
-| `GET /delete` | Hapus file |
-| `GET /download` | Unduh file |
-
-## 📁 Struktur Folder SD Card
+## Struktur File di SD Card
 
 ```
 /
-├── gemini_key.txt   → API key Gemini (dibuat otomatis saat boot pertama)
-├── mjpeg/           → taruh file .mjpeg di sini untuk app MJPEG
-└── update/          → taruh file .bin di sini untuk OTA update lewat menu Update
+├── notepad.txt              # isi app Notepad
+├── gemini_key.txt           # API key Gemini (auto-generate)
+├── nasa_key.txt             # API key NASA, opsional (auto-generate)
+├── ai_memory.txt            # riwayat percakapan AI Chat (maks 12 entri)
+├── canvas_land.bin          # kanvas gambar — orientasi landscape
+├── canvas_port.bin          # kanvas gambar — orientasi portrait
+├── mjpeg/                   # taruh file *.mjpeg di sini utk app MJPEG
+├── update/                  # taruh file *.bin di sini utk OTA lokal
+└── apod_cache/
+    ├── <tanggal>.jpg        # cache gambar APOD (mis. 2026_08_24.jpg)
+    ├── <tanggal>.txt        # cache metadata (judul, tanggal, media_type, copyright, explanation EN)
+    └── <tanggal>_id.txt     # cache hasil terjemahan Indonesia
 ```
-
-## 🔋 Monitoring Baterai
-
-Voltase baterai dibaca lewat ADC (GPIO 8) melalui voltage divider 2× 10kΩ (rasio
-1:2), lalu di-*smoothing* (`battVoltage = battVoltage*0.7 + vBat*0.3`) supaya
-angkanya tidak melompat-lompat. Persentase dihitung dari rentang tegangan Li-ion
-3.0V (kosong) – 4.2V (penuh), dengan notifikasi toast otomatis saat baterai
-**≤15% (lemah)** dan **≤5% (kritis)**.
-
-## 🧩 Catatan Teknis & Gotcha
-
-Beberapa hal yang perlu diketahui kalau mau ikut mengembangkan:
-
-- **Kalibrasi touch terikat rotasi** — `setup()` membaca orientasi tersimpan lalu
-  langsung `display.setRotation()` **sebelum** boot sequence & kalibrasi touch
-  dijalankan. Ini disengaja: XPT2046 di LovyanGFX memetakan sumbu X/Y touch
-  berdasarkan rotasi yang aktif *saat kalibrasi* — kalau meleset dari rotasi
-  runtime, gesture bisa terbaca terbalik/miring.
-- **Urutan definisi struct/enum** — beberapa `struct`/`enum` (`AiLine`, `Vec3f`,
-  `NavAnim`) sengaja diletakkan di paling atas file, bukan dekat fungsi
-  pemakainya. Ini workaround untuk cara `arduino-cli` men-generate function
-  prototype otomatis di puncak file — kalau tipe tsb didefinisikan belakangan,
-  compile gagal dgn error "was not declared in this scope".
-- **Dua bus SPI independen** — layar (`SPI2_HOST`) dan touch (`SPI3_HOST`)
-  sengaja dipisah (`bus_shared=false`) supaya operasi baca touch tidak bentrok
-  dengan render layar.
-
-## 📝 Changelog
-
-Riwayat perubahan versi (mulai v9) ditulis lengkap di komentar header file `.ino`
-utama — mencakup fix kalibrasi touch, animasi Control Center & boot sequence yang
-dibuat berbasis waktu, momentum scroll, tombol Control Center jadi bulat, dan
-lainnya. Baca langsung di bagian atas source code untuk detail tiap versi.
-
-## 📄 Lisensi
-
-Belum ditentukan — tambahkan file `LICENSE` sesuai kebutuhan kamu (mis. MIT,
-GPL-3.0) sebelum membagikan repo ini secara publik.
 
 ---
 
-<div align="center">
+## Cara Setup & Flashing
 
-Dibuat dengan ❤️ di atas ESP32-S3 — *Simplicity, Redefined.*
+1. Buka file `.ino` di Arduino IDE / `arduino-cli` dengan board **ESP32-S3** (pastikan PSRAM diaktifkan — dipakai untuk semua sprite full-screen: `canvas`, `canvasApp`, `transShot`, `apodImg`, buffer MJPEG, dsb).
+2. Install semua [library yang dibutuhkan](#library-yang-dibutuhkan).
+3. Sambungkan hardware sesuai [tabel wiring](#hardware--wiring) di atas.
+4. Siapkan SD Card (format FAT32), masukkan ke slot SDIO.
+5. Flash firmware. Saat pertama kali nyala:
+   - Kalibrasi touch akan berjalan otomatis (ikuti instruksi di layar, sentuh tiap sudut).
+   - Boot sequence "Ren Phone" → "SanzX OS" akan tampil.
+6. Masuk ke app **Setting** untuk sambungkan WiFi (dibutuhkan untuk AI Chat, Trivia, Astronomi, Update via WiFi, dan Web File Manager).
+7. (Opsional) isi `/gemini_key.txt` dan `/nasa_key.txt` di SD Card dengan API key sendiri untuk kuota lebih besar.
 
-</div>
+### Reset kalibrasi touch
+Tombol **"Kalibrasi Ulang"** ada di app Setting — akan me-restart perangkat dan menjalankan ulang wizard kalibrasi.
+
+---
+
+## Library yang Dibutuhkan
+
+| Library | Kegunaan |
+|---|---|
+| `LovyanGFX` | Driver layar ILI9341 + touch XPT2046 (sprite, DMA, dll) |
+| `Preferences` | Penyimpanan pengaturan persisten (NVS) |
+| `WiFi`, `WebServer`, `HTTPClient`, `WiFiClientSecure` | Konektivitas & web server bawaan |
+| `SD_MMC`, `FS` | Akses SD Card via SDIO |
+| `Update` | OTA firmware update |
+| `Wire` | I2C untuk MPU6050 |
+| `JPEGDEC` (bitbank2) | Decode gambar JPEG (dipakai MJPEG player & app Astronomi) |
+| `MjpegClass` | Wrapper pemutaran video Motion-JPEG (berbasis JPEGDEC) |
+
+Semua library di atas tersedia lewat Arduino Library Manager atau repo GitHub masing-masing (kecuali `MjpegClass.h`, yang perlu disertakan manual sebagai file lokal di folder sketch — cek referensi contoh player MJPEG ESP32 populer kalau belum punya salinannya).
+
+---
+
+## Preferensi Tersimpan (NVS)
+
+| Namespace | Key | Isi |
+|---|---|---|
+| `ui` | `theme` | Indeks tema aktif |
+| `ui` | `orient` | Orientasi (landscape/portrait) |
+| `ui` | `autorot` | Status auto-rotate |
+| `ui` | `shakeon` | Status shake-to-home |
+| `wifi` | `ssid`, `pass` | Kredensial WiFi tersimpan |
+| `touch_cal` | `done`, `data` | Status & data kalibrasi touch |
+
+---
+
+## Filosofi & Catatan Desain
+
+Beberapa keputusan desain yang konsisten dipertahankan di seluruh codebase (didokumentasikan di komentar changelog sepanjang file):
+
+- **Animasi berbasis waktu (time-based), bukan berbasis jumlah-frame tetap**, untuk transisi & scroll — supaya durasi terasa konsisten di kondisi hardware apa pun (SPI sibuk, WiFi aktif, dll), walau kadang mengorbankan jumlah frame yang sempat digambar.
+- **Satu fungsi easing (`navEase`) dipakai ulang** oleh banyak animasi berbeda (transisi nav, Control Center, Game Booster, boot sequence) supaya "rasa" gerakan konsisten di seluruh sistem — animasi baru yang butuh nuansa berbeda (mis. overshoot Dynamic Island) sengaja dibuat fungsi terpisah, bukan mengubah `navEase` global.
+- **Area gambar & area sentuh selalu dihitung dari fungsi/konstanta yang sama** (bukan angka hardcode berduplikat) — pelajaran dari bug lama di Control Center yang area kartunya sempat tidak sinkron dengan area yang bisa disentuh.
+- **Trik "cheap glow"/gradient murah** dipakai di boot sequence & efek visual lain sebagai pengganti alpha-blending sungguhan yang mahal untuk MCU embedded.
+- **Cache-first untuk semua data online** (Gemini memory, Trivia tidak di-cache krn real-time, APOD gambar+terjemahan) — meminimalkan pemakaian data & kuota API.
+
+---
+
+## Known Limitations
+
+- Estimasi baterai berbasis voltage divider murni (bukan fuel-gauge IC) — perkiraan kasar, bukan presisi.
+- `DEMO_KEY` NASA & mode tanpa key MyMemory punya rate-limit rendah untuk pemakaian berat.
+- AI Chat & fitur berbasis API lain butuh WiFi + endpoint publik yang bisa diakses (tidak berfungsi offline).
+- Custom JSON parser di beberapa app (Gemini, Trivia, APOD) adalah parser ringan/manual (bukan library JSON penuh) — cukup untuk bentuk respons API yang ditargetkan, tapi tidak robust untuk format JSON arbitrer.
+- Layar APOD men-decode ulang gambar dari cache lokal kalau orientasi berubah selagi app terbuka (tidak instan, tapi tidak perlu koneksi internet lagi).
