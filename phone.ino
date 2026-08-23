@@ -38,10 +38,309 @@
 //     canvas/canvasApp & memuat isi Canvas app -- bukan lagi penentu
 //     rotasi yang dipakai saat kalibrasi.
 //
-// (Semua perbaikan v7 & v8 sebelumnya -- MJPEG player, teks AI Chat &
-// File Explorer tidak dipotong, model Gemini, auto-rotate MPU6050 yang
-// sumbunya sudah dibetulkan + tidak aktif saat lock screen, app Baterai
-// -- tetap dipertahankan di sini.)
+// =================================================================
+// v10 — UPDATE (permintaan user):
+//  1. Game Mode sekarang animasi "game booster" ala HP gaming (ring
+//     energi memancar, sapuan cahaya, kilat, progress bar bertahap)
+//     ketimbang cuma teks statis diam.
+//  2. Semua ikon aplikasi (termasuk game yg dulu cuma huruf polos)
+//     sekarang punya logo vektor sendiri lewat drawAppIcon().
+//  3. Tambah kalibrasi MPU6050 (offset accel & gyro) yang bisa
+//     dijalankan dari halaman Setting, hasilnya disimpan permanen.
+// =================================================================
+// v11 — UPDATE (permintaan user):
+//  1. Animasi "Game Booster" diganti total: yg lama kesannya ramai/norak
+//     (ring memancar, sapuan cahaya, kilat, teks besar "GAME BOOSTER").
+//     Sekarang jadi loading ring simpel & bersih dgn easing halus
+//     (pakai fungsi easing yg sama dgn transisi antar layar).
+//  2. AKAR MASALAH "logo game gak kelihatan" DITEMUKAN: initAppColors()
+//     ternyata TIDAK PERNAH mengisi warna utk index 11-15 (Snake,
+//     Flappy, 2048, TicTacToe, Breakout) -- warnanya default 0 alias
+//     HITAM. Karena lingkaran latar ikon jadi hitam total, garis vektor
+//     ikon (yg warnanya T().bg, ikut gelap) jadi nyaris tak kelihatan di
+//     atasnya. Sekarang semua game dapat warna cerah tersendiri.
+//  3. Control Center dirombak: tiap tombol sekarang pakai IKON vektor
+//     (drawCCIcon) + label singkat di bawahnya -- bukan kotak polos
+//     isi tulisan status doang. Jarak antar kartu (ccGap/ccCardH)
+//     diperbesar biar ikonnya lebih lega, gak sempit.
+//  4. Animasi buka/tutup Control Center diganti dari formula ad-hoc
+//     per-frame jadi animasi berbasis WAKTU (millis) + easing yg sama
+//     dgn transisi navigasi -> gerakannya mulus & konsisten kecepatannya
+//     berapa pun framerate loop() saat itu (dulu bisa keliatan patah2
+//     kalau loop lagi sibuk mis. pas WiFi/AI jalan).
+//  5. Scroll Home dibikin lebih smooth: kecepatan gesture di-low-pass
+//     (bukan diganti mentah tiap frame), decay momentum dibuat lbh
+//     landai, + sedikit efek elastis di ujung atas/bawah list.
+//  6. Canvas: goresan gambar dulu dibikin dgn drawLine() yg digeser-
+//     geser per pixel ketebalan -> keliatan bertangga/kotak-kotak,
+//     apalagi brush besar atau gerakan diagonal cepat. Sekarang goresan
+//     "distempel" pakai fillCircle yg diinterpolasi sepanjang jalur
+//     gerakan jari (canvasStampStroke), jadi mulus & tanpa celah.
+// =================================================================
+// v12 — UPDATE (permintaan user):
+//  1. Control Center dibuat lebih RINGKAS & "mirip HP": panel sekarang
+//     kartu mengambang dgn inset margin kiri/kanan + sudut membulat
+//     (dulu nempel penuh ke tepi layar, sudut lancip), dan tiap tombol
+//     dibuat lebih kecil/padat (ccCardH dulu 48/64px, sekarang 38/52px).
+//  2. Scroll teks dibuat lebih smooth: AI Chat & viewer isi file di File
+//     Explorer sekarang punya momentum (low-pass velocity + decay stlh
+//     jari dilepas) senada dgn gaya scroll Home, bukan cuma geser 1:1
+//     ikut jari lalu berhenti mendadak.
+//  3. File Explorer: BARU - isi file (.txt dsb) sekarang bisa di-scroll
+//     dgn drag jari (dulu teks panjang meluber keluar kotak & gak bisa
+//     dibaca semua). Dibungkus+di-wrap+di-clip+ada scrollbar tipis,
+//     reuse pola & fungsi yg sama persis dgn AI Chat (AiLine+aiWrapAppend).
+//  4. Tema boot sequence diperbarui: latar jadi gradient halus (dulu
+//     hitam polos), animasi logo/hexagon pakai easing yg sama dgn
+//     transisi navigasi (dulu progres linear), ada halo lembut di
+//     belakang logo, judul muncul dgn fade halus (dulu nongol mendadak),
+//     & loader titik di stage 2 berdenyut ukurannya (dulu cuma kedip
+//     nyala/mati). Sengaja dibuat tetap bersih/elegan (bukan "ramai"),
+//     senada dgn keputusan v11 yg menyederhanakan Game Booster.
+// =================================================================
+// v13 — UPDATE (permintaan user: "sistem beneran smooth" + Control Center
+// bulat + boot sequence minim warna):
+//  1. Transisi navigasi antar layar (playNavTransition) dulu jalan dgn
+//     JUMLAH FRAME TETAP (12 frame + delay 6ms/frame) -- durasi totalnya
+//     bisa molor kalau render sedang berat (layar kompleks, atau SPI lg
+//     dipakai bareng WiFi/AI). Sekarang dibuat BERBASIS WAKTU (millis),
+//     pola yg sama dgn fix ccOffset Control Center di v11 -- durasi total
+//     transisi SELALU konsisten ~170ms di kondisi hardware apapun.
+//  2. Control Center dirombak dari kartu kotak (fillRoundRect) jadi TOMBOL
+//     BULAT (fillCircle) dgn label di LUAR/bawah lingkaran -- persis pola
+//     quick-toggle di HP asli. Diameter lingkaran (ccCircleD) dihitung dari
+//     lebar kolom panel (otomatis menyesuaikan lebar layar/orientasi) tapi
+//     dipagari batas atas yg sengaja dikecilkan sedikit drpd ukuran kartu
+//     v12 (38/52px -> skrg diameter dasar 30/40px). Area sentuh (ccTouch)
+//     tetap 1 sel penuh (lingkaran+label) biar tetap gampang di-tap.
+//     Slider Brightness jg dpt handle bulat di ujungnya, senada gaya bulat
+//     yg baru.
+//  3. Boot sequence: dulu stage "Ren Phone" pakai aksen oranye + gradient
+//     latar biru, stage "SanzX OS" pakai aksen cyan + gradient latar navy
+//     (2 hue berbeda + latar berwarna = kesan "banyak warna"). Sekarang
+//     KEDUA stage berbagi SATU palet monokrom gelap yg sama (BOOT_ACCENT
+//     putih, BOOT_GLOW abu-kebiruan redup, latar nyaris hitam polos) --
+//     boot sequence terasa satu tema dark yg konsisten, bukan dua tema
+//     warna yg bertukar.
+// =================================================================
+// v14 — UPDATE (permintaan user: scroll lebih smooth + fitur Dynamic Island
+// + game Trivia Quiz pakai API):
+//  1. Momentum scroll (Home / AI Chat / File Explorer) dulu decay-nya
+//     (*=0.92 tiap iterasi loop()) TIDAK dinormalisasi waktu -- sama persis
+//     dgn akar masalah transisi navigasi sebelum v13: kalau loop() lg berat
+//     (render kompleks/WiFi & HTTP jalan bareng), jumlah iterasi per detik
+//     turun, jadi decay-nya ikut kerasa lebih "lambat berhenti" krn faktor
+//     0.92 diterapkan lebih jarang. Sekarang decay-nya dinormalisasi
+//     terhadap dt (waktu nyata antar frame, bukan jumlah iterasi), pola yg
+//     SAMA PERSIS dgn fix playNavTransition() di v13 -- jadi kecepatan
+//     berhenti momentum scroll konsisten di kondisi hardware apapun.
+//  2. FITUR BARU: Dynamic Island -- pil hitam mengambang di tengah atas
+//     layar (persis konsep "Dynamic Island" HP modern) yg BERMORFING antara
+//     status IDLE (tersembunyi) / COMPACT (pil kecil + indikator/skor) /
+//     EXPANDED (melebar dgn ikon+teks) pakai animasi berbasis waktu DENGAN
+//     easing "overshoot" (dikit "mantul" di ujung gerakan, beda dr navEase
+//     yg datar) supaya morph-nya kerasa kenyal/hidup, bukan geser kaku.
+//     Terintegrasi ke AI Chat (status "sedang berpikir" -> "jawaban siap"),
+//     Mode Game (notifikasi boost performa), & Trivia Quiz (skor live +
+//     feedback benar/salah). Ketuk pil-nya bisa memekarkan lagi isinya,
+//     dan utk AI Chat bisa langsung lompat ke app-nya.
+//  3. FITUR BARU: App Trivia Quiz -- soal diambil real-time dari Open Trivia
+//     Database (opentdb.com) lewat HTTPClient async (task terpisah spt pola
+//     Gemini AI, biar UI gak nge-freeze nunggu respons server). 12 tema
+//     soal (Umum, Sains, Komputer, Olahraga, Geografi, Sejarah, Film,
+//     Musik, Video Game, Hewan, Anime, Mitologi) x 4 tingkat kesulitan x
+//     3 pilihan jumlah soal (5/10/15) = banyak kombinasi permainan. Body
+//     JSON di-decode manual (base64 -> HTML entity) tanpa perlu library
+//     ArduinoJson, senada gaya parsing manual yg sudah dipakai di
+//     doGeminiHttpRequest(). Skor & feedback tiap jawaban nongol di
+//     Dynamic Island.
+// =================================================================
+// v15 — FIX BUILD (root cause & perbaikan):
+//  1. AKAR MASALAH build gagal ("'TriviaLayout' does not name a type" lalu
+//     diikuti "'diNotify' was not declared in this scope"): struct
+//     TriviaLayout (dipakai sbg TIPE RETURN fungsi triviaCalcLayout())
+//     didefinisikan di TENGAH file, dekat kode Trivia -- PERSIS pola bug
+//     yang sudah pernah dialami & didokumentasikan sebelumnya utk AiLine,
+//     Vec3f, dan NavAnim (lihat komentar di dekat definisi struct2 itu di
+//     atas). arduino-cli men-generate prototype utk SEMUA fungsi di
+//     puncak file SEBELUM badan kode lain terbaca. Karena prototype
+//     "TriviaLayout triviaCalcLayout();" ikut digenerate di puncak file
+//     padahal struct TriviaLayout-nya sendiri baru didefinisikan jauh di
+//     bawah, baris prototype itu gagal dikompilasi ("does not name a
+//     type"). Kegagalan pada satu baris di blok prototype yang digenerate
+//     itu membuat parser gagal memproses lanjutan blok prototype dengan
+//     benar (efek domino/cascading), sehingga prototype fungsi lain yang
+//     seharusnya valid -- termasuk diNotify() -- ikut tidak ter-generate,
+//     makanya sendGeminiRequest()/triggerGeminiAI() yang memanggil
+//     diNotify() sebelum definisi aslinya jadi error "was not declared".
+//  2. FIX: struct TriviaLayout dipindahkan ke PUNCAK FILE, tepat setelah
+//     definisi struct Vec3f (bergabung dgn AiLine/Vec3f yang memang sudah
+//     ditaruh di sana justru karena alasan yang sama). Definisi struct
+//     yang lama di bagian APP: TRIVIA QUIZ dihapus (tidak didefinisikan
+//     dua kali), fungsi triviaCalcLayout() di lokasi aslinya tetap sama,
+//     cuma tinggal memakai struct yang sudah dikenal dari puncak file.
+//     Dengan ini seluruh blok prototype otomatis kembali valid dari awal
+//     sampai akhir, dan error diNotify() ikut hilang tanpa perlu diubah
+//     sama sekali (diNotify tidak pernah salah dari awal).
+// =================================================================
+// v16 — FIX BUILD (root cause & perbaikan, KALI INI diNotify() SUNGGUHAN
+// yang salah -- v15 salah diagnosa soal ini):
+//  1. AKAR MASALAH: build masih gagal dgn error yang SAMA PERSIS spt
+//     sebelum v15 ("'diNotify' was not declared in this scope" di
+//     sendGeminiRequest() & triggerGeminiAI()), padahal struct
+//     TriviaLayout sudah dipindah ke puncak file di v15. Ini membuktikan
+//     penyebab errornya BUKAN cascading dari TriviaLayout (itu memang
+//     valid utk dibenahi, tapi bukan akar masalah diNotify).
+//     PENYEBAB SEBENARNYA: fungsi diNotify() adalah SATU-SATUNYA fungsi
+//     di seluruh file ini yang parameter terakhirnya punya DEFAULT VALUE
+//     (const String& badge=""). arduino-cli memakai ctags utk men-scan &
+//     meng-generate prototype semua fungsi secara otomatis di puncak
+//     file SEBELUM badan definisi aslinya terbaca -- tapi ctags versi yg
+//     dipakai gagal mem-parse signature fungsi yang punya default
+//     parameter bertipe referensi dgn literal string (=""), sehingga
+//     prototype "void diNotify(...)" itu SATU-SATUNYA yang gagal
+//     digenerate, sementara fungsi lain (diLink, diHide, dst - yang
+//     TIDAK punya default parameter) tetap berhasil ter-generate dgn
+//     benar. Makanya errornya SELALU spesifik ke diNotify() saja, tidak
+//     pernah ke fungsi Dynamic Island lainnya, di versi manapun dari v14
+//     sampai v15.
+//  2. FIX: tambahkan forward declaration MANUAL utk diNotify() di puncak
+//     file (persis di bawah definisi struct2 AiLine/Vec3f/TriviaLayout),
+//     lengkap dengan default value-nya. Dengan deklarasi manual ini,
+//     compiler sudah mengenal signature diNotify() (termasuk default
+//     value badge) jauh sebelum sendGeminiRequest()/triggerGeminiAI()
+//     memanggilnya -- tidak lagi bergantung pada prototype otomatis
+//     ctags yang terbukti gagal utk kasus ini. Default value ""
+//     dihapus dari definisi ASLI diNotify() di bagian DYNAMIC ISLAND
+//     (tetap di deklarasi saja), karena C++ melarang default argument
+//     yang sama dideklarasikan dua kali (di forward declaration DAN di
+//     definisi) -- aturan standar C++, bukan hal spesifik proyek ini.
+// =================================================================
+// v17 — UPDATE (permintaan user: transisi antar aplikasi lebih smooth/gak
+// patah-patah + Dynamic Island jangan sampai ada teks yang keluar dari pil):
+//  1. AKAR MASALAH transisi "patah-patah": playNavTransition() menggambar
+//     tiap frame animasi dengan MEMANGGIL DUA pushSprite() terpisah ke
+//     `display` (transShot lalu canvas). Tanpa startWrite()/endWrite()
+//     eksplisit, LovyanGFX membuka & menutup TRANSAKSI SPI SENDIRI-SENDIRI
+//     utk tiap pushSprite() (assert chip-select, kirim command jendela
+//     alamat, lock bus, lalu lepas lagi) -- overhead buka-tutup ini terjadi
+//     2x per frame, di atas biaya transfer piksel yang sebenarnya. Karena
+//     durasi transisi sengaja dibuat pendek (170ms, lihat NAV_TRANS_MS),
+//     overhead ini jadi porsi yang signifikan dari waktu tiap frame,
+//     sehingga jumlah frame yang sempat tergambar sedikit & timing-nya gak
+//     merata -> terlihat/terasa tersendat, apalagi kalau SPI lagi dipakai
+//     bareng proses lain (mis. AI Chat/WiFi jalan di background).
+//     FIX: seluruh loop animasi transisi sekarang dibungkus SATU pasang
+//     display.startWrite()/display.endWrite(). Transaksi SPI dibuka SEKALI
+//     di awal & tetap terbuka sepanjang animasi -- tiap pushSprite() di
+//     dalam loop tinggal menumpang transaksi yang sudah terbuka (tanpa
+//     lock/assert-CS/kirim-command berulang), sehingga tiap frame jauh
+//     lebih ringan & gerakannya terasa mulus, tidak tersendat lagi.
+//  2. AKAR MASALAH teks Dynamic Island "keluar" dari pil: ADA DUA penyebab.
+//     Pertama, pil dulu punya DUA baris teks (title + subtitle), tapi lebar
+//     pil (diTargetW) CUMA dihitung dari panjang title -- giliran subtitle-
+//     nya lebih panjang dari title (mis. title "Mode Game" tapi subtitle
+//     "Performa dimaksimalkan"), subtitle itu meleber keluar krn pilnya
+//     sendiri dibuat sempit mengikuti title yang lebih pendek. Kedua, bahkan
+//     utk SATU baris title pun: kalau title dibuat dari gabungan variabel
+//     (mis. nama kategori trivia + jumlah soal) dan jadi lebih panjang dari
+//     muat maksimum pil (SCR_W-28), diTargetW() meng-CLAMP lebar pilnya ke
+//     batas itu, TAPI teks yang digambar TIDAK ikut dipotong/disesuaikan ke
+//     lebar yang sudah di-clamp -> tetap digambar penuh sepanjang aslinya,
+//     otomatis meleber keluar begitu klem lebar itu aktif.
+//     FIX (3 lapis): (a) subtitle DIHAPUS TOTAL dari Dynamic Island -- skrg
+//     cuma SATU baris teks singkat saja (persis spt diminta: mis. "Mode
+//     Game Aktif", tanpa kalimat penjelasan di baris bawahnya), semua
+//     pemanggil diNotify() diubah supaya pesannya singkat & padat dalam
+//     SATU frasa. (b) Fungsi baru diFitTitle() memotong (truncate + "..")
+//     title SEBELUM disimpan kalau ternyata lebih panjang dari muat
+//     maksimum pil, pakai rumus lebar yang SAMA PERSIS dengan diTargetW()
+//     supaya lebar pil & panjang teks yang akhirnya digambar SELALU
+//     konsisten satu sama lain. (c) Sebagai jaring pengaman terakhir,
+//     drawDynamicIsland() sekarang membungkus SEMUA isi pil (ikon, teks,
+//     badge, progress bar) dengan setClipRect() persis di batas pil --
+//     walau ada kasus tak terduga lain nanti, potongan piksel teks TIDAK
+//     PERNAH bisa tergambar keluar dari bentuk pil lagi.
+// =================================================================
+// v18 — UPDATE (permintaan user: rombak lagi transisi antar aplikasi,
+// pastikan efek easing bekerja dgn baik, mulus & memanjakan mata):
+//  1. AKAR MASALAH "easing kerasa gak jalan/kurang mulus" DITEMUKAN:
+//     easing di playNavTransition() secara MATEMATIS sudah benar (progres
+//     dihitung dari waktu nyata lalu dilewatkan ke kurva easing), TAPI
+//     jendela waktunya (NAV_TRANS_MS lama = 170ms) terlalu sempit dibanding
+//     biaya nyata tiap frame: satu frame animasi = DUA pushSprite() penuh
+//     layar lewat SPI 40MHz+DMA, yg di layar 320x240 makan waktu ~puluhan
+//     ms sendiri. Akibatnya dalam 170ms cuma sempat ~4-6 frame yg benar2
+//     ke-render -- di frame sesedikit itu, mata manusia gak sempat
+//     "melihat" lengkungan kurva easing-nya, yg kerasa cuma beberapa lompatan
+//     kasar (persis kayak easing "gak berfungsi" walau angkanya benar).
+//     FIX: NAV_TRANS_MS dinaikkan ke 210ms -- masih terasa cepat/responsif
+//     (di bawah ambang ~300-400ms yg mulai kerasa lambat), tapi ngasih
+//     jendela waktu lebih longgar shg lebih banyak frame sempat tergambar
+//     & lengkungan easing-nya jadi benar2 KELIHATAN mulus, bukan cuma benar
+//     di atas kertas.
+//  2. Kurva easing KHUSUS transisi antar-app: navEase() (cubic) yg lama
+//     dipakai BERSAMA oleh banyak animasi lain (buka/tutup Control Center,
+//     loading ring Game Booster, logo+halo+judul boot sequence) -- sengaja
+//     TIDAK diubah, supaya "rasa" gerakan elemen2 itu yg sudah teliti
+//     disetel sejak v11-v12 tidak ikut berubah tanpa diminta. Sebagai
+//     gantinya dibuat navTransEase() BARU khusus dipakai playNavTransition
+//     -- ease-in-out QUINTIC (pangkat 5, bukan pangkat 3 kayak navEase).
+//     Kurva pangkat lebih tinggi ini punya awalan & akhiran yg lebih landai
+//     drpd cubic (percepatan/perlambatan lebih halus, "melayang" bukan
+//     "diseret"), yg pada durasi animasi sesingkat ini terasa jauh lebih
+//     "premium" & memanjakan mata dibanding cubic biasa.
+//  3. FITUR BARU "depth dim": layar LAMA yg lagi PERGI sekarang diredupkan
+//     sedikit (dimSnapshot(), blend 32% ke arah hitam via lerpColor565 yg
+//     sudah ada) SEKALI tepat setelah snapshot-nya diambil, sebelum loop
+//     animasi berbasis-waktu mulai jalan -- kesan layar lama "surut ke
+//     bayangan" sementara layar baru tetap terang penuh, senada konsep
+//     depth di transisi HP modern (background view digelapkan sedikit
+//     selagi foreground baru masuk). SENGAJA cuma dipanggil SEKALI di
+//     luar loop (bukan tiap frame) supaya TIDAK mengurangi jumlah frame yg
+//     sempat digambar di dalam jendela NAV_TRANS_MS -- kalau redup ulang
+//     tiap frame, biaya itu ikut menyaingi waktu render tiap frame &
+//     malah bikin animasi makin patah2, jadi kontraproduktif thdp tujuan
+//     smooth-nya sendiri.
+//     CATATAN kenapa incoming & outgoing TETAP pakai satu progres p yg
+//     SAMA (bukan dibuat beda kecepatan / parallax gerak): posisi kanan
+//     layar outgoing & posisi kiri layar incoming WAJIB selalu ketemu
+//     persis di titik yg sama tiap frame, kalau tidak bakal muncul CELAH
+//     kosong (progres beda -> titik temu geser) atau TUMPANG TINDIH (extra
+//     piksel yg harus digambar dobel) -- makanya kesan depth di sini
+//     sengaja didapat lewat WARNA (dim) yg murah, bukan lewat kecepatan
+//     gerak berbeda yg akan merusak kesinambungan posisi.
+// =================================================================
+// v19 — REVERT (laporan user: perubahan v18 di atas malah bikin transisi
+// makin parah/kerasa aneh, minta transisinya balik persis kayak versi
+// lama yg dikasih user -- fixed 12 langkah + delay(6), easing cubic biasa,
+// TANPA dim/quintic/durasi berbasis-waktu):
+//  1. Ketiga perubahan "premium" di v18 DICABUT SEMUA dari playNavTransition:
+//     - navTransEase() (quintic) dihapus, navEase() (cubic) yg lama dipakai
+//       lagi -- persis kayak sebelum v18.
+//     - dimSnapshot() (redup layar lama via getBuffer()+lerpColor565)
+//       dihapus total & tidak dipanggil lagi. Ini kemungkinan besar biang
+//       kerok "makin parah"-nya: manipulasi buffer piksel mentah lewat
+//       getBuffer() itu belum pernah dites langsung di hardware asli user,
+//       jadi kalau ternyata ada asumsi yg meleset (mis. layout buffer),
+//       hasilnya bisa nampak rusak/aneh di layar -- bukan cuma "kurang
+//       smooth" tapi benar2 kelihatan salah.
+//     - Loop berbasis-waktu (millis()+NAV_TRANS_MS=210ms) dicabut, balik
+//       ke loop LANGKAH TETAP (STEPS=12) + delay(6) per langkah persis
+//       seperti kode yg dikasih user -- pacing-nya jadi deterministik &
+//       gampang diprediksi (tiap transisi SELALU 12 langkah, titik), bukan
+//       "sebanyak mungkin langkah dalam jendela waktu X" yg count-nya bisa
+//       beda-beda tiap kali jalan.
+//  2. YANG TETAP DIPERTAHANKAN (bukan bagian dari yg dikeluhkan user, dan
+//     mencabutnya akan diam-diam memunculkan lagi bug lama): pembungkus
+//     display.startWrite()/endWrite() di seputar loop (fix v17 utk bug
+//     "transisi patah-patah" krn overhead buka-tutup transaksi SPI 2x per
+//     frame) TETAP ada. Ini murni soal efisiensi transfer SPI, sama sekali
+//     tidak mengubah kurva easing atau tampilan/"rasa" gerakan -- beda dgn
+//     3 hal di atas yg memang soal "rasa". Kalau user MAU ini juga dicabut
+//     (persis 1:1 sama kode yg dikasih, tanpa startWrite/endWrite sama
+//     sekali), tinggal bilang -- efeknya transisi berpotensi kerasa
+//     patah2 lagi terutama saat SPI dipakai bareng WiFi/AI di background.
 // =================================================================
 #include <LovyanGFX.hpp>
 #include <Preferences.h>
@@ -67,7 +366,7 @@
 enum Screen { SCR_HOME, SCR_CLOCK, SCR_CALC, SCR_SENSOR,
               SCR_SETTINGS, SCR_NOTEPAD, SCR_CANVAS, SCR_AICHAT, SCR_FILEEXPLORER,
               SCR_MJPEG, SCR_UPDATE, SCR_BATTERY, SCR_SNAKE, SCR_FLAPPY,
-              SCR_2048, SCR_TTT, SCR_BREAKOUT };
+              SCR_2048, SCR_TTT, SCR_BREAKOUT, SCR_TRIVIA };
 enum Orientation { ORIENT_LANDSCAPE = 0, ORIENT_PORTRAIT = 1 };
 
 // Dipindah ke atas — alasan sama dengan AiLine & Vec3f: arduino-cli men-generate
@@ -87,6 +386,38 @@ struct AiLine { String text; uint16_t color; };
 // "Orientasi 3D", jadi HARUS didefinisikan di sini (bukan di dekat fungsinya)
 // supaya prototype otomatis arduino-cli tidak gagal.
 struct Vec3f { float x,y,z; };
+
+// v15 FIX: sama persis dgn AiLine/Vec3f di atas -- struct TriviaLayout
+// dipakai sbg TIPE RETURN fungsi triviaCalcLayout() (app Trivia Quiz).
+// Sebelumnya struct ini didefinisikan di tengah file (dekat kodenya di
+// bagian APP: TRIVIA QUIZ), sehingga prototype otomatis
+// "TriviaLayout triviaCalcLayout();" yang digenerate arduino-cli di
+// PUNCAK file gagal dikompilasi ("TriviaLayout does not name a type"),
+// dan itu bikin sisa blok prototype ikut gagal ter-generate dgn benar
+// (termasuk prototype diNotify() yang jadi keliatan "not declared" di
+// sendGeminiRequest()/triggerGeminiAI() walau diNotify sendiri benar).
+// Pindahkan ke sini -> masalah selesai dari akarnya.
+struct TriviaLayout{ int diffY, amtY, startY, catBottom; };
+
+// v16 FIX: forward declaration MANUAL untuk diNotify() -- lihat catatan
+// lengkap "v16" di paling atas file. Singkatnya: diNotify() adalah
+// SATU-SATUNYA fungsi di file ini dengan default parameter
+// (const String& badge=""), dan itu bikin ctags (dipakai arduino-cli utk
+// auto-generate prototype fungsi di puncak file) gagal mem-parse &
+// men-generate prototype KHUSUS untuk fungsi ini -- fungsi lain yang
+// tidak punya default parameter (diLink, diHide, dst) tetap berhasil
+// ter-generate otomatis seperti biasa. Karena prototype-nya tidak pernah
+// ada, sendGeminiRequest()/triggerGeminiAI() (dipanggil jauh lebih awal
+// di file, sebelum definisi asli diNotify() di bagian DYNAMIC ISLAND)
+// gagal mengenali fungsi ini -> error "was not declared in this scope".
+// Dengan deklarasi manual di sini (lengkap dgn default value badge=""),
+// compiler sudah kenal signature diNotify() dari awal, jadi tidak lagi
+// bergantung pada prototype otomatis yang terbukti gagal utk kasus ini.
+// v17: parameter 'subtitle' DIHAPUS dari signature -- Dynamic Island
+// sekarang cuma menampilkan SATU baris teks (lihat catatan "v17" di
+// paling atas file & di dekat definisi asli diNotify() utk alasannya).
+void diNotify(char icon, const String& title, uint16_t color,
+              unsigned long expandMs, bool keepAliveCompact, const String& badge = "");
 
 struct Theme {
   const char* name;
@@ -604,6 +935,7 @@ String aiResponse = "";
 volatile bool aiLoading = false;
 float aiRespScrollY = 0;   // posisi scroll layar AI Chat (dipakai jg oleh triggerGeminiAI utk reset)
 int   aiRespMaxScroll = 0;
+float aiRespScrollVel = 0; // v12: kecepatan scroll (low-pass) -> momentum halus stlh jari dilepas
 
 // =================================================================
 // AI MEMORY: riwayat percakapan disimpan permanen di SD Card supaya
@@ -832,6 +1164,10 @@ void sendGeminiRequest(String promptText) {
   aiLoading = false;
   aiRequestStartMillis = 0;
   aiSoftStopTriggered = false;
+  // v14: Dynamic Island kabari hasilnya (mekar sebentar lalu hilang total,
+  // krn activity-nya sudah selesai -> keepAliveCompact=false)
+  diNotify('A', ok?"Jawaban siap!":"Gagal merespons", ok?T().good:T().danger, 1700, false);
+  diLink(SCR_AICHAT);
   needRedrawNow();
 }
 
@@ -860,6 +1196,10 @@ void triggerGeminiAI() {
   aiResponse = "Menghubungi Gemini AI...";
   aiRequestStartMillis = millis();
   aiRespScrollY = 0; // pertanyaan baru -> mulai baca dari atas lagi
+  // v14: Dynamic Island nunjukin activity latar -> mekar sebentar lalu
+  // mengecil jadi pil compact yg berdenyut selama masih loading
+  diNotify('A', "Sedang berpikir...", T().accent2, 1400, true);
+  diLink(SCR_AICHAT);
   needRedrawNow();
 
   BaseType_t res = xTaskCreatePinnedToCore(
@@ -964,15 +1304,31 @@ void renderCurrentFrame(); // forward decl - dipakai utk render frame BARU sblm 
 
 // ease-in-out cubic: mulai halus, cepat di tengah, berhenti halus - lbh
 // "premium" drpd ease-out biasa krn simetris di awal & akhir gerakan.
+// FIX v11: fungsi easing ini sekarang dipakai ULANG oleh animasi buka/tutup
+// Control Center (lihat CONTROL CENTER) & animasi Game Booster, jadi semua
+// animasi di HP ini punya "rasa" gerakan yg konsisten satu sama lain.
+// v19: INI SATU-SATUNYA fungsi easing yg dipakai playNavTransition lagi
+// (navTransEase() quintic dari v18 sudah DIHAPUS, lihat changelog v19 di
+// puncak file) -- balik pakai cubic biasa persis versi sebelum v18.
 float navEase(float p){
   return p<0.5f ? 4.0f*p*p*p : 1.0f-powf(-2.0f*p+2.0f,3.0f)/2.0f;
 }
 
+// v19: playNavTransition DIKEMBALIKAN ke pola LANGKAH TETAP (STEPS=12) +
+// delay(6) per langkah, PERSIS seperti kode yg dikasih user -- lihat
+// changelog v19 di puncak file utk alasan lengkap kenapa dicabut dari versi
+// v18 (quintic easing + dim layar lama + loop berbasis-waktu). Yang TETAP
+// dipertahankan dari v17: pembungkus display.startWrite()/endWrite() di
+// seputar loop, supaya SATU transaksi SPI dipakai bareng utk semua
+// pushSprite() dalam loop (bukan buka-tutup transaksi 2x per langkah) --
+// ini murni efisiensi transfer, tidak mengubah kurva easing atau pacing
+// langkahnya sama sekali, jadi aman digabung dgn pola lama ini.
 void playNavTransition(NavAnim anim){
   canvas.pushSprite(&transShot,0,0); // simpan frame LAMA (canvas msh berisi layar sblm pindah)
   renderCurrentFrame();              // gambar frame BARU ke canvas (state navigasi sudah berubah)
 
   const int STEPS=12;
+  display.startWrite();
   for(int i=1;i<=STEPS;i++){
     float p=navEase((float)i/STEPS);
     if(anim==NAV_ANIM_PUSH){
@@ -990,6 +1346,7 @@ void playNavTransition(NavAnim anim){
     }
     delay(6); // pacing konsisten - biar mulusnya sama di kecepatan SPI/hardware manapun
   }
+  display.endWrite();
   push(); // pastikan frame akhir persis sama dgn 'canvas' (jaga2 sisa pembulatan offset)
 }
 
@@ -1189,6 +1546,194 @@ void drawStatusBar(LGFX_Sprite& s){
 }
 
 // =============================================
+// DYNAMIC ISLAND
+// Pil hitam mengambang di tengah-atas layar (meniru "Dynamic Island" HP
+// modern), dipakai utk notifikasi live singkat: status AI Chat, Mode Game,
+// & skor/feedback Trivia Quiz. Bermorfing antara 3 keadaan (IDLE tersembunyi
+// total / COMPACT pil kecil+indikator / EXPANDED melebar ikon+teks) via
+// animasi BERBASIS WAKTU (pola sama dgn Control Center & transisi navigasi
+// v11/v13) supaya durasinya konsisten di kondisi hardware apapun -- TAPI
+// pakai easing "overshoot" (dikit "mantul" di ujung gerakan) bukan navEase
+// yg datar, biar morph-nya kerasa kenyal/hidup kayak Dynamic Island asli,
+// bukan geser kaku antar 2 ukuran.
+//
+// v17 FIX (akar masalah "kata keluar dari pil"): dulu pil ini punya DUA
+// baris teks (title + subtitle), tapi lebar pil (diTargetW) CUMA dihitung
+// dari panjang title -- subtitle yang seringkali lebih panjang (mis. title
+// "Mode Game" tapi subtitle "Performa dimaksimalkan") jadi meleber keluar
+// pil krn lebar pil ketinggalan sempit dari teksnya sendiri. Bahkan utk
+// SATU baris title pun, kalau title dibuat dari gabungan variabel (mis.
+// nama kategori trivia) & jadi lebih panjang dari muat maksimum pil
+// (SCR_W-28), diTargetW() meng-CLAMP lebar pil tapi teksnya TIDAK ikut
+// dipotong -> tetap meleber.
+// FIX: (a) subtitle dihapus total -- sekarang SATU baris teks singkat saja
+// (persis spt diminta: "Mode Game" tanpa kalimat penjelasan di bawahnya),
+// (b) diFitTitle() memotong+kasih ".." title SEBELUM disimpan kalau lebih
+// panjang dari muat maksimum pil, pakai rumus lebar yg SAMA PERSIS dgn
+// diTargetW() supaya keduanya selalu konsisten, dan (c) sbg jaring
+// pengaman terakhir, drawDynamicIsland() sekarang membungkus SEMUA isi pil
+// (ikon+teks+badge+progress bar) dgn setClipRect() persis di batas pil --
+// walau ada kasus tak terduga lain nanti, piksel teks TIDAK PERNAH bisa
+// tergambar keluar dari bentuk pil lagi.
+// =============================================
+enum DIState { DI_IDLE, DI_COMPACT, DI_EXPANDED };
+DIState diState = DI_IDLE, diTargetState = DI_IDLE;
+unsigned long diAnimStartMs = 0;
+float diAnimFromW = 0, diAnimFromH = 0;
+float diCurW = 0, diCurH = 0;
+const float DI_ANIM_MS = 380.0f; // lbh lama dr transisi nav (12 langkah x ~6ms) -- morph perlu "napas" biar kenyal
+
+char     diIcon = 0;
+String   diTitle = "", diBadge = ""; // v17: diSubtitle dihapus -- cuma 1 baris teks skrg
+uint16_t diColor = 0;
+float    diProgress = -1;   // -1 = tanpa progress bar
+bool     diPulse = false;   // true = ada live activity latar (tetap COMPACT & berdenyut)
+unsigned long diExpandedUntil = 0;
+Screen   diLinkedScreen = SCR_HOME;
+bool     diHasLink = false;
+int      diCurX = 0, diCurY = 2; // posisi terakhir dirender, dipakai loop() utk hit-test tap
+
+// ease "back": dikit overshoot lalu balik pas ke target -- beda dr navEase
+// yg datar simetris; overshoot inilah yg bikin morph kerasa kenyal/hidup.
+float diSpringEase(float p){
+  const float c1=1.70158f, c3=c1+1.0f;
+  float x=p-1.0f;
+  return 1.0f + c3*x*x*x + c1*x*x;
+}
+
+int diTargetW(){
+  if(diTargetState==DI_IDLE) return 0;
+  if(diTargetState==DI_COMPACT){
+    int w = diBadge.length()? (30+(int)diBadge.length()*7) : 34;
+    return constrain(w, 24, SCR_W-28); // v17: diklem jg spy badge panjang gak pernah minta lebar > layar
+  }
+  int tw = (int)diTitle.length()*6;
+  int w = 20 + tw + 16; // ikon + teks + padding
+  return constrain(w, 96, SCR_W-28);
+}
+// v17: tinggi expanded dikecilkan (30->26) krn skrg cuma 1 baris teks,
+// gak perlu ruang ekstra lagi utk baris subtitle ke-2.
+int diTargetH(){ return diTargetState==DI_IDLE ? 0 : (diTargetState==DI_EXPANDED ? 26 : 16); }
+
+void diBeginAnim(){ diAnimFromW=diCurW; diAnimFromH=diCurH; diAnimStartMs=millis(); }
+
+// v17: potong (truncate + "..") title SEBELUM disimpan kalau lebih panjang
+// dari muat maksimum pil -- rumus lebar di sini SENGAJA disamakan persis
+// dgn diTargetW() (20 padding-kiri+ikon, 16 padding-kanan, font 6px/char)
+// supaya lebar pil & panjang teks yg akhirnya digambar SELALU konsisten
+// satu sama lain (gak ada lagi kasus pil di-clamp sempit tapi teksnya
+// tetap digambar sepanjang aslinya).
+void diFitTitle(const String& title){
+  int maxTextPx = (SCR_W-28) - 36; // 36 = padding kiri(20) + padding kanan(16), sama dgn diTargetW()
+  int maxChars = maxTextPx/6;
+  if(maxChars<3) maxChars=3;
+  if((int)title.length() > maxChars) diTitle = title.substring(0, maxChars-2) + "..";
+  else diTitle = title;
+}
+
+// Tampilkan notifikasi baru. keepAliveCompact=true -> setelah expandMs, pil
+// MENGECIL ke COMPACT & terus berdenyut (dipakai selama activity latar msh
+// jalan, mis. AI msh mikir / kuis msh berlangsung); false -> pil MENGHILANG
+// TOTAL setelah expandMs (notifikasi sekali-tembak spt benar/salah/hasil).
+// v16 FIX: default value "" utk parameter 'badge' SUDAH dideklarasikan di
+// forward declaration diNotify() di puncak file -- TIDAK boleh ditulis lagi
+// di sini (definisi asli), karena C++ melarang default argument yang sama
+// dideklarasikan dua kali. Signature di bawah ini sengaja TANPA "=\"\"".
+// v17: parameter 'subtitle' DIHAPUS TOTAL -- pesan sekarang cuma SATU
+// frasa singkat (title saja), lihat catatan "v17" di atas struct DIState.
+void diNotify(char icon, const String& title, uint16_t color,
+              unsigned long expandMs, bool keepAliveCompact, const String& badge){
+  diIcon=icon; diFitTitle(title); diColor=color;
+  diPulse=keepAliveCompact; diBadge=badge; diProgress=-1; diHasLink=false;
+  diExpandedUntil = millis()+expandMs;
+  diBeginAnim();
+  diTargetState = DI_EXPANDED;
+  needRedrawNow();
+}
+void diSetProgress(float p){ diProgress=constrain(p,0.0f,1.0f); needRedrawNow(); }
+void diLink(Screen s){ diLinkedScreen=s; diHasLink=true; }
+void diHide(){
+  diPulse=false; diHasLink=false;
+  if(diTargetState!=DI_IDLE){ diBeginAnim(); diTargetState=DI_IDLE; }
+}
+
+bool diHitTest(int x,int y){
+  if(diState==DI_IDLE && diTargetState==DI_IDLE) return false;
+  return x>=diCurX && x<=diCurX+(int)diCurW && y>=diCurY && y<=diCurY+(int)diCurH;
+}
+void diHandleTap(){
+  if(diHasLink && curScreen()!=diLinkedScreen){ navPush(diLinkedScreen); return; }
+  if(diTargetState==DI_COMPACT){ // ketuk pil compact -> mekar lagi sebentar
+    diExpandedUntil = millis()+1600;
+    diBeginAnim(); diTargetState=DI_EXPANDED;
+    needRedrawNow();
+  }
+}
+
+// Dipanggil TIAP loop() (murah): urus auto-collapse expanded->compact/idle
+// & pastikan needRedraw menyala selama masih ada animasi/denyut berjalan.
+void diUpdate(){
+  if(diTargetState==DI_EXPANDED && millis()>diExpandedUntil){
+    diBeginAnim();
+    diTargetState = diPulse? DI_COMPACT : DI_IDLE;
+  }
+  bool midAnim = (diState!=diTargetState) || (millis()-diAnimStartMs < (unsigned long)DI_ANIM_MS);
+  if(midAnim || (diState==DI_COMPACT && diPulse) || diTargetState==DI_EXPANDED) needRedraw=true;
+}
+
+void drawDynamicIsland(LGFX_Sprite& s){
+  float t=(millis()-diAnimStartMs)/DI_ANIM_MS; if(t>1.0f)t=1.0f;
+  float e=diSpringEase(t);
+  float tw=diAnimFromW+(diTargetW()-diAnimFromW)*e;
+  float th=diAnimFromH+(diTargetH()-diAnimFromH)*e;
+  if(t>=1.0f){ diState=diTargetState; tw=(float)diTargetW(); th=(float)diTargetH(); }
+  diCurW=tw; diCurH=th;
+  if(tw<1||th<1){ diCurX=SCR_W/2; diCurY=2; return; }
+
+  int w=(int)tw,h=(int)th;
+  int x=SCR_W/2-w/2, y=2;
+  diCurX=x; diCurY=y;
+
+  s.fillRoundRect(x,y,w,h,h/2,0x0000); // pil hitam pekat, senada notch HP asli
+
+  // v17: jaring pengaman terakhir -- SEMUA isi pil (ikon/teks/badge/
+  // progress bar) digambar di dalam clip rect PERSIS seukuran pil, jadi
+  // walau ada kasus tak terduga lain di masa depan, potongan piksel teks
+  // TIDAK PERNAH bisa tergambar keluar dari bentuk pil lagi.
+  s.setClipRect(x,y,w,h);
+
+  bool showingCompactLook = (diState==DI_COMPACT) || (diTargetState==DI_COMPACT && t<1.0f);
+  if(showingCompactLook && h<22){
+    if(diBadge.length()){
+      s.setTextColor(0xFFFF); s.setTextSize(1);
+      int tw2=diBadge.length()*6;
+      s.setCursor(x+w/2-tw2/2, y+h/2-4); s.print(diBadge);
+    } else {
+      float pulse = diPulse ? (0.6f+0.4f*sinf(millis()/260.0f)) : 1.0f;
+      s.fillCircle(x+w/2, y+h/2, max(2,(int)(3*pulse)), diColor);
+    }
+  } else if(h>=22){
+    int iconR = max(6,(h-6)/2);
+    int iconCx=x+8+iconR, iconCy=y+h/2;
+    drawAppIcon(s, diIcon, iconCx, iconCy, iconR, diColor);
+    s.setTextColor(0xFFFF); s.setTextSize(1);
+    int textX = iconCx+iconR+6;
+    // v17: cuma SATU baris title -- subtitle dihapus total (lihat catatan
+    // v17 di atas struct DIState utk alasan lengkapnya).
+    s.setCursor(textX, y+h/2-4); s.print(diTitle);
+    if(diProgress>=0){
+      int pbY=y+h-5, pbX=textX, pbW=(x+w-6)-textX;
+      if(pbW>10){
+        s.fillRoundRect(pbX,pbY,pbW,2,1,0x39C7);
+        s.fillRoundRect(pbX,pbY,(int)(pbW*diProgress),2,1,diColor);
+      }
+    }
+  }
+
+  s.clearClipRect();
+}
+
+// =============================================
 // BACK BUTTON
 // =============================================
 #define BACK_W 62
@@ -1253,12 +1798,32 @@ void lockScreenInput(bool touched,bool newT,int tx,int ty){
 // CONTROL CENTER
 // =============================================
 float ccOffset = 0;
-bool  ccAnimatingOpen=false, ccAnimatingClose=false;
+// FIX v11: dulu animasi buka/tutup Control Center pakai formula ad-hoc
+// per-frame (ccOffset += (target-ccOffset)*0.4f + 1.5f) yg kecepatannya
+// ikut naik-turun sesuai framerate loop() saat itu (kadang keliatan
+// patah-patah kalau loop lagi sibuk, mis. pas WiFi/AI jalan).
+// Sekarang dibuat berbasis WAKTU (millis) + fungsi easing yg sama dgn
+// transisi antar-layar (navEase), jadi kecepatan animasinya SELALU mulus
+// & konsisten independen dari framerate.
+bool  ccAnimating=false;
+float ccAnimFromH=0, ccAnimToH=0;
+unsigned long ccAnimStartMs=0;
+const float CC_ANIM_MS = 200.0f;
 #define CC_COLS 3
 #define CC_ROWS 3
 #define CC_ITEMS 7
-void openControlCenter(){ controlCenterOpen=true; ccAnimatingOpen=true; needRedraw=true; }
-void closeControlCenter(){ ccAnimatingOpen=false; ccAnimatingClose=true; needRedraw=true; }
+int ccPanelH(); // forward decl - didefinisikan di bawah, dipakai openControlCenter()
+void openControlCenter(){
+  controlCenterOpen=true;
+  ccAnimFromH=ccOffset; ccAnimToH=(float)ccPanelH();
+  ccAnimStartMs=millis(); ccAnimating=true;
+  needRedraw=true;
+}
+void closeControlCenter(){
+  ccAnimFromH=ccOffset; ccAnimToH=0.0f;
+  ccAnimStartMs=millis(); ccAnimating=true;
+  needRedraw=true;
+}
 
 // ---- Layout dihitung dinamis (BUKAN persentase tetap) supaya 6 kartu +
 // slider brightness SELALU muat & terlihat penuh, di landscape maupun
@@ -1267,16 +1832,34 @@ void closeControlCenter(){ ccAnimatingOpen=false; ccAnimatingClose=true; needRed
 // tidak akan pernah meleset lagi (dulu inilah sebab "area kosong Tema"
 // ke-tap dan mengubah tema, karena baris ke-2 kartu tidak digambar tapi
 // koordinat sentuhnya tetap aktif).
-int ccGap(){ return 6; }
-int ccCardH(){ return currentOrient==ORIENT_LANDSCAPE ? 38 : 52; } // lbh pendek di landscape biar muat
-int ccCardW(){ return (SCR_W - ccGap()*(CC_COLS+1))/CC_COLS; }
-int ccGridTop(){ return STATUS_H+8; }
+// v13: Control Center dirombak jadi TOMBOL BULAT (bukan kartu kotak lagi)
+// senada dgn quick-toggle di HP sungguhan (lingkaran ikon + label kecil di
+// BAWAHnya, terpisah dari lingkaran -- bukan tulisan ditumpuk di dlm kotak).
+// Diameter lingkaran (ccCircleD) dihitung dari lebar kolom yg tersedia
+// (ccCellW, yg mengikuti SCR_W panel) supaya otomatis menyesuaikan layar,
+// TAPI dipagari batas atas (base) yg sengaja dikecilkan sedikit drpd ukuran
+// kartu v12 (38/52) biar kesannya lbih padat/mirip toggle asli, bukan
+// membesar penuh memenuhi kolom.
+int ccMarginX(){ return 8; }  // v12: inset kiri/kanan panel -> kesan mengambang
+int ccPanelW(){ return SCR_W - ccMarginX()*2; }
+int ccGap(){ return 7; } // v12: dipadatkan (dulu 10)
+int ccCardW(){ return (ccPanelW() - ccGap()*(CC_COLS+1))/CC_COLS; } // lebar 1 kolom/sel
+int ccCircleD(){
+  int cellW = ccCardW();
+  int base = currentOrient==ORIENT_LANDSCAPE ? 30 : 40; // v13: agak dikecilkan drpd ccCardH v12 (38/52)
+  int d = min(cellW-8, base); // menyesuaikan layar: mengecil otomatis kalau kolom sempit
+  if(d<24) d=24;
+  return d;
+}
+int ccCardH(){ return ccCircleD()+14; } // tinggi 1 sel = lingkaran + jarak tipis + label
+int ccGridX(){ return ccMarginX()+ccGap(); }
+int ccGridTop(){ return STATUS_H+6; }
 int ccGridH(){ return CC_ROWS*ccCardH() + (CC_ROWS-1)*ccGap(); }
-int ccSliderLabelY(){ return ccGridTop()+ccGridH()+10; }
+int ccSliderLabelY(){ return ccGridTop()+ccGridH()+8; }
 int ccSliderTrackY(){ return ccSliderLabelY()+12; }
-int ccContentBottom(){ return ccSliderTrackY()+18; }
+int ccContentBottom(){ return ccSliderTrackY()+16; }
 int ccPanelH(){
-  int needed = ccContentBottom()+14;   // + ruang utk drag-handle di bawah
+  int needed = ccContentBottom()+12;   // + ruang utk drag-handle di bawah
   int maxAvail = SCR_H-8;              // jgn sampai nutup 1 layar penuh
   return needed<maxAvail? needed : maxAvail;
 }
@@ -1299,55 +1882,130 @@ void ccActShake(){
   showToast(shakeEnabled?"Shake to Home aktif":"Shake to Home mati");
 }
 
+// FIX v11: Control Center dulu isinya kotak polos + tulisan status
+// ("WiFi: ON" dst). Sekarang tiap tombol punya IKON vektor sendiri
+// (mirip drawAppIcon di Home) + label singkat kecil di bawahnya, dan
+// kartunya dikasih ruang lebih lega (lihat ccGap/ccCardH di atas).
+void drawCCIcon(LGFX_Sprite& s, int idx, int cx, int cy, int r, bool active){
+  uint16_t ic = active ? T().bg : T().text; // kontras dgn warna latar tombol
+  switch(idx){
+    case 0: { // WiFi: titik + 2 lengkung sinyal, dicoret kalau OFF
+      s.fillCircle(cx,cy+r-8,2,ic);
+      s.drawArc(cx,cy+r-8,7,6,210,330,ic);
+      s.drawArc(cx,cy+r-8,12,11,210,330,ic);
+      if(!wifiConnected){
+        s.drawLine(cx-r+4,cy-r+4,cx+r-4,cy+r-4,ic);
+      }
+      break;
+    }
+    case 1: { // Airplane: pesawat kertas sederhana
+      s.fillTriangle(cx,cy-r+6, cx-4,cy+7, cx+4,cy+7, ic);
+      s.fillTriangle(cx-r+4,cy+9, cx+r-4,cy+9, cx,cy-2, ic);
+      break;
+    }
+    case 2: { // DND: bulan sabit
+      s.fillCircle(cx,cy,r-6,ic);
+      s.fillCircle(cx+5,cy-3,r-7, active?T().accent:T().surface2);
+      break;
+    }
+    case 3: { // Tema: palet warna (lingkaran + titik2 warna)
+      s.drawCircle(cx,cy,r-6,ic);
+      s.fillCircle(cx-5,cy-3,2, active?T().bg:T().accent);
+      s.fillCircle(cx+4,cy-5,2, active?T().bg:T().good);
+      s.fillCircle(cx+6,cy+4,2, active?T().bg:T().danger);
+      s.fillCircle(cx-3,cy+6,2, active?T().bg:T().accent2);
+      break;
+    }
+    case 4: { // Orientasi: siluet HP (ikut orientasi skrg) + panah rotasi
+      if(currentOrient==ORIENT_LANDSCAPE){
+        s.drawRoundRect(cx-10,cy-6,20,12,2,ic);
+      } else {
+        s.drawRoundRect(cx-6,cy-10,12,20,2,ic);
+      }
+      s.drawArc(cx,cy,r-1,r-2,20,300,ic);
+      s.fillTriangle(cx+r-6,cy-r+4, cx+r-1,cy-r+7, cx+r-8,cy-r+9, ic);
+      break;
+    }
+    case 5: { // Shake: garis zig-zag (getaran)
+      s.drawLine(cx-9,cy+2,cx-4,cy-6,ic);
+      s.drawLine(cx-4,cy-6,cx+1,cy+4,ic);
+      s.drawLine(cx+1,cy+4,cx+6,cy-6,ic);
+      s.drawLine(cx+6,cy-6,cx+10,cy,ic);
+      break;
+    }
+    case 6: { // Kunci layar: gembok
+      s.drawRoundRect(cx-7,cy-1,14,11,2,ic);
+      s.drawArc(cx,cy-3,6,5,180,360,ic);
+      break;
+    }
+  }
+}
+
 void drawControlCenter(LGFX_Sprite& s){
   int ph = (int)ccOffset;
   if(ph<=0) return;
-  s.fillRoundRect(0,0,SCR_W,ph,0,T().surface);
-  s.fillRoundRect(SCR_W/2-16,ph-10,32,4,2,T().divider);
+  // v12: panel mengambang -> inset margin kiri/kanan + sudut membulat.
+  // Radius di-clamp ke ph/2 supaya gak "meledak" pas ph masih kecil di
+  // awal animasi buka/tutup (fillRoundRect dgn radius > tinggi rect bisa
+  // bikin bentuknya aneh).
+  int mx = ccMarginX(), pw = ccPanelW();
+  int rad = min(16, ph/2); if(rad<0) rad=0;
+  s.fillRoundRect(mx,0,pw,ph,rad,T().surface);
+  s.fillRoundRect(SCR_W/2-14,ph-9,28,4,2,T().divider);
 
   const char* labels[CC_ITEMS]={
-    wifiConnected?"WiFi: ON":"WiFi: OFF",
-    airplaneMode?"Airplane: ON":"Airplane: OFF",
-    dndMode?"DND: ON":"DND: OFF",
-    "Tema",
-    currentOrient==ORIENT_LANDSCAPE?"Orient: Land":"Orient: Port",
-    shakeEnabled?"Shake: ON":"Shake: OFF",
-    "Kunci Layar"
+    "WiFi", "Airplane", "DND", "Tema", "Orientasi", "Shake", "Kunci"
   };
   bool activeState[CC_ITEMS]={wifiConnected,airplaneMode,dndMode,false,false,shakeEnabled,false};
-  int cw=ccCardW(), ch=ccCardH(), gap=ccGap(), top=ccGridTop();
+  // v13: tombol skrg BULAT (fillCircle) drpd kotak, label ditulis di LUAR
+  // lingkaran (di bawahnya) -- persis pola toggle quick-settings di HP asli.
+  int cw=ccCardW(), ch=ccCardH(), gap=ccGap(), top=ccGridTop(), gx=ccGridX();
+  int d=ccCircleD(), crad=d/2; // v13: nama 'crad' (bukan 'rad') biar tdk bentrok dgn 'rad' radius sudut panel di atas
+  int iconR = crad-5; if(iconR<9) iconR=9; if(iconR>16) iconR=16;
   for(int i=0;i<CC_ITEMS;i++){
     int col=i%CC_COLS, row=i/CC_COLS;
-    int x=gap+col*(cw+gap);
+    int x=gx+col*(cw+gap);
     int y=top+row*(ch+gap);
+    int ccx=x+cw/2, ccy=y+crad; // pusat lingkaran, rata atas dlm sel
+
     uint16_t bg = activeState[i]? T().accent : T().surface2;
-    uint16_t fg = activeState[i]? T().bg : T().text;
-    s.fillRoundRect(x,y,cw,ch,8,bg);
+    s.fillCircle(ccx,ccy,crad,bg);
+    drawCCIcon(s, i, ccx, ccy, iconR, activeState[i]);
+
+    // label di luar lingkaran -> warnanya dari palet teks umum (bukan lawan
+    // warna latar tombol lagi), aksen dipakai saat status ON biar tetap
+    // kebaca statusnya walau labelnya sudah tidak menumpuk di dlm tombol.
+    uint16_t fg = activeState[i]? T().accent : T().subtext;
     s.setTextColor(fg); s.setTextSize(1);
-    int lw=strlen(labels[i])*6;
-    s.setCursor(x+cw/2-lw/2, y+ch/2-4);
+    int lw=(int)strlen(labels[i])*6;
+    s.setCursor(ccx-lw/2, y+d+3);
     s.print(labels[i]);
   }
 
   s.setTextColor(T().subtext); s.setTextSize(1);
-  s.setCursor(gap, ccSliderLabelY()); s.print("Brightness");
-  int sx=gap, sw=SCR_W-gap*2, sy=ccSliderTrackY();
-  s.fillRoundRect(sx,sy,sw,10,5,T().divider);
-  s.fillRoundRect(sx,sy,map(brightness,0,255,0,sw),10,5,T().accent);
+  s.setCursor(gx, ccSliderLabelY()); s.print("Brightness");
+  int sx=gx, sw=pw-gap*2, sy=ccSliderTrackY();
+  s.fillRoundRect(sx,sy,sw,9,4,T().divider);
+  int fillW = map(brightness,0,255,0,sw);
+  s.fillRoundRect(sx,sy,fillW,9,4,T().accent);
+  // v13: handle bulat di ujung slider, senada dgn gaya "bulat" Control Center
+  int thumbCx=sx+fillW, thumbCy=sy+4;
+  s.fillCircle(thumbCx,thumbCy,7,T().bg);
+  s.fillCircle(thumbCx,thumbCy,5,T().accent);
 
   drawToast(s);
 }
 
 void ccTouch(int x,int y){
   int ph=(int)ccOffset;
-  if(y> ph-10 && y<=ph+4){ closeControlCenter(); return; }
+  if(y> ph-9 && y<=ph+4){ closeControlCenter(); return; }
   if(y>ph) { closeControlCenter(); return; }
 
-  int cw=ccCardW(), ch=ccCardH(), gap=ccGap(), top=ccGridTop();
+  int cw=ccCardW(), ch=ccCardH(), gap=ccGap(), top=ccGridTop(), gx=ccGridX();
   void(*actions[CC_ITEMS])() = { ccActWifi, ccActAirplane, ccActDnd, ccActTheme, ccActOrient, ccActShake, nullptr };
   for(int i=0;i<CC_ITEMS;i++){
     int col=i%CC_COLS, row=i/CC_COLS;
-    int bx=gap+col*(cw+gap);
+    int bx=gx+col*(cw+gap);
     int by=top+row*(ch+gap);
     if(x>=bx&&x<=bx+cw&&y>=by&&y<=by+ch){
       if(i==6){ locked=true; closeControlCenter(); return; }
@@ -1358,10 +2016,174 @@ void ccTouch(int x,int y){
   }
   int sy=ccSliderTrackY();
   if(y>=sy-8 && y<=sy+18){
-    int sx=gap, sw=SCR_W-gap*2;
+    int sx=gx, sw=ccPanelW()-gap*2;
     brightness=constrain(map(x-sx,0,sw,0,255),10,255);
     display.setBrightness(brightness);
     needRedraw=true;
+  }
+}
+
+// =============================================
+// APP ICONS (vektor sederhana - bukan huruf tunggal)
+// =============================================
+// Setiap ikon digambar dgn bentuk yg berhubungan dgn fungsinya, dgn warna
+// kontras (bg = warna teks/garis, fg tetap dipakai utk latar lingkaran).
+void drawAppIcon(LGFX_Sprite& s, char sym, int cx, int cy, int r, uint16_t bgCircle){
+  s.fillCircle(cx,cy,r,bgCircle);
+  uint16_t ic = T().bg; // warna vektor ikon (kontras dgn lingkaran berwarna)
+  switch(sym){
+    case 'J': { // Jam: wajah jam + jarum
+      s.drawCircle(cx,cy,r-3,ic);
+      s.drawLine(cx,cy,cx,cy-r+6,ic);
+      s.drawLine(cx,cy,cx+r-8,cy+2,ic);
+      s.fillCircle(cx,cy,1,ic);
+      break;
+    }
+    case '+': { // Kalkulator: kotak + grid tombol
+      s.fillRoundRect(cx-r+4,cy-r+4,(r-4)*2,(r-4)*2,3,ic);
+      s.fillRect(cx-r+7,cy-r+7,(r-4)*2-6,5,bgCircle);
+      for(int i=0;i<2;i++) for(int j=0;j<3;j++)
+        s.fillRect(cx-r+8+j*7,cy-2+i*7,4,4,bgCircle);
+      break;
+    }
+    case '3': { // Orientasi 3D: kubus wireframe mini
+      int w=r-7;
+      s.drawRect(cx-w,cy-w+4,w*2-4,w*2-4,ic);
+      s.drawLine(cx-w,cy-w+4,cx-w+6,cy-w-2,ic);
+      s.drawLine(cx+w-4,cy-w+4,cx+w+2,cy-w-2,ic);
+      s.drawLine(cx-w+6,cy-w-2,cx+w+2,cy-w-2,ic);
+      s.drawLine(cx+w-4,cy-w+4,cx+w-4,cy+w-4,ic);
+      break;
+    }
+    case '@': { // Setting: gear
+      s.drawCircle(cx,cy,r-6,ic);
+      for(int i=0;i<8;i++){
+        float a=i*PI/4.0f;
+        int x1=cx+(int)(cosf(a)*(r-6)), y1=cy+(int)(sinf(a)*(r-6));
+        int x2=cx+(int)(cosf(a)*(r-1)), y2=cy+(int)(sinf(a)*(r-1));
+        s.drawLine(x1,y1,x2,y2,ic);
+      }
+      s.fillCircle(cx,cy,4,ic);
+      s.fillCircle(cx,cy,2,bgCircle);
+      break;
+    }
+    case 'N': { // Notepad: kertas bergaris
+      s.fillRoundRect(cx-r+6,cy-r+4,(r-6)*2,(r-4)*2,2,ic);
+      for(int i=0;i<3;i++) s.drawFastHLine(cx-r+10,cy-r+10+i*6,(r-6)*2-8,bgCircle);
+      break;
+    }
+    case 'C': { // Canvas: kuas lukis
+      s.fillCircle(cx-4,cy-4,4,ic);
+      s.drawLine(cx-1,cy-1,cx+7,cy+7,ic);
+      s.drawLine(cx+2,cy-2,cx+8,cy+4,ic);
+      s.fillCircle(cx+8,cy+7,2,ic);
+      break;
+    }
+    case 'A': { // AI Chat: gelembung percakapan
+      s.fillRoundRect(cx-r+5,cy-r+7,(r-5)*2,(r-7)*2-2,4,ic);
+      s.fillTriangle(cx-4,cy+r-9,cx+2,cy+r-9,cx-6,cy+r-2,ic);
+      s.fillCircle(cx-5,cy-2,1,bgCircle); s.fillCircle(cx,cy-2,1,bgCircle); s.fillCircle(cx+5,cy-2,1,bgCircle);
+      break;
+    }
+    case 'F': { // Files: folder
+      s.fillRoundRect(cx-r+5,cy-r+6,14,6,2,ic);
+      s.fillRoundRect(cx-r+5,cy-r+10,(r-5)*2,(r-10)*2,2,ic);
+      break;
+    }
+    case 'M': { // MJPEG: tombol play
+      s.fillTriangle(cx-6,cy-8,cx-6,cy+8,cx+9,cy,ic);
+      break;
+    }
+    case 'U': { // Update: panah unduh
+      s.fillRect(cx-3,cy-9,6,10,ic);
+      s.fillTriangle(cx-8,cy,cx+8,cy,cx,cy+10,ic);
+      break;
+    }
+    case 'B': { // Baterai
+      s.drawRoundRect(cx-r+6,cy-8,(r-6)*2-4,16,3,ic);
+      s.fillRect(cx+r-8,cy-4,3,8,ic);
+      s.fillRect(cx-r+9,cy-5,(r-6)*2-10,10,ic);
+      break;
+    }
+    // ---------------- GAME ----------------
+    case 'S': { // Snake
+      s.fillCircle(cx-8,cy+6,4,ic);
+      s.fillCircle(cx-2,cy+2,4,ic);
+      s.fillCircle(cx+3,cy-4,4,ic);
+      s.fillCircle(cx+8,cy-8,5,ic);      // kepala
+      s.fillCircle(cx+9,cy-9,1,bgCircle); // mata
+      break;
+    }
+    case 'V': { // Flappy Block: burung
+      s.fillCircle(cx-2,cy,7,ic);
+      s.fillTriangle(cx+5,cy-2,cx+5,cy+2,cx+12,cy,ic);   // paruh
+      s.fillTriangle(cx-9,cy-2,cx-2,cy-6,cx-2,cy+2,ic);  // sayap
+      s.fillCircle(cx+2,cy-3,1,bgCircle); // mata
+      break;
+    }
+    case '2': { // 2048: grid 2x2
+      int gw=r-4;
+      s.fillRoundRect(cx-gw,cy-gw,gw-2,gw-2,2,ic);
+      s.fillRoundRect(cx+2,cy-gw,gw-2,gw-2,2,ic);
+      s.fillRoundRect(cx-gw,cy+2,gw-2,gw-2,2,ic);
+      s.fillRoundRect(cx+2,cy+2,gw-2,gw-2,2,ic);
+      break;
+    }
+    case 'X': { // Tic-Tac-Toe: grid + X/O
+      s.drawFastVLine(cx-4,cy-9,18,ic);
+      s.drawFastVLine(cx+4,cy-9,18,ic);
+      s.drawFastHLine(cx-9,cy-4,18,ic);
+      s.drawFastHLine(cx-9,cy+4,18,ic);
+      s.drawLine(cx-8,cy-8,cx-2,cy-2,ic);
+      s.drawLine(cx-8,cy-2,cx-2,cy-8,ic);
+      s.drawCircle(cx+5,cy+5,3,ic);
+      break;
+    }
+    case 'K': { // Breakout: bricks + paddle + bola
+      s.fillRect(cx-8,cy-9,6,4,ic);
+      s.fillRect(cx-1,cy-9,6,4,ic);
+      s.fillRect(cx+6,cy-9,4,4,ic);
+      s.fillCircle(cx-2,cy+1,2,ic);
+      s.fillRoundRect(cx-9,cy+7,18,4,2,ic);
+      break;
+    }
+    // -------- Trivia Quiz & Dynamic Island (v14) --------
+    // Skala pakai fraksi r (bukan offset absolut spt di atas) krn dipakai
+    // dobel: ukuran normal di grid Home (r~14) DAN ukuran mini di badge
+    // Dynamic Island (r bisa sekecil ~6).
+    case 'Q': { // Trivia: tanda tanya
+      int rr = max(3, r*3/4);
+      s.drawArc(cx, cy-rr/3, rr/2, max(1,rr/2-2), -150, 60, ic);
+      s.fillCircle(cx, cy+rr/2, max(1,rr/6), ic);
+      break;
+    }
+    case 'Y': { // Feedback: jawaban benar (centang)
+      int rr=max(4,r*3/4);
+      s.drawLine(cx-rr/2, cy,   cx-rr/6, cy+rr/2,   ic);
+      s.drawLine(cx-rr/6, cy+rr/2, cx+rr/2, cy-rr/3, ic);
+      s.drawLine(cx-rr/2, cy+1, cx-rr/6, cy+rr/2+1, ic);
+      s.drawLine(cx-rr/6, cy+rr/2+1, cx+rr/2, cy-rr/3+1, ic);
+      break;
+    }
+    case 'W': { // Feedback: jawaban salah (silang)
+      int rr=max(4,r*3/4);
+      s.drawLine(cx-rr/2,cy-rr/2,cx+rr/2,cy+rr/2,ic);
+      s.drawLine(cx-rr/2,cy+rr/2,cx+rr/2,cy-rr/2,ic);
+      s.drawLine(cx-rr/2,cy-rr/2+1,cx+rr/2,cy+rr/2+1,ic);
+      s.drawLine(cx-rr/2,cy+rr/2+1,cx+rr/2,cy-rr/2+1,ic);
+      break;
+    }
+    case 'L': { // Mode Game aktif: petir/boost
+      int rr=max(4,r*3/4);
+      s.fillTriangle(cx+rr/4,cy-rr, cx-rr/3,cy+rr/6, cx+rr/8,cy+rr/6, ic);
+      s.fillTriangle(cx-rr/8,cy-rr/6, cx+rr/3,cy-rr/6, cx-rr/4,cy+rr, ic);
+      break;
+    }
+    default: {
+      s.setTextColor(ic); s.setTextSize(2);
+      char b[2]={sym,0};
+      s.setCursor(cx-6,cy-8); s.print(b);
+    }
   }
 }
 
@@ -1412,8 +2234,11 @@ void tttEnter(); void tttExit();
 void drawTtt(LGFX_Sprite&); void tttTouch(int,int,bool,bool);
 void brkEnter(); void brkExit();
 void drawBrk(LGFX_Sprite&); void brkTouch(int,int,bool,bool);
+// ---- TRIVIA QUIZ: forward declarations (BARU di v14) ----
+void triviaEnter(); void triviaExit();
+void drawTrivia(LGFX_Sprite&); void triviaTouch(int,int,bool,bool);
 
-AppDef apps[16] = {
+AppDef apps[17] = {
   { "Jam",        'J', 0, clockEnter,    clockExit,    drawClock,        clockTouch,    SCR_CLOCK },
   { "Kalkulator", '+', 0, calcEnter,     calcExit,     drawCalc,         calcTouch,     SCR_CALC },
   { "Orientasi3D", '3', 0, sensorEnter,   sensorExit,   drawSensor,       sensorTouch,   SCR_SENSOR },
@@ -1430,8 +2255,9 @@ AppDef apps[16] = {
   { "2048",       '2', 0, g2048Enter,    g2048Exit,    draw2048,         g2048Touch,    SCR_2048 },
   { "TicTacToe",  'X', 0, tttEnter,      tttExit,      drawTtt,          tttTouch,      SCR_TTT },
   { "Breakout",   'K', 0, brkEnter,      brkExit,      drawBrk,          brkTouch,      SCR_BREAKOUT },
+  { "Trivia",     'Q', 0, triviaEnter,   triviaExit,   drawTrivia,       triviaTouch,   SCR_TRIVIA },
 };
-#define APP_COUNT 16
+#define APP_COUNT 17
 
 void initAppColors(){
   apps[0].color=T().accent;   apps[1].color=T().accent2;
@@ -1441,6 +2267,19 @@ void initAppColors(){
   apps[8].color=0xFBE0; // MJPEG player - warna oranye
   apps[9].color=0xF800; // Update FW - warna merah (menonjol/perlu perhatian)
   apps[10].color=0x07E0; // Baterai - warna hijau
+  // FIX v11 - AKAR MASALAH "logo game gak kelihatan semua, kayaknya
+  // item hitam": index 11-15 (semua app GAME) dulu TIDAK PERNAH diisi
+  // di sini, jadi apps[i].color tetap default 0 alias HITAM. Efeknya,
+  // lingkaran latar ikon di Home (drawAppIcon bgCircle) jadi hitam
+  // total, dan garis vektor ikon (warnanya T().bg, ikut gelap) jadi
+  // nyaris tak kelihatan di atas lingkaran hitam itu. Sekarang tiap
+  // game dapat warna cerah tersendiri spy ikonnya kontras & jelas.
+  apps[11].color=0x1FF9; // Snake - hijau toska
+  apps[12].color=0xFC9F; // Flappy Block - pink
+  apps[13].color=0xFFD2; // 2048 - kuning keemasan
+  apps[14].color=0x861F; // TicTacToe - ungu
+  apps[15].color=0xFB40; // Breakout - oranye kemerahan
+  apps[16].color=0xFDA0; // Trivia Quiz - kuning-oranye cerah (BARU v14)
 }
 
 int appIndexForScreen(Screen s){
@@ -1471,10 +2310,7 @@ void drawHome(LGFX_Sprite& s,float sc){
     int x=gap+col*(cw+gap), y=gridTop+row*(ch+gap)-(int)sc;
     if(y+ch<STATUS_H+2||y>homeDockY()-4)continue;
     s.fillRoundRect(x,y,cw,ch,10,T().surface);
-    s.fillCircle(x+cw/2,y+18,14,apps[i].color);
-    s.setTextColor(T().bg);s.setTextSize(2);
-    char sym[2]={apps[i].sym,0};
-    s.setCursor(x+cw/2-6,y+11);s.print(sym);
+    drawAppIcon(s, apps[i].sym, x+cw/2, y+18, 14, apps[i].color);
     s.setTextColor(T().text);s.setTextSize(1);
     int nl=strlen(apps[i].name)*6;
     s.setCursor(x+cw/2-nl/2,y+ch-12);
@@ -1487,10 +2323,7 @@ void drawHome(LGFX_Sprite& s,float sc){
   for(int i=0;i<4;i++){
     int di=dockIdx[i];
     int cx=6+i*dw+dw/2;
-    s.fillCircle(cx,dockY+19,15,apps[di].color);
-    s.setTextColor(T().bg);s.setTextSize(2);
-    char sym[2]={apps[di].sym,0};
-    s.setCursor(cx-6,dockY+12);s.print(sym);
+    drawAppIcon(s, apps[di].sym, cx, dockY+19, 15, apps[di].color);
   }
   drawToast(s);
 }
@@ -1524,40 +2357,62 @@ int homeMaxScroll(){
 }
 
 // =============================================
-// GAME MODE: dipanggil tiap masuk ke game apapun. Popup singkat + boost
-// clock CPU ESP32-S3 ke 240MHz (maksimal) + jeda polling sensor latar
-// belakang (MPU/baterai) selama main, biar loop game mulus tanpa gangguan.
-// Balik ke clock normal (hemat daya) & polling aktif lagi pas keluar game.
+// GAME MODE: dipanggil tiap masuk ke game apapun. Menjalankan animasi
+// loading singkat & bersih (ring progress muter + ikon kotak scale-in)
+// + boost clock CPU ESP32-S3 ke 240MHz (maksimal) + jeda polling sensor
+// latar belakang (MPU/baterai) selama main, biar loop game mulus tanpa
+// gangguan. Balik ke clock normal (hemat daya) & polling aktif lagi
+// pas keluar game.
 // =============================================
 #define CPU_MHZ_NORMAL 160
 #define CPU_MHZ_GAME   240
 bool gameModeActive = false;
+
+// FIX v11: animasi lama ("game booster" ala HP gaming dgn ring memancar,
+// sapuan cahaya, kilat, teks besar "GAME BOOSTER") kesannya terlalu
+// ramai/norak. Diganti dgn loading indicator simpel & bersih: ring
+// progress yg terisi halus (pakai easing yg sama dgn transisi navigasi)
+// + kotak ikon kecil yg scale-in di tengahnya + 1 baris label singkat.
+void gameBoosterAnim(){
+  int cx=SCR_W/2, cy=SCR_H/2-6;
+  const int STEPS = 18;
+  int ringR = min(SCR_W,SCR_H)/7;
+  if(ringR<24) ringR=24;
+  if(ringR>40) ringR=40;
+
+  for(int f=0; f<=STEPS; f++){
+    float p = navEase((float)f/STEPS); // easing halus, sama dgn transisi navigasi
+    canvas.fillSprite(T().bg);
+
+    // Ring progress tipis, terisi searah jarum jam (2 lapis biar ada depth)
+    canvas.drawArc(cx,cy,ringR,ringR-5,-90,-90+(int)(360*p),T().divider);
+    canvas.drawArc(cx,cy,ringR,ringR-5,-90,-90+(int)(360*p*p),T().accent2);
+
+    // Kotak ikon kecil, scale-in halus di tengah ring
+    int boxSize=(int)(26*constrain(p*1.5f,0.0f,1.0f));
+    if(boxSize>2){
+      canvas.fillRoundRect(cx-boxSize/2,cy-boxSize/2,boxSize,boxSize,boxSize/4,T().accent);
+    }
+
+    if(p>0.45f){
+      canvas.setTextColor(T().subtext); canvas.setTextSize(1);
+      const char* label="Menyiapkan mode game...";
+      int tw=(int)strlen(label)*6;
+      canvas.setCursor(cx-tw/2, cy+ringR+16); canvas.print(label);
+    }
+    push();
+    delay(10);
+  }
+  delay(120);
+}
 
 void enterGameMode(){
   if(!gameModeActive){
     gameModeActive = true;
     setCpuFrequencyMhz(CPU_MHZ_GAME);
   }
-  // Popup "Game Mode" - muncul tiap kali masuk game manapun
-  canvas.fillSprite(0x0000);
-  int pw=SCR_W-40, ph=104;
-  int px=(SCR_W-pw)/2, py=(SCR_H-ph)/2;
-  canvas.fillRoundRect(px,py,pw,ph,14,T().surface);
-  canvas.drawRoundRect(px,py,pw,ph,14,T().accent);
-  canvas.setTextColor(T().accent); canvas.setTextSize(2);
-  const char* title="GAME MODE";
-  int tw=strlen(title)*12;
-  canvas.setCursor(SCR_W/2-tw/2,py+16); canvas.print(title);
-  canvas.setTextColor(T().subtext); canvas.setTextSize(1);
-  char l1[40]; sprintf(l1,"CPU dipacu ke %dMHz (maksimal)",CPU_MHZ_GAME);
-  const char* l2="Sensor latar belakang dijeda";
-  canvas.setCursor(SCR_W/2-(int)strlen(l1)*3,py+50); canvas.print(l1);
-  canvas.setCursor(SCR_W/2-(int)strlen(l2)*3,py+64); canvas.print(l2);
-  canvas.setTextColor(T().good);
-  const char* l3="Siap main!";
-  canvas.setCursor(SCR_W/2-(int)strlen(l3)*3,py+82); canvas.print(l3);
-  push();
-  delay(850);
+  gameBoosterAnim();
+  diNotify('L', "Mode Game Aktif", T().accent, 1300, false); // v14 (v17: subtitle dihapus, jadi 1 baris singkat)
 }
 void exitGameMode(){
   if(!gameModeActive) return;
@@ -2429,6 +3284,13 @@ void drawSettings(LGFX_Sprite& s){
   s.fillRoundRect(SCR_W/2+4,rowY,btnW,24,6,T().surface2);
   s.setTextColor(T().text);s.setCursor(SCR_W/2+10,rowY+7);s.print("Kalibrasi Ulang");
 
+  // ---- BARU: Kalibrasi sensor gerak MPU6050 ----
+  rowY+=28;
+  s.fillRoundRect(8,rowY,rowW,24,6, mpuReady?T().accent2:T().surface2);
+  s.setTextColor(mpuReady?T().bg:T().subtext);s.setTextSize(1);
+  s.setCursor(14,rowY+8);
+  s.print(mpuReady?"Kalibrasi Sensor Gerak (MPU6050)":"MPU6050 tidak terdeteksi");
+
   if(kbVisible)drawKb(s);else drawBack(s);
   drawToast(s);
 }
@@ -2527,6 +3389,18 @@ void settingsTouch(int x,int y,bool held,bool isNew){
       ESP.restart();
       return;
     }
+  }
+
+  // ---- BARU: tombol Kalibrasi Sensor Gerak (MPU6050) ----
+  rowY+=28;
+  if(y>=rowY&&y<=rowY+24){
+    if(mpuReady){
+      calibrateMPU();
+      needRedraw=true;
+    } else {
+      showToast("Sensor MPU6050 tidak terdeteksi");
+    }
+    return;
   }
 }
 
@@ -2652,6 +3526,26 @@ int canvasToolY(){ return SCR_H-44; }
 void canvasEnter(){ lastDX=-1; }
 void canvasExit(){ saveCanvas(); }
 
+// FIX v11: dulu goresan tebal digambar dgn drawLine() digeser-geser per
+// pixel ketebalan (garis utama + garis offset) - hasilnya jelas kelihatan
+// bertangga/kotak-kotak, apalagi kalau brush besar atau jari digerakkan
+// diagonal/cepat. Sekarang goresan "distempel" pakai fillCircle yg
+// diinterpolasi sepanjang jalur gerakan jari (jarak antar stempel
+// disesuaikan ukuran brush), jadi goresannya mulus & tanpa celah walau
+// jari digerakkan cepat.
+void canvasStampStroke(int x0,int y0,int x1,int y1,int size,uint16_t color){
+  int rad = max(1, size/2);
+  float dx=(float)(x1-x0), dy=(float)(y1-y0);
+  float dist=sqrtf(dx*dx+dy*dy);
+  int step = max(1, rad/2);            // jarak antar stempel - makin kecil brush, makin rapat
+  int steps = max(1, (int)(dist/step));
+  for(int i=0;i<=steps;i++){
+    float t=(float)i/steps;
+    int px=x0+(int)(dx*t+0.5f), py=y0+(int)(dy*t+0.5f);
+    canvasApp.fillCircle(px,py,rad,color);
+  }
+}
+
 void drawCanvasScreen(LGFX_Sprite& s){
   s.fillSprite(T().bg);
   drawStatusBar(s);
@@ -2712,12 +3606,10 @@ void canvasTouch(int x,int y,bool held,bool isNew){
   if(y>=capY && y<ty){
     int cy=y-capY;
     if(held&&lastDX>=0){
-      canvasApp.drawLine(lastDX,lastDY,x,cy,drawColor);
-      for(int t2=1;t2<brushSize;t2++){
-        canvasApp.drawLine(lastDX,lastDY+t2,x,cy+t2,drawColor);
-        canvasApp.drawLine(lastDX+t2,lastDY,x+t2,cy,drawColor);
-      }
-    } else canvasApp.fillCircle(x,cy,brushSize/2,drawColor);
+      canvasStampStroke(lastDX,lastDY,x,cy,brushSize,drawColor);
+    } else {
+      canvasApp.fillCircle(x,cy,max(1,brushSize/2),drawColor);
+    }
     lastDX=x;lastDY=cy;
     needRedraw=true;
   }
@@ -2889,6 +3781,7 @@ void aiTouch(int x,int y,bool held,bool isNew){
     // (dulu tidak bisa discroll sama sekali).
     if(y>=chatTop && y<=chatBot){
       dragLastY = y;
+      aiRespScrollVel = 0; // v12: reset sisa momentum di awal sentuhan baru (spt Home)
       return;
     }
 
@@ -2912,6 +3805,10 @@ void aiTouch(int x,int y,bool held,bool isNew){
   if(held && y>=chatTop-20 && y<=chatBot+20){
     int dy = dragLastY - y;
     if(dy!=0){
+      // v12: kecepatan di-low-pass (bukan delta mentah) supaya sisa
+      // momentumnya bisa dipakai utk scroll lanjutan yg mulus setelah jari
+      // dilepas (lihat momentum di loop()) -- gaya yg sama dgn Home.
+      aiRespScrollVel = aiRespScrollVel*0.5f + dy*0.5f;
       aiRespScrollY = constrain(aiRespScrollY + dy, 0.0f, (float)aiRespMaxScroll);
       dragLastY = y;
       needRedraw = true;
@@ -2929,6 +3826,16 @@ int expFileCount = 0;
 int expScrollPage = 0;
 String expViewContent = "";
 String expViewFileName = "";
+
+// v12: BARU - isi file skrg bisa di-scroll (dulu teks panjang meluber
+// keluar kotak & tak terbaca sama sekali). Dibungkus+di-wrap+di-clip persis
+// spt pola scroll teks di AI Chat (reuse AiLine + aiWrapAppend), lengkap dgn
+// momentum halus stlh jari dilepas.
+#define EXP_MAX_LINES 400
+AiLine expLinesBuf[EXP_MAX_LINES];
+float  expViewScrollY = 0;
+int    expViewMaxScroll = 0;
+float  expViewScrollVel = 0;
 
 void scanSdFiles() {
   expFileCount = 0;
@@ -2951,6 +3858,8 @@ void fileExpEnter(){
   expViewContent = "";
   expViewFileName = "";
   expScrollPage = 0;
+  expViewScrollY = 0;    // v12
+  expViewScrollVel = 0;  // v12
   scanSdFiles();
 }
 void fileExpExit(){}
@@ -2972,14 +3881,46 @@ void drawFileExplorer(LGFX_Sprite& s){
     s.fillRoundRect(SCR_W-64,24,58,18,4,T().surface2);
     s.setTextColor(T().accent);s.setCursor(SCR_W-54,29);s.print("Tutup");
 
-    s.fillRoundRect(4,44,SCR_W-8,backY()-50,6,T().surface);
-    s.setTextColor(T().accent2);s.setCursor(10,50);s.print("File: ");
+    int viewTop=44, viewBot=backY()-6, viewH=viewBot-viewTop;
+    s.fillRoundRect(4,viewTop,SCR_W-8,viewH,6,T().surface);
+    s.setTextColor(T().accent2);s.setCursor(10,viewTop+6);s.print("File: ");
     s.setTextColor(T().text);s.print(expViewFileName.c_str());
-    s.drawFastHLine(10,64,SCR_W-20,T().divider);
+    s.drawFastHLine(10,viewTop+20,SCR_W-20,T().divider);
 
-    s.setTextColor(T().text);s.setTextWrap(true);s.setCursor(10,70);
-    // FIX v7: isi file txt ditampilkan PENUH, tidak dipotong 220 karakter lagi.
-    s.print(expViewContent.c_str());
+    // v12: isi file di-wrap ke expLinesBuf (persis pola AI Chat) supaya
+    // tingginya pasti & bisa discroll+diclip -> teks panjang skrg bisa
+    // dibaca semua dgn geser (drag), bukan meluber keluar kotak lagi.
+    int contentTop=viewTop+26, contentBot=viewBot-6;
+    int lineH=10;
+    int innerX=10, innerW=(SCR_W-8)-12;
+    int maxChars=innerW/6; if(maxChars<6) maxChars=6;
+    int n = aiWrapAppend(expLinesBuf,EXP_MAX_LINES,0,expViewContent,T().text,maxChars);
+
+    int contentH = n*lineH;
+    int viewAreaH = contentBot-contentTop;
+    expViewMaxScroll = contentH-viewAreaH; if(expViewMaxScroll<0) expViewMaxScroll=0;
+    if(expViewScrollY>expViewMaxScroll) expViewScrollY=(float)expViewMaxScroll;
+    if(expViewScrollY<0) expViewScrollY=0;
+
+    s.setClipRect(4,contentTop,SCR_W-8,viewAreaH);
+    s.setTextWrap(false);
+    for(int i=0;i<n;i++){
+      int ly = contentTop+i*lineH-(int)expViewScrollY;
+      if(ly+lineH < contentTop || ly > contentBot) continue;
+      s.setTextColor(expLinesBuf[i].color);
+      s.setCursor(innerX,ly);
+      s.print(expLinesBuf[i].text.c_str());
+    }
+    s.clearClipRect();
+
+    // Scrollbar tipis di kanan, sama gaya spt di AI Chat
+    if(expViewMaxScroll>0){
+      int trackX=SCR_W-8, trackY=contentTop, trackH=viewAreaH;
+      int thumbH = max(14, (int)((float)viewAreaH/contentH*trackH));
+      int thumbY = trackY + (int)((float)expViewScrollY/expViewMaxScroll*(trackH-thumbH));
+      s.fillRoundRect(trackX,trackY,3,trackH,1,T().divider);
+      s.fillRoundRect(trackX,thumbY,3,thumbH,1,T().accent);
+    }
 
     drawBack(s);drawToast(s);
     return;
@@ -3034,54 +3975,78 @@ void drawFileExplorer(LGFX_Sprite& s){
 }
 
 void fileExpTouch(int x,int y,bool held,bool isNew){
-  if(!isNew) return;
+  static int dragLastY=0;
+  int viewTop=44, viewBot=backY()-6; // v12: sama dgn area kotak isi file di drawFileExplorer
 
-  if(isBack(x,y)){ navBack(); return; }
+  if(isNew){
+    if(isBack(x,y)){ navBack(); return; }
 
-  if(expViewFileName.length() > 0){
-    if(x>=SCR_W-64 && x<=SCR_W-4 && y>=24 && y<=42){
-      expViewFileName = "";
-      expViewContent = "";
-      needRedraw = true;
+    if(expViewFileName.length() > 0){
+      if(x>=SCR_W-64 && x<=SCR_W-4 && y>=24 && y<=42){
+        expViewFileName = "";
+        expViewContent = "";
+        expViewScrollY = 0; expViewScrollVel = 0; // v12
+        needRedraw = true;
+        return;
+      }
+      // v12: sentuh area isi file -> mulai drag utk scroll (spt AI Chat)
+      if(y>=viewTop && y<=viewBot){
+        dragLastY = y;
+        expViewScrollVel = 0; // reset sisa momentum di awal sentuhan baru
+      }
+      return;
+    }
+
+    if(!sdReady) return;
+
+    int listY = 44;
+    int itemH = 26;
+    int itemsPerPage = 5;
+    int startIdx = expScrollPage * itemsPerPage;
+
+    for(int i = 0; i < itemsPerPage && (startIdx + i) < expFileCount; i++){
+      int idx = startIdx + i;
+      int itemY = listY + i * (itemH + 4);
+      if(y >= itemY && y <= itemY + itemH){
+        if(x >= SCR_W-84 && x <= SCR_W-48){
+          expViewFileName = expFileNames[idx];
+          File f = SD_MMC.open(expViewFileName, FILE_READ);
+          if(f){ expViewContent = f.readString(); f.close(); }
+          else expViewContent = "Gagal membaca isi file.";
+          expViewScrollY = 0; expViewScrollVel = 0; // v12: mulai dari atas tiap buka file baru
+          needRedraw = true;
+          return;
+        }
+        if(x >= SCR_W-44 && x <= SCR_W-8){
+          SD_MMC.remove(expFileNames[idx]);
+          showToast("File Dihapus");
+          scanSdFiles();
+          needRedraw = true;
+          return;
+        }
+      }
+    }
+
+    int pageY = backY() - 2;
+    if(expScrollPage > 0 && x>=SCR_W-120 && x<=SCR_W-66 && y>=pageY){
+      expScrollPage--; needRedraw = true; return;
+    }
+    if((expScrollPage + 1) * itemsPerPage < expFileCount && x>=SCR_W-60 && x<=SCR_W-6 && y>=pageY){
+      expScrollPage++; needRedraw = true; return;
     }
     return;
   }
 
-  if(!sdReady) return;
-
-  int listY = 44;
-  int itemH = 26;
-  int itemsPerPage = 5;
-  int startIdx = expScrollPage * itemsPerPage;
-
-  for(int i = 0; i < itemsPerPage && (startIdx + i) < expFileCount; i++){
-    int idx = startIdx + i;
-    int itemY = listY + i * (itemH + 4);
-    if(y >= itemY && y <= itemY + itemH){
-      if(x >= SCR_W-84 && x <= SCR_W-48){
-        expViewFileName = expFileNames[idx];
-        File f = SD_MMC.open(expViewFileName, FILE_READ);
-        if(f){ expViewContent = f.readString(); f.close(); }
-        else expViewContent = "Gagal membaca isi file.";
-        needRedraw = true;
-        return;
-      }
-      if(x >= SCR_W-44 && x <= SCR_W-8){
-        SD_MMC.remove(expFileNames[idx]);
-        showToast("File Dihapus");
-        scanSdFiles();
-        needRedraw = true;
-        return;
-      }
+  // v12: Frame lanjutan selagi jari ditahan -> geser scroll isi file
+  // (dulu file explorer tidak menangani frame held sama sekali).
+  if(held && expViewFileName.length() > 0 && y>=viewTop-20 && y<=viewBot+20){
+    int dy = dragLastY - y;
+    if(dy!=0){
+      expViewScrollVel = expViewScrollVel*0.5f + dy*0.5f; // low-pass, sama gaya dgn Home/AI Chat
+      expViewScrollY = constrain(expViewScrollY + dy, 0.0f, (float)expViewMaxScroll);
+      dragLastY = y;
+      needRedraw = true;
     }
-  }
-
-  int pageY = backY() - 2;
-  if(expScrollPage > 0 && x>=SCR_W-120 && x<=SCR_W-66 && y>=pageY){
-    expScrollPage--; needRedraw = true; return;
-  }
-  if((expScrollPage + 1) * itemsPerPage < expFileCount && x>=SCR_W-60 && x<=SCR_W-6 && y>=pageY){
-    expScrollPage++; needRedraw = true; return;
   }
 }
 
@@ -3773,6 +4738,7 @@ void renderCurrentFrame(){
     if(idx>=0) apps[idx].draw(canvas);
   }
   if(!locked && controlCenterOpen) drawControlCenter(canvas);
+  if(!locked && !controlCenterOpen) drawDynamicIsland(canvas); // v14: overlay di atas semua layar (kecuali lock/CC)
 }
 
 // =============================================
@@ -3833,27 +4799,88 @@ void glitchTextRGB(int cx,int y,const char* text,int size){
   canvas.setTextColor(0xFFFF); canvas.setCursor(x,y);     canvas.print(text);
 }
 
+// =================================================================
+// v12: TEMA BOOT SEQUENCE DIPERBARUI -- dulu latar cuma hitam polos +
+// scale-in linear + teks muncul mendadak (hard cutoff) + loader titik
+// cuma kedip nyala/mati. Sekarang:
+//  1. Latar jadi gradient halus (lerpColor565+bootDrawGradientBg) drpd
+//     hitam polos, bikin logo lebih "pop".
+//  2. Logo & hexagon skrg pakai navEase (easing yg sama dgn transisi
+//     navigasi & Control Center) drpd progres linear -> geraknya lbh
+//     "premium", mulai halus & berhenti halus.
+//  3. Ada halo lembut berlapis di belakang logo (pendekatan murah dari
+//     efek glow, tanpa alpha blending sungguhan).
+//  4. Judul muncul dgn fade halus (interpolasi warna) drpd nongol
+//     mendadak di p>0.5.
+//  5. Loader titik di stage 2 skrg berdenyut ukurannya (wave pulse)
+//     drpd cuma kedip warna nyala/mati.
+// Sengaja TIDAK dibuat "ramai" (no glitch/chromatic-aberration) --
+// senada dgn keputusan v11 yg bikin Game Booster jadi simpel & bersih.
+// =================================================================
+uint16_t lerpColor565(uint16_t c1, uint16_t c2, float t){
+  if(t<0)t=0; if(t>1)t=1;
+  int r1=(c1>>11)&0x1F, g1=(c1>>5)&0x3F, b1=c1&0x1F;
+  int r2=(c2>>11)&0x1F, g2=(c2>>5)&0x3F, b2=c2&0x1F;
+  int r=r1+(int)((r2-r1)*t), g=g1+(int)((g2-g1)*t), b=b1+(int)((b2-b1)*t);
+  return (uint16_t)((r<<11)|(g<<5)|b);
+}
+// x,y,w,h = area yg mau digambar; totalH = tinggi total gradient (biasanya
+// tinggi layar) -- dipisah dari h/y supaya bisa dipakai jg utk nge-refresh
+// SEBAGIAN area saja (mis. area loader titik) tanpa bikin "kotak hitam"
+// yg warnanya beda dari gradient di sekelilingnya.
+void bootDrawGradientBg(int x,int y,int w,int h,int totalH,uint16_t top,uint16_t bottom){
+  for(int row=0; row<h; row++){
+    float t=(totalH>0)? (float)(y+row)/totalH : 0.0f;
+    canvas.drawFastHLine(x,y+row,w,lerpColor565(top,bottom,t));
+  }
+}
+
+// v13: PALET BOOT DISATUKAN & DIREDAM -- dulu stage 1 pakai oranye+gradient
+// biru dan stage 2 pakai cyan+gradient navy (2 hue berbeda + gradient
+// berwarna = kesannya "ramai"/banyak warna). Sekarang KEDUA stage berbagi
+// satu palet monokrom gelap yg sama (BOOT_*): background nyaris hitam
+// polos (bukan gradient biru/navy lagi), logo/hex/teks putih bersih, dan
+// cuma SATU warna aksen abu-kebiruan redup dipakai bersama utk halo &
+// particle ring. Baik sesuai preferensi tema dark (minim warna).
+uint16_t BOOT_ACCENT = 0xFFFF; // putih -- dipakai kedua stage (dulu: oranye vs cyan)
+uint16_t BOOT_GLOW   = 0x39C7; // satu abu-kebiruan redup utk halo & partikel
+uint16_t BOOT_BG_TOP = 0x10A2; // abu sangat gelap (nyaris hitam)
+uint16_t BOOT_BG_BOT = 0x0000; // hitam polos
+
 void bootStageRenPhone(int w,int h){
   int cx=w/2, cy=h/2-24;
-  uint16_t accent=0xFD40; // oranye khas brand "Ren"
+  uint16_t accent=BOOT_ACCENT;
+  uint16_t glow=BOOT_GLOW;
+  uint16_t bgTop=BOOT_BG_TOP, bgBot=BOOT_BG_BOT;
 
-  // Logo membesar halus (scale-in) dibarengi ring partikel tipis - cepat & bersih
-  for(int f=0; f<=10; f++){
-    float p=f/10.0f;
-    canvas.fillSprite(0x0000);
-    bootDrawParticleRing(cx,cy,50+(int)(14*p),10,0x2965,p*3.0f);
-    int boxSize=(int)(24+42*p);
+  // v12: logo membesar dgn EASING (navEase) + halo lembut berlapis +
+  // background gradient -- kesannya lbh "premium" drpd scale-in linear +
+  // partikel doang di atas hitam polos.
+  const int STEPS=14;
+  for(int f=0; f<=STEPS; f++){
+    float lp=(float)f/STEPS;
+    float p=navEase(lp);
+    bootDrawGradientBg(0,0,w,h,h,bgTop,bgBot);
+
+    int haloR=(int)(20+34*p);
+    canvas.fillCircle(cx,cy,haloR+10,lerpColor565(bgTop,glow,0.35f));
+    canvas.fillCircle(cx,cy,haloR+4, lerpColor565(bgTop,glow,0.6f));
+    bootDrawParticleRing(cx,cy,46+(int)(16*p),12,BOOT_GLOW,p*2.4f);
+
+    int boxSize=(int)(22+42*p);
     canvas.fillRoundRect(cx-boxSize/2,cy-boxSize/2,boxSize,boxSize,boxSize/4,accent);
     canvas.setTextColor(0x0000); canvas.setTextSize(3);
     canvas.setCursor(cx-9,cy-12); canvas.print("R");
-    if(p>0.5f){
-      canvas.setTextColor(0xFFFF); canvas.setTextSize(2);
+
+    if(lp>0.45f){
+      float tp = navEase((lp-0.45f)/0.55f); // fade-in judul jg mulus, bukan mendadak
+      canvas.setTextColor(lerpColor565(bgBot,0xFFFF,tp)); canvas.setTextSize(2);
       const char* title="REN PHONE";
       int tw=strlen(title)*12;
       canvas.setCursor(cx-tw/2,cy+50); canvas.print(title);
     }
     push();
-    delay(9);
+    delay(7);
   }
   canvas.setTextColor(0x8C51); canvas.setTextSize(1);
   const char* tag="Simplicity, Redefined.";
@@ -3865,39 +4892,62 @@ void bootStageRenPhone(int w,int h){
 
 void bootStageSanzXOS(int w,int h){
   int cx=w/2, cy=h/2-10;
-  uint16_t hexColor=0x04FF; // biru cyan khas "SanzX OS"
+  // v13: dulu cyan+gradient navy (beda hue dr stage 1 = kesan banyak warna).
+  // Sekarang pakai persis palet BOOT_* yg sama dgn stage 1 -> boot sequence
+  // terasa satu kesatuan tema gelap, bukan dua tema warna yg beda2.
+  uint16_t hexColor=BOOT_ACCENT;
+  uint16_t glow=BOOT_GLOW;
+  uint16_t bgTop=BOOT_BG_TOP, bgBot=BOOT_BG_BOT;
 
-  // Hexagon tergambar halus + teks muncul - cepat & bersih
-  for(int f=0; f<=10; f++){
-    float p=f/10.0f;
-    canvas.fillSprite(0x0000);
+  // v12: hexagon muncul dgn EASING (bukan progres linear) + sedikit
+  // rotasi selagi membesar (kesan "merakit diri", settle ke posisi
+  // normal) + halo lembut + background gradient -- senada dgn stage 1.
+  const int STEPS=14;
+  for(int f=0; f<=STEPS; f++){
+    float lp=(float)f/STEPS;
+    float p=navEase(lp);
+    bootDrawGradientBg(0,0,w,h,h,bgTop,bgBot);
+
+    int haloR=(int)(16+30*p);
+    canvas.fillCircle(cx,cy,haloR+10,lerpColor565(bgTop,glow,0.35f));
+    canvas.fillCircle(cx,cy,haloR+4, lerpColor565(bgTop,glow,0.6f));
+
     float r=34*p;
+    float rot=(1.0f-p)*0.6f; // mulai agak miring, settle ke posisi normal
     int hx[6],hy[6];
     for(int i=0;i<6;i++){
-      float ang=PI/6+i*PI/3;
+      float ang=PI/6+i*PI/3+rot;
       hx[i]=cx+(int)(cosf(ang)*r); hy[i]=cy+(int)(sinf(ang)*r);
     }
     for(int i=0;i<6;i++) canvas.drawLine(hx[i],hy[i],hx[(i+1)%6],hy[(i+1)%6],hexColor);
+
     canvas.setTextColor(hexColor); canvas.setTextSize(2);
     canvas.setCursor(cx-8,cy-8); canvas.print("S");
-    if(p>0.5f){
-      canvas.setTextColor(0xFFFF); canvas.setTextSize(2);
+
+    if(lp>0.45f){
+      float tp = navEase((lp-0.45f)/0.55f);
+      canvas.setTextColor(lerpColor565(bgBot,0xFFFF,tp)); canvas.setTextSize(2);
       const char* title="SanzX OS";
       int tw=strlen(title)*12;
       canvas.setCursor(cx-tw/2,cy+48); canvas.print(title);
     }
     push();
-    delay(9);
+    delay(7);
   }
-  // titik loading singkat, 3 kedipan aja
-  for(int i=0;i<3;i++){
-    canvas.fillRect(cx-26,cy+66,52,10,0x0000);
+  // v12: loader 3 titik skrg berdenyut ukurannya secara berjalan (wave
+  // pulse) drpd cuma kedip nyala/mati -- terasa lbh hidup & mulus.
+  int dotCx=cx, dotCy=cy+70;
+  for(int i=0;i<8;i++){
+    bootDrawGradientBg(dotCx-28,dotCy-8,56,18,h,bgTop,bgBot);
     for(int d=0; d<3; d++){
-      uint16_t dc=(d==i)? 0xFFFF : 0x2965;
-      canvas.fillCircle(cx-16+d*16,cy+72,3,dc);
+      float phase = (float)i - d*1.2f;
+      float pulse = 0.5f+0.5f*sinf(phase*0.9f);
+      int rad = 2+(int)(2*pulse);
+      uint16_t dc = lerpColor565(BOOT_GLOW,0xFFFF,pulse);
+      canvas.fillCircle(dotCx-16+d*16,dotCy,rad,dc);
     }
     push();
-    delay(80);
+    delay(45);
   }
   delay(120);
 }
@@ -3942,10 +4992,33 @@ int gStartX=0,gStartY=0; bool gGestureDone=false;
 #define MPU_ADDR    0x68
 
 bool  mpuReady   = false;
-float mpuAx=0, mpuAy=0, mpuAz=1.0f;      // percepatan, satuan g
-float mpuGx=0, mpuGy=0, mpuGz=0;         // kecepatan sudut, derajat/detik
+float mpuAx=0, mpuAy=0, mpuAz=1.0f;      // percepatan, satuan g (sudah dikoreksi offset)
+float mpuGx=0, mpuGy=0, mpuGz=0;         // kecepatan sudut, derajat/detik (sudah dikoreksi offset)
 float mpuTempC   = 0;
 float smoothRoll = 0, smoothPitch = 0;   // sudut kemiringan halus (derajat) - dipakai app Orientasi 3D
+
+// ---- BARU: offset kalibrasi MPU6050, disimpan permanen di NVS ----
+// Tanpa kalibrasi, accel/gyro mentah biasanya punya bias kecil bawaan
+// pabrik (mis. gyro tidak persis 0 saat diam, accel Z tidak persis 1g
+// saat rata). Offset ini dikurangkan dari pembacaan mentah di
+// mpuReadRaw() supaya app Orientasi 3D, auto-rotate, shake-detect, dan
+// kontrol Breakout jadi lebih akurat & stabil.
+float mpuOffAx=0, mpuOffAy=0, mpuOffAz=0;
+float mpuOffGx=0, mpuOffGy=0, mpuOffGz=0;
+
+void saveMpuCal(){
+  Preferences p; p.begin("mpucal",false);
+  p.putFloat("ax",mpuOffAx); p.putFloat("ay",mpuOffAy); p.putFloat("az",mpuOffAz);
+  p.putFloat("gx",mpuOffGx); p.putFloat("gy",mpuOffGy); p.putFloat("gz",mpuOffGz);
+  p.putBool("done",true);
+  p.end();
+}
+void loadMpuCal(){
+  Preferences p; p.begin("mpucal",true);
+  mpuOffAx=p.getFloat("ax",0); mpuOffAy=p.getFloat("ay",0); mpuOffAz=p.getFloat("az",0);
+  mpuOffGx=p.getFloat("gx",0); mpuOffGy=p.getFloat("gy",0); mpuOffGz=p.getFloat("gz",0);
+  p.end();
+}
 
 bool mpuWriteReg(uint8_t reg, uint8_t val){
   Wire.beginTransmission(MPU_ADDR);
@@ -3985,10 +5058,64 @@ bool mpuReadRaw(){
   int16_t rax=(buf[0]<<8)|buf[1], ray=(buf[2]<<8)|buf[3], raz=(buf[4]<<8)|buf[5];
   int16_t rtemp=(buf[6]<<8)|buf[7];
   int16_t rgx=(buf[8]<<8)|buf[9], rgy=(buf[10]<<8)|buf[11], rgz=(buf[12]<<8)|buf[13];
-  mpuAx = rax/16384.0f; mpuAy = ray/16384.0f; mpuAz = raz/16384.0f; // +-2g -> 16384 LSB/g
-  mpuGx = rgx/131.0f;   mpuGy = rgy/131.0f;   mpuGz = rgz/131.0f;   // +-250dps -> 131 LSB/(deg/s)
+  // FIX v10: offset kalibrasi (mpuOffAx..mpuOffGz) dikurangkan di sini,
+  // jadi SEMUA konsumen sensor (auto-rotate, shake, Breakout, Orientasi 3D)
+  // otomatis ikut lebih akurat begitu user selesai kalibrasi di Setting.
+  mpuAx = rax/16384.0f - mpuOffAx; mpuAy = ray/16384.0f - mpuOffAy; mpuAz = raz/16384.0f - mpuOffAz; // +-2g -> 16384 LSB/g
+  mpuGx = rgx/131.0f   - mpuOffGx; mpuGy = rgy/131.0f   - mpuOffGy; mpuGz = rgz/131.0f   - mpuOffGz;   // +-250dps -> 131 LSB/(deg/s)
   mpuTempC = rtemp/340.0f + 36.53f;
   return true;
+}
+
+// =================================================================
+// KALIBRASI MPU6050 (BARU di v10)
+// Dipanggil dari halaman Setting. HP HARUS diam & rata (layar menghadap
+// ke atas) selama proses ini berjalan (~1 detik). Fungsi ini mengambil
+// rata-rata sejumlah sampel mentah, lalu menghitung offset supaya:
+//  - gyro (X/Y/Z) terbaca 0 dps saat diam (bias giro dihilangkan)
+//  - accel X/Y terbaca 0g dan accel Z terbaca 1g saat rata (bias accel
+//    & sedikit ketidaklurusan pemasangan chip dikompensasi)
+// Hasilnya disimpan permanen ke NVS lewat saveMpuCal(), jadi tetap
+// berlaku walau perangkat direstart.
+// =================================================================
+void calibrateMPU(){
+  if(!mpuReady) return;
+
+  showToast("Kalibrasi... taruh HP rata & diam!",2500);
+  renderCurrentFrame();
+  push();
+  delay(400); // beri waktu user meletakkan HP sebelum sampling dimulai
+
+  const int N = 200;
+  double sax=0,say=0,saz=0,sgx=0,sgy=0,sgz=0;
+  int got=0;
+  for(int i=0;i<N;i++){
+    if(mpuReadRaw()){ // note: mpuReadRaw() sudah mengurangi offset LAMA -
+                       // gpp, kita hanya pakai ini utk cari offset BARU relatif thd nilai ini
+      sax+=mpuAx; say+=mpuAy; saz+=mpuAz;
+      sgx+=mpuGx; sgy+=mpuGy; sgz+=mpuGz;
+      got++;
+    }
+    delay(5);
+  }
+
+  if(got<10){
+    showToast("Kalibrasi gagal, coba lagi");
+    return;
+  }
+
+  // Offset baru = offset lama + rata-rata error yg baru terukur, supaya
+  // hasil akhir kumulatif membuat pembacaan pas di titik nol/1g yg benar.
+  mpuOffAx += sax/got;
+  mpuOffAy += say/got;
+  mpuOffAz += (saz/got) - 1.0f; // asumsi HP rata, layar ke atas -> Z seharusnya 1g
+  mpuOffGx += sgx/got;
+  mpuOffGy += sgy/got;
+  mpuOffGz += sgz/got;
+
+  saveMpuCal();
+  showToast("Kalibrasi MPU6050 selesai!");
+  needRedrawNow();
 }
 
 // ---- Auto-rotate: layar ikut kemiringan HP ----
@@ -4210,6 +5337,544 @@ void battTouch(int x,int y,bool held,bool isNew){
   }
 }
 
+// =============================================
+// APP: TRIVIA QUIZ (BARU v14)
+// Soal diambil REAL-TIME dari Open Trivia Database (opentdb.com) lewat
+// HTTPClient async (task terpisah spt pola doGeminiHttpRequest/geminiTaskFunc
+// -> UI gak nge-freeze nunggu server). Parsing JSON manual (tanpa library
+// ArduinoJson) senada gaya yg sudah dipakai di doGeminiHttpRequest():
+// dipakai param API &encode=base64 supaya SEMUA field teks jadi string
+// base64 polos (tanpa perlu unescape tanda kutip/karakter aneh dulu),
+// lalu hasilnya di-decode base64 + entity HTML manual (spt &quot; &#039;).
+// =============================================
+
+// ---- Base64 decode sederhana (dipakai baca respons OpenTDB) ----
+int triviaB64Val(char c){
+  if(c>='A'&&c<='Z') return c-'A';
+  if(c>='a'&&c<='z') return c-'a'+26;
+  if(c>='0'&&c<='9') return c-'0'+52;
+  if(c=='+') return 62;
+  if(c=='/') return 63;
+  return -1;
+}
+String triviaB64Decode(const String& in){
+  String out; out.reserve(in.length()*3/4+4);
+  int val=0, bits=-8;
+  for(size_t i=0;i<in.length();i++){
+    char c=in[i];
+    if(c=='=') break;
+    int d=triviaB64Val(c);
+    if(d<0) continue;
+    val=(val<<6)+d; bits+=6;
+    if(bits>=0){ out += (char)((val>>bits)&0xFF); bits-=8; }
+  }
+  return out;
+}
+
+// ---- Decode entity HTML umum yg sering muncul di teks OpenTDB. Karakter
+// aksen (é, ü, dst) sengaja ditranslit ke ASCII polos krn font bawaan
+// LovyanGFX di proyek ini cuma dukung ASCII -- kalau dibiarkan unicode
+// mentah, malah gak kebaca sama sekali di layar. ----
+String triviaHtmlDecode(String s){
+  struct Ent{ const char* pat; const char* rep; };
+  static const Ent ents[] = {
+    {"&quot;","\""}, {"&#039;","'"}, {"&apos;","'"}, {"&rsquo;","'"}, {"&lsquo;","'"},
+    {"&rdquo;","\""}, {"&ldquo;","\""}, {"&ndash;","-"}, {"&mdash;","-"}, {"&hellip;","..."},
+    {"&eacute;","e"}, {"&egrave;","e"}, {"&ecirc;","e"}, {"&uuml;","u"}, {"&ouml;","o"},
+    {"&auml;","a"}, {"&ntilde;","n"}, {"&ccedil;","c"}, {"&aacute;","a"}, {"&iacute;","i"},
+    {"&oacute;","o"}, {"&uacute;","u"}, {"&deg;","deg"}, {"&times;","x"}, {"&divide;","/"},
+    {"&frac12;","1/2"}, {"&frac14;","1/4"}, {"&frac34;","3/4"}, {"&trade;","(TM)"},
+    {"&lt;","<"}, {"&gt;",">"}, {"&nbsp;"," "}, {"&amp;","&"}, // &amp; PALING TERAKHIR
+  };
+  for(auto& e: ents) s.replace(e.pat, e.rep);
+  return s;
+}
+
+// ---- Parser JSON manual (khusus bentuk respons OpenTDB, bukan parser umum) ----
+int triviaJsonGetInt(const String& s, const char* key){
+  String pat = String("\"")+key+"\":";
+  int i = s.indexOf(pat);
+  if(i<0) return -1;
+  i += pat.length();
+  int j=i;
+  while(j<(int)s.length() && (isDigit(s[j])||s[j]=='-')) j++;
+  if(j==i) return -1;
+  return s.substring(i,j).toInt();
+}
+String triviaJsonGetString(const String& obj, const char* key){
+  String pat = String("\"")+key+"\":\"";
+  int i = obj.indexOf(pat);
+  if(i<0) return "";
+  i += pat.length();
+  int j = obj.indexOf('"', i);
+  if(j<0) return "";
+  return obj.substring(i,j);
+}
+int triviaJsonGetStringArray(const String& obj, const char* key, String out[], int maxN){
+  String pat = String("\"")+key+"\":[";
+  int i = obj.indexOf(pat);
+  if(i<0) return 0;
+  i += pat.length();
+  int end = obj.indexOf(']', i);
+  if(end<0) return 0;
+  String body = obj.substring(i,end);
+  int n=0, p=0;
+  while(n<maxN){
+    int q1=body.indexOf('"',p); if(q1<0) break;
+    int q2=body.indexOf('"',q1+1); if(q2<0) break;
+    out[n++]=body.substring(q1+1,q2);
+    p=q2+1;
+  }
+  return n;
+}
+// Cari isi array "results":[...] dgn menghitung kedalaman [ ] (bukan cuma
+// indexOf '[' & ']' pertama) krn di dalamnya ada array bersarang lain
+// (tiap objek soal punya "incorrect_answers":[...] sendiri).
+String triviaExtractResultsArray(const String& full){
+  int i = full.indexOf("\"results\":[");
+  if(i<0) return "";
+  i = full.indexOf('[', i);
+  int depth=0;
+  for(int j=i; j<(int)full.length(); j++){
+    if(full[j]=='[') depth++;
+    else if(full[j]==']'){ depth--; if(depth==0) return full.substring(i+1,j); }
+  }
+  return "";
+}
+// Pecah isi array objek {...},{...} jadi potongan per-objek dgn menghitung
+// kedalaman { } (robust walau ada [ ] bersarang di dalam tiap objek).
+int triviaSplitObjects(const String& arrBody, String outObjs[], int maxN){
+  int n=0, depth=0, start=-1;
+  for(int i=0;i<(int)arrBody.length() && n<maxN;i++){
+    char c=arrBody[i];
+    if(c=='{'){ if(depth==0) start=i; depth++; }
+    else if(c=='}'){ depth--; if(depth==0 && start>=0){ outObjs[n++]=arrBody.substring(start,i+1); start=-1; } }
+  }
+  return n;
+}
+
+// ---- Data tema/kategori (id sesuai id kategori resmi OpenTDB) ----
+struct TriviaCategory{ int id; const char* name; uint16_t color; };
+TriviaCategory triviaCats[] = {
+  {9,  "Umum",          0xFD40},
+  {17, "Sains & Alam",  0x07E0},
+  {18, "Komputer",      0x07FF},
+  {21, "Olahraga",      0xF800},
+  {22, "Geografi",      0x3ADF},
+  {23, "Sejarah",       0xFC9F},
+  {11, "Film",          0xFFE0},
+  {12, "Musik",         0x861F},
+  {15, "Video Game",    0x1FF9},
+  {27, "Hewan",         0xFB40},
+  {31, "Anime & Manga", 0xF81F},
+  {20, "Mitologi",      0x04FF},
+};
+#define TRIVIA_CAT_COUNT 12
+const char* triviaDiffNames[4] = {"Mudah","Sedang","Sulit","Acak"};
+const int   triviaAmountOpts[3] = {5,10,15};
+
+// ---- State ----
+enum TriviaPage { TRV_SETUP, TRV_LOADING, TRV_QUESTION, TRV_RESULT, TRV_ERROR };
+TriviaPage triviaPage = TRV_SETUP;
+
+#define TRIVIA_MAX_Q 20
+struct TriviaQuestion{ String question; String answers[4]; int correctIdx; };
+TriviaQuestion triviaQs[TRIVIA_MAX_Q];
+int triviaCount=0, triviaCur=0, triviaScore=0, triviaCorrectCount=0;
+int triviaSelected=-1; bool triviaAnswered=false;
+unsigned long triviaAnswerAtMs=0;
+String triviaErrorMsg="";
+
+int triviaSelCat=0, triviaSelDiff=0, triviaSelAmount=1; // default: Umum, Mudah, 10 soal
+float triviaCatScrollY=0;
+int triviaTouchStartX=0, triviaTouchStartY=0, triviaTouchLastY=0;
+bool triviaIsSwiping=false; unsigned long triviaSwipeStartTime=0;
+
+TaskHandle_t triviaTaskHandle=NULL;
+
+// ---- Layout (dihitung dari BAWAH ke ATAS, satu sumber kebenaran dipakai
+// bareng oleh fungsi gambar & fungsi hit-test sentuhan -> gak bisa ketuker) ----
+// v15 FIX: struct TriviaLayout dipindahkan ke PUNCAK FILE (dekat AiLine/
+// Vec3f) karena dipakai sbg TIPE RETURN fungsi di bawah ini -- lihat
+// komentar "v15 — FIX BUILD" di paling atas file utk penjelasan lengkap
+// akar masalahnya. Definisi struct tidak lagi ada di sini, cukup dipakai.
+TriviaLayout triviaCalcLayout(){
+  TriviaLayout L;
+  L.startY = backY()-6-28;
+  L.amtY   = L.startY-34;
+  L.diffY  = L.amtY-34;
+  L.catBottom = L.diffY-14;
+  return L;
+}
+int triviaCatTop(){ return STATUS_H+26; }
+int triviaCatCols(){ return currentOrient==ORIENT_LANDSCAPE?3:2; }
+int triviaCatCardW(){ int cols=triviaCatCols(); return (SCR_W-(cols+1)*6)/cols; }
+int triviaCatCardH(){ return 36; }
+int triviaCatMaxScroll(){
+  TriviaLayout L=triviaCalcLayout();
+  int cols=triviaCatCols();
+  int rows=(TRIVIA_CAT_COUNT+cols-1)/cols;
+  int viewportH = L.catBottom - triviaCatTop();
+  int needed = rows*(triviaCatCardH()+6) - viewportH;
+  return max(0,needed);
+}
+int triviaQTop(){ return STATUS_H+24; }
+int triviaQTextH(){ return 58; }
+int triviaAnsTop(){ return triviaQTop()+triviaQTextH()+4; }
+void triviaAnsRect(int idx,int& x,int& y,int& w,int& h){
+  int top=triviaAnsTop(), bottom=backY()-6, gap=5;
+  h=(bottom-top-3*gap)/4;
+  y=top+idx*(h+gap);
+  x=8; w=SCR_W-16;
+}
+
+// ---- Fetch (jalan di task terpisah, pola sama dgn doGeminiHttpRequest) ----
+void triviaFetchQuestions(){
+  WiFiClientSecure client; client.setInsecure(); client.setTimeout(12000);
+  HTTPClient http; http.setTimeout(12000); http.setConnectTimeout(12000);
+
+  int catId = triviaCats[triviaSelCat].id;
+  int amount = triviaAmountOpts[triviaSelAmount];
+  String diffParam = "";
+  if(triviaSelDiff==0) diffParam="&difficulty=easy";
+  else if(triviaSelDiff==1) diffParam="&difficulty=medium";
+  else if(triviaSelDiff==2) diffParam="&difficulty=hard";
+  // triviaSelDiff==3 ("Acak") -> tanpa parameter difficulty = OpenTDB campur semua tingkat
+
+  String url = "https://opentdb.com/api.php?amount="+String(amount)+"&category="+String(catId)+
+               diffParam+"&type=multiple&encode=base64";
+
+  if(!http.begin(client,url)){
+    triviaErrorMsg="Gagal inisialisasi koneksi ke server soal.";
+    triviaPage=TRV_ERROR; needRedrawNow(); return;
+  }
+  int httpCode = http.GET();
+  if(httpCode!=HTTP_CODE_OK){
+    triviaErrorMsg = "Gagal mengambil soal (HTTP "+String(httpCode)+"). Cek koneksi internet.";
+    http.end(); triviaPage=TRV_ERROR; needRedrawNow(); return;
+  }
+  String body = http.getString();
+  http.end();
+
+  int rc = triviaJsonGetInt(body, "response_code");
+  if(rc!=0){
+    switch(rc){
+      case 1: triviaErrorMsg="Soal gak cukup utk tema/tingkat ini. Coba tema/jumlah lain."; break;
+      case 2: triviaErrorMsg="Parameter permintaan tidak valid."; break;
+      default: triviaErrorMsg="Server soal sedang bermasalah. Coba lagi nanti."; break;
+    }
+    triviaPage=TRV_ERROR; needRedrawNow(); return;
+  }
+
+  String resultsArr = triviaExtractResultsArray(body);
+  String objs[TRIVIA_MAX_Q];
+  int n = triviaSplitObjects(resultsArr, objs, TRIVIA_MAX_Q);
+
+  int built=0;
+  for(int i=0;i<n && built<TRIVIA_MAX_Q;i++){
+    String qB64 = triviaJsonGetString(objs[i], "question");
+    String cB64 = triviaJsonGetString(objs[i], "correct_answer");
+    String wrongB64[3];
+    int wn = triviaJsonGetStringArray(objs[i], "incorrect_answers", wrongB64, 3);
+    if(qB64.length()==0 || cB64.length()==0 || wn<1) continue;
+
+    String qText = triviaHtmlDecode(triviaB64Decode(qB64));
+    String correctText = triviaHtmlDecode(triviaB64Decode(cB64));
+    String opts[4]; int optN=0;
+    opts[optN++]=correctText;
+    for(int k=0;k<wn && optN<4;k++) opts[optN++]=triviaHtmlDecode(triviaB64Decode(wrongB64[k]));
+    while(optN<4) opts[optN++]="-";
+
+    // acak urutan opsi (Fisher-Yates) biar jawaban benar gak selalu di A
+    for(int k=optN-1;k>0;k--){ int r=random(0,k+1); String tmp=opts[k]; opts[k]=opts[r]; opts[r]=tmp; }
+    int correctIdx=0;
+    for(int k=0;k<optN;k++) if(opts[k]==correctText){ correctIdx=k; break; }
+
+    triviaQs[built].question = qText;
+    for(int k=0;k<4;k++) triviaQs[built].answers[k]=opts[k];
+    triviaQs[built].correctIdx = correctIdx;
+    built++;
+  }
+
+  if(built==0){
+    triviaErrorMsg="Gagal membaca data soal dari server.";
+    triviaPage=TRV_ERROR; needRedrawNow(); return;
+  }
+
+  triviaCount=built; triviaCur=0; triviaScore=0; triviaCorrectCount=0;
+  triviaSelected=-1; triviaAnswered=false;
+  triviaPage=TRV_QUESTION;
+  diNotify('Q', "Kuis dimulai!", triviaCats[triviaSelCat].color, 1600, false); // v17: subtitle dihapus
+  needRedrawNow();
+}
+void triviaTaskFunc(void* parameter){
+  triviaFetchQuestions();
+  triviaTaskHandle=NULL;
+  vTaskDelete(NULL);
+}
+void triviaStartFetch(){
+  if(WiFi.status()!=WL_CONNECTED){
+    triviaErrorMsg="WiFi belum terhubung. Sambungkan WiFi dulu lewat Setting.";
+    triviaPage=TRV_ERROR; needRedraw=true; return;
+  }
+  triviaPage=TRV_LOADING;
+  needRedraw=true;
+  BaseType_t res = xTaskCreatePinnedToCore(triviaTaskFunc,"triviaTask",16384,NULL,1,&triviaTaskHandle,1);
+  if(res!=pdPASS){
+    triviaErrorMsg="Gagal membuat proses pengambilan soal. Coba lagi.";
+    triviaPage=TRV_ERROR; needRedraw=true;
+  }
+}
+
+void triviaAdvance(){
+  triviaCur++;
+  if(triviaCur>=triviaCount){
+    triviaPage=TRV_RESULT;
+    diNotify('Y', "Selesai: "+String(triviaCorrectCount)+"/"+String(triviaCount),
+              T().accent2, 2200, false); // v17: subtitle dihapus, digabung ke 1 baris singkat
+  } else {
+    triviaSelected=-1; triviaAnswered=false;
+  }
+  needRedraw=true;
+}
+// Dipanggil TIAP loop() (murah, cek curScreen dulu) - urus animasi spinner
+// loading & auto-lanjut ke soal berikutnya stlh feedback benar/salah tampil.
+void triviaPeriodicUpdate(){
+  if(curScreen()!=SCR_TRIVIA) return;
+  if(triviaPage==TRV_LOADING) needRedraw=true;
+  if(triviaPage==TRV_QUESTION && triviaAnswered && millis()-triviaAnswerAtMs>1400) triviaAdvance();
+}
+
+void triviaEnter(){ triviaPage=TRV_SETUP; triviaCatScrollY=0; }
+void triviaExit(){}
+
+void drawTriviaSetup(LGFX_Sprite& s){
+  s.setTextColor(T().accent); s.setTextSize(1);
+  s.setCursor(8,25); s.print("Trivia Quiz - Pilih Tema");
+
+  TriviaLayout L = triviaCalcLayout();
+  int cols=triviaCatCols(), cw=triviaCatCardW(), ch=triviaCatCardH(), gap=6;
+  int top=triviaCatTop(), bottom=L.catBottom;
+  for(int i=0;i<TRIVIA_CAT_COUNT;i++){
+    int col=i%cols, row=i/cols;
+    int x=gap+col*(cw+gap), y=top+row*(ch+gap)-(int)triviaCatScrollY;
+    if(y+ch<top || y>bottom) continue;
+    bool sel=(i==triviaSelCat);
+    uint16_t bg = sel? triviaCats[i].color : T().surface;
+    s.fillRoundRect(x,y,cw,ch,8,bg);
+    if(sel) s.drawRoundRect(x,y,cw,ch,8,T().text);
+    s.setTextColor(sel?T().bg:T().text); s.setTextSize(1);
+    int nl=strlen(triviaCats[i].name)*6;
+    s.setCursor(x+cw/2-min(nl,cw-6)/2, y+ch/2-4);
+    s.print(triviaCats[i].name);
+  }
+
+  s.setTextColor(T().subtext); s.setTextSize(1);
+  s.setCursor(8, L.diffY-10); s.print("Tingkat:");
+  int dw=(SCR_W-16)/4;
+  for(int i=0;i<4;i++){
+    int x=8+i*dw; bool sel=(i==triviaSelDiff);
+    s.fillRoundRect(x,L.diffY,dw-4,22,5, sel?T().accent:T().surface2);
+    s.setTextColor(sel?T().bg:T().text);
+    int nl=strlen(triviaDiffNames[i])*6;
+    s.setCursor(x+(dw-4)/2-nl/2, L.diffY+7);
+    s.print(triviaDiffNames[i]);
+  }
+
+  s.setTextColor(T().subtext);
+  s.setCursor(8, L.amtY-10); s.print("Jumlah Soal:");
+  int aw=(SCR_W-16)/3;
+  for(int i=0;i<3;i++){
+    int x=8+i*aw; bool sel=(i==triviaSelAmount);
+    s.fillRoundRect(x,L.amtY,aw-4,22,5, sel?T().accent2:T().surface2);
+    char b[10]; sprintf(b,"%d Soal",triviaAmountOpts[i]);
+    int nl=strlen(b)*6;
+    s.setTextColor(sel?T().bg:T().text);
+    s.setCursor(x+(aw-4)/2-nl/2, L.amtY+7);
+    s.print(b);
+  }
+
+  s.fillRoundRect(8,L.startY,SCR_W-16,28,8,T().good);
+  s.setTextColor(T().bg); s.setTextSize(2);
+  const char* lbl="Mulai Kuis";
+  int lw=strlen(lbl)*12;
+  s.setCursor(SCR_W/2-lw/2, L.startY+6);
+  s.print(lbl);
+}
+
+void drawTriviaLoading(LGFX_Sprite& s){
+  int cx=SCR_W/2, cy=SCR_H/2-6;
+  float ang = fmodf((float)millis(),1200.0f)/1200.0f*360.0f;
+  s.drawArc(cx,cy,26,20,0,360,T().divider);       // cincin dasar redup
+  s.drawArc(cx,cy,26,20,ang,ang+260,T().accent2); // arc terang yg muter di atasnya
+  s.setTextColor(T().subtext); s.setTextSize(1);
+  const char* lbl="Mengambil soal dari server...";
+  int tw=strlen(lbl)*6;
+  s.setCursor(cx-tw/2, cy+40); s.print(lbl);
+}
+
+void drawTriviaQuestion(LGFX_Sprite& s){
+  if(triviaCur<0||triviaCur>=triviaCount) return;
+  TriviaQuestion& q = triviaQs[triviaCur];
+
+  s.fillRoundRect(6,STATUS_H+3,96,16,4,triviaCats[triviaSelCat].color);
+  s.setTextColor(T().bg); s.setTextSize(1);
+  s.setCursor(11,STATUS_H+7); s.print(triviaCats[triviaSelCat].name);
+
+  char info[24]; sprintf(info,"Soal %d/%d",triviaCur+1,triviaCount);
+  s.setTextColor(T().text); s.setCursor(SCR_W-(int)strlen(info)*6-64, STATUS_H+7); s.print(info);
+  char scoreB[20]; sprintf(scoreB,"Skor:%d",triviaScore);
+  s.setTextColor(T().accent2); s.setCursor(SCR_W-56, STATUS_H+7); s.print(scoreB);
+
+  // wrap pertanyaan pakai fungsi & buffer yg sama dgn AI Chat (reuse pola
+  // yg sudah dipakai File Explorer sejak v12 - lihat aiWrapAppend)
+  int maxChars = (SCR_W-16)/6;
+  int n = aiWrapAppend(aiLinesBuf, AI_MAX_LINES, 0, q.question, T().text, maxChars);
+  int qy=triviaQTop();
+  for(int i=0;i<n && i<5;i++){
+    s.setTextColor(aiLinesBuf[i].color); s.setTextSize(1);
+    s.setCursor(8, qy+i*11); s.print(aiLinesBuf[i].text.c_str());
+  }
+
+  const char* letters[4]={"A","B","C","D"};
+  for(int i=0;i<4;i++){
+    int x,y,w,h; triviaAnsRect(i,x,y,w,h);
+    uint16_t bg=T().surface;
+    if(triviaAnswered){
+      if(i==q.correctIdx) bg=T().good;
+      else if(i==triviaSelected) bg=T().danger;
+    }
+    s.fillRoundRect(x,y,w,h,6,bg);
+    bool hi = triviaAnswered && (i==q.correctIdx || i==triviaSelected);
+    s.setTextColor(hi?T().bg:T().text); s.setTextSize(1);
+    String line = String(letters[i])+". "+q.answers[i];
+    int maxC=(w-10)/6;
+    if((int)line.length()>maxC) line=line.substring(0,maxC-1)+".";
+    s.setCursor(x+6, y+h/2-4); s.print(line.c_str());
+  }
+}
+
+void drawTriviaResult(LGFX_Sprite& s){
+  int cx=SCR_W/2;
+  s.setTextColor(T().accent); s.setTextSize(2);
+  const char* title="Kuis Selesai!";
+  s.setCursor(cx-(int)strlen(title)*6, STATUS_H+18); s.print(title);
+
+  char scoreB[32]; sprintf(scoreB,"%d/%d benar",triviaCorrectCount,triviaCount);
+  s.setTextColor(T().text); s.setTextSize(2);
+  s.setCursor(cx-(int)strlen(scoreB)*6, STATUS_H+46); s.print(scoreB);
+
+  int pct = triviaCount? (triviaCorrectCount*100/triviaCount) : 0;
+  const char* msg = pct>=80?"Hebat, jagoan trivia!" : pct>=50?"Lumayan, terus asah!" : "Ayo coba lagi, pasti bisa!";
+  s.setTextColor(T().subtext); s.setTextSize(1);
+  s.setCursor(cx-(int)strlen(msg)*3, STATUS_H+74); s.print(msg);
+
+  s.fillRoundRect(8, STATUS_H+96, SCR_W-16, 26, 7, T().good);
+  s.setTextColor(T().bg); s.setTextSize(1);
+  const char* l1="Main Lagi (tema sama)";
+  s.setCursor(cx-(int)strlen(l1)*3, STATUS_H+106); s.print(l1);
+
+  s.fillRoundRect(8, STATUS_H+128, SCR_W-16, 26, 7, T().surface2);
+  s.setTextColor(T().text);
+  const char* l2="Ganti Tema";
+  s.setCursor(cx-(int)strlen(l2)*3, STATUS_H+138); s.print(l2);
+}
+
+void drawTriviaError(LGFX_Sprite& s){
+  s.setTextColor(T().danger); s.setTextSize(1);
+  s.setCursor(8, STATUS_H+20); s.print("Gagal memuat soal:");
+  int maxChars=(SCR_W-16)/6;
+  int n = aiWrapAppend(aiLinesBuf, AI_MAX_LINES, 0, triviaErrorMsg, T().text, maxChars);
+  for(int i=0;i<n && i<6;i++){
+    s.setTextColor(T().text); s.setCursor(8, STATUS_H+36+i*11); s.print(aiLinesBuf[i].text.c_str());
+  }
+  int by=STATUS_H+36+6*11+10;
+  s.fillRoundRect(8,by,SCR_W-16,26,7,T().accent);
+  s.setTextColor(T().bg); s.setTextSize(1);
+  const char* l="Coba Lagi";
+  s.setCursor(SCR_W/2-(int)strlen(l)*3, by+10); s.print(l);
+}
+
+void drawTrivia(LGFX_Sprite& s){
+  s.fillSprite(T().bg); drawStatusBar(s);
+  switch(triviaPage){
+    case TRV_SETUP:    drawTriviaSetup(s); break;
+    case TRV_LOADING:  drawTriviaLoading(s); break;
+    case TRV_QUESTION: drawTriviaQuestion(s); break;
+    case TRV_RESULT:   drawTriviaResult(s); break;
+    case TRV_ERROR:    drawTriviaError(s); break;
+  }
+  drawBack(s);
+  drawToast(s);
+}
+
+// Ketuk sekali (tap) di halaman Setup - dipanggil dari loop() saat lepas
+// jari & terdeteksi BUKAN gerakan drag (lihat blok khusus SCR_TRIVIA di loop()).
+void triviaHandleSetupTap(int x,int y){
+  if(isBack(x,y)){ navBack(); return; }
+  TriviaLayout L = triviaCalcLayout();
+  int top=triviaCatTop(), bottom=L.catBottom;
+  if(y>=top && y<=bottom){
+    int cols=triviaCatCols(), cw=triviaCatCardW(), ch=triviaCatCardH(), gap=6;
+    for(int i=0;i<TRIVIA_CAT_COUNT;i++){
+      int col=i%cols, row=i/cols;
+      int ax=gap+col*(cw+gap), ay=top+row*(ch+gap)-(int)triviaCatScrollY;
+      if(x>=ax&&x<=ax+cw&&y>=ay&&y<=ay+ch){ triviaSelCat=i; needRedraw=true; return; }
+    }
+    return;
+  }
+  if(y>=L.diffY && y<=L.diffY+30){
+    int dw=(SCR_W-16)/4;
+    for(int i=0;i<4;i++){ int bx=8+i*dw; if(x>=bx&&x<=bx+dw-4){ triviaSelDiff=i; needRedraw=true; return; } }
+    return;
+  }
+  if(y>=L.amtY && y<=L.amtY+30){
+    int aw=(SCR_W-16)/3;
+    for(int i=0;i<3;i++){ int bx=8+i*aw; if(x>=bx&&x<=bx+aw-4){ triviaSelAmount=i; needRedraw=true; return; } }
+    return;
+  }
+  if(y>=L.startY && y<=L.startY+28){ triviaStartFetch(); return; }
+}
+
+void triviaQuestionTouch(int x,int y){
+  if(triviaAnswered || triviaCur<0 || triviaCur>=triviaCount) return;
+  for(int i=0;i<4;i++){
+    int bx,by,bw,bh; triviaAnsRect(i,bx,by,bw,bh);
+    if(x>=bx&&x<=bx+bw&&y>=by&&y<=by+bh){
+      triviaSelected=i; triviaAnswered=true; triviaAnswerAtMs=millis();
+      bool correct = (i==triviaQs[triviaCur].correctIdx);
+      if(correct){ triviaScore+=10; triviaCorrectCount++; }
+      String badge = String(triviaCorrectCount)+"/"+String(triviaCount);
+      diNotify(correct?'Y':'W', correct?"Jawaban benar!":"Kurang tepat",
+                correct?T().good:T().danger, 1300, true, badge); // v17: subtitle "Skor: X" dihapus
+      needRedraw=true;
+      return;
+    }
+  }
+}
+void triviaResultTouch(int x,int y){
+  if(y>=STATUS_H+96 && y<=STATUS_H+122){ triviaStartFetch(); return; }
+  if(y>=STATUS_H+128 && y<=STATUS_H+154){ triviaPage=TRV_SETUP; needRedraw=true; return; }
+}
+void triviaErrorTouch(int x,int y){
+  int by=STATUS_H+36+6*11+10;
+  if(y>=by && y<=by+26){ triviaPage=TRV_SETUP; needRedraw=true; return; }
+}
+
+// Dispatch generik (dipanggil loop() persis spt app lain: tap-on-press).
+// Halaman TRV_SETUP TIDAK lewat sini -- ditangani terpisah di loop() krn
+// butuh drag-scroll+tap (lihat blok khusus SCR_TRIVIA).
+void triviaTouch(int x,int y,bool held,bool isNew){
+  if(!isNew) return;
+  if(isBack(x,y)){ navBack(); return; }
+  switch(triviaPage){
+    case TRV_QUESTION: triviaQuestionTouch(x,y); break;
+    case TRV_RESULT:   triviaResultTouch(x,y); break;
+    case TRV_ERROR:    triviaErrorTouch(x,y); break;
+    default: break;
+  }
+}
+
 void setup(){
   Serial.begin(115200);
   display.init();
@@ -4270,6 +5935,7 @@ void setup(){
   needRedraw = true;
 
   mpuInit();                                // MPU6050 (SDA=15, SCL=7)
+  loadMpuCal();                              // BARU v10: muat offset kalibrasi tersimpan (kalau ada)
   autoRotateEnabled = loadAutoRotatePref();
   shakeEnabled = loadShakePref();
   analogReadResolution(12);
@@ -4293,7 +5959,13 @@ void setup(){
 // LOOP
 // =============================================
 unsigned long lastClk=0,lastSen=0,lastMpu=0,lastBatt=0;
+unsigned long lastLoopMs=0; // v14: dipakai normalisasi decay momentum scroll thdp waktu nyata (dt)
 void loop(){
+  unsigned long nowMs=millis();
+  float dt = lastLoopMs? (float)(nowMs-lastLoopMs) : 16.0f;
+  if(dt>100.0f) dt=100.0f; // jaga2 abis jeda blocking panjang (mis. persis setelah boot)
+  lastLoopMs = nowMs;
+
   if(!gameModeActive){
     if(millis()-lastMpu>50){ lastMpu=millis(); mpuUpdate(); }
     if(millis()-lastBatt>5000){ lastBatt=millis(); battUpdate(); needRedraw=true; }
@@ -4304,21 +5976,25 @@ void loop(){
   }
 
   checkAiWatchdog();
+  diUpdate();              // v14: urus animasi/auto-collapse Dynamic Island
+  triviaPeriodicUpdate();  // v14: urus spinner loading & auto-lanjut soal Trivia
 
   lgfx::touch_point_t tp;
   bool touched=display.getTouch(&tp);
   int tx=touched?(int)tp.x:0,ty=touched?(int)tp.y:0;
   bool newT=touched&&!wasTouched;
 
-  if(ccAnimatingOpen){
-    // ease-out: makin dekat target makin pelan, terasa lebih halus drpd langkah linear tetap
-    float target=(float)ccPanelH();
-    ccOffset += (target-ccOffset)*0.4f + 1.5f;
-    if(ccOffset>=target-1.0f){ ccOffset=target; ccAnimatingOpen=false; }
-    needRedraw=true;
-  } else if(ccAnimatingClose){
-    ccOffset -= ccOffset*0.4f + 1.5f;
-    if(ccOffset<=1.0f){ ccOffset=0; ccAnimatingClose=false; controlCenterOpen=false; }
+  if(ccAnimating){
+    // FIX v11: animasi berbasis waktu (bukan formula per-frame ad-hoc) +
+    // easing navEase yg sama dipakai transisi antar layar -> gerakannya
+    // mulus & konsisten kecepatannya berapa pun framerate loop() saat ini.
+    float t = (millis()-ccAnimStartMs)/CC_ANIM_MS;
+    if(t>=1.0f){
+      t=1.0f;
+      ccAnimating=false;
+      if(ccAnimToH<=0.0f) controlCenterOpen=false;
+    }
+    ccOffset = ccAnimFromH + (ccAnimToH-ccAnimFromH)*navEase(t);
     needRedraw=true;
   }
 
@@ -4334,7 +6010,10 @@ void loop(){
     wasTouched=touched; delay(8); return;
   }
 
-  if(newT){ gStartX=tx; gStartY=ty; gGestureDone=false; }
+  if(newT){
+    gStartX=tx; gStartY=ty; gGestureDone=false;
+    if(diHitTest(tx,ty)){ diHandleTap(); gGestureDone=true; } // v14: ketuk Dynamic Island
+  }
   if(touched && !gGestureDone && !kbVisible){
     int dy=ty-gStartY, dx=tx-gStartX;
     if(gStartY<STATUS_H+6 && dy>28 && abs(dy)>abs(dx)){
@@ -4352,12 +6031,21 @@ void loop(){
       if(!wasTouched){
         touchStartX=tx;touchStartY=ty;touchLastY=ty;
         isSwiping=false;swipeStartTime=millis();
+        homeScrollVel=0; // FIX v11: reset residual velocity di awal sentuhan baru
       } else {
         if(abs(ty-touchStartY)>12)isSwiping=true;
         if(isSwiping){
-          homeScrollVel=(touchLastY-ty)*0.8f;
-          homeScrollY+=touchLastY-ty;
-          homeScrollY=constrain(homeScrollY,0.0f,(float)homeMaxScroll());
+          float rawDelta=(float)(touchLastY-ty);
+          // FIX v11: velocity di-low-pass (bukan diganti mentah tiap
+          // frame) supaya gerakan drag terasa lebih mulus & tidak
+          // "patah" saat jari sedikit goyang antar sample sentuhan.
+          homeScrollVel = homeScrollVel*0.5f + rawDelta*0.5f;
+          homeScrollY += rawDelta;
+          // FIX v11: sedikit efek elastis di batas atas/bawah drpd
+          // constrain keras, biar transisi ke ujung list terasa halus.
+          if(homeScrollY<0) homeScrollY*=0.5f;
+          float maxS=(float)homeMaxScroll();
+          if(homeScrollY>maxS) homeScrollY = maxS + (homeScrollY-maxS)*0.5f;
           needRedraw=true;
         }
         touchLastY=ty;
@@ -4367,12 +6055,52 @@ void loop(){
         Screen nx=homeCheck(touchStartX,touchStartY,homeScrollY);
         if(nx!=SCR_HOME) navPush(nx);
       }
+      homeScrollY=constrain(homeScrollY,0.0f,(float)homeMaxScroll());
     } else {
-      if(fabsf(homeScrollVel)>0.5f){
-        homeScrollY+=homeScrollVel;homeScrollVel*=0.85f;
+      if(fabsf(homeScrollVel)>0.3f){
+        homeScrollY+=homeScrollVel;
+        // v14: decay dinormalisasi thdp dt (bukan konstanta per-iterasi) --
+        // pola sama dgn fix playNavTransition() di v13, biar kecepatan
+        // momentum berhenti KONSISTEN di kondisi hardware apapun (dulu loop
+        // yg lg berat bikin decay kerasa lbh lambat krn iterasi/detik turun).
+        homeScrollVel*=powf(0.92f, dt/16.0f);
         homeScrollY=constrain(homeScrollY,0.0f,(float)homeMaxScroll());
         needRedraw=true;
+      } else {
+        homeScrollVel=0;
       }
+    }
+    if(needRedraw){renderCurrentFrame();push();needRedraw=false;}
+
+  } else if(curScreen()==SCR_TRIVIA && triviaPage==TRV_SETUP){
+    // v14: halaman pilih tema Trivia butuh drag-scroll+tap spt Home (bukan
+    // sekadar tap-on-press spt app lain), jadi ditangani khusus di sini
+    // persis pola Home -- dispatch generik apps[idx].touch() di bawah cuma
+    // dikirim pas TOUCH-DOWN/HELD (tanpa event lepas), jadi gak bisa bedain
+    // niat "tap pilih kartu" vs "mulai drag scroll".
+    if(touched){
+      if(!wasTouched){
+        triviaTouchStartX=tx; triviaTouchStartY=ty; triviaTouchLastY=ty;
+        triviaIsSwiping=false; triviaSwipeStartTime=millis();
+      } else {
+        if(abs(ty-triviaTouchStartY)>10) triviaIsSwiping=true;
+        TriviaLayout TL = triviaCalcLayout();
+        if(triviaIsSwiping && triviaTouchStartY>=triviaCatTop() && triviaTouchStartY<=TL.catBottom){
+          float rawDelta=(float)(triviaTouchLastY-ty);
+          triviaCatScrollY += rawDelta;
+          if(triviaCatScrollY<0) triviaCatScrollY*=0.5f;
+          float maxS=(float)triviaCatMaxScroll();
+          if(triviaCatScrollY>maxS) triviaCatScrollY = maxS+(triviaCatScrollY-maxS)*0.5f;
+          needRedraw=true;
+        }
+        triviaTouchLastY=ty;
+      }
+    } else if(wasTouched){
+      if(!triviaIsSwiping && millis()-triviaSwipeStartTime<400){
+        triviaHandleSetupTap(triviaTouchStartX,triviaTouchStartY);
+      }
+      triviaCatScrollY=constrain(triviaCatScrollY,0.0f,(float)triviaCatMaxScroll());
+      needRedraw=true;
     }
     if(needRedraw){renderCurrentFrame();push();needRedraw=false;}
 
@@ -4392,6 +6120,32 @@ void loop(){
     bool inActionGame = curScreen()==SCR_SNAKE || curScreen()==SCR_FLAPPY || curScreen()==SCR_BREAKOUT;
     if(inActionGame && millis()-lastSen>40){ needRedraw=true; lastSen=millis(); }
     if(curScreen()==SCR_AICHAT && aiLoading){ needRedraw=true; }
+    if(curScreen()==SCR_TRIVIA && triviaPage==TRV_LOADING){ needRedraw=true; } // v14: animasi spinner
+
+    // v12: momentum scroll halus utk teks (AI Chat & isi file di File
+    // Explorer) selagi jari SUDAH dilepas -> gerakannya jalan terus lalu
+    // melambat pelan-pelan, senada dgn gaya momentum scroll Home.
+    if(!touched){
+      if(curScreen()==SCR_AICHAT && !kbVisible){
+        if(fabsf(aiRespScrollVel)>0.3f){
+          aiRespScrollY = constrain(aiRespScrollY + aiRespScrollVel, 0.0f, (float)aiRespMaxScroll);
+          aiRespScrollVel *= powf(0.92f, dt/16.0f); // v14: decay dinormalisasi dt (lihat catatan di blok Home)
+          needRedraw = true;
+        } else {
+          aiRespScrollVel = 0;
+        }
+      }
+      if(curScreen()==SCR_FILEEXPLORER && expViewFileName.length()>0){
+        if(fabsf(expViewScrollVel)>0.3f){
+          expViewScrollY = constrain(expViewScrollY + expViewScrollVel, 0.0f, (float)expViewMaxScroll);
+          expViewScrollVel *= powf(0.92f, dt/16.0f); // v14: decay dinormalisasi dt
+          needRedraw = true;
+        } else {
+          expViewScrollVel = 0;
+        }
+      }
+    }
+
     if(needRedraw){renderCurrentFrame();push();needRedraw=false;}
   }
   wasTouched=touched;
