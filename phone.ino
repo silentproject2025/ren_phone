@@ -262,6 +262,55 @@
 //     walau ada kasus tak terduga lain nanti, potongan piksel teks TIDAK
 //     PERNAH bisa tergambar keluar dari bentuk pil lagi.
 // =================================================================
+// v18 — UPDATE (permintaan user: rombak lagi transisi antar aplikasi,
+// pastikan efek easing bekerja dgn baik, mulus & memanjakan mata):
+//  1. AKAR MASALAH "easing kerasa gak jalan/kurang mulus" DITEMUKAN:
+//     easing di playNavTransition() secara MATEMATIS sudah benar (progres
+//     dihitung dari waktu nyata lalu dilewatkan ke kurva easing), TAPI
+//     jendela waktunya (NAV_TRANS_MS lama = 170ms) terlalu sempit dibanding
+//     biaya nyata tiap frame: satu frame animasi = DUA pushSprite() penuh
+//     layar lewat SPI 40MHz+DMA, yg di layar 320x240 makan waktu ~puluhan
+//     ms sendiri. Akibatnya dalam 170ms cuma sempat ~4-6 frame yg benar2
+//     ke-render -- di frame sesedikit itu, mata manusia gak sempat
+//     "melihat" lengkungan kurva easing-nya, yg kerasa cuma beberapa lompatan
+//     kasar (persis kayak easing "gak berfungsi" walau angkanya benar).
+//     FIX: NAV_TRANS_MS dinaikkan ke 210ms -- masih terasa cepat/responsif
+//     (di bawah ambang ~300-400ms yg mulai kerasa lambat), tapi ngasih
+//     jendela waktu lebih longgar shg lebih banyak frame sempat tergambar
+//     & lengkungan easing-nya jadi benar2 KELIHATAN mulus, bukan cuma benar
+//     di atas kertas.
+//  2. Kurva easing KHUSUS transisi antar-app: navEase() (cubic) yg lama
+//     dipakai BERSAMA oleh banyak animasi lain (buka/tutup Control Center,
+//     loading ring Game Booster, logo+halo+judul boot sequence) -- sengaja
+//     TIDAK diubah, supaya "rasa" gerakan elemen2 itu yg sudah teliti
+//     disetel sejak v11-v12 tidak ikut berubah tanpa diminta. Sebagai
+//     gantinya dibuat navTransEase() BARU khusus dipakai playNavTransition
+//     -- ease-in-out QUINTIC (pangkat 5, bukan pangkat 3 kayak navEase).
+//     Kurva pangkat lebih tinggi ini punya awalan & akhiran yg lebih landai
+//     drpd cubic (percepatan/perlambatan lebih halus, "melayang" bukan
+//     "diseret"), yg pada durasi animasi sesingkat ini terasa jauh lebih
+//     "premium" & memanjakan mata dibanding cubic biasa.
+//  3. FITUR BARU "depth dim": layar LAMA yg lagi PERGI sekarang diredupkan
+//     sedikit (dimSnapshot(), blend 32% ke arah hitam via lerpColor565 yg
+//     sudah ada) SEKALI tepat setelah snapshot-nya diambil, sebelum loop
+//     animasi berbasis-waktu mulai jalan -- kesan layar lama "surut ke
+//     bayangan" sementara layar baru tetap terang penuh, senada konsep
+//     depth di transisi HP modern (background view digelapkan sedikit
+//     selagi foreground baru masuk). SENGAJA cuma dipanggil SEKALI di
+//     luar loop (bukan tiap frame) supaya TIDAK mengurangi jumlah frame yg
+//     sempat digambar di dalam jendela NAV_TRANS_MS -- kalau redup ulang
+//     tiap frame, biaya itu ikut menyaingi waktu render tiap frame &
+//     malah bikin animasi makin patah2, jadi kontraproduktif thdp tujuan
+//     smooth-nya sendiri.
+//     CATATAN kenapa incoming & outgoing TETAP pakai satu progres p yg
+//     SAMA (bukan dibuat beda kecepatan / parallax gerak): posisi kanan
+//     layar outgoing & posisi kiri layar incoming WAJIB selalu ketemu
+//     persis di titik yg sama tiap frame, kalau tidak bakal muncul CELAH
+//     kosong (progres beda -> titik temu geser) atau TUMPANG TINDIH (extra
+//     piksel yg harus digambar dobel) -- makanya kesan depth di sini
+//     sengaja didapat lewat WARNA (dim) yg murah, bukan lewat kecepatan
+//     gerak berbeda yg akan merusak kesinambungan posisi.
+// =================================================================
 #include <LovyanGFX.hpp>
 #include <Preferences.h>
 #include <WiFi.h>
@@ -1231,6 +1280,37 @@ float navEase(float p){
   return p<0.5f ? 4.0f*p*p*p : 1.0f-powf(-2.0f*p+2.0f,3.0f)/2.0f;
 }
 
+// v18: ease-in-out QUINTIC (pangkat 5) -- KHUSUS dipakai playNavTransition()
+// (bukan pengganti navEase() di atas, yg tetap dipakai apa adanya oleh CC/
+// Game Booster/boot sequence supaya "rasa" gerakan mereka tidak ikut
+// berubah). Dibanding navEase (cubic), kurva ini punya awalan & akhiran yg
+// lebih landai -- percepatan & perlambatannya lebih halus, kesannya
+// "melayang" ketimbang "diseret" -- pas dipakai utk gerakan sesingkat
+// transisi antar-app (lihat NAV_TRANS_MS) bikin ujung2 gerakannya kerasa
+// lebih premium & enak dipandang drpd cubic biasa.
+float navTransEase(float p){
+  return p<0.5f ? 16.0f*p*p*p*p*p : 1.0f-powf(-2.0f*p+2.0f,5.0f)/2.0f;
+}
+
+// v18: redupkan snapshot layar LAMA sedikit (blend `amount` ke arah hitam,
+// reuse lerpColor565 yg sudah ada dipakai gradient boot sequence -- blend
+// per-channel yg benar, bukan bit-shift kasar yg bisa nge-bleed antar
+// channel R/G/B). Efeknya: layar yg lagi PERGI terasa "surut ke bayangan"
+// dibanding layar BARU yg tetap terang penuh -- kesan depth murah ala
+// transisi HP modern. PENTING: dipanggil SEKALI SAJA tepat setelah
+// snapshot diambil & SEBELUM loop animasi berbasis-waktu mulai (lihat
+// playNavTransition) -- kalau dipanggil ulang tiap frame, biaya nyapu
+// seluruh buffer itu ikut menyaingi waktu render tiap frame & malah
+// mengurangi jumlah frame yg sempat digambar, jadi kontraproduktif thdp
+// tujuan smooth itu sendiri. Dipanggil sekali di luar loop = biayanya
+// dibayar SATU KALI di awal, sama sekali tidak memotong jatah frame.
+void dimSnapshot(LGFX_Sprite &s, float amount){
+  uint16_t* buf = (uint16_t*)s.getBuffer(); // pola sama dgn canvasApp.getBuffer() (load/saveCanvas)
+  if(!buf) return;
+  uint32_t n = (uint32_t)SCR_W * (uint32_t)SCR_H;
+  for(uint32_t i=0; i<n; i++) buf[i] = lerpColor565(buf[i], 0x0000, amount);
+}
+
 // v13: dulu transisi ini jalan dgn JUMLAH FRAME TETAP (STEPS=12) + delay(6)
 // per frame -- artinya durasi TOTAL animasi ikut molor kalau proses push
 // sprite lg lambat (mis. layar penuh/kompleks, atau SPI lg dipakai bareng
@@ -1243,9 +1323,17 @@ float navEase(float p){
 // persis -> transisi TIDAK PERNAH kerasa "molor"/lambat, cuma kerasa
 // sedikit kurang mulus di kondisi terburuk. Ini yg dimaksud "smooth" yg
 // konsisten di kondisi apapun, bukan cuma smooth pas kondisi ideal.
-const float NAV_TRANS_MS = 170.0f;
+// v18: dinaikkan dari 170 -> 210ms. AKAR MASALAH yg diperbaiki: pada 170ms,
+// jendela waktunya lebih sempit drpd biaya nyata 2x pushSprite() penuh
+// layar per frame (SPI 40MHz+DMA, layar 320x240) -- cuma sempat ~4-6 frame
+// per transisi, kurang buat mata manusia benar2 "melihat" lengkungan
+// easing-nya (kerasa cuma beberapa lompatan kasar). 210ms masih terasa
+// cepat/responsif (jauh di bawah ~300-400ms yg mulai kerasa lambat) tapi
+// ngasih lebih banyak jendela utk frame ekstra tergambar.
+const float NAV_TRANS_MS = 210.0f;
 void playNavTransition(NavAnim anim){
   canvas.pushSprite(&transShot,0,0); // simpan frame LAMA (canvas msh berisi layar sblm pindah)
+  dimSnapshot(transShot, 0.32f);     // v18: redupkan layar lama sblm animasi jalan (lihat dimSnapshot)
   renderCurrentFrame();              // gambar frame BARU ke canvas (state navigasi sudah berubah)
 
   unsigned long startMs = millis();
@@ -1261,7 +1349,10 @@ void playNavTransition(NavAnim anim){
   // porsi yang cukup besar dari waktu tiap frame, sehingga jumlah frame
   // yang sempat digambar jadi sedikit & timing-nya gak merata -> terasa
   // "patah-patah"/tersendat, apalagi kalau SPI lagi dipakai bareng proses
-  // lain (mis. AI Chat/WiFi jalan di background).
+  // lain (mis. AI Chat/WiFi jalan di background). (Catatan v18: angka
+  // "170ms" di paragraf atas adalah nilai SAAT bug itu ditemukan/diperbaiki
+  // di v17 -- sejak v18 durasinya 210ms, lihat NAV_TRANS_MS di atas; akar
+  // masalah & fix startWrite()/endWrite()-nya sendiri tidak berubah.)
   // FIX: bungkus SELURUH loop animasi dgn SATU pasang startWrite()/
   // endWrite(). Transaksi SPI dibuka SEKALI di awal & tetap terbuka
   // sepanjang animasi berjalan -- tiap pushSprite() di dalam loop tinggal
@@ -1272,7 +1363,7 @@ void playNavTransition(NavAnim anim){
   do {
     t = (millis()-startMs)/NAV_TRANS_MS;
     if(t>1.0f) t=1.0f;
-    float p = navEase(t);
+    float p = navTransEase(t); // v18: quintic khusus transisi antar-app (lihat navTransEase)
     if(anim==NAV_ANIM_PUSH){
       int offset=(int)(SCR_W*p);
       transShot.pushSprite(-offset,0);
@@ -1522,7 +1613,7 @@ DIState diState = DI_IDLE, diTargetState = DI_IDLE;
 unsigned long diAnimStartMs = 0;
 float diAnimFromW = 0, diAnimFromH = 0;
 float diCurW = 0, diCurH = 0;
-const float DI_ANIM_MS = 380.0f; // lbh lama dr transisi nav (170ms) -- morph perlu "napas" biar kenyal
+const float DI_ANIM_MS = 380.0f; // lbh lama dr transisi nav (210ms) -- morph perlu "napas" biar kenyal
 
 char     diIcon = 0;
 String   diTitle = "", diBadge = ""; // v17: diSubtitle dihapus -- cuma 1 baris teks skrg
