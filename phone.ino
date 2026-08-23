@@ -66,8 +66,15 @@
 // =============================================
 enum Screen { SCR_HOME, SCR_CLOCK, SCR_CALC, SCR_SENSOR,
               SCR_SETTINGS, SCR_NOTEPAD, SCR_CANVAS, SCR_AICHAT, SCR_FILEEXPLORER,
-              SCR_MJPEG, SCR_UPDATE, SCR_BATTERY };
+              SCR_MJPEG, SCR_UPDATE, SCR_BATTERY, SCR_SNAKE, SCR_FLAPPY,
+              SCR_2048, SCR_TTT, SCR_BREAKOUT };
 enum Orientation { ORIENT_LANDSCAPE = 0, ORIENT_PORTRAIT = 1 };
+
+// Dipindah ke atas — alasan sama dengan AiLine & Vec3f: arduino-cli men-generate
+// prototype untuk playNavTransition(NavAnim anim) di puncak file; kalau NavAnim
+// baru dideklarasikan di tengah file (dekat fungsinya), prototype itu digenerate
+// SEBELUM definisi enum ini terbaca → error "NavAnim was not declared in this scope".
+enum NavAnim { NAV_ANIM_PUSH, NAV_ANIM_BACK, NAV_ANIM_HOME };
 
 // Dipindah ke atas (sebelum semua definisi fungsi) supaya prototype otomatis
 // yang di-generate arduino-cli di puncak file sudah kenal tipe ini duluan.
@@ -154,6 +161,7 @@ public:
 LGFX display;
 LGFX_Sprite canvas(&display);      // frame buffer utama (full screen)
 LGFX_Sprite canvasApp(&display);   // buffer khusus app Canvas (drawing)
+LGFX_Sprite transShot(&display);   // snapshot layar lama, dipakai animasi transisi antar-layar
 
 // =============================================
 // ORIENTASI
@@ -206,6 +214,9 @@ void applyOrientation(Orientation o, bool doSave) {
   canvas.deleteSprite();
   canvas.setPsram(true);
   canvas.createSprite(SCR_W, SCR_H);
+  transShot.deleteSprite();
+  transShot.setPsram(true);
+  transShot.createSprite(SCR_W, SCR_H);
   canvasApp.deleteSprite();
   canvasApp.setPsram(true);
   canvasApp.createSprite(SCR_W, canvasAppHeight());
@@ -943,19 +954,60 @@ void appOnExit(Screen s);
 bool notepadNeedsConfirm();          // true = ada perubahan blm disimpan, tahan navigasi
 void notepadRequestConfirm(int act); // act: 1=Back, 2=Home -> tampilkan dialog Simpan/Buang
 
+// =============================================
+// TRANSISI ANTAR LAYAR (slide halus dgn easing, dipakai navPush/Back/Home)
+// Push  = layar baru masuk dari KANAN (kesan "buka halaman baru")
+// Back  = layar sblmnya masuk dari KIRI (kebalikan dari Push)
+// Home  = geser TURUN (kesan "menutup/pulang", searah swipe unlock)
+// =============================================
+void renderCurrentFrame(); // forward decl - dipakai utk render frame BARU sblm animasi
+
+// ease-in-out cubic: mulai halus, cepat di tengah, berhenti halus - lbh
+// "premium" drpd ease-out biasa krn simetris di awal & akhir gerakan.
+float navEase(float p){
+  return p<0.5f ? 4.0f*p*p*p : 1.0f-powf(-2.0f*p+2.0f,3.0f)/2.0f;
+}
+
+void playNavTransition(NavAnim anim){
+  canvas.pushSprite(&transShot,0,0); // simpan frame LAMA (canvas msh berisi layar sblm pindah)
+  renderCurrentFrame();              // gambar frame BARU ke canvas (state navigasi sudah berubah)
+
+  const int STEPS=12;
+  for(int i=1;i<=STEPS;i++){
+    float p=navEase((float)i/STEPS);
+    if(anim==NAV_ANIM_PUSH){
+      int offset=(int)(SCR_W*p);
+      transShot.pushSprite(-offset,0);
+      canvas.pushSprite(SCR_W-offset,0);
+    } else if(anim==NAV_ANIM_BACK){
+      int offset=(int)(SCR_W*p);
+      transShot.pushSprite(offset,0);
+      canvas.pushSprite(-SCR_W+offset,0);
+    } else { // NAV_ANIM_HOME
+      int offset=(int)(SCR_H*p);
+      transShot.pushSprite(0,offset);
+      canvas.pushSprite(0,-SCR_H+offset);
+    }
+    delay(6); // pacing konsisten - biar mulusnya sama di kecepatan SPI/hardware manapun
+  }
+  push(); // pastikan frame akhir persis sama dgn 'canvas' (jaga2 sisa pembulatan offset)
+}
+
 void navPush(Screen s){
   appOnExit(curScreen());
   if(navDepth<NAV_MAX) navStack[navDepth++]=s;
   appOnEnter(s);
   kbVisible=false; kbTarget=nullptr;
-  needRedraw=true;
+  playNavTransition(NAV_ANIM_PUSH);
+  needRedraw=false; // frame akhir sudah ke-push oleh playNavTransition
 }
 void navGoHome(){
   if(notepadNeedsConfirm()){ notepadRequestConfirm(2); return; }
   appOnExit(curScreen());
   navDepth=0;
   kbVisible=false; kbTarget=nullptr;
-  needRedraw=true;
+  playNavTransition(NAV_ANIM_HOME);
+  needRedraw=false;
 }
 void navBack(){
   if(notepadNeedsConfirm()){ notepadRequestConfirm(1); return; }
@@ -963,7 +1015,8 @@ void navBack(){
   if(navDepth>0) navDepth--;
   if(navDepth>0) appOnEnter(navStack[navDepth-1]);
   kbVisible=false; kbTarget=nullptr;
-  needRedraw=true;
+  playNavTransition(NAV_ANIM_BACK);
+  needRedraw=false;
 }
 
 // =============================================
@@ -1348,8 +1401,19 @@ void drawUpdate(LGFX_Sprite&); void updTouch(int,int,bool,bool);
 // ---- BATERAI: forward declarations (BARU di v8) ----
 void battEnter(); void battExit();
 void drawBatteryApp(LGFX_Sprite&); void battTouch(int,int,bool,bool);
+// ---- GAME: forward declarations ----
+void snakeEnter(); void snakeExit();
+void drawSnake(LGFX_Sprite&); void snakeTouch(int,int,bool,bool);
+void flapEnter(); void flapExit();
+void drawFlap(LGFX_Sprite&); void flapTouch(int,int,bool,bool);
+void g2048Enter(); void g2048Exit();
+void draw2048(LGFX_Sprite&); void g2048Touch(int,int,bool,bool);
+void tttEnter(); void tttExit();
+void drawTtt(LGFX_Sprite&); void tttTouch(int,int,bool,bool);
+void brkEnter(); void brkExit();
+void drawBrk(LGFX_Sprite&); void brkTouch(int,int,bool,bool);
 
-AppDef apps[11] = {
+AppDef apps[16] = {
   { "Jam",        'J', 0, clockEnter,    clockExit,    drawClock,        clockTouch,    SCR_CLOCK },
   { "Kalkulator", '+', 0, calcEnter,     calcExit,     drawCalc,         calcTouch,     SCR_CALC },
   { "Orientasi3D", '3', 0, sensorEnter,   sensorExit,   drawSensor,       sensorTouch,   SCR_SENSOR },
@@ -1361,8 +1425,13 @@ AppDef apps[11] = {
   { "MJPEG",      'M', 0, mjpegEnter,    mjpegExit,    drawMjpegPlayer,  mjpegTouch,    SCR_MJPEG },
   { "Update",     'U', 0, updEnter,      updExit,      drawUpdate,       updTouch,      SCR_UPDATE },
   { "Baterai",    'B', 0, battEnter,     battExit,     drawBatteryApp,   battTouch,     SCR_BATTERY },
+  { "Snake",      'S', 0, snakeEnter,    snakeExit,    drawSnake,        snakeTouch,    SCR_SNAKE },
+  { "Flappy",     'V', 0, flapEnter,     flapExit,     drawFlap,         flapTouch,     SCR_FLAPPY },
+  { "2048",       '2', 0, g2048Enter,    g2048Exit,    draw2048,         g2048Touch,    SCR_2048 },
+  { "TicTacToe",  'X', 0, tttEnter,      tttExit,      drawTtt,          tttTouch,      SCR_TTT },
+  { "Breakout",   'K', 0, brkEnter,      brkExit,      drawBrk,          brkTouch,      SCR_BREAKOUT },
 };
-#define APP_COUNT 11
+#define APP_COUNT 16
 
 void initAppColors(){
   apps[0].color=T().accent;   apps[1].color=T().accent2;
@@ -1452,6 +1521,572 @@ int homeMaxScroll(){
   int ch=homeCardH(), gap=6, gridTop=72;
   int needed = gridTop + rows*(ch+gap) - homeDockY();
   return max(0, needed);
+}
+
+// =============================================
+// GAME MODE: dipanggil tiap masuk ke game apapun. Popup singkat + boost
+// clock CPU ESP32-S3 ke 240MHz (maksimal) + jeda polling sensor latar
+// belakang (MPU/baterai) selama main, biar loop game mulus tanpa gangguan.
+// Balik ke clock normal (hemat daya) & polling aktif lagi pas keluar game.
+// =============================================
+#define CPU_MHZ_NORMAL 160
+#define CPU_MHZ_GAME   240
+bool gameModeActive = false;
+
+void enterGameMode(){
+  if(!gameModeActive){
+    gameModeActive = true;
+    setCpuFrequencyMhz(CPU_MHZ_GAME);
+  }
+  // Popup "Game Mode" - muncul tiap kali masuk game manapun
+  canvas.fillSprite(0x0000);
+  int pw=SCR_W-40, ph=104;
+  int px=(SCR_W-pw)/2, py=(SCR_H-ph)/2;
+  canvas.fillRoundRect(px,py,pw,ph,14,T().surface);
+  canvas.drawRoundRect(px,py,pw,ph,14,T().accent);
+  canvas.setTextColor(T().accent); canvas.setTextSize(2);
+  const char* title="GAME MODE";
+  int tw=strlen(title)*12;
+  canvas.setCursor(SCR_W/2-tw/2,py+16); canvas.print(title);
+  canvas.setTextColor(T().subtext); canvas.setTextSize(1);
+  char l1[40]; sprintf(l1,"CPU dipacu ke %dMHz (maksimal)",CPU_MHZ_GAME);
+  const char* l2="Sensor latar belakang dijeda";
+  canvas.setCursor(SCR_W/2-(int)strlen(l1)*3,py+50); canvas.print(l1);
+  canvas.setCursor(SCR_W/2-(int)strlen(l2)*3,py+64); canvas.print(l2);
+  canvas.setTextColor(T().good);
+  const char* l3="Siap main!";
+  canvas.setCursor(SCR_W/2-(int)strlen(l3)*3,py+82); canvas.print(l3);
+  push();
+  delay(850);
+}
+void exitGameMode(){
+  if(!gameModeActive) return;
+  gameModeActive = false;
+  setCpuFrequencyMhz(CPU_MHZ_NORMAL);
+}
+
+// =============================================
+// GAME: SNAKE (ketuk layar ke arah tujuan - kepala ular akan belok ke situ)
+// =============================================
+#define SNAKE_CELL 12
+#define SNAKE_MAXLEN 500
+struct SnakeSeg{ int x,y; };
+SnakeSeg snakeBody[SNAKE_MAXLEN];
+int  snakeCols, snakeRows, snakeLen;
+int  snakeDirX, snakeDirY;
+int  snakeFoodX, snakeFoodY;
+int  snakeScore, snakeTickMs;
+bool snakeOver;
+unsigned long snakeLastTick;
+
+void snakeSpawnFood(){
+  bool onBody;
+  do{
+    onBody=false;
+    snakeFoodX = random(0,snakeCols);
+    snakeFoodY = random(0,snakeRows);
+    for(int i=0;i<snakeLen;i++) if(snakeBody[i].x==snakeFoodX && snakeBody[i].y==snakeFoodY){ onBody=true; break; }
+  } while(onBody);
+}
+void snakeReset(){
+  snakeCols = SCR_W/SNAKE_CELL;
+  snakeRows = (SCR_H-STATUS_H)/SNAKE_CELL;
+  snakeLen = 3;
+  for(int i=0;i<snakeLen;i++){ snakeBody[i].x = snakeCols/2 - i; snakeBody[i].y = snakeRows/2; }
+  snakeDirX=1; snakeDirY=0;
+  snakeScore=0; snakeOver=false; snakeTickMs=150;
+  snakeSpawnFood();
+  snakeLastTick=millis();
+}
+void snakeEnter(){ enterGameMode(); snakeReset(); }
+void snakeExit(){ exitGameMode(); }
+
+void snakeTick(){
+  if(snakeOver) return;
+  SnakeSeg newHead = { snakeBody[0].x+snakeDirX, snakeBody[0].y+snakeDirY };
+  if(newHead.x<0||newHead.x>=snakeCols||newHead.y<0||newHead.y>=snakeRows){ snakeOver=true; return; }
+  for(int i=0;i<snakeLen;i++) if(snakeBody[i].x==newHead.x && snakeBody[i].y==newHead.y){ snakeOver=true; return; }
+  bool grow = (newHead.x==snakeFoodX && newHead.y==snakeFoodY);
+  int newLen = grow ? min(snakeLen+1,SNAKE_MAXLEN) : snakeLen;
+  for(int i=newLen-1;i>0;i--) snakeBody[i]=snakeBody[i-1];
+  snakeBody[0]=newHead;
+  snakeLen=newLen;
+  if(grow){
+    snakeScore+=10;
+    if(snakeTickMs>70) snakeTickMs-=3;
+    snakeSpawnFood();
+  }
+}
+
+void drawSnake(LGFX_Sprite& s){
+  s.fillSprite(T().bg); drawStatusBar(s);
+  if(!snakeOver && millis()-snakeLastTick>=(unsigned long)snakeTickMs){ snakeTick(); snakeLastTick=millis(); }
+
+  int top=STATUS_H;
+  for(int i=0;i<snakeLen;i++){
+    uint16_t c = (i==0)?T().accent:T().good;
+    s.fillRoundRect(snakeBody[i].x*SNAKE_CELL, top+snakeBody[i].y*SNAKE_CELL, SNAKE_CELL-1, SNAKE_CELL-1, 2, c);
+  }
+  s.fillRoundRect(snakeFoodX*SNAKE_CELL, top+snakeFoodY*SNAKE_CELL, SNAKE_CELL-1, SNAKE_CELL-1, 4, T().danger);
+
+  char buf[24]; sprintf(buf,"Skor: %d",snakeScore);
+  s.setTextColor(T().subtext); s.setTextSize(1); s.setCursor(6,STATUS_H+2); s.print(buf);
+
+  if(snakeOver){
+    int bx=SCR_W/2-72, by=SCR_H/2-32, bw=144, bh=64;
+    s.fillRoundRect(bx,by,bw,bh,10,T().surface);
+    s.drawRoundRect(bx,by,bw,bh,10,T().danger);
+    s.setTextColor(T().danger); s.setTextSize(1); s.setCursor(bx+30,by+14); s.print("GAME OVER");
+    s.setTextColor(T().subtext); s.setCursor(bx+10,by+34); s.print("Ketuk layar utk ulang");
+  }
+  drawBack(s);
+}
+
+void snakeTouch(int x,int y,bool held,bool isNew){
+  if(!isNew) return;
+  if(isBack(x,y)){ navBack(); return; }
+  if(snakeOver){ snakeReset(); return; }
+  SnakeSeg head=snakeBody[0];
+  int hx = head.x*SNAKE_CELL+SNAKE_CELL/2;
+  int hy = STATUS_H+head.y*SNAKE_CELL+SNAKE_CELL/2;
+  int dx=x-hx, dy=y-hy;
+  int nx=snakeDirX, ny=snakeDirY;
+  if(abs(dx)>abs(dy)){ nx = dx>0?1:-1; ny=0; } else { ny = dy>0?1:-1; nx=0; }
+  if(!(nx==-snakeDirX && ny==-snakeDirY)){ snakeDirX=nx; snakeDirY=ny; } // gak boleh langsung balik 180 derajat
+}
+
+// =============================================
+// GAME: FLAPPY BLOCK (ketuk layar utk terbang, hindari pipa)
+// =============================================
+#define FLAP_GRAVITY 0.35f
+#define FLAP_IMPULSE -5.4f
+#define FLAP_GAP     72
+#define FLAP_PIPE_W  26
+#define FLAP_BIRD_X  50
+#define FLAP_BIRD_R  8
+#define FLAP_PIPE_COUNT 3
+
+struct FlapPipe{ int x, gapY; bool passed; };
+FlapPipe flapPipes[FLAP_PIPE_COUNT];
+float flapY, flapVel;
+int   flapScore;
+bool  flapOver, flapStarted;
+
+void flapReset(){
+  flapY = SCR_H/2; flapVel=0;
+  flapScore=0; flapOver=false; flapStarted=false;
+  for(int i=0;i<FLAP_PIPE_COUNT;i++){
+    flapPipes[i].x = SCR_W + 60 + i*140;
+    flapPipes[i].gapY = random(STATUS_H+60, SCR_H-60);
+    flapPipes[i].passed=false;
+  }
+}
+void flapEnter(){ enterGameMode(); flapReset(); }
+void flapExit(){ exitGameMode(); }
+
+void flapTick(){
+  if(!flapStarted || flapOver) return;
+  flapVel += FLAP_GRAVITY;
+  flapY += flapVel;
+  if(flapY > SCR_H-6 || flapY < STATUS_H+6){ flapOver=true; return; }
+  for(int i=0;i<FLAP_PIPE_COUNT;i++){
+    flapPipes[i].x -= 3;
+    if(flapPipes[i].x < -FLAP_PIPE_W){
+      flapPipes[i].x = SCR_W+10;
+      flapPipes[i].gapY = random(STATUS_H+60, SCR_H-60);
+      flapPipes[i].passed=false;
+    }
+    bool xOverlap = (FLAP_BIRD_X+FLAP_BIRD_R > flapPipes[i].x) && (FLAP_BIRD_X-FLAP_BIRD_R < flapPipes[i].x+FLAP_PIPE_W);
+    if(xOverlap){
+      if(flapY-FLAP_BIRD_R < flapPipes[i].gapY-FLAP_GAP/2 || flapY+FLAP_BIRD_R > flapPipes[i].gapY+FLAP_GAP/2){
+        flapOver=true;
+      }
+    }
+    if(!flapPipes[i].passed && flapPipes[i].x+FLAP_PIPE_W < FLAP_BIRD_X){
+      flapPipes[i].passed=true; flapScore++;
+    }
+  }
+}
+
+void drawFlap(LGFX_Sprite& s){
+  s.fillSprite(T().bg); drawStatusBar(s);
+  flapTick();
+  for(int i=0;i<FLAP_PIPE_COUNT;i++){
+    int gy=flapPipes[i].gapY;
+    s.fillRoundRect(flapPipes[i].x, STATUS_H, FLAP_PIPE_W, max(0,gy-FLAP_GAP/2-STATUS_H), 4, T().good);
+    s.fillRoundRect(flapPipes[i].x, gy+FLAP_GAP/2, FLAP_PIPE_W, max(0,SCR_H-(gy+FLAP_GAP/2)), 4, T().good);
+  }
+  s.fillCircle(FLAP_BIRD_X, (int)flapY, FLAP_BIRD_R, T().accent);
+
+  char buf[8]; sprintf(buf,"%d",flapScore);
+  s.setTextColor(T().text); s.setTextSize(2); s.setCursor(SCR_W/2-6,STATUS_H+6); s.print(buf);
+
+  if(!flapStarted){
+    const char* h="Ketuk layar utk mulai";
+    s.setTextColor(T().subtext); s.setTextSize(1);
+    s.setCursor(SCR_W/2-(int)strlen(h)*3,SCR_H/2+40); s.print(h);
+  }
+  if(flapOver){
+    int bx=SCR_W/2-72, by=SCR_H/2-32, bw=144, bh=64;
+    s.fillRoundRect(bx,by,bw,bh,10,T().surface);
+    s.drawRoundRect(bx,by,bw,bh,10,T().danger);
+    s.setTextColor(T().danger); s.setTextSize(1); s.setCursor(bx+30,by+14); s.print("GAME OVER");
+    s.setTextColor(T().subtext); s.setCursor(bx+10,by+34); s.print("Ketuk layar utk ulang");
+  }
+  drawBack(s);
+}
+
+void flapTouch(int x,int y,bool held,bool isNew){
+  if(!isNew) return;
+  if(isBack(x,y)){ navBack(); return; }
+  if(flapOver){ flapReset(); return; }
+  flapStarted=true;
+  flapVel = FLAP_IMPULSE;
+}
+
+// =============================================
+// GAME: 2048 (swipe layar ke 4 arah)
+// =============================================
+#define G2048_CELL 52
+#define G2048_GAP  6
+int  g2048Board[4][4];
+int  g2048Score;
+bool g2048Over, g2048Win;
+int  g2048DragStartX, g2048DragStartY;
+bool g2048Dragging;
+
+void g2048AddRandom(){
+  int emptyR[16], emptyC[16], n=0;
+  for(int r=0;r<4;r++) for(int c=0;c<4;c++) if(g2048Board[r][c]==0){ emptyR[n]=r; emptyC[n]=c; n++; }
+  if(n==0) return;
+  int pick=random(0,n);
+  g2048Board[emptyR[pick]][emptyC[pick]] = (random(0,10)<9)?2:4;
+}
+void g2048Reset(){
+  memset(g2048Board,0,sizeof(g2048Board));
+  g2048Score=0; g2048Over=false; g2048Win=false; g2048Dragging=false;
+  g2048AddRandom(); g2048AddRandom();
+}
+void g2048Enter(){ enterGameMode(); g2048Reset(); }
+void g2048Exit(){ exitGameMode(); }
+
+bool g2048CompressMergeLeft(){
+  bool moved=false;
+  for(int r=0;r<4;r++){
+    int line[4], n=0;
+    for(int c=0;c<4;c++) if(g2048Board[r][c]!=0) line[n++]=g2048Board[r][c];
+    for(int i=0;i<n-1;i++){
+      if(line[i]==line[i+1]){
+        line[i]*=2; g2048Score+=line[i];
+        if(line[i]==2048) g2048Win=true;
+        for(int k=i+1;k<n-1;k++) line[k]=line[k+1];
+        n--;
+      }
+    }
+    for(int c=0;c<4;c++){
+      int v = c<n?line[c]:0;
+      if(g2048Board[r][c]!=v) moved=true;
+      g2048Board[r][c]=v;
+    }
+  }
+  return moved;
+}
+void g2048RotateCW(){
+  int tmp[4][4];
+  for(int r=0;r<4;r++) for(int c=0;c<4;c++) tmp[c][3-r]=g2048Board[r][c];
+  memcpy(g2048Board,tmp,sizeof(tmp));
+}
+bool g2048BoardFull(){
+  for(int r=0;r<4;r++) for(int c=0;c<4;c++) if(g2048Board[r][c]==0) return false;
+  return true;
+}
+bool g2048HasMove(){
+  if(!g2048BoardFull()) return true;
+  for(int r=0;r<4;r++) for(int c=0;c<4;c++){
+    int v=g2048Board[r][c];
+    if(c<3 && g2048Board[r][c+1]==v) return true;
+    if(r<3 && g2048Board[r+1][c]==v) return true;
+  }
+  return false;
+}
+// dir: 0=kiri, 1=atas, 2=kanan, 3=bawah
+void g2048Move(int dir){
+  if(g2048Over) return;
+  for(int i=0;i<dir;i++) g2048RotateCW();
+  bool moved = g2048CompressMergeLeft();
+  for(int i=0;i<(4-dir)%4;i++) g2048RotateCW();
+  if(moved){
+    g2048AddRandom();
+    if(!g2048HasMove()) g2048Over=true;
+  }
+}
+
+void draw2048(LGFX_Sprite& s){
+  s.fillSprite(T().bg); drawStatusBar(s);
+  char buf[24]; sprintf(buf,"Skor: %d",g2048Score);
+  s.setTextColor(T().subtext); s.setTextSize(1); s.setCursor(6,STATUS_H+2); s.print(buf);
+
+  int boardW = 4*G2048_CELL+5*G2048_GAP;
+  int gx = SCR_W/2-boardW/2, gy = STATUS_H+22;
+  s.fillRoundRect(gx,gy,boardW,boardW,8,T().surface);
+  for(int r=0;r<4;r++){
+    for(int c=0;c<4;c++){
+      int v=g2048Board[r][c];
+      int cx=gx+G2048_GAP+c*(G2048_CELL+G2048_GAP);
+      int cy=gy+G2048_GAP+r*(G2048_CELL+G2048_GAP);
+      uint16_t cc = (v==0)?T().surface2 : (v<=4?T().good : v<=32?T().accent : v<=256?T().accent2 : T().danger);
+      s.fillRoundRect(cx,cy,G2048_CELL,G2048_CELL,6,cc);
+      if(v>0){
+        char vb[6]; sprintf(vb,"%d",v);
+        int vw=strlen(vb)*6*(v<100?2:1);
+        s.setTextColor(v<=4?T().bg:0xFFFF); s.setTextSize(v<100?2:1);
+        s.setCursor(cx+G2048_CELL/2-vw/2, cy+G2048_CELL/2-8);
+        s.print(vb);
+      }
+    }
+  }
+
+  if(g2048Over || g2048Win){
+    int bx=SCR_W/2-72, by=SCR_H/2-32, bw=144, bh=64;
+    s.fillRoundRect(bx,by,bw,bh,10,T().surface);
+    s.drawRoundRect(bx,by,bw,bh,10,g2048Win?T().good:T().danger);
+    s.setTextColor(g2048Win?T().good:T().danger); s.setTextSize(1);
+    s.setCursor(bx+30,by+14); s.print(g2048Win?"KAMU MENANG!":"GAME OVER");
+    s.setTextColor(T().subtext); s.setCursor(bx+10,by+34); s.print("Ketuk layar utk ulang");
+  }
+  drawBack(s);
+}
+
+void g2048Touch(int x,int y,bool held,bool isNew){
+  if(isNew && isBack(x,y)){ navBack(); return; }
+  if(g2048Over || g2048Win){ if(isNew) g2048Reset(); return; }
+  if(isNew){ g2048DragStartX=x; g2048DragStartY=y; g2048Dragging=true; return; }
+  if(held && g2048Dragging){
+    int dx=x-g2048DragStartX, dy=y-g2048DragStartY;
+    int adx=abs(dx), ady=abs(dy);
+    if(max(adx,ady) > 34){ // ambang batas swipe
+      if(adx>ady) g2048Move(dx>0?2:0); else g2048Move(dy>0?3:1);
+      g2048Dragging=false; // 1 gesture = 1 langkah, cegah geser panjang jadi banyak langkah
+      needRedraw=true;
+    }
+  }
+}
+
+// =============================================
+// GAME: TIC-TAC-TOE (vs komputer - AI sederhana: menang>blok>tengah>acak)
+// =============================================
+char tttBoard[9]; // ' '=kosong, 'X'=user, 'O'=komputer
+bool tttOver; char tttWinner; // 'X','O','D'(seri)
+
+void tttReset(){
+  for(int i=0;i<9;i++) tttBoard[i]=' ';
+  tttOver=false; tttWinner=' ';
+}
+void tttEnter(){ tttReset(); } // game santai, gak perlu Game Mode (gak butuh performa tinggi)
+void tttExit(){}
+
+char tttCheckWin(){
+  const int L[8][3]={{0,1,2},{3,4,5},{6,7,8},{0,3,6},{1,4,7},{2,5,8},{0,4,8},{2,4,6}};
+  for(int i=0;i<8;i++){
+    char a=tttBoard[L[i][0]],b=tttBoard[L[i][1]],c=tttBoard[L[i][2]];
+    if(a!=' ' && a==b && b==c) return a;
+  }
+  bool full=true; for(int i=0;i<9;i++) if(tttBoard[i]==' ') full=false;
+  if(full) return 'D';
+  return ' ';
+}
+void tttAiMove(){
+  // 1) kalau AI bisa menang langsung, ambil
+  // 2) kalau user bisa menang giliran depan, blok
+  // 3) ambil tengah kalau kosong
+  // 4) acak dari sisa kotak kosong
+  const int L[8][3]={{0,1,2},{3,4,5},{6,7,8},{0,3,6},{1,4,7},{2,5,8},{0,4,8},{2,4,6}};
+  for(int pass=0; pass<2; pass++){
+    char me = pass==0? 'O':'X';
+    for(int i=0;i<8;i++){
+      int a=L[i][0],b=L[i][1],c=L[i][2];
+      char va=tttBoard[a],vb=tttBoard[b],vc=tttBoard[c];
+      if(va==me&&vb==me&&vc==' '){ tttBoard[c]='O'; return; }
+      if(va==me&&vc==me&&vb==' '){ tttBoard[b]='O'; return; }
+      if(vb==me&&vc==me&&va==' '){ tttBoard[a]='O'; return; }
+    }
+  }
+  if(tttBoard[4]==' '){ tttBoard[4]='O'; return; }
+  int empty[9],n=0;
+  for(int i=0;i<9;i++) if(tttBoard[i]==' ') empty[n++]=i;
+  if(n>0) tttBoard[empty[random(0,n)]]='O';
+}
+
+void drawTtt(LGFX_Sprite& s){
+  s.fillSprite(T().bg); drawStatusBar(s);
+  s.setTextColor(T().accent); s.setTextSize(1); s.setCursor(8,STATUS_H+4); s.print("Tic-Tac-Toe vs CPU");
+
+  int cellW = min(SCR_W-40, SCR_H-STATUS_H-100)/3;
+  int gx=SCR_W/2-cellW*3/2, gy=STATUS_H+30;
+  for(int i=0;i<9;i++){
+    int r=i/3, c=i%3;
+    int cx=gx+c*cellW, cy=gy+r*cellW;
+    s.fillRoundRect(cx+2,cy+2,cellW-4,cellW-4,6,T().surface);
+    if(tttBoard[i]=='X'){
+      s.setTextColor(T().accent); s.setTextSize(3);
+      s.setCursor(cx+cellW/2-9,cy+cellW/2-12); s.print("X");
+    } else if(tttBoard[i]=='O'){
+      s.setTextColor(T().danger); s.setTextSize(3);
+      s.setCursor(cx+cellW/2-9,cy+cellW/2-12); s.print("O");
+    }
+  }
+
+  if(tttOver){
+    const char* msg = tttWinner=='X' ? "Kamu Menang!" : tttWinner=='O' ? "CPU Menang!" : "Seri!";
+    int bx=SCR_W/2-72, by=gy+cellW*3+14, bw=144, bh=44;
+    s.fillRoundRect(bx,by,bw,bh,10,T().surface);
+    s.drawRoundRect(bx,by,bw,bh,10,T().accent);
+    s.setTextColor(T().text); s.setTextSize(1);
+    s.setCursor(SCR_W/2-(int)strlen(msg)*3,by+10); s.print(msg);
+    s.setTextColor(T().subtext); s.setCursor(SCR_W/2-48,by+26); s.print("Ketuk utk main lagi");
+  }
+  drawBack(s);
+}
+
+void tttTouch(int x,int y,bool held,bool isNew){
+  if(!isNew) return;
+  if(isBack(x,y)){ navBack(); return; }
+  if(tttOver){ tttReset(); needRedraw=true; return; }
+
+  int cellW = min(SCR_W-40, SCR_H-STATUS_H-100)/3;
+  int gx=SCR_W/2-cellW*3/2, gy=STATUS_H+30;
+  if(x<gx || x>=gx+cellW*3 || y<gy || y>=gy+cellW*3) return;
+  int c=(x-gx)/cellW, r=(y-gy)/cellW;
+  int idx=r*3+c;
+  if(tttBoard[idx]!=' ') return;
+
+  tttBoard[idx]='X';
+  char w = tttCheckWin();
+  if(w!=' '){ tttOver=true; tttWinner=w; needRedraw=true; return; }
+  tttAiMove();
+  w = tttCheckWin();
+  if(w!=' '){ tttOver=true; tttWinner=w; }
+  needRedraw=true;
+}
+
+// =============================================
+// GAME: BREAKOUT (paddle dikontrol KEMIRINGAN HP via MPU6050, fallback drag jari)
+// =============================================
+#define BRK_COLS 8
+#define BRK_ROWS 4
+#define BRK_PADW 44
+#define BRK_PADH 8
+#define BRK_BALLR 4
+bool  brkBricks[BRK_ROWS][BRK_COLS];
+float brkPadX;
+float brkBallX, brkBallY, brkVelX, brkVelY;
+int   brkScore; bool brkOver, brkWin, brkStarted;
+int   brkBrickW, brkBrickH, brkTop;
+
+void brkReset(){
+  for(int r=0;r<BRK_ROWS;r++) for(int c=0;c<BRK_COLS;c++) brkBricks[r][c]=true;
+  brkBrickW = SCR_W/BRK_COLS;
+  brkBrickH = 14;
+  brkTop = STATUS_H+16;
+  brkPadX = SCR_W/2;
+  brkBallX = SCR_W/2; brkBallY = SCR_H-40;
+  brkVelX = 0; brkVelY = 0;
+  brkScore=0; brkOver=false; brkWin=false; brkStarted=false;
+}
+void brkEnter(){ enterGameMode(); brkReset(); }
+void brkExit(){ exitGameMode(); }
+
+void brkTick(){
+  if(!brkStarted || brkOver || brkWin) return;
+
+  // Kontrol paddle: kalau MPU6050 kedeteksi, ikutin kemiringan kiri/kanan (smoothRoll).
+  // Kalau sensor gak ada, paddle ngikutin posisi X jari terakhir yg nyentuh layar (fallback).
+  if(mpuReady){
+    float target = SCR_W/2 + constrain(smoothRoll,-35.0f,35.0f)*3.2f;
+    brkPadX += (target-brkPadX)*0.25f;
+  }
+  brkPadX = constrain(brkPadX, BRK_PADW/2.0f, SCR_W-BRK_PADW/2.0f);
+
+  brkBallX += brkVelX; brkBallY += brkVelY;
+  if(brkBallX<BRK_BALLR || brkBallX>SCR_W-BRK_BALLR) brkVelX=-brkVelX;
+  if(brkBallY<brkTop+BRK_BALLR) brkVelY=-brkVelY;
+  if(brkBallY > SCR_H+20){ brkOver=true; return; }
+
+  int padY = SCR_H-24;
+  if(brkBallY+BRK_BALLR >= padY && brkBallY < padY+BRK_PADH &&
+     brkBallX > brkPadX-BRK_PADW/2 && brkBallX < brkPadX+BRK_PADW/2 && brkVelY>0){
+    brkVelY=-fabsf(brkVelY);
+    float hit = (brkBallX-brkPadX)/(BRK_PADW/2.0f); // -1..1, posisi kena di paddle
+    brkVelX = hit*3.2f;
+  }
+
+  for(int r=0;r<BRK_ROWS;r++){
+    for(int c=0;c<BRK_COLS;c++){
+      if(!brkBricks[r][c]) continue;
+      int bx=c*brkBrickW, by=brkTop+r*brkBrickH;
+      if(brkBallX>bx && brkBallX<bx+brkBrickW && brkBallY-BRK_BALLR<by+brkBrickH && brkBallY+BRK_BALLR>by){
+        brkBricks[r][c]=false;
+        brkVelY=-brkVelY;
+        brkScore+=10;
+        goto brickHit;
+      }
+    }
+  }
+  brickHit:;
+
+  bool anyLeft=false;
+  for(int r=0;r<BRK_ROWS;r++) for(int c=0;c<BRK_COLS;c++) if(brkBricks[r][c]) anyLeft=true;
+  if(!anyLeft) brkWin=true;
+}
+
+void drawBrk(LGFX_Sprite& s){
+  s.fillSprite(T().bg); drawStatusBar(s);
+  brkTick();
+
+  for(int r=0;r<BRK_ROWS;r++){
+    for(int c=0;c<BRK_COLS;c++){
+      if(!brkBricks[r][c]) continue;
+      uint16_t cc = (r==0)?T().danger:(r==1)?T().accent:(r==2)?T().accent2:T().good;
+      s.fillRect(c*brkBrickW+1, brkTop+r*brkBrickH+1, brkBrickW-2, brkBrickH-2, cc);
+    }
+  }
+  int padY=SCR_H-24;
+  s.fillRoundRect((int)(brkPadX-BRK_PADW/2), padY, BRK_PADW, BRK_PADH, 3, T().accent);
+  s.fillCircle((int)brkBallX,(int)brkBallY,BRK_BALLR,T().text);
+
+  char buf[24]; sprintf(buf,"Skor: %d",brkScore);
+  s.setTextColor(T().subtext); s.setTextSize(1); s.setCursor(6,STATUS_H+2); s.print(buf);
+
+  if(!mpuReady){
+    s.setTextColor(T().subtext);
+    s.setCursor(SCR_W-98,STATUS_H+2); s.print("(drag = geser)");
+  }
+
+  if(!brkStarted){
+    const char* h="Ketuk layar utk mulai";
+    s.setTextColor(T().subtext); s.setTextSize(1);
+    s.setCursor(SCR_W/2-(int)strlen(h)*3,SCR_H/2+40); s.print(h);
+  }
+  if(brkOver || brkWin){
+    int bx=SCR_W/2-72, by=SCR_H/2-32, bw=144, bh=64;
+    s.fillRoundRect(bx,by,bw,bh,10,T().surface);
+    s.drawRoundRect(bx,by,bw,bh,10,brkWin?T().good:T().danger);
+    s.setTextColor(brkWin?T().good:T().danger); s.setTextSize(1);
+    s.setCursor(bx+30,by+14); s.print(brkWin?"MENANG!":"GAME OVER");
+    s.setTextColor(T().subtext); s.setCursor(bx+10,by+34); s.print("Ketuk layar utk ulang");
+  }
+  drawBack(s);
+}
+
+void brkTouch(int x,int y,bool held,bool isNew){
+  if(isNew && isBack(x,y)){ navBack(); return; }
+  if(brkOver || brkWin){ if(isNew) brkReset(); return; }
+  if(!brkStarted){
+    if(isNew){ brkStarted=true; brkVelX=1.6f; brkVelY=-3.2f; }
+    return;
+  }
+  // Fallback drag-kontrol kalau MPU6050 gak kedeteksi
+  if(!mpuReady && (held || isNew)) brkPadX = x;
 }
 
 // =============================================
@@ -3659,8 +4294,10 @@ void setup(){
 // =============================================
 unsigned long lastClk=0,lastSen=0,lastMpu=0,lastBatt=0;
 void loop(){
-  if(millis()-lastMpu>50){ lastMpu=millis(); mpuUpdate(); }
-  if(millis()-lastBatt>5000){ lastBatt=millis(); battUpdate(); needRedraw=true; }
+  if(!gameModeActive){
+    if(millis()-lastMpu>50){ lastMpu=millis(); mpuUpdate(); }
+    if(millis()-lastBatt>5000){ lastBatt=millis(); battUpdate(); needRedraw=true; }
+  }
 
   if(wifiConnected && webServerRunning){
     webServer.handleClient();
@@ -3674,12 +4311,14 @@ void loop(){
   bool newT=touched&&!wasTouched;
 
   if(ccAnimatingOpen){
-    ccOffset += (float)ccPanelH()/6.0f;
-    if(ccOffset>=ccPanelH()){ ccOffset=ccPanelH(); ccAnimatingOpen=false; }
+    // ease-out: makin dekat target makin pelan, terasa lebih halus drpd langkah linear tetap
+    float target=(float)ccPanelH();
+    ccOffset += (target-ccOffset)*0.4f + 1.5f;
+    if(ccOffset>=target-1.0f){ ccOffset=target; ccAnimatingOpen=false; }
     needRedraw=true;
   } else if(ccAnimatingClose){
-    ccOffset -= (float)ccPanelH()/6.0f;
-    if(ccOffset<=0){ ccOffset=0; ccAnimatingClose=false; controlCenterOpen=false; }
+    ccOffset -= ccOffset*0.4f + 1.5f;
+    if(ccOffset<=1.0f){ ccOffset=0; ccAnimatingClose=false; controlCenterOpen=false; }
     needRedraw=true;
   }
 
@@ -3750,6 +4389,8 @@ void loop(){
     }
     if(curScreen()==SCR_CLOCK && millis()-lastClk>500){ needRedraw=true; lastClk=millis(); }
     if(curScreen()==SCR_SENSOR && millis()-lastSen>50){ needRedraw=true; lastSen=millis(); }
+    bool inActionGame = curScreen()==SCR_SNAKE || curScreen()==SCR_FLAPPY || curScreen()==SCR_BREAKOUT;
+    if(inActionGame && millis()-lastSen>40){ needRedraw=true; lastSen=millis(); }
     if(curScreen()==SCR_AICHAT && aiLoading){ needRedraw=true; }
     if(needRedraw){renderCurrentFrame();push();needRedraw=false;}
   }
