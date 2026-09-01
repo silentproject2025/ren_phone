@@ -26,7 +26,7 @@ jobs:
           arduino-cli core install esp32:esp32
           arduino-cli lib install "LovyanGFX"
           arduino-cli lib install "JPEGDEC"
-
+          arduino-cli lib install "ESP32-audioI2S"
       - name: Compile Sketch
         run: |
           mkdir -p build_sketch
