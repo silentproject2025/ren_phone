@@ -1,6 +1,6 @@
 <div align="center">
 
-# 📱 Ren Phone
+# 📱 Accretion Phone
 ### Firmware "Smartphone" DIY untuk ESP32-S3 — dijalankan oleh **NyxOS**
 
 *Satu chip, satu layar sentuh, satu kartu SD — dan sebuah sistem operasi mini lengkap dengan asisten AI, integrasi NASA, pemutar media, dan lebih dari 25 aplikasi bawaan.*
