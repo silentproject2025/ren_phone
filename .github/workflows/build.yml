@@ -27,6 +27,7 @@ jobs:
           arduino-cli lib install "LovyanGFX"
           arduino-cli lib install "JPEGDEC"
           arduino-cli lib install "ESP32-audioI2S-master@3.4.6"
+          arduino-cli lib install "EspUsbHost"
 
       - name: Compile Sketch
         run: |
