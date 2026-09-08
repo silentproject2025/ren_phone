@@ -21,7 +21,7 @@ jobs:
       - name: Update Board Manager and Install Core & Libraries
         run: |
           arduino-cli config init --overwrite
-          arduino-cli config set board_manager.additional_urls https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
+          arduino-cli config set board_manager.additional_urls https://githubusercontent.com
           arduino-cli core update-index
           arduino-cli core install esp32:esp32
           arduino-cli lib install "LovyanGFX"
@@ -35,8 +35,11 @@ jobs:
           cp phone.ino build_sketch/
           cp MjpegClass.h build_sketch/
           mv build_sketch/phone.ino build_sketch/build_sketch.ino
+          
+          # Mengompilasi dengan menyuntikkan parameter optimasi memori Mbed TLS ke compiler
           arduino-cli compile --fqbn esp32:esp32:esp32s3 \
             --board-options "FlashSize=16M,PSRAM=opi,PartitionScheme=app3M_fat9M_16MB" \
+            --build-property "compiler.cpp.extra_flags=-DCONFIG_MBEDTLS_DYNAMIC_BUFFER=1 -DCONFIG_MBEDTLS_ASYMMETRIC_CONTENT_LEN=1 -DCONFIG_MBEDTLS_SSL_IN_CONTENT_LEN=4096 -DCONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN=2048" \
             build_sketch --output-dir build
 
       - name: Upload Binary Artifacts
