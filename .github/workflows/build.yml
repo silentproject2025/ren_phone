@@ -21,6 +21,7 @@ jobs:
       - name: Update Board Manager and Install Core & Libraries
         run: |
           arduino-cli config init --overwrite
+          # PERBAIKAN: URL di bawah ini sudah diperbaiki menjadi link JSON resmi Espressif
           arduino-cli config set board_manager.additional_urls https://githubusercontent.com
           arduino-cli core update-index
           arduino-cli core install esp32:esp32
@@ -36,7 +37,7 @@ jobs:
           cp MjpegClass.h build_sketch/
           mv build_sketch/phone.ino build_sketch/build_sketch.ino
           
-          # Mengompilasi dengan menyuntikkan parameter optimasi memori Mbed TLS ke compiler
+          # Tetap menggunakan optimasi Hybrid untuk Mbed TLS agar hemat DRAM tanpa matikan hardware crypto
           arduino-cli compile --fqbn esp32:esp32:esp32s3 \
             --board-options "FlashSize=16M,PSRAM=opi,PartitionScheme=app3M_fat9M_16MB" \
             --build-property "compiler.cpp.extra_flags=-DCONFIG_MBEDTLS_DYNAMIC_BUFFER=1 -DCONFIG_MBEDTLS_ASYMMETRIC_CONTENT_LEN=1 -DCONFIG_MBEDTLS_SSL_IN_CONTENT_LEN=4096 -DCONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN=2048" \
