@@ -9,7 +9,6 @@ on:
 
 jobs:
   build:
-    name: Build ESP32-S3 Firmware
     runs-on: ubuntu-latest
 
     steps:
@@ -19,42 +18,37 @@ jobs:
       - name: Setup Arduino CLI
         uses: arduino/setup-arduino-cli@v2
 
-      - name: Configure Board Manager & Install ESP32 Core
+      - name: Update Board Manager and Install Core & Libraries
         run: |
           arduino-cli config init --overwrite
-          # Perbaikan: URL Resmi Espressif
-          arduino-cli config set board_manager.additional_urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
+          arduino-cli config set board_manager.additional_urls https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
+          arduino-cli config set library.enable_unsafe_install true
           arduino-cli core update-index
           arduino-cli core install esp32:esp32
 
-      - name: Install Required Libraries
-        run: |
           arduino-cli lib install "LovyanGFX"
           arduino-cli lib install "JPEGDEC"
-          arduino-cli lib install "ESP32-audioI2S@3.4.6"
-          arduino-cli lib install "EspUsbHost"
 
-      - name: Prepare Sketch Structure
-        run: |
-          # Arduino CLI mengharuskan nama folder sama dengan nama file .ino
-          mkdir -p phone
-          cp phone.ino phone/
-          if [ -f MjpegClass.h ]; then
-            cp MjpegClass.h phone/
-          fi
+          # Coba install dari Library Manager, kalau gagal fallback ke git
+          arduino-cli lib install "ESP32-audioI2S-master@3.4.6" || \
+            arduino-cli lib install --git-url https://github.com/schreibfaul1/ESP32-audioI2S.git
 
-      - name: Compile Firmware
+          arduino-cli lib install "EspUsbHost" || \
+            arduino-cli lib install --git-url https://github.com/tanakamasayuki/EspUsbHost.git
+
+      - name: Compile Sketch
         run: |
-          # Opsi board langsung disatukan ke FQBN
-          arduino-cli compile \
-            --fqbn esp32:esp32:esp32s3:FlashSize=16M,PSRAM=opi,PartitionScheme=app3M_fat9M_16MB \
+          mkdir -p build_sketch
+          cp phone.ino build_sketch/
+          cp MjpegClass.h build_sketch/
+          mv build_sketch/phone.ino build_sketch/build_sketch.ino
+          arduino-cli compile --fqbn esp32:esp32:esp32s3 \
+            --board-options "FlashSize=16M,PSRAM=opi,PartitionScheme=app3M_fat9M_16MB" \
             --build-property "compiler.cpp.extra_flags=-DCONFIG_MBEDTLS_DYNAMIC_BUFFER=1 -DCONFIG_MBEDTLS_ASYMMETRIC_CONTENT_LEN=1 -DCONFIG_MBEDTLS_SSL_IN_CONTENT_LEN=4096 -DCONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN=2048" \
-            --output-dir build \
-            phone
+            build_sketch --output-dir build
 
       - name: Upload Binary Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: esp32-firmware-binaries
           path: build/*.bin
-          
