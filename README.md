@@ -1,101 +1,104 @@
-# ren_phone (NyxOS)
+# 📱 ren_phone — HP DIY dari Nol, Ditenagai ESP32-S3
 
-Firmware DIY untuk membuat "HP" custom berbasis **ESP32-S3**, dengan layar sentuh, banyak aplikasi bawaan, integrasi AI (Google Gemini), integrasi data NASA, pemutar media, dan berbagai sensor. Seluruh sistem (bootscreen, launcher, status bar, lock screen, Control Center, dsb.) ditulis dari nol di atas [LovyanGFX](https://github.com/lovyan03/LovyanGFX) — codename sistemnya sendiri adalah **NyxOS**, dengan animasi boot bertema "Accretion" (partikel yang membentuk tulisan lalu berubah jadi logo).
+> **"Kenapa beli HP, kalau bisa dibikin sendiri?"**
 
-> File utama proyek ini adalah satu sketch `.ino` besar yang sudah berkembang lewat puluhan iterasi (v9 → v60+), dengan riwayat perubahan & alasan tiap fix didokumentasikan langsung sebagai komentar di kode.
+**ren_phone** adalah sistem operasi HP custom yang ditulis dari nol — bukan modif Android, bukan port sistem lain — murni satu file firmware C++ raksasa yang berjalan di atas chip **ESP32-S3**. Ia punya lock screen, launcher, status bar, Control Center, notifikasi mengambang ala Dynamic Island, sampai AI assistant yang bisa diajak ngobrol pakai suara. Semuanya nyala di layar TFT kecil seharga recehan dibanding HP beneran.
 
----
+Sistemnya dinamai **NyxOS**, dengan boot animation bertema *"Accretion"* — ratusan partikel yang berputar mengorbit, lalu perlahan menyatu membentuk tulisan sebelum melebur jadi logo. Bukan sekadar splash screen "Loading...".
 
-## Daftar Isi
-
-- [Fitur Utama](#fitur-utama)
-- [Daftar Aplikasi](#daftar-aplikasi)
-- [Kebutuhan Hardware](#kebutuhan-hardware)
-- [Peta Pin (Wiring)](#peta-pin-wiring)
-- [Kebutuhan Software](#kebutuhan-software)
-- [Cara Build & Flash](#cara-build--flash)
-- [Konfigurasi API Key](#konfigurasi-api-key)
-- [Struktur File di SD Card](#struktur-file-di-sd-card)
-- [Web File Manager](#web-file-manager)
-- [Kontrol & Gesture](#kontrol--gesture)
-- [Format Media Kustom](#format-media-kustom)
-- [Catatan Teknis & Keterbatasan](#catatan-teknis--keterbatasan)
-- [Lisensi](#lisensi)
+Proyek ini juga unik karena **seluruh riwayat perubahannya** — puluhan iterasi, dari v9 sampai versi terbaru — didokumentasikan langsung di dalam kode: apa bug-nya, apa akar masalahnya, kenapa fix-nya begitu. Jadi firmware ini sekaligus jadi semacam studi kasus panjang soal ngoprek ESP32 sampai ke akar-akarnya (fragmentasi RAM internal, timing SPI, kalibrasi sensor, dan sejenisnya).
 
 ---
 
-## Fitur Utama
+## ✨ Kenapa Ini Menarik
 
-- **Layar sentuh penuh** dengan lock screen (swipe-to-unlock), Control Center (swipe-down dari status bar), status bar dinamis, dan **Dynamic Island** (notifikasi mengambang ala HP modern) untuk status AI Chat, Mode Game, dan skor Trivia.
-- **UI glassmorphism** (efek kaca buram) di Home, Lock Screen, dan Control Center, dengan 4 tema: `Dark`, `AMOLED`, `Light`, `Pastel`.
-- **Rotasi otomatis** (portrait/landscape) berbasis sensor MPU6050, dengan kalibrasi touch yang selalu sinkron dengan rotasi aktif.
-- **Shake-to-Home**, mode pesawat, DND, kontrol kecerahan, kunci layar — semua dari Control Center.
-- **Wallpaper kustom** (upload JPG lewat web file manager), dengan fallback ke penyimpanan flash internal (FFat) kalau SD Card tidak terpasang.
-- **Web File Manager** bawaan (server HTTP di port 80): upload/download/edit/hapus file di SD Card, atur wallpaper, dan atur API key — semua dari browser tanpa perlu keyboard fisik di HP.
-- **Update firmware OTA** — bisa dari file `.bin` di SD Card atau diunduh langsung lewat URL WiFi.
-- **AI Chat** (Google Gemini API) dengan memori percakapan persisten di SD Card, plus **dikte suara** (rekam → transkrip otomatis → isi ke kolom chat).
-- **AI Live** — mode ngobrol dengan suara penuh: rekam suara → Gemini memahami & menjawab → jawaban diubah jadi suara (Gemini TTS) dan diputar lewat speaker.
-- **Integrasi data NASA**: APOD (foto astronomi harian + terjemahan otomatis ke Indonesia), NEO Asteroid tracker, Mars Rover Photos, citra Bumi EPIC, dan pencarian NASA Image Library — semua dengan caching lokal ke SD Card atau PSRAM.
-- **Trivia Quiz** online (Open Trivia Database) dengan 12 kategori × 4 tingkat kesulitan.
-- **6 game bawaan**: Snake, Flappy Block, 2048, Tic-Tac-Toe, Breakout, dan Labirin (klon Pac-Man dengan progres level & rekor tersimpan permanen).
-- **Pemutar media**: MJPEG video player, MP3 Player (pemutaran latar belakang), dan AVI Player (video + audio, format kustom ringan).
-- **Kontrol hardware tambahan**: LED Neopixel (RGB, mode solid & rainbow), motor getar dengan pola berbeda per jenis notifikasi, meteran level mic real-time, dan HWmonitor (estimasi beban CPU per-core, RAM/PSRAM, uji speaker).
-- **Monitor baterai** dengan estimasi persentase & sisa kapasitas dari voltage divider.
+- 🧠 **Ada AI di dalam HP-nya sendiri.** Chat teks maupun ngobrol suara penuh (rekam → Gemini paham & jawab → dijawab balik pakai suara TTS) — semua lewat Google Gemini API.
+- 🚀 **Terhubung ke NASA.** Buka foto astronomi harian, lacak asteroid yang mendekati Bumi, lihat foto terbaru dari rover di Mars, sampai citra satelit Bumi — langsung dari genggaman.
+- 🎮 **6 game bawaan**, termasuk klon Pac-Man lengkap dengan sistem level & rekor skor yang tersimpan permanen.
+- 🎵 **Pemutar MP3 & video AVI** — muter musik di background sambil buka app lain, persis HP beneran.
+- 🌐 **Web server built-in.** Colok WiFi, buka browser di laptop, langsung bisa upload file, ganti wallpaper, atau atur API key tanpa sentuh HP-nya sama sekali.
+- 🔧 **Update firmware OTA** — tinggal taruh file `.bin` di kartu SD atau kasih link URL, tanpa colok kabel USB.
+- 💡 **Kontrol hardware nyata**: LED RGB, motor getar dengan pola berbeda tiap notifikasi, sensor gerak buat auto-rotate & shake-to-home, sampai meteran level mic real-time buat ngecek wiring.
+- 🩺 **Ada Task Manager-nya sendiri** (HWmonitor) — bisa lihat beban tiap core CPU, sisa RAM/PSRAM, bahkan tombol tes speaker.
 
 ---
 
-## Daftar Aplikasi
+## 📚 Daftar Isi
 
-| Aplikasi | Deskripsi singkat |
+- [Galeri Aplikasi](#️-galeri-aplikasi)
+- [Yang Perlu Disiapkan](#️-yang-perlu-disiapkan)
+- [Peta Kabel (Wiring)](#-peta-kabel-wiring)
+- [Software & Library](#-software--library)
+- [Cara Bangun Sendiri](#-cara-bangun-sendiri)
+- [Setel API Key](#-setel-api-key)
+- [Struktur Kartu SD](#️-struktur-kartu-sd)
+- [Web File Manager](#-web-file-manager)
+- [Gesture & Kontrol](#-gesture--kontrol)
+- [Format Video Kustom](#-format-video-kustom)
+- [Hal-Hal yang Perlu Diketahui](#️-hal-hal-yang-perlu-diketahui)
+- [Lisensi](#-lisensi)
+
+---
+
+## 🖼️ Galeri Aplikasi
+
+29 aplikasi berjalan di satu launcher grid dengan ikon vektor kustom (bukan cuma huruf tunggal!):
+
+| # | Aplikasi | Yang bisa dilakukan |
+|---|---|---|
+| 1 | **Jam** | Jam digital real-time via NTP |
+| 2 | **Kalkulator** | Hitung-hitungan dasar |
+| 3 | **Orientasi 3D** | Kubus 3D yang berputar sesuai kemiringan HP asli (data MPU6050) |
+| 4 | **Setting** | WiFi, tema, kecerahan, kalibrasi sensor & touch |
+| 5 | **Notepad** | Catatan tersimpan permanen di SD Card |
+| 6 | **Canvas** | Corat-coret pakai jari, brush halus tanpa "bertangga" |
+| 7 | **AI Chat** | Ngobrol teks dengan Gemini, bisa juga dikte pakai suara |
+| 8 | **Files** | File explorer buat kartu SD |
+| 9 | **MJPEG** | Pemutar video motion-JPEG |
+| 10 | **Update** | Flash firmware baru — dari SD Card atau URL WiFi |
+| 11 | **Baterai** | Tegangan, persentase, estimasi sisa daya |
+| 12 | **Snake** | Klasik, dengan tembus tepi layar |
+| 13 | **Flappy** | Terbang lewati pipa |
+| 14 | **2048** | Swipe 4 arah, gabung angka |
+| 15 | **TicTacToe** | Lawan CPU atau 2 pemain, papan sampai 5×5 |
+| 16 | **Breakout** | Kendali drag jari **atau** miringkan HP |
+| 17 | **Trivia** | Kuis online, 12 kategori × 4 level |
+| 18 | **Astronomi** | Foto NASA APOD harian + auto-translate ke Indonesia |
+| 19 | **NEO Asteroid** | Radar asteroid dekat Bumi hari ini |
+| 20 | **Mars Rover** | Foto terbaru dari Curiosity/Perseverance |
+| 21 | **Bumi EPIC** | Foto Bumi dari satelit DSCOVR |
+| 22 | **Galeri NASA** | Pencarian bebas ke arsip foto NASA |
+| 23 | **Neopixel** | Kontrol LED RGB — solid color atau rainbow otomatis |
+| 24 | **MP3 Player** | Muter musik, jalan terus di background |
+| 25 | **AVI Player** | Video + audio, format kustom ringan |
+| 26 | **Mic Level** | VU meter buat ngecek mic beneran nangkep suara |
+| 27 | **HWmonitor** | Beban CPU per-core, RAM/PSRAM, tes speaker |
+| 28 | **AI Live** | Ngobrol suara penuh — bicara, AI jawab pakai suara |
+| 29 | **Labirin** | Klon Pac-Man, kejar-kejaran hantu, rekor tersimpan |
+
+---
+
+## 🛠️ Yang Perlu Disiapkan
+
+| Komponen | Kenapa Perlu |
 |---|---|
-| Jam | Jam digital real-time (NTP) |
-| Kalkulator | Kalkulator dasar |
-| Orientasi 3D | Visualisasi 3D real-time orientasi HP dari data MPU6050 |
-| Setting | WiFi, tema, kecerahan, auto-rotate, kalibrasi ulang sensor/touch |
-| Notepad | Catatan teks tersimpan ke SD Card, dengan dialog konfirmasi simpan |
-| Canvas | Kanvas gambar jari dengan palet warna & ukuran brush |
-| AI Chat | Chat dengan Gemini AI, mendukung dikte suara & memori percakapan |
-| Files | File explorer SD Card (lihat isi file .txt, hapus, dsb.) |
-| MJPEG | Pemutar video MJPEG dari `/mjpeg` di SD Card |
-| Update | Update firmware via SD Card atau URL WiFi (OTA) |
-| Baterai | Info tegangan, persentase, & estimasi sisa daya |
-| Snake | Snake klasik dengan wrap-around di tepi layar |
-| Flappy | Flappy Bird ala block |
-| 2048 | 2048 dengan swipe 4 arah |
-| TicTacToe | Vs CPU atau 2 pemain, papan 3x3/4x4/5x5 |
-| Breakout | Kontrol drag jari atau kemiringan HP (kalau ada MPU6050) |
-| Trivia | Kuis trivia online (Open Trivia DB), 12 kategori |
-| Astronomi | NASA APOD — foto astronomi harian + terjemahan ID |
-| NEO Asteroid | Data asteroid dekat Bumi (NASA NeoWs) |
-| Mars Rover | Foto dari rover Curiosity/Perseverance |
-| Bumi EPIC | Citra Bumi dari kamera EPIC (DSCOVR satellite) |
-| Galeri NASA | Pencarian NASA Image & Video Library |
-| Neopixel | Kontrol LED RGB (solid color / rainbow) |
-| MP3 Player | Pemutar MP3 dari `/mp3`, jalan di background |
-| AVI Player | Pemutar video+audio format AVI kustom dari `/avi` |
-| Mic Level | Meteran level mic real-time (uji wiring INMP441) |
-| HWmonitor | Estimasi beban CPU per-core, RAM/PSRAM, uji speaker |
-| AI Live | Ngobrol suara penuh dengan Gemini (voice-in, voice-out) |
-| Labirin | Klon Pac-Man dengan level & rekor skor persisten |
+| **ESP32-S3** (dengan PSRAM!) | Otak dari semuanya — PSRAM wajib untuk decode gambar & buffer audio |
+| **TFT ILI9341** | Layarnya |
+| **Touch XPT2046** | Biar bisa disentuh, bukan cuma dilihat |
+| **MicroSD Card + modul SDIO** | Simpan file, cache foto, musik, video |
+| **MPU6050** | Deteksi kemiringan & goyangan |
+| **INMP441** | Mic — buat dikte suara & AI Live |
+| **MAX98357A** | Ampli speaker |
+| **Motor getar kecil** | Feedback haptic |
+| **LED Neopixel (opsional)** | Lampu RGB, tapi seru |
+| **Voltage divider 10k+10k** | Biar tahu baterai sekarat atau belum |
 
 ---
 
-## Kebutuhan Hardware
+## 🔌 Peta Kabel (Wiring)
 
-- **Board**: ESP32-S3 (dengan PSRAM — wajib untuk fitur gambar/audio)
-- **Layar**: TFT ILI9341 (SPI)
-- **Touch**: XPT2046 resistif (SPI terpisah)
-- **Storage**: SD Card via SDIO (SD_MMC 1-bit)
-- **Sensor gerak**: MPU6050 (accelerometer + gyroscope, I2C)
-- **Mic**: INMP441 (I2S)
-- **Speaker/Amp**: MAX98357A (I2S)
-- **Motor getar** (vibration motor kecil, on/off digital)
-- **LED Neopixel/WS2812** (opsional, addressable RGB)
-- Voltage divider 10k+10k untuk monitor baterai Li-ion 1 sel
+**Layar ILI9341 (SPI)**
 
-## Peta Pin (Wiring)
-
-### Layar (ILI9341, SPI)
 | Fungsi | GPIO |
 |---|---|
 | SCLK | 12 |
@@ -104,9 +107,10 @@ Firmware DIY untuk membuat "HP" custom berbasis **ESP32-S3**, dengan layar sentu
 | DC | 2 |
 | CS | 10 |
 | RST | 14 |
-| Backlight (PWM) | 21 |
+| Backlight | 21 |
 
-### Touch (XPT2046, SPI terpisah / SPI3)
+**Touch XPT2046 (bus SPI terpisah)**
+
 | Fungsi | GPIO |
 |---|---|
 | SCLK | 6 |
@@ -114,161 +118,166 @@ Firmware DIY untuk membuat "HP" custom berbasis **ESP32-S3**, dengan layar sentu
 | MISO | 4 |
 | CS | 9 |
 
-### SD Card (SDIO 1-bit)
+**SD Card (SDIO 1-bit)**
+
 | Fungsi | GPIO |
 |---|---|
 | CLK | 39 |
 | CMD | 38 |
 | D0 | 40 |
 
-### Audio Output (MAX98357A — dipakai bergantian oleh MP3/AVI/AI Live, tidak bisa jalan bersamaan)
+**Audio Output — MAX98357A** *(dipakai gantian oleh MP3/AVI/AI Live, tidak bisa jalan bersamaan)*
+
 | Fungsi | GPIO |
 |---|---|
 | BCLK | 42 |
 | LRC | 41 |
 | DOUT | 17 |
 
-### Mic (INMP441)
+**Mic — INMP441**
+
 | Fungsi | GPIO |
 |---|---|
 | SCK | 47 |
 | WS | 46 |
 | SD | 45 |
 
-> L/R pin INMP441 ditarik ke GND (channel kiri aktif).
+> Pin L/R ditarik ke GND (channel kiri aktif).
 
-### Sensor & Lainnya
+**Sensor & Lainnya**
+
 | Komponen | GPIO |
 |---|---|
 | MPU6050 SDA | 15 |
 | MPU6050 SCL | 7 (alamat I2C `0x68`) |
 | Motor getar | 18 |
 | LED Neopixel | 48 |
-| Baterai (ADC, via voltage divider 1:2) | 8 |
+| Baterai (ADC via divider 1:2) | 8 |
 
 ---
 
-## Kebutuhan Software
+## 💻 Software & Library
 
-- **Arduino-ESP32 core 3.x** (dibutuhkan untuk `ESP_I2S.h`, `rgbLedWrite()`, dan API terbaru lainnya)
-- Library yang **wajib diinstall manual**:
-  - **LovyanGFX**
-  - **JPEGDEC**
-  - **ESP32-audioI2S** oleh schreibfaul1 (`Audio.h`) — untuk decode MP3
-  - `MjpegClass` (header pendukung pemutar MJPEG)
-- Library bawaan Arduino-ESP32 core (tidak perlu install terpisah):
-  - `WiFi`, `WebServer`, `HTTPClient`, `WiFiClientSecure`
-  - `FS`, `SD_MMC`, `FFat`
-  - `Update` (OTA)
-  - `Preferences` (penyimpanan NVS)
-  - `Wire` (I2C)
-  - `ESP_I2S.h` (I2S untuk mic & speaker mentah)
-  - `mbedtls/base64.h` (encode/decode base64, untuk audio & API)
-  - `esp_bt.h`, `esp_freertos_hooks.h` (pelepasan RAM Bluetooth & idle hook CPU monitor)
+**Wajib**: Arduino-ESP32 core **3.x** (dibutuhkan untuk `ESP_I2S.h`, `rgbLedWrite()`, dan API-API baru lainnya).
 
-## Cara Build & Flash
+**Install manual dulu**, belum bawaan Arduino IDE:
+- 🎨 `LovyanGFX` — mesin grafis + driver layar/touch
+- 🖼️ `JPEGDEC` — decode semua gambar JPG (foto NASA, wallpaper, MJPEG)
+- 🔊 `ESP32-audioI2S` oleh schreibfaul1 (`Audio.h`) — decoder MP3
+- 🎞️ `MjpegClass` — pemutar video MJPEG
 
-1. Install Arduino IDE (atau `arduino-cli`) dengan board package **esp32 by Espressif** versi 3.x.
-2. Pilih board ESP32-S3 dengan **PSRAM diaktifkan** dan skema partisi yang menyisakan ruang untuk **OTA** dan **FFat**.
-3. Install library-library di atas lewat Library Manager / manual.
-4. Sesuaikan pin wiring sesuai tabel di atas kalau board Anda berbeda.
+**Sudah bawaan** Arduino-ESP32 core, tinggal pakai:
+`WiFi`, `WebServer`, `HTTPClient`, `WiFiClientSecure`, `FS`, `SD_MMC`, `FFat`, `Update`, `Preferences`, `Wire`, `ESP_I2S.h`, `mbedtls/base64.h`, `esp_bt.h`, `esp_freertos_hooks.h`.
+
+---
+
+## 🚀 Cara Bangun Sendiri
+
+1. Install **Arduino IDE** + board package **esp32 by Espressif** (versi 3.x).
+2. Pilih board **ESP32-S3**, pastikan **PSRAM diaktifkan**, dan pilih skema partisi yang menyisakan ruang untuk **OTA** + **FFat**.
+3. Install semua library "wajib" di atas (lewat Library Manager atau clone manual).
+4. Cocokkan wiring dengan tabel pin — atau ubah angka pin di kode kalau board kamu beda susunan.
 5. Compile & upload seperti sketch Arduino biasa.
-6. Saat boot pertama kali, perangkat akan menjalankan kalibrasi touch (ikuti instruksi di layar — sentuh titik di tiap sudut).
+6. Nyalakan pertama kali → ikuti layar kalibrasi touch (sentuh tanda di tiap sudut).
+
+Selesai — HP kamu sudah hidup. 🎉
 
 ---
 
-## Konfigurasi API Key
+## 🔑 Setel API Key
 
-Beberapa fitur butuh API key, disimpan sebagai file teks di SD Card (dibuat otomatis kalau belum ada) — atau lewat **Web File Manager** kalau tidak punya SD Card:
+Beberapa fitur butuh kunci API. Semua disimpan sebagai file teks biasa di SD Card (otomatis dibuat saat pertama nyala), atau bisa diisi lewat **Web File Manager** tanpa perlu SD Card sama sekali:
 
-| File | Untuk | Catatan |
+| File | Untuk Fitur | Info |
 |---|---|---|
-| `/gemini_key.txt` | AI Chat, AI Live, dikte suara | Dapatkan gratis di [Google AI Studio](https://aistudio.google.com/app/apikey). Fallback ke NVS internal kalau SD tidak ada. |
-| `/nasa_key.txt` | APOD, NEO, Mars Rover, EPIC, Galeri NASA | Opsional — dibiarkan `DEMO_KEY` tetap jalan, tapi limit request per jam jauh lebih kecil. Dapatkan gratis di [api.nasa.gov](https://api.nasa.gov). |
+| `/gemini_key.txt` | AI Chat, AI Live, dikte suara | Gratis di Google AI Studio (aistudio.google.com/app/apikey) |
+| `/nasa_key.txt` | APOD, NEO, Mars Rover, EPIC, Galeri NASA | Boleh dibiarkan `DEMO_KEY` (limitnya kecil), atau ambil gratis di api.nasa.gov |
 
-WiFi diatur lewat aplikasi **Setting** (bisa scan jaringan sekitar langsung dari HP).
+WiFi diatur langsung dari HP-nya sendiri di app **Setting** — lengkap dengan fitur scan jaringan sekitar.
 
 ---
 
-## Struktur File di SD Card
+## 🗂️ Struktur Kartu SD
 
 ```
 /
-├── notepad.txt              # isi Notepad
-├── gemini_key.txt           # API key Gemini
-├── nasa_key.txt             # API key NASA
-├── ai_memory.txt            # riwayat percakapan AI Chat/AI Live (auto-terpangkas)
-├── wallpaper.jpg            # wallpaper Home & Lock Screen (opsional)
-├── canvas_land.bin          # kanvas gambar (landscape)
-├── canvas_port.bin          # kanvas gambar (portrait)
-├── mjpeg/                   # taruh file .mjpeg di sini
-├── update/                  # taruh file firmware .bin di sini (OTA lokal)
-├── mp3/                     # taruh file .mp3 di sini
-├── avi/                     # taruh file .avi (format kustom, lihat di bawah)
-├── apod_cache/              # cache foto+terjemahan APOD
-├── neo_cache/                
-├── mars_cache/
-├── epic_cache/
-└── imglib_cache/
+├── notepad.txt              → isi Notepad
+├── gemini_key.txt           → kunci API Gemini
+├── nasa_key.txt             → kunci API NASA
+├── ai_memory.txt            → memori percakapan AI (auto-terpangkas)
+├── wallpaper.jpg            → wallpaper Home & Lock Screen
+├── canvas_land.bin          → kanvas gambar (landscape)
+├── canvas_port.bin          → kanvas gambar (portrait)
+├── mjpeg/                   → video .mjpeg
+├── update/                  → firmware .bin (OTA lokal)
+├── mp3/                     → lagu .mp3
+├── avi/                     → video .avi (format kustom, lihat di bawah)
+├── apod_cache/              → cache foto+terjemahan APOD
+├── neo_cache/               → cache data NASA NeoWs
+├── mars_cache/              → cache foto Mars Rover
+├── epic_cache/              → cache citra Bumi EPIC
+└── imglib_cache/            → cache hasil pencarian Galeri NASA
 ```
 
-> Kalau SD Card tidak terpasang: wallpaper otomatis pakai penyimpanan flash internal (FFat), API key jatuh ke NVS, dan gambar dari NASA API diunduh langsung ke PSRAM tanpa disimpan permanen.
+> 💡 **Tanpa SD Card?** Tetap jalan! Wallpaper otomatis pindah ke flash internal (FFat), API key ke NVS, dan foto NASA diunduh langsung ke PSRAM tanpa disimpan permanen.
 
 ---
 
-## Web File Manager
+## 🌐 Web File Manager
 
-Begitu WiFi tersambung, buka `http://<IP-perangkat>/` dari browser HP/laptop di jaringan yang sama untuk:
+WiFi nyala → buka `http://<IP-HP>/` dari browser mana saja di jaringan yang sama:
 
-- Upload file apa saja ke SD Card
-- Edit langsung file teks (`.txt`, `.json`, `.csv`, `.log`, `.ini`, `.md`) lewat browser
-- Download / hapus file
-- Atur & lihat status API Key Gemini
-- Upload wallpaper (`wallpaper.jpg`) — otomatis aktif langsung tanpa restart
+- 📤 Upload file apa pun ke SD Card
+- ✏️ Edit langsung file teks lewat browser (`.txt`, `.json`, `.csv`, `.log`, `.ini`, `.md`)
+- 📥 Download / 🗑️ hapus file
+- 🔑 Atur kunci API Gemini
+- 🖼️ Ganti wallpaper (upload `wallpaper.jpg`) — langsung aktif, tanpa restart
 
 ---
 
-## Kontrol & Gesture
+## 🤙 Gesture & Kontrol
 
-| Gesture | Aksi |
+| Gerakan | Aksi |
 |---|---|
 | Swipe ke atas di lock screen | Buka kunci |
 | Swipe ke bawah dari status bar | Buka Control Center |
-| Swipe ke atas dari tepi bawah layar | Kembali ke Home |
-| Goyangkan HP | Kembali ke Home (bisa dimatikan di Control Center) |
-| Miringkan HP | Auto-rotate layar (bisa dimatikan), kontrol game Breakout/Labirin |
-| Ketuk Dynamic Island | Buka aplikasi terkait / perbesar detail notifikasi |
+| Swipe ke atas dari tepi bawah | Kembali ke Home |
+| Goyangkan HP | Balik ke Home (bisa dimatikan) |
+| Miringkan HP | Auto-rotate layar / kontrol Breakout & Labirin |
+| Ketuk Dynamic Island | Buka app terkait / lihat detail notifikasi |
 
 ---
 
-## Format Media Kustom
+## 🎞️ Format Video Kustom
 
-### AVI Player
-Parser AVI custom yang ringan — hanya mendukung video **MJPEG** + audio **PCM 16-bit**. Konversi video biasa jadi format ini dengan ffmpeg:
+**AVI Player** pakai parser kustom yang ringan — cuma dukung video **MJPEG** + audio **PCM 16-bit**. Konversi video biasa jadi format ini pakai ffmpeg:
 
 ```bash
 ffmpeg -i input.mp4 -c:v mjpeg -q:v 5 -vf "fps=15,scale=320:240" \
        -c:a pcm_s16le -ar 22050 -ac 1 output.avi
 ```
 
-> Resolusi **wajib** 320×240 (landscape) — player tidak melakukan scaling otomatis.
+> ⚠️ Resolusi **wajib** 320×240 (landscape) — player tidak melakukan scaling otomatis.
 
-### MJPEG Player
-File `.mjpeg` biasa (motion JPEG mentah), ditaruh di folder `/mjpeg`.
-
----
-
-## Catatan Teknis & Keterbatasan
-
-- **RAM internal ESP32-S3 terbatas (~162KB)** — koneksi TLS/HTTPS butuh blok kontigu ~20-30KB. Kadang muncul error `HTTP -1` yang sebenarnya bukan masalah jaringan, melainkan RAM internal sedang terfragmentasi. Firmware sudah menyertakan mekanisme retry/wait otomatis sebelum menyerah, dan aplikasi **HWmonitor** menampilkan angka *"Blok Terbesar"* real-time untuk diagnosis.
-- Fitur-fitur berat (dekode gambar/JPEG, buffer audio, rekaman suara) sangat bergantung pada **PSRAM** — tanpa PSRAM, sebagian fitur (unggah wallpaper, foto NASA, dikte suara, AI Live) tidak akan bekerja dengan baik.
-- MP3 Player dan AVI Player berbagi **satu jalur I2S fisik** yang sama dengan AI Live — tidak bisa berjalan bersamaan; salah satu otomatis dihentikan saat yang lain dijalankan.
-- Estimasi baterai dihitung murni dari pembacaan tegangan (voltage divider), bukan fuel-gauge IC — nilai persentase & sisa mAh adalah perkiraan kasar.
-- API `DEMO_KEY` NASA punya limit rate yang kecil; pakai key pribadi untuk pemakaian rutin.
-- Endpoint Mars Rover Photos milik NASA kadang mengembalikan `404` untuk kombinasi sol/rover tertentu — ini keterbatasan dari sisi server NASA sendiri (proyek open-source di baliknya sudah tidak dirawat), bukan bug aplikasi; firmware otomatis fallback ke endpoint `/latest_photos`.
+**MJPEG Player** lebih simpel — tinggal taruh file `.mjpeg` mentah di folder `/mjpeg`.
 
 ---
 
-## Lisensi
+## ⚠️ Hal-Hal yang Perlu Diketahui
 
-Belum ditentukan — tambahkan berkas `LICENSE` sesuai kebutuhan Anda sebelum membagikan/menerbitkan ulang proyek ini.
+- **RAM internal ESP32-S3 itu kecil (~162KB)**, dan koneksi HTTPS butuh blok memori kontigu ~20–30KB. Kadang muncul error `HTTP -1` yang sebenarnya bukan soal jaringan, tapi RAM internal lagi terpecah-pecah (fragmented). Firmware sudah punya mekanisme tunggu & coba-ulang otomatis, dan app **HWmonitor** menampilkan angka *"Blok Terbesar"* secara real-time buat diagnosis kalau masih kejadian.
+- **PSRAM itu wajib**, bukan opsional — tanpa itu, fitur berat (wallpaper, foto NASA, rekam suara, AI Live) gak akan jalan mulus.
+- MP3 Player, AVI Player, dan AI Live **berbagi satu jalur audio fisik** yang sama — tidak bisa nyala bersamaan, otomatis saling menghentikan.
+- Estimasi baterai murni dari pembacaan tegangan (bukan fuel-gauge IC beneran) — anggap sebagai perkiraan kasar, bukan angka presisi.
+- `DEMO_KEY` NASA limitnya kecil — kalau sering dipakai, ambil key pribadi (gratis).
+- Endpoint **Mars Rover Photos** dari NASA kadang balas `404` untuk kombinasi sol/rover tertentu — ini keterbatasan di sisi server NASA sendiri, bukan bug aplikasi (sudah ada fallback otomatis ke foto terbaru).
+
+---
+
+## 📄 Lisensi
+
+Belum ditentukan — tambahkan berkas `LICENSE` sesuai kebutuhanmu sebelum membagikan atau menerbitkan ulang proyek ini.
+
+---
+
+<p align="center"><i>Dibangun sepotong demi sepotong, satu bug demi satu bug, sampai jadi "HP" yang beneran bisa dipakai. 🔋📲</i></p>
