@@ -408,50 +408,27 @@ struct VibStep{ uint8_t on; uint16_t ms; };
 // struct-nya (dulu ditaruh deket kode game Labirin, jauh lebih ke bawah).
 struct MazeGhost{ int x,y,prevX,prevY,dirX,dirY; };
 
-// v53 FIX bug "semua fitur ber-API NASA selalu HTTP error -1": -1
-// (HTTPC_ERROR_CONNECTION_REFUSED) di sini bukan krn API key/URL salah,
-// tp krn koneksi TLS (WiFiClientSecure) GAGAL KEBENTUK -- penyebabnya
-// SAMA PERSIS dgn masalah RAM internal yg udah didiagnosis panjang di AI
-// Live (lihat catatan v28/v30/v42 di aiLiveWaitForHeap): RAM internal chip
-// cuma ~162KB, TLS butuh blok kontigu ~20-30KB, dan abis sesi HTTPS
-// sebelumnya ditutup, lwIP/mbedTLS kadang perlu waktu nyata (bbrp ratus
-// ms) sblm beneran ngelepas RAM-nya. AI Live udah dikasih "retry-wait"
-// (aiLiveWaitForHeap) buat ini dr v42, TAPI helper itu cuma dipakai di
-// jalur AI Live -- app2 lain yg bikin WiFiClientSecure sendiri2 blm
-// pernah dikasih guard yg sama, makanya mulai kena stlh app lain
-// (terutama AI Chat/Live) sempat jalan & bikin RAM internal fragmented.
-// Fix: helper yg sama persis logikanya, dipakai di SEMUA titik yg bikin
-// WiFiClientSecure di file ini (NASA/MyMemory/Trivia/dst).
-// v61: definisi DIPINDAH ke sini (paling atas file, dkt SearchBarState/
-// VibStep) -- awalnya ditaruh deket kode NASA, tp krn dipakai jg dr
-// triviaFetchQuestions() yg LETAKNYA lebih awal di file, prototype
-// otomatis arduino-cli gagal ngenalin fungsi ber-default-parameter ini
-// SEBELUM definisi aslinya kebaca (bug yg SAMA PERSIS kayak kasus
-// showToast & MazeGhost sebelumnya). Drpd nebak2 lg titik amannya di
-// mana tiap kali dipake fungsi baru, taruh di paling atas skalian --
-// titik ini PASTI sudah dikenal bagaimanapun cara arduino-cli nyisipin
-// prototype otomatisnya (persis alasan SearchBarState/VibStep di atas).
-size_t nasaWaitForHeap(size_t minBlock=20000, unsigned long maxWaitMs=1500){
-  size_t lb = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
-  unsigned long waitStart=millis();
-  while(lb<minBlock && millis()-waitStart<maxWaitMs){
-    delay(50);
-    lb = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
-  }
-  if(lb<minBlock){
-    Serial.printf("[NASA] largestBlock msh kurang stlh nunggu %lums: %u (butuh >=%u)\n",
-                   millis()-waitStart,(unsigned)lb,(unsigned)minBlock);
-  }
-  return lb;
-}
-// Dipanggil di tiap pesan error "HTTP <code>" -- kalau code==-1
-// (HTTPC_ERROR_CONNECTION_REFUSED), kasih penjelasan yg lebih jelas drpd
-// cuma angka -1 doang. Utk kode lain, kosong (biarin pesan aslinya yg tampil).
-String nasaHttpErrHint(int code){
-  if(code==-1) return " RAM internal HP lagi padat -- coba lagi sebentar (atau tutup app lain dulu).";
-  return "";
-}
-
+// v62 FIX build error massal ("'Theme'/'Orientation'/'Screen'/'NavAnim'/
+// 'Vec3f'/'AiLine'/'TriviaLayout' does not name a type" / "was not declared
+// in this scope", muncul BARENGAN di puluhan baris sekaligus): AKAR MASALAH
+// -- nasaWaitForHeap() & nasaHttpErrHint() (lihat definisinya PERSIS di
+// bawah blok enum/struct ini) adalah fungsi BER-BODY (bukan cuma deklarasi),
+// dan di v61 keduanya sengaja dipindah ke sini, ke atas blok enum Screen/
+// Orientation/NavAnim/struct AiLine/Vec3f/TriviaLayout/Theme yg ada di bawah
+// ini. Akibatnya nasaWaitForHeap() jadi fungsi-BER-BODY PALING AWAL di
+// seluruh file -- dan arduino-cli menyisipkan SATU BLOK prototype otomatis
+// (utk SEMUA fungsi di file, termasuk Theme& T(), Screen curScreen(),
+// Vec3f rot3f(Vec3f,...), dst) TEPAT SEBELUM fungsi-ber-body paling awal itu.
+// Jadi walau enum/struct di bawah ini "sudah dipindah ke atas", posisinya
+// tetap SETELAH nasaWaitForHeap() -- prototype otomatis itu disisipkan
+// SEBELUM semuanya sempat dikenal, persis kasus yg sama yg sudah pernah
+// dibenerin utk AiLine/Vec3f/TriviaLayout/diNotify (v9/v15/v16/v23), cuma
+// kali ini biang keroknya nasaWaitForHeap/nasaHttpErrHint yg gak sengaja
+// "menyalip" ke depan blok tipe ini.
+// FIX: blok enum Screen/Orientation/NavAnim/struct AiLine/Vec3f/
+// TriviaLayout/forward-decl diNotify/struct Theme dipindah ke SINI --
+// SEBELUM nasaWaitForHeap()/nasaHttpErrHint() -- supaya semua tipe sudah
+// dikenal sebelum fungsi-ber-body pertama di file manapun itu berada.
 enum Screen { SCR_HOME, SCR_CLOCK, SCR_CALC, SCR_SENSOR,
               SCR_SETTINGS, SCR_NOTEPAD, SCR_CANVAS, SCR_AICHAT, SCR_FILEEXPLORER,
               SCR_MJPEG, SCR_UPDATE, SCR_BATTERY, SCR_SNAKE, SCR_FLAPPY,
@@ -533,6 +510,56 @@ struct Theme {
   uint16_t bg, surface, surface2, accent, accent2,
            text, subtext, divider, good, danger;
 };
+
+
+// v53 FIX bug "semua fitur ber-API NASA selalu HTTP error -1": -1
+// (HTTPC_ERROR_CONNECTION_REFUSED) di sini bukan krn API key/URL salah,
+// tp krn koneksi TLS (WiFiClientSecure) GAGAL KEBENTUK -- penyebabnya
+// SAMA PERSIS dgn masalah RAM internal yg udah didiagnosis panjang di AI
+// Live (lihat catatan v28/v30/v42 di aiLiveWaitForHeap): RAM internal chip
+// cuma ~162KB, TLS butuh blok kontigu ~20-30KB, dan abis sesi HTTPS
+// sebelumnya ditutup, lwIP/mbedTLS kadang perlu waktu nyata (bbrp ratus
+// ms) sblm beneran ngelepas RAM-nya. AI Live udah dikasih "retry-wait"
+// (aiLiveWaitForHeap) buat ini dr v42, TAPI helper itu cuma dipakai di
+// jalur AI Live -- app2 lain yg bikin WiFiClientSecure sendiri2 blm
+// pernah dikasih guard yg sama, makanya mulai kena stlh app lain
+// (terutama AI Chat/Live) sempat jalan & bikin RAM internal fragmented.
+// Fix: helper yg sama persis logikanya, dipakai di SEMUA titik yg bikin
+// WiFiClientSecure di file ini (NASA/MyMemory/Trivia/dst).
+// v61: definisi dipindah ke dekat SearchBarState/VibStep -- awalnya
+// ditaruh deket kode NASA, tp krn dipakai jg dr triviaFetchQuestions() yg
+// LETAKNYA lebih awal di file, prototype otomatis arduino-cli gagal
+// ngenalin fungsi ber-default-parameter ini SEBELUM definisi aslinya
+// kebaca (bug yg SAMA PERSIS kayak kasus showToast & MazeGhost
+// sebelumnya).
+// v62 CATATAN: pemindahan v61 di atas TERNYATA nimbulin efek samping baru
+// -- fungsi ini (ber-body) jadi fungsi-ber-body PALING AWAL di file,
+// nyalip di depan blok enum Screen/Orientation/NavAnim/struct AiLine/
+// Vec3f/TriviaLayout/Theme (lihat catatan "v62 FIX" lengkap PERSIS di
+// atas enum Screen). Sudah dibenerin dgn mindahin blok tipe itu ke
+// SEBELUM fungsi ini -- fungsi ini sendiri TIDAK perlu dipindah lagi,
+// cukup dipastikan tidak ada lagi tipe custom yg didefinisikan SETELAHNYA.
+size_t nasaWaitForHeap(size_t minBlock=20000, unsigned long maxWaitMs=1500){
+  size_t lb = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
+  unsigned long waitStart=millis();
+  while(lb<minBlock && millis()-waitStart<maxWaitMs){
+    delay(50);
+    lb = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
+  }
+  if(lb<minBlock){
+    Serial.printf("[NASA] largestBlock msh kurang stlh nunggu %lums: %u (butuh >=%u)\n",
+                   millis()-waitStart,(unsigned)lb,(unsigned)minBlock);
+  }
+  return lb;
+}
+// Dipanggil di tiap pesan error "HTTP <code>" -- kalau code==-1
+// (HTTPC_ERROR_CONNECTION_REFUSED), kasih penjelasan yg lebih jelas drpd
+// cuma angka -1 doang. Utk kode lain, kosong (biarin pesan aslinya yg tampil).
+String nasaHttpErrHint(int code){
+  if(code==-1) return " RAM internal HP lagi padat -- coba lagi sebentar (atau tutup app lain dulu).";
+  return "";
+}
+
 // (struct SearchBarState & VibStep: definisi lengkap ada PALING ATAS
 // file, tepat sesudah blok #include -- lihat catatan v23 di sana)
 
