@@ -28,7 +28,7 @@ jobs:
 
           arduino-cli lib install "LovyanGFX"
           arduino-cli lib install "JPEGDEC"
-
+          arduino-cli lib install "lvgl"
           # Coba install dari Library Manager, kalau gagal fallback ke git
           arduino-cli lib install "ESP32-audioI2S-master@3.4.6" || \
             arduino-cli lib install --git-url https://github.com/schreibfaul1/ESP32-audioI2S.git
