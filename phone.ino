@@ -14104,6 +14104,8 @@ void loop(){
         // v86: dipanggil TERUS (termasuk saat !touched) supaya dpad/tombol
         // virtual NES bisa "lepas" pas jari diangkat -- lihat nesInput_touch().
         apps[idx].touch(tx,ty,held,newT);
+        nesWatchdogTick();
+        nesWatchdogTick();
       } else {
         if(newT) apps[idx].touch(tx,ty,false,true);
         else if(touched && held) apps[idx].touch(tx,ty,true,false);
