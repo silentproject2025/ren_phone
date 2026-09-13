@@ -3690,6 +3690,7 @@ void drawInf(LGFX_Sprite&); void infTouch(int,int,bool,bool);
 // nes_video/nes_osd/nes_input/nes_app_renphone.ino terpisah)
 void nesEnter(); void nesExit();
 void drawNes(LGFX_Sprite&); void nesTouch(int,int,bool,bool);
+void nesWatchdogTick();
 
 AppDef apps[27] = {
   { "Jam",        'J', 0, clockEnter,    clockExit,    drawClock,        clockTouch,    SCR_CLOCK },
