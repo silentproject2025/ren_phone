@@ -62,6 +62,16 @@ jobs:
           grep -q "nesExitRequested" build_sketch/src/nofrendo.c || \
             (echo "::error::Patch nesExitRequested gagal diterapkan ke nofrendo.c" && exit 1)
 
+          sed -i '/^void vid_setpalette/,/^}/d' build_sketch/src/vid_drv.c
+
+          grep -q "vid_setpalette" build_sketch/src/vid_drv.c && \
+            (echo "::error::Patch penghapusan vid_setpalette gagal diterapkan ke vid_drv.c" && exit 1)
+
+          grep -rl '\blog_printf\b' build_sketch/src | xargs -r sed -i 's/\blog_printf\b/nof_log_printf/g'
+
+          grep -rq '\blog_printf\b' build_sketch/src/log.c && \
+            (echo "::error::Patch rename log_printf gagal diterapkan" && exit 1)
+
           NOF_INCLUDE="$(pwd)/build_sketch/src"
 
           arduino-cli compile --fqbn esp32:esp32:esp32s3 \
