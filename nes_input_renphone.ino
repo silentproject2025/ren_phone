@@ -80,7 +80,6 @@ extern "C" void osd_getinput(void) {
   // di thread/task yg SAMA dgn nes_emulate() (bukan dari luar/thread
   // lain), jadi gak ada race condition dgn struktur internal NES.
   if (nesExitRequested) {
-    extern "C" void nes_poweroff(void);
     nes_poweroff();
   }
 

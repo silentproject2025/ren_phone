@@ -1,12 +1,3 @@
-// =================================================================
-// nes_protos_renphone.ino
-// FIX bug Arduino IDE: auto-generate prototype buat fungsi extern "C"
-// kita salah linkage (dibuat versi C++ biasa, padahal harusnya C),
-// bentrok sama prototype asli di header nofrendo. Kita kasih tau
-// prototype yang BENAR di sini duluan, biar Arduino nggak bikin
-// sendiri yang salah.
-// =================================================================
-
 extern "C" {
   struct rgb_s;     typedef struct rgb_s rgb_t;
   struct vidinfo_s; typedef struct vidinfo_s vidinfo_t;
@@ -24,6 +15,7 @@ extern "C" {
   int  osd_makesnapname(char *filename, int len);
   int  osd_nofrendo_ticks(void);
   const char *osd_getromdata(const char *name);
-  void osd_unloadromdata(void);
-  void ppu_scanline_blit(unsigned char *bmp, int scanline, bool draw_flag);
+  void osd_unloadromdata();
+  void ppu_scanline_blit(uint8_t *bmp, int scanline, bool draw_flag);
+  void nes_poweroff(void);
 }
