@@ -340,6 +340,9 @@ void vid_flush(void)
 
    ASSERT(driver);
 
+   if (NULL == driver->lock_write && NULL == driver->custom_blit)
+      return;
+
    if (true == driver->invalidate)
    {
       driver->invalidate = false;
@@ -391,7 +394,7 @@ int vid_setmode(int width, int height)
 
 static int vid_findmode(int width, int height, viddriver_t *osd_driver)
 {
-   if (osd_driver->init(width, height))
+   if (osd_driver->init && osd_driver->init(width, height))
    {
       driver = NULL;
       return -1; /* mode not available! */
@@ -400,21 +403,21 @@ static int vid_findmode(int width, int height, viddriver_t *osd_driver)
    /* we got our driver */
    driver = osd_driver;
 
-   /* re-assert dimensions, clear the surface */
-   screen = driver->lock_write();
+   /* re-assert dimensions, clear the surface -- lock_write jg opsional,
+      screen bisa tetap NULL kalau driver gak menyediakannya */
+   screen = driver->lock_write ? driver->lock_write() : NULL;
 
    /* use custom pageclear, if necessary */
    if (driver->clear)
       driver->clear(GUI_BLACK);
-   else
+   else if (NULL != screen)
       bmp_clear(screen, GUI_BLACK);
 
    /* release surface */
    if (driver->free_write)
       driver->free_write(-1, NULL);
 
-   log_printf("video driver: %s at %dx%d\n", driver->name,
-              screen->width, screen->height);
+   log_printf("video driver: %s at %dx%d\n", driver->name, width, height);
 
    return 0;
 }
