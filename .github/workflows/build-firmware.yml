@@ -46,7 +46,7 @@ jobs:
           cp nes_osd_renphone.ino    build_sketch/
           cp nes_input_renphone.ino  build_sketch/
           cp nes_app_renphone.ino    build_sketch/
-          cp nes_protos_renphone.ino build_sketch/
+          cp nes_0_protos_renphone.ino build_sketch/
 
           mkdir -p build_sketch/src
           find nofrendo_core \( -name "*.c" -o -name "*.h" \) \
