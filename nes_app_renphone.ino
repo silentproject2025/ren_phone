@@ -8,6 +8,15 @@
 extern "C" {
   #include <nofrendo.h>
 }
+extern char nesRomPath[160];
+
+// FIX: nesRomPath didefinisikan di nes_osd_renphone.ino, tapi file itu
+// baru ke-compile SETELAH file ini (urutan alfabetis Arduino) -- jadi
+// perlu di-extern-in di sini biar kekenal duluan.
+
+// FIX: nesRomPath didefinisikan di nes_osd_renphone.ino, tapi file itu
+// baru ke-compile SETELAH file ini (urutan alfabetis Arduino) -- jadi
+// perlu di-extern-in di sini biar kekenal duluan.
 
 static TaskHandle_t nesTaskHandle = nullptr;
 static volatile bool nesTaskRunning = false;
