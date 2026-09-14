@@ -77,6 +77,16 @@ static void nesTaskFn(void *param) {
   vTaskDelete(nullptr);
 }
 
+// FIX crash: 12KB stack terlalu mepet buat emulator CPU+PPU+mapper NES
+// (rantai pemanggilannya lumayan dalam) -- gampang stack-overflow &
+// bikin ESP32 crash/reset random. Dinaikin ke 48KB, dan DITARUH DI
+// PSRAM (bukan internal RAM) via xTaskCreateStaticPinnedToCore, biar
+// gak rebutan sama canvas/canvasApp/transShot punya UI Ren Phone yang
+// udah makan internal RAM lumayan banyak.
+#define NES_TASK_STACK_BYTES (48 * 1024)
+static StackType_t *nesTaskStack = nullptr;
+static StaticTask_t nesTaskTCB;
+
 // Nyalain task emulator utk ROM yg SUDAH dipilih & diisi ke nesRomPath.
 static void nesStartGame(){
   nesVideo_begin();  // buka transaksi SPI + bersihkan layar
@@ -87,9 +97,21 @@ static void nesStartGame(){
   nesTaskRunning = true;
   nesTaskEverStarted = true;
 
+  if (!nesTaskStack) {
+    nesTaskStack = (StackType_t*) heap_caps_malloc(NES_TASK_STACK_BYTES, MALLOC_CAP_SPIRAM);
+  }
+  if (!nesTaskStack) {
+    // PSRAM gagal dialokasi (harusnya gak terjadi di N16R8) -- fallback
+    // ke internal RAM drpd nge-crash total krn stack null.
+    xTaskCreatePinnedToCore(nesTaskFn, "nofrendo", NES_TASK_STACK_BYTES,
+                             nullptr, 1, &nesTaskHandle, 1);
+    return;
+  }
+
   // Pin ke core 1 (UI/touch Ren Phone tetap jalan bebas di core 0).
-  xTaskCreatePinnedToCore(nesTaskFn, "nofrendo", 12288, nullptr, 1,
-                           &nesTaskHandle, 1);
+  nesTaskHandle = xTaskCreateStaticPinnedToCore(
+      nesTaskFn, "nofrendo", NES_TASK_STACK_BYTES, nullptr, 1,
+      nesTaskStack, &nesTaskTCB, 1);
 }
 
 void nesEnter() {
