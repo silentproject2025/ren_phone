@@ -1,53 +1,71 @@
 // =================================================================
 // nes_app_renphone.ino
-// "App" SCR_NES itu sendiri: nyalain/matiin task emulator, dan 3 fungsi
-// standar (nesEnter/nesExit/drawNes/nesTouch) pola SAMA PERSIS kayak
-// Snake/Flappy/dkk di firmware kamu.
+// "App" SCR_NES: scan ROM .nes di root SD card, biarin user pilih dari
+// list (bukan 1 path hardcode), baru nyalain task emulator.
 // =================================================================
 
 extern "C" {
   #include <nofrendo.h>
 }
+
+// FIX: nesRomPath didefinisikan di nes_osd_renphone.ino, tapi file itu
+// baru ke-compile SETELAH file ini (urutan alfabetis Arduino) -- jadi
+// perlu di-extern-in di sini biar kekenal duluan.
 extern char nesRomPath[160];
-
-// FIX: nesRomPath didefinisikan di nes_osd_renphone.ino, tapi file itu
-// baru ke-compile SETELAH file ini (urutan alfabetis Arduino) -- jadi
-// perlu di-extern-in di sini biar kekenal duluan.
-
-// FIX: nesRomPath didefinisikan di nes_osd_renphone.ino, tapi file itu
-// baru ke-compile SETELAH file ini (urutan alfabetis Arduino) -- jadi
-// perlu di-extern-in di sini biar kekenal duluan.
 
 static TaskHandle_t nesTaskHandle = nullptr;
 static volatile bool nesTaskRunning = false;
 
-// FIX v87 (bug: layar nyangkut selamanya di "Memuat NES..."): dulu
-// nesEnter() langsung nyalain task tanpa ngecek ROM-nya ada apa nggak.
-// Kalau file gak ketemu/SD belum siap, task-nya mati DIAM-DIAM (cuma
-// log_printf ke Serial) begitu balik dari main_loop() -- tapi layar
-// gak pernah digambar ulang (drawNes cuma sekali) jadi teks loading-nya
-// nyangkut selamanya, padahal ESP32-nya sendiri baik2 aja (makanya
-// neopixel dkk tetap jalan normal).
-//
-// nesRomError/nesRomErrorMsg: dicek DULU sebelum task dinyalain.
-// nesTaskEverStarted: dicek tiap frame lewat nesWatchdogTick() (dipanggil
-// dari loop utama di phone.ino) -- kalau task SEMPAT jalan tapi lalu mati
-// sendiri (ROM corrupt/mapper gak didukung/RAM kurang di tengah jalan),
-// ini yg narik kita otomatis balik ke Home drpd nyangkut selamanya lagi.
+// FIX v87 (bug: layar nyangkut selamanya di "Memuat NES..."): cek
+// dulu ROM-nya ada apa nggak SEBELUM nyalain task, drpd task mati
+// diam2 & layar nyangkut selamanya tanpa pesan apa2.
 static bool nesRomError = false;
 static String nesRomErrorMsg = "";
 static bool nesTaskEverStarted = false;
 // nesVideoActive: nesVideo_end() cuma boleh dipanggil kalau nesVideo_begin()
-// beneran kepanggil duluan (kalau nesEnter() gagal di pre-check ROM, transaksi
-// SPI-nya belum dibuka sama sekali -- endWrite() tanpa startWrite() bisa bikin
-// state SPI berantakan).
+// beneran kepanggil duluan.
 static bool nesVideoActive = false;
+
+// v88: ROM PICKER -- scan ROOT SD card, list semua *.nes yg ketemu,
+// biar user bisa pilih ROM apa aja tanpa perlu isi 1 nama file hardcode.
+#define NES_MAX_ROMS 40
+static String nesRomList[NES_MAX_ROMS];
+static int    nesRomCount  = 0;
+static int    nesListPage  = 0;
+static bool   nesShowingPicker = true;
+static const int NES_ITEMS_PER_PAGE = 5;
 
 // Dicek tiap frame di osd_getinput() (nes_input_renphone.ino) -- itu
 // yg beneran manggil nes_poweroff() supaya loop emulasi berhenti aman
 // (dari THREAD/TASK yg sama dgn emulator, bukan dari luar -- penting
 // biar gak race condition).
 volatile bool nesExitRequested = false;
+
+// Scan ROOT SD card (bukan subfolder) cari semua file *.nes.
+// Pola SAMA PERSIS kayak scanSdFiles() punya File Explorer kamu, biar
+// konsisten cara SD_MMC.open()-nya (pakai "/" + nama file, BUKAN
+// "/sdcard/..." -- SD_MMC di ESP32 udah otomatis anggap "/" = root SD,
+// gak perlu prefix mountpoint lagi).
+static void nesScanRoms(){
+  nesRomCount = 0;
+  if(!sdReady) return;
+  File root = SD_MMC.open("/");
+  if(!root || !root.isDirectory()){ if(root) root.close(); return; }
+  File f = root.openNextFile();
+  while(f && nesRomCount < NES_MAX_ROMS){
+    if(!f.isDirectory()){
+      String name = String(f.name());
+      int slashIdx = name.lastIndexOf('/');
+      if(slashIdx >= 0) name = name.substring(slashIdx+1);
+      String lower = name; lower.toLowerCase();
+      if(lower.endsWith(".nes")){
+        nesRomList[nesRomCount++] = name;
+      }
+    }
+    f = root.openNextFile();
+  }
+  root.close();
+}
 
 // Task terpisah -- WAJIB, karena nofrendo_main() itu BLOCKING (baru
 // return kalau game beneran keluar), jadi gak boleh dipanggil langsung
@@ -59,36 +77,13 @@ static void nesTaskFn(void *param) {
   vTaskDelete(nullptr);
 }
 
-void nesEnter() {
-  // nesRomPath (di nes_osd_renphone.ino) HARUS sudah diisi SEBELUM ini
-  // -- misal dari hasil pilih file di File Explorer kamu. Untuk testing
-  // awal, biarin default "/sdcard/roms/game.nes" dulu.
-  nesRomError = false;
-  nesTaskEverStarted = false;
-
-  // FIX v87: cek dulu SD siap & filenya BENERAN ada, sebelum nyalain apa2.
-  // Kalau enggak, jangan buka transaksi video / nyalain task sama sekali --
-  // cukup tampilkan pesan error yg jelas di drawNes() (lihat di bawah).
-  if (!sdReady) {
-    nesRomError = true;
-    nesRomErrorMsg = "SD card belum siap/gak kedetek.";
-    return;
-  }
-  if (!SD_MMC.exists(nesRomPath)) {
-    nesRomError = true;
-    nesRomErrorMsg = String("File ROM gak ketemu:\n") + nesRomPath +
-                     "\n\nCopy dulu file .nes ke path ini lewat Files, "
-                     "atau pilih ROM lain di File Explorer.";
-    return;
-  }
-
-  nesVideo_begin();  // buka transaksi SPI + bersihkan layar (lihat file video)
+// Nyalain task emulator utk ROM yg SUDAH dipilih & diisi ke nesRomPath.
+static void nesStartGame(){
+  nesVideo_begin();  // buka transaksi SPI + bersihkan layar
   nesVideoActive = true;
 
   // Set true DI SINI (bukan cuma di dalam nesTaskFn) supaya gak ada celah
-  // race: kalau nesWatchdogTick() sempat jalan tepat sesudah task dibuat
-  // tapi SEBELUM baris pertama nesTaskFn() sempat dieksekusi, dia gak boleh
-  // salah kira task-nya udah mati.
+  // race dgn nesWatchdogTick() yg jalan tiap frame.
   nesTaskRunning = true;
   nesTaskEverStarted = true;
 
@@ -97,16 +92,37 @@ void nesEnter() {
                            &nesTaskHandle, 1);
 }
 
+void nesEnter() {
+  nesRomError = false;
+  nesShowingPicker = true;
+  nesTaskEverStarted = false;
+  nesListPage = 0;
+
+  if (!sdReady) {
+    nesRomError = true;
+    nesShowingPicker = false;
+    nesRomErrorMsg = "SD card belum siap/gak kedetek.";
+    return;
+  }
+
+  nesScanRoms();
+  if (nesRomCount == 0) {
+    nesRomError = true;
+    nesShowingPicker = false;
+    nesRomErrorMsg = "Gak ada file .nes ditemukan di root SD card.\n\n"
+                      "Copy ROM .nes ke root SD card (bukan di dalam "
+                      "folder), terus buka lagi app NES ini.";
+    return;
+  }
+  // nesShowingPicker tetap true -> layar list ROM digambar di drawNes(),
+  // task emulator BARU dinyalain sesudah user tap salah satu di nesTouch().
+}
+
 void nesExit() {
   // CATATAN JUJUR: nofrendo_main() aslinya didesain jalan sampai user
-  // "quit" dari dalam game itu sendiri (lewat event_quit), bukan
-  // di-interupsi dari luar dgn aman. Utk keluar bersih ke Home tanpa
-  // reboot, kamu perlu tambahan KECIL di file nofrendo.c milik core:
-  // di dalam main_loop(), ubah kondisi while-nya jadi juga mengecek
-  // flag ini:
-  //     extern volatile bool nesExitRequested;
-  //     while (false == console.quit && !nesExitRequested) { ... }
-  // (satu baris tambahan -- lihat penjelasan lengkap di chat)
+  // "quit" dari dalam game itu sendiri, bukan di-interupsi dari luar
+  // dgn aman. Flag nesExitRequested ini dicek lewat patch 1-baris di
+  // nofrendo.c (sudah otomatis diterapkan CI build, lihat workflow).
   extern volatile bool nesExitRequested;
   nesExitRequested = true;
 
@@ -115,22 +131,21 @@ void nesExit() {
   int waitMs = 0;
   while (nesTaskRunning && waitMs < 2000) { delay(10); waitMs += 10; }
 
-  // FIX v87: jangan endWrite() kalau belum pernah startWrite() (kasus
-  // nesEnter() gagal di pre-check ROM & langsung return lebih awal).
+  // Jangan endWrite() kalau belum pernah startWrite() (kasus keluar dari
+  // layar picker/error sebelum game sempat dinyalain sama sekali).
   if (nesVideoActive) {
     nesVideo_end();
     nesVideoActive = false;
   }
   nesExitRequested = false; // reset buat sesi main berikutnya
   nesTaskEverStarted = false;
+  nesShowingPicker = true; // balik lagi ke layar list kalau masuk NES lagi
 }
 
-// FIX v87: dipanggil TIAP FRAME dari loop utama (phone.ino) selagi
-// curScreen()==SCR_NES -- ini "jaring pengaman" kalau task nofrendo
-// SEMPAT jalan normal tapi lalu mati sendiri di tengah jalan (ROM
-// corrupt, mapper gak didukung, RAM abis pas alokasi ROM gede, dll).
-// Tanpa ini, layar bakal nyangkut lagi persis kayak bug awal -- cuma
-// bedanya sempat kelihatan game jalan sebentar dulu.
+// Dipanggil TIAP FRAME dari loop utama (phone.ino) selagi curScreen()==
+// SCR_NES -- jaring pengaman kalau task nofrendo SEMPAT jalan normal tapi
+// lalu mati sendiri di tengah jalan (ROM corrupt, mapper gak didukung,
+// RAM abis, dll). Otomatis balik ke Home drpd nyangkut selamanya.
 void nesWatchdogTick() {
   if (nesTaskEverStarted && !nesTaskRunning) {
     nesTaskEverStarted = false; // biar cuma trigger sekali
@@ -138,14 +153,9 @@ void nesWatchdogTick() {
   }
 }
 
-// drawNes(): pas kondisi normal cuma kepanggil SEKALI pas transisi
-// Home->NES (sebelum task emulator jalan & ambil alih layar langsung) --
-// jadi cukup buat layar "Memuat..." simpel, gak perlu dianimasikan.
-// Kalau ROM gagal dimuat (nesRomError), fungsi ini malah TERUS dipanggil
-// ulang tiap frame (task emulatornya emang gak pernah dinyalain), jadi
-// aman dipakai buat layar error + tombol kembali.
 void drawNes(LGFX_Sprite& s) {
   s.fillScreen(TFT_BLACK);
+
   if (nesRomError) {
     s.setTextColor(TFT_RED); s.setTextSize(1);
     s.setCursor(8, STATUS_H + 20); s.print("Gagal membuka NES:");
@@ -155,9 +165,43 @@ void drawNes(LGFX_Sprite& s) {
       s.setTextColor(TFT_WHITE); s.setCursor(8, STATUS_H + 36 + i * 11);
       s.print(aiLinesBuf[i].text.c_str());
     }
-    drawBack(s); // ketuk pojok back utk kembali ke Home (lihat nesTouch)
+    drawBack(s); // ketuk pojok back utk kembali ke Home
     return;
   }
+
+  if (nesShowingPicker) {
+    s.setTextColor(T().accent); s.setTextSize(1);
+    s.setCursor(8, 26); s.print("Pilih ROM NES");
+
+    int listY = 44, itemH = 26;
+    int startIdx = nesListPage * NES_ITEMS_PER_PAGE;
+    for (int i = 0; i < NES_ITEMS_PER_PAGE && (startIdx + i) < nesRomCount; i++) {
+      int idx = startIdx + i;
+      int itemY = listY + i * (itemH + 4);
+      s.fillRoundRect(4, itemY, SCR_W - 8, itemH, 6, T().surface);
+      s.setTextColor(T().accent2); s.setCursor(10, itemY + 8); s.print("[N]");
+      s.setTextColor(T().text); s.setCursor(32, itemY + 8);
+      String fn = nesRomList[idx];
+      if (fn.length() > 22) fn = fn.substring(0, 20) + "..";
+      s.print(fn.c_str());
+    }
+
+    int pageY = backY() - 2;
+    if (nesListPage > 0) {
+      s.fillRoundRect(SCR_W - 120, pageY, 54, 22, 4, T().surface2);
+      s.setTextColor(T().text); s.setCursor(SCR_W - 110, pageY + 6); s.print("< Prev");
+    }
+    if ((nesListPage + 1) * NES_ITEMS_PER_PAGE < nesRomCount) {
+      s.fillRoundRect(SCR_W - 60, pageY, 54, 22, 4, T().surface2);
+      s.setTextColor(T().text); s.setCursor(SCR_W - 52, pageY + 6); s.print("Next >");
+    }
+
+    drawBack(s);
+    return;
+  }
+
+  // Cuma kelihatan sekejap pas transisi list->game, sebelum task emulator
+  // ambil alih layar langsung lewat SPI.
   s.setTextColor(TFT_WHITE); s.setTextSize(2);
   s.setCursor(SCR_W/2-60, SCR_H/2-10);
   s.print("Memuat NES...");
@@ -168,5 +212,36 @@ void nesTouch(int tx, int ty, bool held, bool newT) {
     if (newT && isBack(tx, ty)) { navBack(); }
     return;
   }
+
+  if (nesShowingPicker) {
+    if (!newT) return;
+    if (isBack(tx, ty)) { navBack(); return; }
+
+    int listY = 44, itemH = 26;
+    int startIdx = nesListPage * NES_ITEMS_PER_PAGE;
+    for (int i = 0; i < NES_ITEMS_PER_PAGE && (startIdx + i) < nesRomCount; i++) {
+      int idx = startIdx + i;
+      int itemY = listY + i * (itemH + 4);
+      if (tx >= 4 && tx <= SCR_W - 4 && ty >= itemY && ty <= itemY + itemH) {
+        String fn = nesRomList[idx];
+        if (!fn.startsWith("/")) fn = "/" + fn;
+        fn.toCharArray(nesRomPath, sizeof(nesRomPath));
+        nesShowingPicker = false;
+        needRedraw = true;
+        nesStartGame();
+        return;
+      }
+    }
+
+    int pageY = backY() - 2;
+    if (nesListPage > 0 && tx >= SCR_W-120 && tx <= SCR_W-66 && ty >= pageY) {
+      nesListPage--; needRedraw = true; return;
+    }
+    if ((nesListPage+1) * NES_ITEMS_PER_PAGE < nesRomCount && tx >= SCR_W-60 && tx <= SCR_W-6 && ty >= pageY) {
+      nesListPage++; needRedraw = true; return;
+    }
+    return;
+  }
+
   nesInput_touch(tx, ty, held, newT);
 }
