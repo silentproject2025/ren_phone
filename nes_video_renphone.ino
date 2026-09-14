@@ -50,9 +50,9 @@ static uint16_t nesPalette[256];
 extern "C" void vid_setpalette(rgb_t *pal) {
   for (int i = 0; i < 256; i++) {
     // format RGB565: 5 bit merah, 6 bit hijau, 5 bit biru
-    nesPalette[i] = ((pal[i].r & 0xF8) << 8) |
+    nesPalette[i] = ((pal[i].b & 0xF8) << 8) |
                     ((pal[i].g & 0xFC) << 3) |
-                    ((pal[i].b) >> 3);
+                    ((pal[i].r) >> 3);
   }
 }
 
