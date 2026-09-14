@@ -49,7 +49,11 @@ static uint16_t nesPalette[256];
 
 extern "C" void vid_setpalette(rgb_t *pal) {
   for (int i = 0; i < 256; i++) {
-    // format RGB565: 5 bit merah, 6 bit hijau, 5 bit biru
+    // format 565, tapi channel R & B DITUKAR: panel kamu dikonfig
+    // cfg.rgb_order=false (BGR) di LGFX config phone.ino. Fungsi
+    // tinggi kayak fillRect()/canvas.pushSprite() otomatis nyesuaiin
+    // urutan ini, tapi pushImage() buffer mentah kayak di bawah TIDAK
+    // -- makanya warnanya kebalik cuma di NES doang.
     nesPalette[i] = ((pal[i].b & 0xF8) << 8) |
                     ((pal[i].g & 0xFC) << 3) |
                     ((pal[i].r) >> 3);
@@ -132,5 +136,11 @@ extern "C" void ppu_scanline_blit(uint8_t *bmp, int scanline, bool draw_flag) {
   // juga gak nambah overhead di 223 baris lainnya.
   if (scanline == NES_VISIBLE_HEIGHT - 1) {
     nesOverlay_afterFrame();
+    // FIX crash: main_loop() nofrendo gak pernah vTaskDelay/yield --
+    // kalau dibiarin, idle task core 1 gak kebagian jatah CPU sama
+    // sekali & Task Watchdog Timer bakal panic/reset seluruh ESP32.
+    // 1 tick di sini (sekali per FRAME, bukan per scanline) cukup buat
+    // "ngasih napas" ke scheduler tanpa kerasa nge-lag gamenya.
+    vTaskDelay(1);
   }
 }
