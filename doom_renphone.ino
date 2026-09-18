@@ -34,6 +34,7 @@
 // =================================================================
 
 #include <DoomGlue.h>
+#include "hw_conf.h"
 extern "C" {
 #include <doomgeneric_fs.h>
 }
