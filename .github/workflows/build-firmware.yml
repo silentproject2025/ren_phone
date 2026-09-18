@@ -1,0 +1,95 @@
+name: Build Firmware Binaries
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Arduino CLI
+        uses: arduino/setup-arduino-cli@v2
+
+      - name: Update Board Manager and Install Core & Libraries
+        run: |
+          arduino-cli config init --overwrite
+          arduino-cli config set board_manager.additional_urls https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
+          arduino-cli config set library.enable_unsafe_install true
+          arduino-cli core update-index
+          arduino-cli core install esp32:esp32
+
+          arduino-cli lib install "LovyanGFX"
+          arduino-cli lib install "JPEGDEC"
+          arduino-cli lib install "lvgl"
+          arduino-cli lib install "ESP32-audioI2S-master@3.4.6" || \
+            arduino-cli lib install --git-url https://github.com/schreibfaul1/ESP32-audioI2S.git
+
+      - name: Compile Sketch
+        run: |
+          mkdir -p build_sketch
+          cp phone.ino build_sketch/
+          cp MjpegClass.h build_sketch/
+          cp phone_notif_center.ino build_sketch/
+          mv build_sketch/phone.ino build_sketch/build_sketch.ino
+
+          cp nes_video_renphone.ino  build_sketch/
+          cp nes_osd_renphone.ino    build_sketch/
+          cp nes_input_renphone.ino  build_sketch/
+          cp nes_app_renphone.ino    build_sketch/
+          cp nes_0_protos_renphone.ino build_sketch/
+
+          # ---- App DOOM (lib ESP-DOOM, divendor di esp_doom_core/) ----
+          cp doom_renphone.ino build_sketch/
+          cp hw_conf.h         build_sketch/
+
+          mkdir -p build_sketch/src
+          find nofrendo_core \( -name "*.c" -o -name "*.h" \) \
+            ! -name "main.c" ! -name "display.c" ! -name "keyboard.c" \
+            ! -name "osd.c" ! -name "timing.c" ! -name "sound.c" \
+            ! -name "stubs.c" \
+            -exec cp {} build_sketch/src/ \;
+
+          find esp_doom_core \( -name "*.c" -o -name "*.cpp" -o -name "*.h" \) \
+            -exec cp {} build_sketch/src/ \;
+
+          grep -q "DoomGlue_Begin" build_sketch/src/DoomGlue.cpp || \
+            (echo "::error::esp_doom_core tidak lengkap -- DoomGlue.cpp tidak ketemu di build_sketch/src" && exit 1)
+
+          sed -i \
+            's/while (false == console\.quit)/extern volatile bool nesExitRequested;\n while (false == console.quit \&\& !nesExitRequested)/' \
+            build_sketch/src/nofrendo.c
+
+          grep -q "nesExitRequested" build_sketch/src/nofrendo.c || \
+            (echo "::error::Patch nesExitRequested gagal diterapkan ke nofrendo.c" && exit 1)
+
+          sed -i '/^void vid_setpalette/,/^}/d' build_sketch/src/vid_drv.c
+
+          grep -q "vid_setpalette" build_sketch/src/vid_drv.c && \
+            (echo "::error::Patch penghapusan vid_setpalette gagal diterapkan ke vid_drv.c" && exit 1)
+
+          grep -rl '\blog_printf\b' build_sketch/src | xargs -r sed -i 's/\blog_printf\b/nof_log_printf/g'
+
+          grep -rq '\blog_printf\b' build_sketch/src/log.c && \
+            (echo "::error::Patch rename log_printf gagal diterapkan" && exit 1)
+
+          NOF_INCLUDE="$(pwd)/build_sketch/src"
+
+          arduino-cli compile --fqbn esp32:esp32:esp32s3 \
+            --board-options "FlashSize=16M,PSRAM=opi,PartitionScheme=app3M_fat9M_16MB" \
+            --build-property "compiler.cpp.extra_flags=-DCONFIG_MBEDTLS_DYNAMIC_BUFFER=1 -DCONFIG_MBEDTLS_ASYMMETRIC_CONTENT_LEN=1 -DCONFIG_MBEDTLS_SSL_IN_CONTENT_LEN=4096 -DCONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN=2048 -I${NOF_INCLUDE}" \
+            --build-property "compiler.c.extra_flags=-I${NOF_INCLUDE}" \
+            build_sketch --output-dir build
+
+      - name: Upload Binary Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: esp32-firmware-binaries
+          path: build/*.bin
