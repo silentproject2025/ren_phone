@@ -53,7 +53,11 @@ static const char *player_colors[] =
 
 // Array of end-of-level statistics that have been captured.
 
-#define MAX_CAPTURES 32
+// DRAM fix: dulu 32 -> captured_stats[] = ~6.4 KB di DRAM internal. Array ini
+// cuma terisi kalau DOOM dijalankan dgn parameter "-statdump" (guard di
+// StatCopy() ngecek num_captured_stats < MAX_CAPTURES), yg tidak pernah
+// dipakai di firmware ini -> cukup 1 slot.
+#define MAX_CAPTURES 1
 static wbstartstruct_t captured_stats[MAX_CAPTURES];
 static int num_captured_stats = 0;
 

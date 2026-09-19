@@ -20,12 +20,14 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 // Data.
 #include "sounds.h"
 #include "m_fixed.h"
 
 #include "info.h"
+#include "DoomExtraRam.h"
 
 #include "p_mobj.h"
 
@@ -124,7 +126,10 @@ void A_SpawnFly();
 void A_BrainExplode();
 
 
-state_t	states[NUMSTATES] = {
+// DRAM fix: tabel asli dipindah jadi const (masuk flash/rodata), salinan yg
+// bisa diubah (G_InitNew ngubah states[].tics & mobjinfo[].speed utk mode
+// nightmare/fast) dibuat di PSRAM lewat Info_InitPsram().
+static const state_t states_rom[NUMSTATES] = {
     {SPR_TROO,0,-1,{NULL},S_NULL,0,0},	// S_NULL
     {SPR_SHTG,4,0,{A_Light0},S_NULL,0,0},	// S_LIGHTDONE
     {SPR_PUNG,0,1,{A_WeaponReady},S_PUNCH,0,0},	// S_PUNCH
@@ -1095,7 +1100,7 @@ state_t	states[NUMSTATES] = {
 };
 
 
-mobjinfo_t mobjinfo[NUMMOBJTYPES] = {
+static const mobjinfo_t mobjinfo_rom[NUMMOBJTYPES] = {
 
     {		// MT_PLAYER
 	-1,		// doomednum
@@ -4660,3 +4665,22 @@ mobjinfo_t mobjinfo[NUMMOBJTYPES] = {
     }
 };
 
+
+// -----------------------------------------------------------------
+// DRAM fix: states[] (~27 KB) & mobjinfo[] (~12.6 KB) dulu array global
+// ber-inisialisasi (.data -> makan DRAM internal). Sekarang cuma pointer;
+// isinya disalin dari tabel const di atas ke PSRAM. Dipanggil dari
+// DoomExtraRam_Init() (<- Z_Init) SEBELUM ada kode yg baca states/mobjinfo.
+// Disalin ulang tiap sesi DOOM supaya modifikasi nightmare/fast dari sesi
+// sebelumnya tidak bocor ke sesi berikutnya.
+// -----------------------------------------------------------------
+state_t*     states   = NULL;
+mobjinfo_t*  mobjinfo = NULL;
+
+void Info_InitPsram(void)
+{
+    if (!states)   states   = (state_t*)   DoomExtraRam_Alloc(sizeof(states_rom));
+    if (!mobjinfo) mobjinfo = (mobjinfo_t*) DoomExtraRam_Alloc(sizeof(mobjinfo_rom));
+    memcpy(states,   states_rom,   sizeof(states_rom));
+    memcpy(mobjinfo, mobjinfo_rom, sizeof(mobjinfo_rom));
+}

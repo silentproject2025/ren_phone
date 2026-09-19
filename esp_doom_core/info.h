@@ -1153,7 +1153,9 @@ typedef struct
     int misc2;
 } state_t;
 
-extern state_t	states[NUMSTATES];
+// DRAM fix: pointer ke salinan di PSRAM (lihat Info_InitPsram() di info.c)
+extern state_t*	states;
+void Info_InitPsram(void);
 extern char *sprnames[];
 
 typedef enum {
@@ -1326,6 +1328,6 @@ typedef struct
 
 } mobjinfo_t;
 
-extern mobjinfo_t mobjinfo[NUMMOBJTYPES];
+extern mobjinfo_t* mobjinfo;
 
 #endif

@@ -64,6 +64,9 @@ void TryRunTics (void);
 // Called at start of game loop to initialize timers
 void D_StartGameLoop(void);
 
+// DRAM fix: alokasi ticdata[] di PSRAM (dipanggil dari DoomExtraRam_Init)
+void D_LoopInitPsram(void);
+
 // Initialize networking code and connect to server.
 
 doom_boolean D_InitNetGame(net_connect_data_t *connect_data);

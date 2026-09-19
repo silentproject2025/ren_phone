@@ -66,9 +66,14 @@ extern int		loopcount;
 #define MAXLIGHTZ	       128
 #define LIGHTZSHIFT		20
 
-extern lighttable_t*	scalelight[LIGHTLEVELS][MAXLIGHTSCALE];
-extern lighttable_t*	scalelightfixed[MAXLIGHTSCALE];
-extern lighttable_t*	zlight[LIGHTLEVELS][MAXLIGHTZ];
+// DRAM fix: 3 tabel di bawah dulu array global (~11.4 KB DRAM internal).
+// Sekarang pointer ke blok PSRAM (dialokasi di R_LightTablesInitPsram(),
+// dipanggil dari DoomExtraRam_Init). Sintaks pemakaian (scalelight[i][j],
+// planezlight = zlight[i], dst) TIDAK berubah.
+extern lighttable_t*	(*scalelight)[MAXLIGHTSCALE];
+extern lighttable_t**	scalelightfixed;
+extern lighttable_t*	(*zlight)[MAXLIGHTZ];
+void R_LightTablesInitPsram(void);
 
 extern int		extralight;
 extern lighttable_t*	fixedcolormap;

@@ -1,6 +1,7 @@
 // Buffer render DOOM yang tadinya static array di RAM internal,
 // sekarang dialokasikan ke PSRAM sekali di awal (dipanggil dari Z_Init).
 #include <stddef.h>
+#include <string.h>
 #include "esp_heap_caps.h"
 #include "doomtype.h"
 #include "m_fixed.h"
@@ -10,6 +11,9 @@
 #include "r_draw.h"
 #include "r_state.h"
 #include "r_things.h"
+#include "r_main.h"
+#include "info.h"
+#include "d_loop.h"
 #include "DoomExtraRam.h"
 
 // Harus sama dengan MAXWIDTH/MAXHEIGHT di r_draw.c
@@ -26,8 +30,20 @@ static void *AllocPsram(size_t n)
     return p;
 }
 
+void *DoomExtraRam_Alloc(size_t n)
+{
+    void *p = AllocPsram(n);
+    if (p) memset(p, 0, n);
+    return p;
+}
+
 void DoomExtraRam_Init(void)
 {
+    // Tabel besar yg dulu di DRAM internal (fix "region dram0_0_seg overflowed")
+    Info_InitPsram();         // states[] + mobjinfo[]  (~39.7 KB)
+    D_LoopInitPsram();        // ticdata[]              (~20.5 KB)
+    R_LightTablesInitPsram(); // scalelight/zlight      (~11.5 KB)
+
     floorclip        = (short*)   AllocPsram(SCREENWIDTH  * sizeof(short));
     ceilingclip      = (short*)   AllocPsram(SCREENWIDTH  * sizeof(short));
     spanstart        = (int*)     AllocPsram(SCREENHEIGHT * sizeof(int));

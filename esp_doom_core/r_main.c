@@ -34,6 +34,7 @@
 
 #include "r_local.h"
 #include "r_sky.h"
+#include "DoomExtraRam.h"
 
 
 
@@ -97,9 +98,24 @@ int *viewangletox;
 // from clipangle to -clipangle.
 angle_t			xtoviewangle[SCREENWIDTH+1];
 
-lighttable_t*		scalelight[LIGHTLEVELS][MAXLIGHTSCALE];
-lighttable_t*		scalelightfixed[MAXLIGHTSCALE];
-lighttable_t*		zlight[LIGHTLEVELS][MAXLIGHTZ];
+// DRAM fix: dulu array global (scalelight 3 KB + scalelightfixed 0.2 KB +
+// zlight 8 KB). Sekarang pointer; blok-nya dialokasi di PSRAM.
+lighttable_t*		(*scalelight)[MAXLIGHTSCALE] = NULL;
+lighttable_t**		scalelightfixed = NULL;
+lighttable_t*		(*zlight)[MAXLIGHTZ] = NULL;
+
+void R_LightTablesInitPsram(void)
+{
+    if (!scalelight)
+        scalelight = (lighttable_t*(*)[MAXLIGHTSCALE])
+            DoomExtraRam_Alloc(sizeof(lighttable_t*) * LIGHTLEVELS * MAXLIGHTSCALE);
+    if (!scalelightfixed)
+        scalelightfixed = (lighttable_t**)
+            DoomExtraRam_Alloc(sizeof(lighttable_t*) * MAXLIGHTSCALE);
+    if (!zlight)
+        zlight = (lighttable_t*(*)[MAXLIGHTZ])
+            DoomExtraRam_Alloc(sizeof(lighttable_t*) * LIGHTLEVELS * MAXLIGHTZ);
+}
 
 // bumped light from gun blasts
 int			extralight;			

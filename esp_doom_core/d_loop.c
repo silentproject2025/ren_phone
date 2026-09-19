@@ -23,6 +23,7 @@
 
 #include "d_event.h"
 #include "d_loop.h"
+#include "DoomExtraRam.h"
 #include "d_ticcmd.h"
 
 #include "i_system.h"
@@ -57,7 +58,18 @@ typedef struct
 // from all players.
 //
 
-static ticcmd_set_t ticdata[BACKUPTICS];
+// DRAM fix: dulu array statis 128 x sizeof(ticcmd_set_t) = ~20 KB di DRAM
+// internal. Sekarang pointer, dialokasikan (nol semua) di PSRAM oleh
+// D_LoopInitPsram() yg dipanggil dari DoomExtraRam_Init() (<- Z_Init).
+static ticcmd_set_t *ticdata = NULL;
+
+void D_LoopInitPsram(void)
+{
+    if (!ticdata)
+    {
+        ticdata = (ticcmd_set_t *) DoomExtraRam_Alloc(sizeof(ticcmd_set_t) * BACKUPTICS);
+    }
+}
 
 // The index of the next tic to be made (with a call to BuildTiccmd).
 
