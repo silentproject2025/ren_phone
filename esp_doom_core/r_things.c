@@ -76,7 +76,7 @@ lighttable_t**	spritelights;
 
 // constant arrays
 EXT_RAM_BSS_ATTR EXT_RAM_BSS_ATTR //  used for psprite clipping and initializing clipping
-EXT_RAM_BSS_ATTR EXT_RAM_BSS_ATTR EXT_RAM_BSS_ATTR short		negonearray[SCREENWIDTH];
+short *negonearray;
 short *screenheightarray;
 
 
@@ -869,7 +869,7 @@ void R_SortVisSprites (void)
 //
 // R_DrawSprite
 EXT_RAM_BSS_ATTR EXT_RAM_BSS_ATTR //
-EXT_RAM_BSS_ATTR EXT_RAM_BSS_ATTR EXT_RAM_BSS_ATTR static short		clipbot[SCREENWIDTH];
+short *clipbot;
 short *cliptop;
 void R_DrawSprite (vissprite_t* spr)
 {
