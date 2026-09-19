@@ -11,10 +11,14 @@ bool Palette::load(const uint8_t *rgb)
         uint8_t g = rgb[i * 3 + 1];
         uint8_t b = rgb[i * 3 + 2];
 
+        // Channel R & B SENGAJA ditukar: panel Ren Phone dikonfig BGR
+        // (cfg.rgb_order=false di LGFX phone.ino), dan writePixels() buffer
+        // mentah TIDAK menyesuaikan urutan itu (beda dgn fillRect/drawString).
+        // Kasus yg sama persis dgn vid_setpalette() di nes_video_renphone.ino.
         colors[i] =
-            ((r >> 3) << 11) |
+            ((b >> 3) << 11) |
             ((g >> 2) << 5)  |
-            (b >> 3);
+            (r >> 3);
     }
 
     return true;
