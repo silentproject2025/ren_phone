@@ -19,6 +19,8 @@
 
 #ifndef __R_DRAW__
 #define __R_DRAW__
+extern int *columnofs;
+extern unsigned char **ylookup;
 
 
 

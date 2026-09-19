@@ -60,8 +60,8 @@ int		scaledviewwidth;
 int		viewheight;
 int		viewwindowx;
 int		viewwindowy; 
-byte*		ylookup[MAXHEIGHT]; 
-int		columnofs[MAXWIDTH]; 
+byte **ylookup;
+int *columnofs;
 
 // Color tables for different players,
 //  translate a limited part to another

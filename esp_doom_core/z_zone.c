@@ -18,6 +18,7 @@
 
 
 #include "z_zone.h"
+#include "DoomExtraRam.h"
 #include "i_system.h"
 #include "doomtype.h"
 
@@ -112,6 +113,7 @@ void Z_Shutdown (void)
 
 void Z_Init (void)
 {
+    DoomExtraRam_Init();
     memblock_t*	block;
     int		size;
 
