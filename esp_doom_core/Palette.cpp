@@ -16,9 +16,9 @@ bool Palette::load(const uint8_t *rgb)
         // mentah TIDAK menyesuaikan urutan itu (beda dgn fillRect/drawString).
         // Kasus yg sama persis dgn vid_setpalette() di nes_video_renphone.ino.
         colors[i] =
-            ((b >> 3) << 11) |
+            ((r >> 3) << 11) |
             ((g >> 2) << 5)  |
-            (r >> 3);
+            (b >> 3);
     }
 
     return true;

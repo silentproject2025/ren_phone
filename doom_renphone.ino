@@ -58,7 +58,7 @@ public:
   void beginFrame() override { display.startWrite(); }
   void writeRow(int x, int y, const uint16_t* rgb565, int count) override {
     display.setAddrWindow(x, y, count, 1);
-    display.writePixels(rgb565, count);
+    display.writePixels((const lgfx::rgb565_t*)rgb565, count);
   }
   void endFrame() override { display.endWrite(); }
   int width()  const override { return DOOM_PANEL_W; }
