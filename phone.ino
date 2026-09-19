@@ -480,6 +480,26 @@
 // ---- MJPEG PLAYER: dependensi tambahan ----
 #include <JPEGDEC.h>
 #include "MjpegClass.h"
+
+// RAM INTERNAL FIX: satu objek JPEGDEC itu ~17.9KB (sizeof, dihitung dari
+// header resminya) & dulu ada 4 objek global TERPISAH utk gambar non-realtime
+// (wallpaper, APOD, EPIC, ImgLib) = ~70KB RAM internal kepakai permanen sejak
+// boot, walau app-nya gak pernah dibuka. Sekarang objeknya dialokasikan
+// LAZY di PSRAM (sekali, pas pertama dipakai). Cara pakai sama spt pointer:
+// wallpaperJpeg->open(...). Objek `mjpeg` (MjpegClass) SENGAJA tetap di RAM
+// internal krn kecepatan decode video lebih penting.
+#include <new>
+struct PsramJpeg {
+  JPEGDEC* p = nullptr;
+  JPEGDEC* operator->() {
+    if (!p) {
+      void* m = heap_caps_calloc(1, sizeof(JPEGDEC), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+      if (!m) m = calloc(1, sizeof(JPEGDEC)); // PSRAM gagal: fallback RAM biasa, jangan crash
+      p = new (m) JPEGDEC();
+    }
+    return p;
+  }
+};
 // "ESP_I2S.h" BAWAAN Arduino-ESP32 core 3.x (gak perlu install terpisah)
 // -- dipakai utk nulis nada uji speaker di app HWmonitor & baca PCM
 // mentah dr mic (dictation AI Chat).
@@ -4560,7 +4580,7 @@ const char* homeGreeting(int hour){
 const char* WALLPAPER_FILE = "/wallpaper.jpg";
 LGFX_Sprite wallpaperImg(&display);
 bool wallpaperReady = false;
-JPEGDEC wallpaperJpeg;
+PsramJpeg wallpaperJpeg;
 
 int wallpaperJpegDrawCallback(JPEGDRAW* pDraw){
   wallpaperImg.pushImage(pDraw->x,pDraw->y,pDraw->iWidth,pDraw->iHeight,(lgfx::swap565_t*)pDraw->pPixels);
@@ -4590,10 +4610,10 @@ bool loadWallpaper(){
   if(!wallpaperImg.createSprite(SCR_W,SCR_H)){ f.close(); return false; }
   wallpaperImg.fillSprite(T().bg); // isi dulu warna tema -- jaga2 kalau ada pojok yg gak ke-cover hasil decode
 
-  if(!wallpaperJpeg.open(f, wallpaperJpegDrawCallback)){
+  if(!wallpaperJpeg->open(f, wallpaperJpegDrawCallback)){
     f.close(); wallpaperImg.deleteSprite(); return false;
   }
-  int iw=wallpaperJpeg.getWidth(), ih=wallpaperJpeg.getHeight();
+  int iw=wallpaperJpeg->getWidth(), ih=wallpaperJpeg->getHeight();
   int scale=0;
   float ratio = min((float)iw/SCR_W,(float)ih/SCR_H); // rasio TERKECIL -> gaya "cover" (lihat komentar di atas)
   if(ratio>4) scale=JPEG_SCALE_EIGHTH;
@@ -4602,9 +4622,9 @@ bool loadWallpaper(){
   int shiftAmt=(scale==JPEG_SCALE_EIGHTH)?3:(scale==JPEG_SCALE_QUARTER)?2:(scale==JPEG_SCALE_HALF)?1:0;
   int dw=iw>>shiftAmt, dh=ih>>shiftAmt;
   int dx=(SCR_W-dw)/2, dy=(SCR_H-dh)/2; // sengaja BOLEH negatif (beda dgn APOD yg di-clamp max(0,..)) -- itu yg motong tepi foto biar nutup penuh layar
-  wallpaperJpeg.setPixelType(RGB565_BIG_ENDIAN);
-  wallpaperJpeg.decode(dx,dy,scale);
-  wallpaperJpeg.close();
+  wallpaperJpeg->setPixelType(RGB565_BIG_ENDIAN);
+  wallpaperJpeg->decode(dx,dy,scale);
+  wallpaperJpeg->close();
   f.close();
   wallpaperReady=true;
   needRedrawNow();
@@ -12180,7 +12200,7 @@ bool nasaDownloadImageToPsram(const String& imgUrl){
 //  - MyMemory  : https://api.mymemory.translated.net/get?q=...&langpair=en|id
 // =============================================
 #include <JPEGDEC.h> // sudah ke-include jg di puncak file (MJPEG player) -- aman didobel, header guard
-JPEGDEC apodJpeg;
+PsramJpeg apodJpeg;
 LGFX_Sprite apodImg(&display); // sprite persisten khusus gambar APOD (dipakai spy gak perlu decode ulang tiap redraw)
 bool  apodImgReady=false;
 int   apodImgW=0, apodImgH=0;
@@ -12466,19 +12486,19 @@ bool apodDecodeCachedImage(){
     if(!SD_MMC.exists(path)) return false;
     f = SD_MMC.open(path,FILE_READ);
     if(!f) return false;
-    opened = apodJpeg.open(f, apodJpegDrawCallback);
+    opened = apodJpeg->open(f, apodJpegDrawCallback);
   } else {
     // v23: SD gak dipasang -- decode LANGSUNG dr buffer PSRAM hasil unduhan
     // (lihat nasaDownloadImageToPsram di atas), bukan dr file SD.
     if(!nasaRamImgBuf || nasaRamImgLen==0) return false;
-    opened = apodJpeg.openRAM(nasaRamImgBuf, nasaRamImgLen, apodJpegDrawCallback);
+    opened = apodJpeg->openRAM(nasaRamImgBuf, nasaRamImgLen, apodJpegDrawCallback);
   }
   if(!opened){
     if(f) f.close();
     apodImgReady=true; // tetap "ready" -> tampil kotak kosong drpd nge-block nunggu
     return false;
   }
-  int iw=apodJpeg.getWidth(), ih=apodJpeg.getHeight();
+  int iw=apodJpeg->getWidth(), ih=apodJpeg->getHeight();
   int scale=0;
   float ratio = max((float)iw/boxW,(float)ih/boxH);
   if(ratio>4) scale=JPEG_SCALE_EIGHTH;
@@ -12487,9 +12507,9 @@ bool apodDecodeCachedImage(){
   int shiftAmt = (scale==JPEG_SCALE_EIGHTH)?3 : (scale==JPEG_SCALE_QUARTER)?2 : (scale==JPEG_SCALE_HALF)?1 : 0;
   int dw=iw>>shiftAmt, dh=ih>>shiftAmt;
   int dx=max(0,(boxW-dw)/2), dy=max(0,(boxH-dh)/2);
-  apodJpeg.setPixelType(RGB565_BIG_ENDIAN);
-  apodJpeg.decode(dx,dy,scale);
-  apodJpeg.close();
+  apodJpeg->setPixelType(RGB565_BIG_ENDIAN);
+  apodJpeg->decode(dx,dy,scale);
+  apodJpeg->close();
   if(f) f.close();
   apodImgReady=true;
   return true;
@@ -13406,7 +13426,7 @@ TaskHandle_t epicPhotoTaskHandle=NULL;
 SearchBarState epicSearchBar;
 String epicSearchInput="";
 
-JPEGDEC epicJpeg;
+PsramJpeg epicJpeg;
 LGFX_Sprite epicImg(&display);
 bool epicImgReady=false;
 int epicImgW=0, epicImgH=0;
@@ -13469,14 +13489,14 @@ bool epicDecodeCachedImage(const String& imageName){
     if(!SD_MMC.exists(path)) return false;
     f=SD_MMC.open(path,FILE_READ);
     if(!f) return false;
-    opened = epicJpeg.open(f,epicJpegDrawCallback);
+    opened = epicJpeg->open(f,epicJpegDrawCallback);
   } else {
     // v23: SD gak dipasang -- decode LANGSUNG dr buffer PSRAM.
     if(!nasaRamImgBuf || nasaRamImgLen==0) return false;
-    opened = epicJpeg.openRAM(nasaRamImgBuf, nasaRamImgLen, epicJpegDrawCallback);
+    opened = epicJpeg->openRAM(nasaRamImgBuf, nasaRamImgLen, epicJpegDrawCallback);
   }
   if(!opened){ if(f) f.close(); epicImgReady=true; return false; }
-  int iw=epicJpeg.getWidth(), ih=epicJpeg.getHeight();
+  int iw=epicJpeg->getWidth(), ih=epicJpeg->getHeight();
   int scale=0;
   float ratio=max((float)iw/boxW,(float)ih/boxH);
   if(ratio>4) scale=JPEG_SCALE_EIGHTH;
@@ -13485,9 +13505,9 @@ bool epicDecodeCachedImage(const String& imageName){
   int shiftAmt=(scale==JPEG_SCALE_EIGHTH)?3:(scale==JPEG_SCALE_QUARTER)?2:(scale==JPEG_SCALE_HALF)?1:0;
   int dw=iw>>shiftAmt, dh=ih>>shiftAmt;
   int dx=max(0,(boxW-dw)/2), dy=max(0,(boxH-dh)/2);
-  epicJpeg.setPixelType(RGB565_BIG_ENDIAN);
-  epicJpeg.decode(dx,dy,scale);
-  epicJpeg.close();
+  epicJpeg->setPixelType(RGB565_BIG_ENDIAN);
+  epicJpeg->decode(dx,dy,scale);
+  epicJpeg->close();
   if(f) f.close();
   epicImgReady=true;
   return true;
@@ -13776,7 +13796,7 @@ TaskHandle_t imgLibPhotoTaskHandle=NULL;
 SearchBarState imgLibSearchBar;
 String imgLibSearchInput="";
 
-JPEGDEC imgLibJpeg;
+PsramJpeg imgLibJpeg;
 LGFX_Sprite imgLibImgSpr(&display);
 bool imgLibImgReady=false;
 int imgLibImgW=0, imgLibImgH=0;
@@ -13849,14 +13869,14 @@ bool imgLibDecodeCachedImage(const String& nasaId){
     if(!SD_MMC.exists(path)) return false;
     f=SD_MMC.open(path,FILE_READ);
     if(!f) return false;
-    opened = imgLibJpeg.open(f,imgLibJpegDrawCallback);
+    opened = imgLibJpeg->open(f,imgLibJpegDrawCallback);
   } else {
     // v23: SD gak dipasang -- decode LANGSUNG dr buffer PSRAM.
     if(!nasaRamImgBuf || nasaRamImgLen==0) return false;
-    opened = imgLibJpeg.openRAM(nasaRamImgBuf, nasaRamImgLen, imgLibJpegDrawCallback);
+    opened = imgLibJpeg->openRAM(nasaRamImgBuf, nasaRamImgLen, imgLibJpegDrawCallback);
   }
   if(!opened){ if(f) f.close(); imgLibImgReady=true; return false; }
-  int iw=imgLibJpeg.getWidth(), ih=imgLibJpeg.getHeight();
+  int iw=imgLibJpeg->getWidth(), ih=imgLibJpeg->getHeight();
   int scale=0;
   float ratio=max((float)iw/boxW,(float)ih/boxH);
   if(ratio>4) scale=JPEG_SCALE_EIGHTH;
@@ -13865,9 +13885,9 @@ bool imgLibDecodeCachedImage(const String& nasaId){
   int shiftAmt=(scale==JPEG_SCALE_EIGHTH)?3:(scale==JPEG_SCALE_QUARTER)?2:(scale==JPEG_SCALE_HALF)?1:0;
   int dw=iw>>shiftAmt, dh=ih>>shiftAmt;
   int dx=max(0,(boxW-dw)/2), dy=max(0,(boxH-dh)/2);
-  imgLibJpeg.setPixelType(RGB565_BIG_ENDIAN);
-  imgLibJpeg.decode(dx,dy,scale);
-  imgLibJpeg.close();
+  imgLibJpeg->setPixelType(RGB565_BIG_ENDIAN);
+  imgLibJpeg->decode(dx,dy,scale);
+  imgLibJpeg->close();
   if(f) f.close();
   imgLibImgReady=true;
   return true;
