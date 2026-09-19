@@ -1,3 +1,5 @@
+#include "esp_attr.h"
+#include "esp_attr.h"
 #include <DoomSound.h>
 
 #include <Arduino.h>
@@ -105,17 +107,17 @@ static SfxData* LoadSfx(sfxinfo_t* sfx)
 }
 
 static void MixerTask(void*)
-{
-    static int32_t acc[MIX_FRAMES];
-    static int16_t out[MIX_FRAMES];
+EXT_RAM_BSS_ATTR EXT_RAM_BSS_ATTR {
+EXT_RAM_BSS_ATTR EXT_RAM_BSS_ATTR EXT_RAM_BSS_ATTR     static int32_t acc[MIX_FRAMES];
+EXT_RAM_BSS_ATTR     static int16_t out[MIX_FRAMES];
 
     #ifdef DOOM_MUSIC_SYNTH
     // MusSynth_Render writes STEREO (2 int32 per frame): it was built
     // for the full Ultravice mixer, which outputs stereo. DoomSound's
     // pipeline is deliberately mono (see IDoomPCMOutput.h), so we
     // render into a scratch stereo buffer and downmix L+R here rather
-    // than touching mus_synth.cpp's internals.
-    static int32_t musicScratch[MIX_FRAMES * 2];
+EXT_RAM_BSS_ATTR EXT_RAM_BSS_ATTR     // than touching mus_synth.cpp's internals.
+EXT_RAM_BSS_ATTR     static int32_t musicScratch[MIX_FRAMES * 2];
     #endif
 
     while (mixRun)

@@ -1,3 +1,5 @@
+#include "esp_attr.h"
+#include "esp_attr.h"
 //
 // Copyright(C) 1993-1996 Id Software, Inc.
 // Copyright(C) 2005-2014 Simon Howard
@@ -73,9 +75,9 @@ fixed_t		pspriteiscale;
 lighttable_t**	spritelights;
 
 // constant arrays
-//  used for psprite clipping and initializing clipping
-short		negonearray[SCREENWIDTH];
-short		screenheightarray[SCREENWIDTH];
+EXT_RAM_BSS_ATTR EXT_RAM_BSS_ATTR //  used for psprite clipping and initializing clipping
+EXT_RAM_BSS_ATTR EXT_RAM_BSS_ATTR EXT_RAM_BSS_ATTR short		negonearray[SCREENWIDTH];
+EXT_RAM_BSS_ATTR short		screenheightarray[SCREENWIDTH];
 
 
 //
@@ -866,9 +868,9 @@ void R_SortVisSprites (void)
 
 //
 // R_DrawSprite
-//
-static short		clipbot[SCREENWIDTH];
-static short		cliptop[SCREENWIDTH];
+EXT_RAM_BSS_ATTR EXT_RAM_BSS_ATTR //
+EXT_RAM_BSS_ATTR EXT_RAM_BSS_ATTR EXT_RAM_BSS_ATTR static short		clipbot[SCREENWIDTH];
+EXT_RAM_BSS_ATTR static short		cliptop[SCREENWIDTH];
 void R_DrawSprite (vissprite_t* spr)
 {
     drawseg_t*		ds;

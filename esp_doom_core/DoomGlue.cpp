@@ -1,3 +1,5 @@
+#include "esp_attr.h"
+#include "esp_attr.h"
 #include <DoomGlue.h>
 
 #include <Arduino.h>
@@ -130,9 +132,9 @@ static_assert(!kCropY ? (DOOM_VIEWPORT_Y + kContentH <= kPanelH)
                        : (DOOM_VIEWPORT_Y >= 0 && DOOM_VIEWPORT_Y + kPanelH <= kContentH),
     "DOOM_VIEWPORT_Y doesn't fit: content doesn't fit at that placement, "
     "or the crop window falls outside the (rescaled) content");
-
-static uint16_t xLUT[kContentW];
-static uint16_t yLUT[kContentH];
+EXT_RAM_BSS_ATTR EXT_RAM_BSS_ATTR 
+EXT_RAM_BSS_ATTR EXT_RAM_BSS_ATTR EXT_RAM_BSS_ATTR static uint16_t xLUT[kContentW];
+EXT_RAM_BSS_ATTR static uint16_t yLUT[kContentH];
 static bool lutReady = false;
 
 // Nearest-neighbor with rounding (not truncation): srcIdx = round(dstIdx
@@ -233,8 +235,8 @@ void DG_DrawFrame()
 
     if (!lutReady)
         BuildScaleLUT();
-
-    static uint16_t row[kOutW];
+EXT_RAM_BSS_ATTR EXT_RAM_BSS_ATTR 
+EXT_RAM_BSS_ATTR     static uint16_t row[kOutW];
 
     DG_Display->beginFrame();
 
