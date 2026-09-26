@@ -288,11 +288,17 @@ static void nyxPpuFillBgRow(uint16_t* lineBuf, int layer, int py, int vw, bool o
 // sungguhan) biar murah -- utk sprite kotak biasa hasilnya rapi, utk
 // sprite bulat (blob) halo di pojok agak kurang presisi, tapi cukup buat
 // demo & tetap murah di CPU.
-static void nyxPpuCompositeSpritesRow(uint16_t* lineBuf, int vw, int py, bool frontPass){
+// v99: dulu fungsi ini scan SEMUA NYX_PPU_MAX_SPRITES slot tiap baris x 2
+// pass/frame (cek visible+priorityFront), padahal biasanya cuma segelintir
+// yg beneran visible -- di 32 slot x 218 baris x 2 pass = ~14rb iterasi
+// "cek doang" per frame, SEBELUM sempat gambar apa2. Sekarang dikasih
+// idxList (indeks sprite yg visible & prioritasnya cocok, dibangun 1x per
+// frame di nyxPpuRender, bukan di-scan ulang tiap baris) -- loop di bawah
+// jadi cuma sepanjang jumlah sprite yg BENERAN aktif.
+static void nyxPpuCompositeSpritesRow(uint16_t* lineBuf, int vw, int py, const uint8_t* idxList, int idxCount){
   const int GLOW_PAD = 4;
-  for(int i=0;i<NYX_PPU_MAX_SPRITES;i++){
-    NyxSprite& sp = nyxPpuSprites[i];
-    if(!sp.visible || sp.priorityFront!=frontPass) continue;
+  for(int ii=0; ii<idxCount; ii++){
+    NyxSprite& sp = nyxPpuSprites[idxList[ii]];
     int size = NYX_PPU_TILE * sp.scale;
     int pad = sp.hasGlow ? GLOW_PAD : 0;
     if(py < sp.y-pad || py >= sp.y+size+pad) continue;      // culling vertikal (+halo)
@@ -329,17 +335,46 @@ static void nyxPpuCompositeSpritesRow(uint16_t* lineBuf, int vw, int py, bool fr
 // Bedanya: sekarang disusun per BARIS ke nyxLineBuf dulu, baru di-blit
 // SEKALIGUS lewat 1x pushImage() -- pola yg sama persis dgn yg sudah
 // terbukti jalan di ppu_scanline_blit() app NES (nes_video_renphone.ino).
+// v99: profiling -- micros() dibungkus di sekitar isi fungsi ini (bukan
+// nyxPpuFillBgRow/nyxPpuCompositeSpritesRow sendiri2, biar overhead
+// pemanggilan micros() itu sendiri gak ganggu ukuran) supaya kelihatan
+// beneran berapa lama COMPOSITOR (BG+sprite, murni CPU) makan waktu per
+// frame, terpisah dari waktu total drawPpuApp() (yg juga ada fillSprite,
+// status bar, teks). Kalau nyxPpuLastRenderUs << (1000000/fps total),
+// artinya bottleneck ADA DI LUAR compositor ini (misal blit s ke layar
+// fisik di tempat lain / phone.ino) -- bukan di PPU-nya.
+static unsigned long nyxPpuLastRenderUs = 0;
+
 void nyxPpuRender(LGFX_Sprite& s, int vx, int vy, int vw, int vh){
   if(!nyxPpuReady) return;
   if(vw>NYX_PPU_LINEBUF_MAX) vw=NYX_PPU_LINEBUF_MAX; // jaga2 batas buffer statis
+  unsigned long t0 = micros();
+
+  // Bangun daftar indeks sprite yg visible SEKALI per frame (bukan per
+  // baris) -- lihat catatan v99 di nyxPpuCompositeSpritesRow soal kenapa.
+  static uint8_t backIdx[NYX_PPU_MAX_SPRITES];
+  static uint8_t frontIdx[NYX_PPU_MAX_SPRITES];
+  int backCount=0, frontCount=0;
+  for(int i=0;i<NYX_PPU_MAX_SPRITES;i++){
+    if(!nyxPpuSprites[i].visible) continue;
+    if(nyxPpuSprites[i].priorityFront) frontIdx[frontCount++] = (uint8_t)i;
+    else backIdx[backCount++] = (uint8_t)i;
+  }
+
   for(int py=0; py<vh; py++){
     nyxPpuFillBgRow(nyxLineBuf, 0, py, vw, false);
-    nyxPpuCompositeSpritesRow(nyxLineBuf, vw, py, false);
+    nyxPpuCompositeSpritesRow(nyxLineBuf, vw, py, backIdx, backCount);
     nyxPpuFillBgRow(nyxLineBuf, 1, py, vw, true);
-    nyxPpuCompositeSpritesRow(nyxLineBuf, vw, py, true);
+    nyxPpuCompositeSpritesRow(nyxLineBuf, vw, py, frontIdx, frontCount);
     s.pushImage(vx, vy+py, vw, 1, nyxLineBuf);
   }
+
+  nyxPpuLastRenderUs = micros() - t0;
 }
+
+// v99: getter buat profiling di layar (drawPpuApp) -- lihat catatan di
+// nyxPpuRender soal cara baca angkanya.
+unsigned long nyxPpuGetLastRenderUs(){ return nyxPpuLastRenderUs; }
 
 // v98: kurva easing generik (ease-out cubic) -- buat animasi/transisi yg
 // mulai cepat lalu "mendarat" halus, kesan gerakan lebih "mewah" drpd
@@ -449,8 +484,13 @@ void drawPpuApp(LGFX_Sprite& s){
 
   nyxPpuRender(s, vx,vy,vw,vh);
 
-  char buf[64];
-  sprintf(buf,"NyxPPU v2 - %d sprite - %.0f FPS (ketuk utk nambah)", ppuEntCount, fps);
+  // v99: tampilkan waktu compositor (ms) di sebelah FPS -- biar kelihatan
+  // langsung di HP: kalau ms ini kecil tapi FPS masih rendah, artinya
+  // bottleneck-nya BUKAN di NyxPPU (ada di tempat lain, mis. blit ke
+  // layar fisik) -- lihat catatan lengkap di nyxPpuRender().
+  char buf[80];
+  float renderMs = nyxPpuGetLastRenderUs() / 1000.0f;
+  sprintf(buf,"NyxPPU v2 - %d sprite - %.0f FPS - cpu:%.1fms (ketuk)", ppuEntCount, fps, renderMs);
   s.setTextColor(T().text); s.setTextSize(1); s.setCursor(6, vy+4); s.print(buf);
 
   drawBack(s);
