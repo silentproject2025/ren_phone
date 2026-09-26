@@ -413,7 +413,7 @@ void ppuAppEnter(){
   // taburi beberapa tile awan acak di BG1 biar keliatan efek "lubang" (id 0
   // dilewatin, id awan digambar) + parallax scroll beda kecepatan dr BG0.
   for(int i=0;i<26;i++){
-    nyxPpuSetLayerTile(1, random(0,NYX_PPU_LAYER_W), random(0,NYX_PPU_LAYER_H), ppuTileCloud);
+    nyxPpuSetLayerTile(1, random(0,NYX_PPU_LAYER_W), random(0,NYX_PPU_LAYER_H), ppuTileCloud, false, false);
   }
   nyxPpuSetScroll(0,0,0); nyxPpuSetScroll(1,0,0);
   ppuEntCount = 0;
