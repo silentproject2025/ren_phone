@@ -8083,7 +8083,14 @@ void updTouch(int x,int y,bool held,bool isNew){
 // =============================================
 // PUSH FRAME
 // =============================================
-void push(){ canvas.pushSprite(0,0); }
+// v99 fase 2: profiling waktu push() (blit canvas FULL SCREEN 320x240 ke
+// panel fisik lewat SPI/DMA) -- dipakai buat bandingkan dgn waktu compositor
+// NyxPPU (lihat drawPpuApp di ppu_engine_renphone.ino). Cuma nambah 2 baris
+// di fungsi push() sendiri, TIDAK menyentuh puluhan tempat yg manggil push()
+// di file ini -- resiko minim krn isolated ke 1 fungsi.
+static unsigned long nyxPushLastUs = 0;
+unsigned long getPushLastUs(){ return nyxPushLastUs; }
+void push(){ unsigned long t0=micros(); canvas.pushSprite(0,0); nyxPushLastUs=micros()-t0; }
 void renderCurrentFrame(){
   // v68 FIX: font custom (Mono/Sans/Tebal/Serif) ternyata KETINGGIAN buat
   // kotak2 UI yg didesain pas-pasan buat teks 8px (tombol, status bar, grid
