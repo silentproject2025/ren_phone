@@ -160,6 +160,19 @@ void doomEnter(){
   doomPrevOrient = currentOrient;
   if(currentOrient != ORIENT_LANDSCAPE) applyOrientation(ORIENT_LANDSCAPE, false);
 
+  // v104: DOOM gambar LANGSUNG ke `display` (bukan lewat `canvas` spt app
+  // lain -- lihat doomDrawOverlay() & DoomGlue), jadi paling kerasa kalau
+  // SPI Overclock (Settings) lagi disetel tinggi -- gejalanya persis yg
+  // dilaporkan: kadang crash / warna keinvert sendiri di tengah main.
+  // Fix: paksa turun ke index 0 (60MHz, paling aman/terbukti) SELAMA
+  // Doom jalan, lalu balikin ke pilihan user di doomExit(). AMAN dipanggil
+  // di sini (runtime, bukan cuma pas boot) krn momennya pas TIDAK ADA
+  // transaksi SPI yg lagi jalan -- task Doom belum dibuat sama sekali di
+  // titik ini. spiOcIdx (pilihan user) TIDAK diubah/ditimpa, cuma dipakai
+  // sbg patokan buat balikin nanti -- jadi pilihan di Settings tetap apa
+  // adanya, cuma "dipinjam turun sementara" khusus selagi di app Doom.
+  if(spiOcIdx != 0) display.setSpiFreqMHz(SPI_OC_OPTIONS[0]);
+
   enterGameMode(); // boost CPU_MHZ_GAME, sama spt Snake/Inferno/dll
 
   doomStopRequested = false;
@@ -177,6 +190,7 @@ void doomEnter(){
   }
   if(res != pdPASS){
     doomErrorMsg = "Gagal membuat task DOOM (RAM internal habis).";
+    if(spiOcIdx != 0) display.setSpiFreqMHz(SPI_OC_OPTIONS[spiOcIdx]); // v104: gagal start -> balikin SPI, jangan nyangkut di 60MHz
     exitGameMode();
     if(currentOrient != doomPrevOrient) applyOrientation(doomPrevOrient, false);
   }
@@ -191,6 +205,10 @@ void doomExit(){
     uint32_t waitStart = millis();
     while(doomPlaying && millis()-waitStart < 2000) delay(10);
   }
+  // v104: balikin SPI ke pilihan user di Settings -- aman di sini krn
+  // loop di atas udah mastiin task Doom (yg gambar langsung ke `display`)
+  // beneran berhenti dulu, jd gak ada transaksi SPI yg lagi jalan.
+  if(spiOcIdx != 0) display.setSpiFreqMHz(SPI_OC_OPTIONS[spiOcIdx]);
   exitGameMode();
   if(currentOrient != doomPrevOrient) applyOrientation(doomPrevOrient, true);
   needRedrawNow();
