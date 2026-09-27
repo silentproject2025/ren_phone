@@ -6310,13 +6310,6 @@ void sensorTouch(int x,int y,bool held,bool isNew){
 String settSSID="",settPass="";
 bool settShowPass=false;int settFocus=-1;
 
-void settingsEnter(){ 
-  settSSID=String(WIFI_SSID); 
-  settPass=String(WIFI_PASSWORD); 
-  startWifiScan();
-}
-void settingsExit(){}
-
 // v103: SPI Overclock -- pengganti pola manual "ubah angka di source,
 // commit, push, apply patch, reflash" yg dipakai user buat nyoba
 // 60/70/75/80MHz satu2 kemarin. Sekarang 5 preset ini tersedia lewat
@@ -6334,7 +6327,8 @@ void settingsExit(){}
 // sudah dideklarasikan SEBELUM dipakai (beda dr fungsi antar-file yg
 // otomatis di-prototype sama Arduino builder).
 const int SPI_OC_OPTIONS[5] = {60,65,70,75,80};
-int spiOcIdx = 0;
+int spiOcIdx = 0;        // v104: yg BENERAN aktif skrg (dimuat NVS di boot, dipakai jg oleh doomEnter/doomExit)
+int spiOcPendingIdx = 0; // v104: hasil rombak total -- pilihan yg lagi "dicoba" di layar Settings, BELUM diterapkan/direstart sampai user ketuk pil-nya sendiri. Disinkronkan ulang ke spiOcIdx tiap kali layar Settings dibuka, lihat settingsEnter().
 void saveSpiOcPref(){ Preferences p; p.begin("ui",false); p.putInt("spimhz",SPI_OC_OPTIONS[spiOcIdx]); p.end(); }
 int loadSpiOcPref(){
   Preferences p; p.begin("ui",true);
@@ -6344,23 +6338,38 @@ int loadSpiOcPref(){
   return 0; // fallback: kalau NVS somehow kesimpen angka yg gak ada di daftar, jangan crash -- balik ke paling aman
 }
 
+void settingsEnter(){ 
+  settSSID=String(WIFI_SSID); 
+  settPass=String(WIFI_PASSWORD); 
+  startWifiScan();
+  spiOcPendingIdx = spiOcIdx; // v104: reset pilihan "lagi dicoba" ke yg BENERAN aktif tiap buka Settings -- biar gak nyisa pilihan lama yg pernah digeser tapi gak jadi diterapkan
+}
+void settingsExit(){}
+
 void drawSettings(LGFX_Sprite& s){
   checkWifiScanComplete();
 
   s.fillSprite(T().bg);drawStatusBar(s);
   s.setTextColor(T().good);s.setTextSize(1);s.setCursor(8,26);s.print("Pengaturan");
 
-  // v103: SPI Overclock -- ditaruh di celah kosong antara judul "Pengaturan"
-  // & tombol Rot:ON (bukan baris baru) biar GAK NAMBAH TINGGI layar --
-  // layar Settings ini udah pas-pasan (lihat catatan v66 di bawah soal
-  // panel Tema+Font yg sengaja digabung krn alasan yg sama). Ketuk buat
-  // cycle 60->65->70->75->80->60MHz, LANGSUNG restart tiap ganti (freq
-  // SPI cuma bisa diterapkan di boot, lihat setSpiFreqMHz()).
-  int ocX=74, ocW=88;
-  s.fillRoundRect(ocX,24,ocW,18,4, spiOcIdx==0?T().surface2:T().accent2);
-  s.setTextColor(spiOcIdx==0?T().subtext:T().bg);
-  char ocBuf[16]; sprintf(ocBuf,"SPI:%dMHz",SPI_OC_OPTIONS[spiOcIdx]);
-  s.setCursor(ocX+4,29); s.print(ocBuf);
+  // v104: ROMBAK TOTAL interaksi SPI Overclock -- versi lama (v103) tiap
+  // ketuk LANGSUNG cycle+restart, jadi kalau mau lompat jauh (mis. 60ke80)
+  // harus tekan+reboot 4x. Sekarang gaya "< 70MHz >": geser2 dulu pakai
+  // panah (spiOcPendingIdx, CUMA visual, BELUM diterapkan, BELUM restart),
+  // baru kalau sudah fix ketuk PIL TENGAHNYA sendiri buat terapkan+restart
+  // SEKALI aja. Tetap ditaruh di celah kosong yg sama (gak nambah tinggi
+  // layar -- layar Settings ini udah pas-pasan, lihat catatan v66).
+  int ocArrowW=18, ocX=74, ocPillX=ocX+ocArrowW, ocPillW=52;
+  bool ocDirty = (spiOcPendingIdx != spiOcIdx); // ada pilihan yg blm diterapkan?
+  s.fillRoundRect(ocX,24,ocArrowW,18,4,T().surface2);
+  s.setTextColor(T().accent);s.setFont(&lgfx::fonts::Font0);s.setCursor(ocX+6,29);s.print("<");
+  s.fillRoundRect(ocPillX+ocPillW+2,24,ocArrowW,18,4,T().surface2);
+  s.setTextColor(T().accent);s.setCursor(ocPillX+ocPillW+2+6,29);s.print(">");
+  s.setFont(&lgfx::fonts::Font0); // v104: font balik ke default eksplisit spy gak "nempel" ke elemen setelahnya
+  s.fillRoundRect(ocPillX,24,ocPillW,18,4, ocDirty?T().accent2:T().surface2);
+  s.setTextColor(ocDirty?T().bg:T().subtext);
+  char ocBuf[10]; sprintf(ocBuf,"%dMHz",SPI_OC_OPTIONS[spiOcPendingIdx]);
+  s.setCursor(ocPillX+4,29); s.print(ocBuf);
 
   // Toggle Auto-Rotate (di sebelah kiri tombol Pindai)
   int arW=62;
@@ -6501,16 +6510,31 @@ void settingsTouch(int x,int y,bool held,bool isNew){
   
   if(isBack(x,y)){ navBack(); return; }
 
-  // v103: SPI Overclock -- ketuk cycle 60->65->70->75->80->60MHz, lalu
-  // LANGSUNG restart (freq bus SPI cuma bisa diterapkan pas boot, sebelum
-  // display.init() -- lihat setup() & setSpiFreqMHz()). Ditaruh SEBELUM
-  // toast krn device restart sebelum toast sempet kebaca -- gapapa, efeknya
-  // langsung kelihatan dr angka MHz yg berubah begitu Settings kebuka lagi.
-  int ocX=74, ocW=88;
-  if(x>=ocX && x<=ocX+ocW && y>=24 && y<=42){
-    spiOcIdx = (spiOcIdx+1)%5;
-    saveSpiOcPref();
-    ESP.restart();
+  // v104: ROMBAK TOTAL -- panah kiri/kanan cuma geser spiOcPendingIdx
+  // (visual doang, BELUM diterapkan/restart). Restart CUMA kejadian kalau
+  // user ketuk PIL TENGAHNYA SENDIRI (dan cuma kalau ada perubahan beneran
+  // drpd yg lagi aktif) -- jadi mau lompat 60->80, geser2 dulu bebas,
+  // reboot cuma sekali pas beneran fix pilihannya.
+  int ocArrowW=18, ocX=74, ocPillX=ocX+ocArrowW, ocPillW=52;
+  if(x>=ocX && x<=ocX+ocArrowW && y>=24 && y<=42){
+    if(spiOcPendingIdx>0){ spiOcPendingIdx--; needRedraw=true; }
+    return;
+  }
+  if(x>=ocPillX+ocPillW+2 && x<=ocPillX+ocPillW+2+ocArrowW && y>=24 && y<=42){
+    if(spiOcPendingIdx<4){ spiOcPendingIdx++; needRedraw=true; }
+    return;
+  }
+  if(x>=ocPillX && x<=ocPillX+ocPillW && y>=24 && y<=42){
+    if(spiOcPendingIdx == spiOcIdx){
+      showToast("Sudah aktif di MHz ini");
+    } else {
+      spiOcIdx = spiOcPendingIdx;
+      saveSpiOcPref();
+      showToast("Menerapkan & restart...");
+      renderCurrentFrame(); push(); // v104 FIX: showToast() cuma nyimpen state, gak langsung gambar -- paksa 1 siklus render+blit manual di sini spy toast BENERAN kelihatan sebelum layar mati krn restart (tanpa ini, delay() di bawah cuma nge-freeze layar KOSONG, toast gak sempet ke-render sama sekali)
+      delay(500); // kasih waktu toast keliatan sebentar sblm restart
+      ESP.restart();
+    }
     return;
   }
 
