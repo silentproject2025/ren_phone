@@ -983,12 +983,16 @@ enum KbMode { KB_LOWER, KB_UPPER, KB_NUM };
 // 60-80MHz kalau jalur SCLK/MOSI pendek & rapi. Kalau abis diflash layar
 // keliatan bergaris/pecah/warna acak, TURUNKAN nilai ini balik ke
 // 40000000 -- itu tandanya kabel fisik sudah mentok, bukan salah kode.
-// v102: dinaikkan sedikit dari 70MHz ke 75MHz -- titik tengah antara 70
-// (belum dites, tapi harusnya aman) dan 80 (kadang goyang). Kalau di 75MHz
-// masih bersih, ini kompromi lebih baik drpd 70; kalau MULAI goyang lagi
-// di sini, berarti batas amannya ada DI ANTARA 70 dan 75 -- turun balik
-// ke 70000000 (atau 60000000 kalau mau paling aman & sudah pasti bersih).
-#define DISPLAY_SPI_FREQ_EXPERIMENTAL 75000000
+// v103: DISPLAY_SPI_FREQ_EXPERIMENTAL sekarang cuma FALLBACK kalau NVS
+// belum pernah diisi (first boot). Nilai yg BENERAN dipakai sekarang
+// datang dari fitur "SPI Overclock" di app Settings (pilihan preset
+// 60/65/70/75/80MHz, disimpan NVS "ui"/"spimhz", diterapkan lewat
+// display.setSpiFreqMHz() SEBELUM display.init() di setup() -- lihat
+// SPI_OC_OPTIONS & loadSpiOcPref() di bawah). Dibalikin ke 60000000
+// (bukan 75 bekas eksperimen manual) krn ini sekarang jadi DEFAULT
+// paling aman utk first-boot/abis NVS kereset -- pilihan lbh tinggi
+// jadi keputusan sadar user lewat UI, bukan hardcoded di source lagi.
+#define DISPLAY_SPI_FREQ_EXPERIMENTAL 60000000
 
 // =============================================
 // LGFX CONFIG
@@ -1041,6 +1045,18 @@ public:
       _touch_instance.config(cfg);
       _panel_instance.setTouch(&_touch_instance); }
     setPanel(&_panel_instance);
+  }
+
+  // v103: SPI Overclock -- dipanggil dari setup() SEBELUM display.init(),
+  // BUKAN saat device lagi jalan/tampilan aktif (ganti freq bus SPI di
+  // tengah transaksi yg lagi jalan berisiko bikin state SPI korup). Baca
+  // ulang config bus yg SUDAH di-set constructor, timpa cuma freq_write-nya,
+  // lalu re-attach ke panel -- pola yg sama persis dgn config asli di atas.
+  void setSpiFreqMHz(int mhz){
+    auto cfg = _bus_instance.config();
+    cfg.freq_write = (uint32_t)mhz * 1000000UL;
+    _bus_instance.config(cfg);
+    _panel_instance.setBus(&_bus_instance);
   }
 };
 LGFX display;
@@ -6301,11 +6317,50 @@ void settingsEnter(){
 }
 void settingsExit(){}
 
+// v103: SPI Overclock -- pengganti pola manual "ubah angka di source,
+// commit, push, apply patch, reflash" yg dipakai user buat nyoba
+// 60/70/75/80MHz satu2 kemarin. Sekarang 5 preset ini tersedia lewat
+// tombol di app Settings, disimpan NVS namespace "ui" (sama dgn
+// preferensi UI lain di file ini) key "spimhz", dan diterapkan lewat
+// display.setSpiFreqMHz() di setup() SEBELUM display.init() -- jadi
+// GANTI FREQ BUTUH REBOOT (gak bisa "on-the-fly" selagi device nyala,
+// lihat catatan lengkap di method setSpiFreqMHz() pada class LGFX).
+// Index 0 (60MHz) SENGAJA jadi default paling aman -- lihat riwayat:
+// 80MHz kadang bikin layar "goyang" (tanda margin sinyal SPI mepet
+// batas fisik kabel/jalur), 70-75MHz belum tentu semua unit board aman.
+// DITARUH DI SINI (sebelum drawSettings/settingsTouch yg makainya),
+// BUKAN di dekat preferensi UI lain jauh di bawah -- file .ino ini
+// dikompile sbg SATU translation unit gede, jd variabel global HARUS
+// sudah dideklarasikan SEBELUM dipakai (beda dr fungsi antar-file yg
+// otomatis di-prototype sama Arduino builder).
+const int SPI_OC_OPTIONS[5] = {60,65,70,75,80};
+int spiOcIdx = 0;
+void saveSpiOcPref(){ Preferences p; p.begin("ui",false); p.putInt("spimhz",SPI_OC_OPTIONS[spiOcIdx]); p.end(); }
+int loadSpiOcPref(){
+  Preferences p; p.begin("ui",true);
+  int v = p.getInt("spimhz", SPI_OC_OPTIONS[0]); // default 60MHz kalau NVS kosong/first boot
+  p.end();
+  for(int i=0;i<5;i++) if(SPI_OC_OPTIONS[i]==v) return i;
+  return 0; // fallback: kalau NVS somehow kesimpen angka yg gak ada di daftar, jangan crash -- balik ke paling aman
+}
+
 void drawSettings(LGFX_Sprite& s){
   checkWifiScanComplete();
 
   s.fillSprite(T().bg);drawStatusBar(s);
   s.setTextColor(T().good);s.setTextSize(1);s.setCursor(8,26);s.print("Pengaturan");
+
+  // v103: SPI Overclock -- ditaruh di celah kosong antara judul "Pengaturan"
+  // & tombol Rot:ON (bukan baris baru) biar GAK NAMBAH TINGGI layar --
+  // layar Settings ini udah pas-pasan (lihat catatan v66 di bawah soal
+  // panel Tema+Font yg sengaja digabung krn alasan yg sama). Ketuk buat
+  // cycle 60->65->70->75->80->60MHz, LANGSUNG restart tiap ganti (freq
+  // SPI cuma bisa diterapkan di boot, lihat setSpiFreqMHz()).
+  int ocX=74, ocW=88;
+  s.fillRoundRect(ocX,24,ocW,18,4, spiOcIdx==0?T().surface2:T().accent2);
+  s.setTextColor(spiOcIdx==0?T().subtext:T().bg);
+  char ocBuf[16]; sprintf(ocBuf,"SPI:%dMHz",SPI_OC_OPTIONS[spiOcIdx]);
+  s.setCursor(ocX+4,29); s.print(ocBuf);
 
   // Toggle Auto-Rotate (di sebelah kiri tombol Pindai)
   int arW=62;
@@ -6445,6 +6500,19 @@ void settingsTouch(int x,int y,bool held,bool isNew){
   if(!isNew) return;
   
   if(isBack(x,y)){ navBack(); return; }
+
+  // v103: SPI Overclock -- ketuk cycle 60->65->70->75->80->60MHz, lalu
+  // LANGSUNG restart (freq bus SPI cuma bisa diterapkan pas boot, sebelum
+  // display.init() -- lihat setup() & setSpiFreqMHz()). Ditaruh SEBELUM
+  // toast krn device restart sebelum toast sempet kebaca -- gapapa, efeknya
+  // langsung kelihatan dr angka MHz yg berubah begitu Settings kebuka lagi.
+  int ocX=74, ocW=88;
+  if(x>=ocX && x<=ocX+ocW && y>=24 && y<=42){
+    spiOcIdx = (spiOcIdx+1)%5;
+    saveSpiOcPref();
+    ESP.restart();
+    return;
+  }
 
   int arW=62;
   int arX = SCR_W-74-arW-6;
@@ -8733,6 +8801,8 @@ void calibrateMPU(){
 bool autoRotateEnabled = true;
 void saveAutoRotatePref(){ Preferences p; p.begin("ui",false); p.putBool("autorot",autoRotateEnabled); p.end(); }
 bool loadAutoRotatePref(){ Preferences p; p.begin("ui",true); bool v=p.getBool("autorot",true); p.end(); return v; }
+
+}
 
 Orientation  pendingOrient      = ORIENT_PORTRAIT;
 unsigned long pendingOrientSince = 0;
@@ -15416,6 +15486,11 @@ void setup(){
   // (di-cache) seumur boot itu.
   mjpegEnsureBuffer();
 
+  // v103: SPI Overclock -- HARUS sebelum display.init() (freq bus perlu
+  // sudah final sebelum transaksi SPI pertama ke panel dikirim). Lihat
+  // catatan lengkap di setSpiFreqMHz() (class LGFX) & loadSpiOcPref().
+  spiOcIdx = loadSpiOcPref();
+  display.setSpiFreqMHz(SPI_OC_OPTIONS[spiOcIdx]);
   display.init();
   vibInit(); // v23: motor getar di GPIO 18
 
