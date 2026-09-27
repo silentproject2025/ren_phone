@@ -8802,8 +8802,6 @@ bool autoRotateEnabled = true;
 void saveAutoRotatePref(){ Preferences p; p.begin("ui",false); p.putBool("autorot",autoRotateEnabled); p.end(); }
 bool loadAutoRotatePref(){ Preferences p; p.begin("ui",true); bool v=p.getBool("autorot",true); p.end(); return v; }
 
-}
-
 Orientation  pendingOrient      = ORIENT_PORTRAIT;
 unsigned long pendingOrientSince = 0;
 
