@@ -6326,7 +6326,17 @@ bool settShowPass=false;int settFocus=-1;
 // dikompile sbg SATU translation unit gede, jd variabel global HARUS
 // sudah dideklarasikan SEBELUM dipakai (beda dr fungsi antar-file yg
 // otomatis di-prototype sama Arduino builder).
-const int SPI_OC_OPTIONS[5] = {60,65,70,75,80};
+// v105: DISEDERHANAKAN dari 5 preset (60/65/70/75/80) jadi 2, berdasarkan
+// DATA EMPIRIS user langsung di HP: FPS di NyxPPU (13) dan Inferno (19-20)
+// TETAP SAMA di 60/65/70/75MHz -- gak ada peningkatan sama sekali -- dan
+// cuma tembus lebih tinggi (26an) pas beneran di 80MHz. Ini bukti kuat
+// clock SPI ESP32-S3 di setup ini CUMA bisa loncat ke nilai diskret
+// tertentu (turunan integer dari clock dasar chip, bukan Hz bebas) --
+// 60/65/70/75 semuanya kebulatin diam2 ke clock real yg SAMA (dugaan kuat
+// ~40MHz), sementara 80MHz kebetulan salah satu nilai "bersih" yg beneran
+// tercapai. Drpd nyimpen 3 pilihan PALSU yg gak ngapa2in, cuma disisain
+// 2 titik yg TERBUKTI beda nyata.
+const int SPI_OC_OPTIONS[2] = {60,80};
 int spiOcIdx = 0;        // v104: yg BENERAN aktif skrg (dimuat NVS di boot, dipakai jg oleh doomEnter/doomExit)
 int spiOcPendingIdx = 0; // v104: hasil rombak total -- pilihan yg lagi "dicoba" di layar Settings, BELUM diterapkan/direstart sampai user ketuk pil-nya sendiri. Disinkronkan ulang ke spiOcIdx tiap kali layar Settings dibuka, lihat settingsEnter().
 void saveSpiOcPref(){ Preferences p; p.begin("ui",false); p.putInt("spimhz",SPI_OC_OPTIONS[spiOcIdx]); p.end(); }
@@ -6334,7 +6344,7 @@ int loadSpiOcPref(){
   Preferences p; p.begin("ui",true);
   int v = p.getInt("spimhz", SPI_OC_OPTIONS[0]); // default 60MHz kalau NVS kosong/first boot
   p.end();
-  for(int i=0;i<5;i++) if(SPI_OC_OPTIONS[i]==v) return i;
+  for(int i=0;i<2;i++) if(SPI_OC_OPTIONS[i]==v) return i;
   return 0; // fallback: kalau NVS somehow kesimpen angka yg gak ada di daftar, jangan crash -- balik ke paling aman
 }
 
@@ -6521,7 +6531,7 @@ void settingsTouch(int x,int y,bool held,bool isNew){
     return;
   }
   if(x>=ocPillX+ocPillW+2 && x<=ocPillX+ocPillW+2+ocArrowW && y>=24 && y<=42){
-    if(spiOcPendingIdx<4){ spiOcPendingIdx++; needRedraw=true; }
+    if(spiOcPendingIdx<1){ spiOcPendingIdx++; needRedraw=true; }
     return;
   }
   if(x>=ocPillX && x<=ocPillX+ocPillW && y>=24 && y<=42){
