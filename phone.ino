@@ -983,13 +983,12 @@ enum KbMode { KB_LOWER, KB_UPPER, KB_NUM };
 // 60-80MHz kalau jalur SCLK/MOSI pendek & rapi. Kalau abis diflash layar
 // keliatan bergaris/pecah/warna acak, TURUNKAN nilai ini balik ke
 // 40000000 -- itu tandanya kabel fisik sudah mentok, bukan salah kode.
-// v101: diturunkan dari 80MHz ke 70MHz (titik tengah) -- di 80MHz layar
-// kadang keliatan "goyang" sesekali (tanda margin sinyal SPI udah mepet
-// batas fisik kabel/jalur, lihat catatan v100 di atas). 70MHz dicoba biar
-// tetap lebih cepat drpd 60MHz yg terbukti bersih total, tapi kasih jarak
-// dari titik yg mulai muncul artefak. Kalau MASIH goyang di 70MHz juga,
-// turunkan lagi ke 60000000 (nilai terakhir yg TERBUKTI bersih total).
-#define DISPLAY_SPI_FREQ_EXPERIMENTAL 70000000
+// v102: dinaikkan sedikit dari 70MHz ke 75MHz -- titik tengah antara 70
+// (belum dites, tapi harusnya aman) dan 80 (kadang goyang). Kalau di 75MHz
+// masih bersih, ini kompromi lebih baik drpd 70; kalau MULAI goyang lagi
+// di sini, berarti batas amannya ada DI ANTARA 70 dan 75 -- turun balik
+// ke 70000000 (atau 60000000 kalau mau paling aman & sudah pasti bersih).
+#define DISPLAY_SPI_FREQ_EXPERIMENTAL 75000000
 
 // =============================================
 // LGFX CONFIG
