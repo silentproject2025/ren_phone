@@ -40,6 +40,8 @@ jobs:
           cp phone_notif_center.ino build_sketch/
           cp ppu_engine_renphone.ino build_sketch/
           cp wakeword_renphone.ino build_sketch/
+          cp musicbt_renphone.ino build_sketch/
+          cp rplink.h build_sketch/
           mv build_sketch/phone.ino build_sketch/build_sketch.ino
 
           cp nes_video_renphone.ino  build_sketch/

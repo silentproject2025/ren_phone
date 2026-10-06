@@ -615,7 +615,10 @@ enum Screen { SCR_HOME, SCR_CLOCK, SCR_CALC, SCR_SENSOR,
               // v115: app baru "Wake Word" -- kata kunci suara buatan
               // sendiri (template matching MFCC+DTW, on-device), lihat
               // file wakeword_renphone.ino terpisah.
-              SCR_WAKE };
+              SCR_WAKE,
+              // app baru "Musik" -- S3 master, ESP32-CAM co-prosesor BT A2DP,
+              // lihat file musicbt_renphone.ino + rplink.h.
+              SCR_MUSIC };
 enum Orientation { ORIENT_LANDSCAPE = 0, ORIENT_PORTRAIT = 1 };
 
 // Dipindah ke atas — alasan sama dengan AiLine & Vec3f: arduino-cli men-generate
@@ -4217,6 +4220,17 @@ void drawAppIcon(LGFX_Sprite& s, char sym, int cx, int cy, int r, uint16_t bgCir
       s.fillRect(cx-cw/2-1, cy-rr/3+cw+max(2,rr/3), cw+2, 2, ic); // alas
       break;
     }
+    case 'm': { // Musik: dua not berpalang
+      int rr=max(8,r-6);
+      int hx=max(3,rr/3);
+      int lx=cx-rr/2, rx=cx+rr/2, hy=cy+rr/2-2;
+      s.fillCircle(lx, hy, hx, ic);
+      s.fillCircle(rx, hy, hx, ic);
+      s.fillRect(lx+hx-1, cy-rr/2, 2, hy-(cy-rr/2), ic);
+      s.fillRect(rx+hx-1, cy-rr/2, 2, hy-(cy-rr/2), ic);
+      s.fillRect(lx+hx-1, cy-rr/2, rx-lx+2, 3, ic);
+      break;
+    }
     default: {
       s.setTextColor(ic); s.setTextSize(2);
       char b[2]={sym,0};
@@ -4348,8 +4362,12 @@ void drawPomo(LGFX_Sprite&); void pomoTouch(int,int,bool,bool);
 void wakeEnter(); void wakeExit();
 void drawWake(LGFX_Sprite&); void wakeTouch(int,int,bool,bool);
 void wakeBegin(); void wakeLoopPoll(); void wakeYieldMic(uint32_t holdMs);
+// ---- Musik (S3 master -> ESP32-CAM A2DP) -- definisi di musicbt_renphone.ino ----
+void musicEnter(); void musicExit();
+void drawMusic(LGFX_Sprite&); void musicTouch(int,int,bool,bool);
+void musicLoopPoll();
 
-AppDef apps[31] = {
+AppDef apps[32] = {
   { "Jam",        'J', 0, clockEnter,    clockExit,    drawClock,        clockTouch,    SCR_CLOCK },
   { "Kalkulator", '+', 0, calcEnter,     calcExit,     drawCalc,         calcTouch,     SCR_CALC },
   { "Orientasi3D", '3', 0, sensorEnter,   sensorExit,   drawSensor,       sensorTouch,   SCR_SENSOR },
@@ -4393,8 +4411,10 @@ AppDef apps[31] = {
   { "Pomodoro",   'T', 0, pomoEnter,    pomoExit,     drawPomo,         pomoTouch,     SCR_POMODORO },
   // ---- v115: Wake Word -- kata kunci suara buatan sendiri (permintaan user) ----
   { "Wake Word",  'w', 0, wakeEnter,    wakeExit,     drawWake,         wakeTouch,     SCR_WAKE },
+  // ---- Musik: pemutar MP3 SD -> TWS lewat ESP32-CAM (kabel UART) ----
+  { "Musik",      'm', 0, musicEnter,   musicExit,    drawMusic,        musicTouch,    SCR_MUSIC },
 };
-#define APP_COUNT 31
+#define APP_COUNT 32
 
 // =============================================
 // NOTIFIKASI BADGE (BARU) -- angka kecil merah di pojok ikon app, mirip
@@ -16101,6 +16121,7 @@ void loop(){
 
   checkAiWatchdog();
   wakeLoopPoll(); // v115: urus hasil task wake word (simpan template, aksi pas terdeteksi) -- murah kalau gak ada kerjaan
+  musicLoopPoll(); // Musik: toast/redraw/simpan prefs -- no-op kalau app belum pernah dibuka
   appMemGuardTick(); // v92: "batas aman RAM" -- kill cache RAM app astronomi paling lama nganggur kalau RAM internal mepet, lihat definisinya dekat appOnEnter/appOnExit
   diUpdate();              // v14: urus animasi/auto-collapse Dynamic Island
   triviaPeriodicUpdate();  // v14: urus spinner loading & auto-lanjut soal Trivia
