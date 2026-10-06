@@ -1,0 +1,47 @@
+name: Build CAM BT Co-Processor
+
+on:
+  push:
+    branches: [ "main", "master" ]
+    paths: [ "cam_bt_coprocessor/**", ".github/workflows/build-cam-coprocessor.yml" ]
+  pull_request:
+    branches: [ "main", "master" ]
+    paths: [ "cam_bt_coprocessor/**" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Arduino CLI
+        uses: arduino/setup-arduino-cli@v2
+
+      - name: Install ESP32 core & libraries
+        run: |
+          arduino-cli config init --overwrite
+          arduino-cli config set board_manager.additional_urls https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
+          arduino-cli config set library.enable_unsafe_install true
+          arduino-cli core update-index
+          arduino-cli core install esp32:esp32
+
+          arduino-cli lib install "audio-tools" || \
+            arduino-cli lib install --git-url https://github.com/pschatzmann/arduino-audio-tools.git
+          arduino-cli lib install "arduino-libhelix" || \
+            arduino-cli lib install --git-url https://github.com/pschatzmann/arduino-libhelix.git
+          arduino-cli lib install "ESP32-A2DP" || \
+            arduino-cli lib install --git-url https://github.com/pschatzmann/ESP32-A2DP.git
+
+      - name: Compile CAM sketch
+        run: |
+          arduino-cli compile --fqbn esp32:esp32:esp32cam \
+            --board-options "PartitionScheme=huge_app" \
+            cam_bt_coprocessor --output-dir build_cam
+
+      - name: Upload Binary Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: cam-bt-coprocessor-binaries
+          path: build_cam/*.bin
