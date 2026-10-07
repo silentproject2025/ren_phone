@@ -19,6 +19,8 @@
 //  BELUM PERNAH di-compile di environment (gak ada toolchain ESP32).
 // =====================================================================
 #include "rplink.h"
+#include "ryne_engine.h"
+#include <new>
 #include <Preferences.h>
 #include <vector>
 #include <algorithm>
@@ -63,7 +65,20 @@ static volatile bool musLoaded = false;      // ada lagu yg lagi di-stream/diput
 static volatile bool musPaused = false;
 static volatile int  musVol = 80;
 static volatile int  musRepeat = 0;          // 0 mati, 1 semua, 2 satu
-static volatile bool musShuffle = false;
+static volatile int  musShufMode = 0;       // 0 mati, 1 acak, 2 AI (RYNE v2)
+
+// ---- RYNE v2 (engine di ryne_engine.h) ----
+static RyneEngine*   ryne = nullptr;        // dialokasi di PSRAM, hanya disentuh task musik
+static int           musEngineCur = -1;     // lagu yg sedang "dibukukan" engine
+static int           musHist[16];
+static int           musHistN = 0;
+static volatile int  musVibeIdx = 6, musVibePct = 0;
+static volatile bool musLiked = false;
+static volatile bool musRyneDirty = false;
+static uint32_t      musRyneSaveMs = 0, musTickMs = 0;
+static volatile uint32_t musUiTouch = 0;
+static uint32_t      musUiTouchSeen = 0;
+static int           musLastVolSeen = -1;
 static volatile uint32_t musDurMs = 0;
 static volatile uint32_t musKbps = 0, musSr = 0;
 static volatile bool musStreaming = false, musFileDone = false;
@@ -136,6 +151,84 @@ static void musFmtTime(char* out, uint32_t ms) {
 }
 
 // =====================================================================
+//  RYNE glue (task musik)
+// =====================================================================
+static uint32_t musKey(const String& path) {          // FNV-1a nama file (huruf kecil)
+  int sl = path.lastIndexOf('/');
+  String b = (sl >= 0) ? path.substring(sl + 1) : path;
+  b.toLowerCase();
+  uint32_t h = 2166136261u;
+  for (int i = 0; i < (int)b.length(); i++) { h ^= (uint8_t)b[i]; h *= 16777619u; }
+  return h;
+}
+
+static int musHourNow() {
+  time_t t = time(nullptr);
+  if (t < 1700000000) return -1;                      // jam belum disinkron
+  struct tm tmv;
+  localtime_r(&t, &tmv);
+  return tmv.tm_hour;
+}
+
+static void musRyneLoad() {
+  File f = SD_MMC.open("/ryne2.bin", FILE_READ);
+  if (!f) return;
+  size_t sz = f.size();
+  if (sz > 0 && sz <= RyneEngine::maxSerial()) {
+    uint8_t* buf = (uint8_t*)heap_caps_malloc(sz, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (buf) {
+      if (f.read(buf, sz) == (int)sz) ryne->deserialize(buf, sz);
+      free(buf);
+    }
+  }
+  f.close();
+}
+
+static void musRyneSave() {
+  if (!ryne) return;
+  size_t cap = RyneEngine::maxSerial();
+  uint8_t* buf = (uint8_t*)heap_caps_malloc(cap, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  if (!buf) return;
+  size_t sz = ryne->serialize(buf, cap);
+  if (sz) {
+    File f = SD_MMC.open("/ryne2.tmp", FILE_WRITE);
+    if (f) {
+      size_t w = f.write(buf, sz);
+      f.close();
+      if (w == sz) { SD_MMC.remove("/ryne2.bin"); SD_MMC.rename("/ryne2.tmp", "/ryne2.bin"); }
+      else SD_MMC.remove("/ryne2.tmp");
+    }
+  }
+  free(buf);
+}
+
+static void musRyneAttach(const uint32_t* keys, int n) {
+  if (!ryne) {
+    void* mem = heap_caps_malloc(sizeof(RyneEngine), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    ryne = mem ? new (mem) RyneEngine() : new RyneEngine();
+    ryne->seed(esp_random());
+    musRyneLoad();
+  }
+  ryne->setPlaylist(n, keys);
+  musEngineCur = -1;
+  if (musCur >= 0 && musCur < n) musLiked = ryne->liked(musCur);
+}
+
+// tutup lagu yg sedang berjalan di buku engine. how: 0 habis, 1 skip, 2 pilih manual, 3 stop
+static void musEndCurrent(int how) {
+  if (ryne && musEngineCur >= 0) {
+    ryne->onTrackEnd(musEngineCur, musPlayedMs, musDurMs, how, millis());
+    musRyneDirty = true;
+  }
+  musEngineCur = -1;
+}
+
+static void musHistPush(int idx) {
+  if (musHistN < 16) musHist[musHistN++] = idx;
+  else { memmove(musHist, musHist + 1, 15 * sizeof(int)); musHist[15] = idx; }
+}
+
+// =====================================================================
 //  PLAYLIST (dipanggil di task)
 // =====================================================================
 static void musScanPlaylist() {
@@ -166,6 +259,9 @@ static void musScanPlaylist() {
     root.close();
   }
   std::sort(tmp.begin(), tmp.end(), [](const String& a, const String& b) { return a.compareTo(b) < 0; });
+  uint32_t keys[MUS_MAX_TRACKS];
+  int nk = (int)tmp.size(); if (nk > MUS_MAX_TRACKS) nk = MUS_MAX_TRACKS;
+  for (int i = 0; i < nk; i++) keys[i] = musKey(tmp[i]);
   if (xSemaphoreTake(musMtx, portMAX_DELAY) == pdTRUE) {
     musList.swap(tmp);
     xSemaphoreGive(musMtx);
@@ -174,6 +270,7 @@ static void musScanPlaylist() {
   if (musCur >= n) musCur = 0;
   if (musCur < 0) musCur = 0;
   musListTop = 0;
+  musRyneAttach(keys, n);
 }
 
 // header MP3: cari frame pertama utk sample rate & bitrate (estimasi durasi CBR)
@@ -211,7 +308,7 @@ static bool musParseMp3(uint32_t* sr, uint32_t* kbps, uint32_t* off) {
 // =====================================================================
 //  KONTROL LAGU (task)
 // =====================================================================
-static bool musStartTrack(int idx) {
+static bool musStartTrack(int idx, int prevHow) {
   int n = (int)musList.size();
   if (n == 0) { musToast("Tidak ada MP3 di /music"); return false; }
   if (!musCamAlive) { musToast("Modul BT tidak terdeteksi"); return false; }
@@ -235,6 +332,7 @@ static bool musStartTrack(int idx) {
   if (sr != 44100) musToast("MP3 bukan 44.1kHz, nada bergeser");
   musFile.seek(0);
 
+  musEndCurrent(prevHow);                       // bukukan lagu sebelumnya (reward) SEBELUM musPlayedMs di-reset
   musSeq++;
   uint8_t sq = musSeq;
   musCredit = 0; musSentSince = 0;
@@ -243,6 +341,11 @@ static bool musStartTrack(int idx) {
   musCur = idx; musLoaded = true; musPaused = false; musEnded = false;
   musPlayedMs = 0; musStreaming = true; musFileDone = false;
   musPrefsDirty = true; musPrefsMs = millis();
+  if (ryne) {
+    ryne->onTrackStart(idx, millis());
+    musEngineCur = idx;
+    musLiked = ryne->liked(idx);
+  }
   return true;
 }
 
@@ -250,7 +353,12 @@ static int musNextIdx(int dir, bool autoNext) {
   int n = (int)musList.size();
   if (n == 0) return -1;
   if (autoNext && musRepeat == 2) return musCur;
-  if (musShuffle && n > 1) {
+  if (dir < 0 && musShufMode != 0 && musHistN > 0) return musHist[--musHistN];   // "kembali" = lagu sebelumnya
+  if (musShufMode == 2 && dir > 0 && ryne && n > 1) {                            // AI: Thompson sampling
+    int i = ryne->selectNext(musCur, n, millis());
+    if (i >= 0) return i;
+  }
+  if (musShufMode != 0 && n > 1) {
     int r;
     do { r = (int)random(0, n); } while (r == musCur);
     return r;
@@ -268,15 +376,19 @@ static void musSendPause(bool pause) {
 
 static void musHandleReq(uint8_t t, int32_t a, const char* s) {
   switch (t) {
-    case 'p': musStartTrack((int)a); break;
+    case 'p': musStartTrack((int)a, 2); break;
     case 'u':
-      if (!musLoaded) musStartTrack(musCur < 0 ? 0 : musCur);
+      if (!musLoaded) musStartTrack(musCur < 0 ? 0 : musCur, 3);
       else { musPaused = !musPaused; musSendPause(musPaused); }
       break;
-    case 'n': { int i = musNextIdx(1, false); if (i >= 0) musStartTrack(i); break; }
+    case 'n': {
+      int old = musCur, i = musNextIdx(1, false);
+      if (i >= 0 && musStartTrack(i, 1) && musShufMode != 0) musHistPush(old);
+      break;
+    }
     case 'b':
-      if (musLoaded && musPlayedMs > 3000) musStartTrack(musCur);
-      else { int i = musNextIdx(-1, false); if (i >= 0) musStartTrack(i); }
+      if (musLoaded && musPlayedMs > 3000) musStartTrack(musCur, 2);
+      else { int i = musNextIdx(-1, false); if (i >= 0) musStartTrack(i, 2); }
       break;
     case 'v': {
       int v = (int)a; if (v < 0) v = 0; if (v > 127) v = 127;
@@ -285,6 +397,7 @@ static void musHandleReq(uint8_t t, int32_t a, const char* s) {
       break;
     }
     case 's':
+      musEndCurrent(3);
       musLoaded = false; musStreaming = false;
       if (musFile) musFile.close();
       rpSend(Serial1, RP_STOP, nullptr, 0);
@@ -299,6 +412,13 @@ static void musHandleReq(uint8_t t, int32_t a, const char* s) {
       rpSend(Serial1, RP_CONNECT, (const uint8_t*)s, (uint16_t)strlen(s));
       break;
     case 'r': musScanPlaylist(); break;
+    case 'k':                                     // tombol suka (toggle) untuk lagu terpilih
+      if (ryne && musCur >= 0) {
+        bool on = !ryne->liked(musCur);
+        ryne->like(musCur, on, millis());
+        musLiked = on; musRyneDirty = true;
+      }
+      break;
     default: break;
   }
 }
@@ -330,6 +450,16 @@ static void musTask(void* arg) {
                           ((uint32_t)P.payload[10] << 16) | ((uint32_t)P.payload[11] << 24);
             musLastStatusMs = millis();
             musCamAlive = true;
+            if (P.len >= 17 && ryne) {                 // energi & kecerahan audio (CAM v2)
+              uint32_t en = (uint32_t)P.payload[13] | ((uint32_t)P.payload[14] << 8);
+              uint32_t zc = (uint32_t)P.payload[15] | ((uint32_t)P.payload[16] << 8);
+              if (en > 0) {
+                float loud = log10f(1.f + (float)en) / 4.0792f; if (loud > 1.f) loud = 1.f;
+                float br = (float)zc / 260.f; if (br > 1.f) br = 1.f;
+                bool pl = (fl & 2) != 0 && musLoaded && !musPaused;
+                ryne->onAudio(loud, br, pl, millis());
+              }
+            }
           }
           break;
         case RP_ENDED:
@@ -379,9 +509,28 @@ static void musTask(void* arg) {
     // ---- 5. lagu habis -> berikutnya ----
     if (musEnded) {
       musEnded = false;
-      int i = musNextIdx(1, true);
-      if (i >= 0) musStartTrack(i);
+      musEndCurrent(0);                            // habis alami = reward positif
+      int old = musCur, i = musNextIdx(1, true);
+      if (i >= 0) { if (musStartTrack(i, 3) && musShufMode != 0 && i != old) musHistPush(old); }
       else { musLoaded = false; musStreaming = false; if (musFile) musFile.close(); }
+    }
+
+    // ---- 5b. RYNE: tick 2 Hz (vibe) + event volume/interaksi + simpan berkala ----
+    {
+      uint32_t nowT = millis();
+      if (ryne && nowT - musTickMs >= 500) {
+        musTickMs = nowT;
+        if (musLastVolSeen < 0) musLastVolSeen = musVol;
+        int dv = (int)musVol - musLastVolSeen;
+        if (dv >= 4 || dv <= -4) { ryne->onVolume(dv, nowT); musLastVolSeen = musVol; }
+        if (musUiTouch != musUiTouchSeen) { musUiTouchSeen = musUiTouch; ryne->onInteraction(nowT); }
+        ryne->tick(nowT, musHourNow(), (int)musVol, (int)musRepeat, musLoaded && !musPaused);
+        int top = ryne->vibeTop();
+        musVibeIdx = top; musVibePct = (int)(ryne->pv[top] * 100.f + 0.5f);
+        if (musRyneDirty && nowT - musRyneSaveMs > 15000) {
+          musRyneDirty = false; musRyneSaveMs = nowT; musRyneSave();
+        }
+      }
     }
 
     // ---- 6. streaming file -> CAM (kredit dari status CAM) ----
@@ -422,7 +571,7 @@ static void musBegin() {
     Preferences p; p.begin("music", true);
     musVol = p.getInt("vol", 80);
     musRepeat = p.getInt("rep", 0);
-    musShuffle = p.getBool("shuf", false);
+    musShufMode = p.getInt("smode", p.getBool("shuf", false) ? 1 : 0);
     musCur = p.getInt("cur", 0);
     p.end();
   }
@@ -487,7 +636,7 @@ void musicLoopPoll() {
     musPrefsDirty = false;
     Preferences p; p.begin("music", false);
     p.putInt("vol", musVol); p.putInt("rep", musRepeat);
-    p.putBool("shuf", musShuffle); p.putInt("cur", musCur);
+    p.putInt("smode", musShufMode); p.putInt("cur", musCur);
     p.end();
   }
 }
@@ -500,7 +649,7 @@ void musicLoopPoll() {
 static bool  mLand = true;
 static int   mHdrY, mChipH, mDafX, mDafW, mTwsX, mTwsW;
 static int   mCovX, mCovY, mCovS, mTitX, mTitY, mTitW, mSubY;
-static int   mEqX, mEqY, mEqW, mEqH;
+static int   mEqX, mEqY, mEqW, mEqH, mVibeY;
 static int   mVolY, mVolIcX, mVolSX, mVolSW;
 static int   mBarX, mBarY, mBarW, mTimeY;
 static int   mCtlCY, mShufX, mPrevX, mPlayX, mNextX, mRepX;
@@ -526,12 +675,14 @@ static void musCalcLayout() {
     mCovX = 12; mCovY = 50; mCovS = 88;
     int x0 = mCovX + mCovS + 12, rw = W - 12 - x0;
     mTitX = x0; mTitY = 52; mTitW = rw; mSubY = 74;
-    mEqX = x0; mEqY = 88; mEqW = rw; mEqH = 30;
+    mVibeY = 88;
+    mEqX = x0; mEqY = 100; mEqW = rw; mEqH = 18;
     mVolY = 124; mVolIcX = x0 + 8; mVolSX = x0 + 26; mVolSW = rw - 26;
     mBarX = 12; mBarY = 152; mBarW = W - 24; mTimeY = 141;
   } else {
     mCovS = 120; mCovX = (W - mCovS) / 2; mCovY = 48;
     mTitX = 12; mTitY = 176; mTitW = W - 24; mSubY = 197;
+    mVibeY = -1;
     mEqX = 12; mEqY = 0; mEqW = 0; mEqH = 0;
     mVolY = 208; mVolIcX = 20; mVolSX = 38; mVolSW = W - 12 - 38;
     mBarX = 12; mBarY = 242; mBarW = W - 24; mTimeY = 231;
@@ -594,6 +745,11 @@ static void musDrawRepeat(LGFX_Sprite& s, int cx, int cy, uint16_t c, bool one) 
   s.fillTriangle(cx + 9, cy - 5, cx + 3, cy - 9, cx + 3, cy - 1, c);
   s.fillTriangle(cx - 9, cy + 5, cx - 3, cy + 1, cx - 3, cy + 9, c);
   if (one) { s.setTextSize(1); s.setTextColor(c); s.setCursor(cx - 2, cy - 3); s.print("1"); }
+}
+static void musDrawHeart(LGFX_Sprite& s, int cx, int cy, uint16_t c) {
+  s.fillCircle(cx - 3, cy - 2, 3, c);
+  s.fillCircle(cx + 3, cy - 2, 3, c);
+  s.fillTriangle(cx - 6, cy - 1, cx + 6, cy - 1, cx, cy + 6, c);
 }
 static void musDrawSpeaker(LGFX_Sprite& s, int cx, int cy, uint16_t c, int lvl) {
   s.fillRect(cx - 7, cy - 3, 4, 6, c);
@@ -709,15 +865,32 @@ static void musDrawPlayer(LGFX_Sprite& s) {
   s.clearClipRect();
 
   // info
-  char sub[56];
-  if (musLoaded && musKbps)
-    snprintf(sub, sizeof(sub), "%d/%d   MP3 %ukbps  %u.%ukHz", musCur + 1, musListCount(),
-             (unsigned)musKbps, (unsigned)(musSr / 1000), (unsigned)((musSr % 1000) / 100));
-  else
-    snprintf(sub, sizeof(sub), "%d/%d", musCur + 1, musListCount());
+  char sub[64];
+  int vp = musVibePct, vi = musVibeIdx;
+  if (vi < 0 || vi >= RY_NV) vi = 6;
+  if (mLand) {
+    if (musLoaded && musKbps)
+      snprintf(sub, sizeof(sub), "%d/%d   MP3 %ukbps  %u.%ukHz", musCur + 1, musListCount(),
+               (unsigned)musKbps, (unsigned)(musSr / 1000), (unsigned)((musSr % 1000) / 100));
+    else
+      snprintf(sub, sizeof(sub), "%d/%d", musCur + 1, musListCount());
+  } else {
+    if (vp > 0) snprintf(sub, sizeof(sub), "%d/%d   %s %d%%", musCur + 1, musListCount(), RY_VIBE_NAME[vi], vp);
+    else        snprintf(sub, sizeof(sub), "%d/%d", musCur + 1, musListCount());
+  }
   s.setTextSize(1); s.setTextColor(T().subtext);
   int sw = s.textWidth(sub);
   s.setCursor(mLand ? mTitX : mTitX + (mTitW - sw) / 2, mSubY); s.print(sub);
+  musDrawHeart(s, mTitX + mTitW - 8, mSubY + 4, musLiked ? 0xF9A6 : blend565(T().bg, T().text, 70));
+
+  if (mVibeY >= 0) {                                   // baris vibe (RYNE)
+    uint16_t vc = musHsv(vi * 45.f, 0.7f, 0.95f);
+    s.fillCircle(mTitX + 4, mVibeY + 4, 3, vc);
+    char vb[40];
+    if (vp > 0) snprintf(vb, sizeof(vb), "Vibe: %s %d%%", RY_VIBE_NAME[vi], vp);
+    else        snprintf(vb, sizeof(vb), "Vibe: mempelajari...");
+    s.setTextColor(T().text); s.setCursor(mTitX + 12, mVibeY); s.print(vb);
+  }
 
   musDrawEq(s, playing);
 
@@ -746,8 +919,10 @@ static void musDrawPlayer(LGFX_Sprite& s) {
   }
 
   // kontrol
-  musDrawShuffle(s, mShufX, mCtlCY, musShuffle ? T().accent : T().subtext);
-  if (musShuffle) s.fillCircle(mShufX, mCtlCY + 15, 2, T().accent);
+  int sm = musShufMode;
+  musDrawShuffle(s, mShufX, mCtlCY, sm == 2 ? T().accent2 : (sm == 1 ? T().accent : T().subtext));
+  if (sm == 1) s.fillCircle(mShufX, mCtlCY + 15, 2, T().accent);
+  if (sm == 2) { s.setTextSize(1); s.setTextColor(T().accent2); s.setCursor(mShufX - 6, mCtlCY + 11); s.print("AI"); }
   musDrawRepeat(s, mRepX, mCtlCY, musRepeat ? T().accent : T().subtext, musRepeat == 2);
   if (musRepeat) s.fillCircle(mRepX, mCtlCY + 15, 2, T().accent);
   musDrawIcon(s, 0, mPrevX, mCtlCY, T().text);
@@ -865,6 +1040,7 @@ void drawMusic(LGFX_Sprite& s) {
 
 void musicTouch(int x, int y, bool held, bool isNew) {
   musCalcLayout();
+  if (isNew) musUiTouch++;                          // sinyal 'interaksi' utk RYNE
 
   // slider volume: boleh di-drag (event held)
   if (musPage == 0 && (isNew || held) && musHit(x, y, mVolSX - 6, mVolY - 4, mVolSW + 12, 20)) {
@@ -917,7 +1093,14 @@ void musicTouch(int x, int y, bool held, bool isNew) {
   if (musHitC(x, y, mPlayX, mCtlCY, mPlayR + 6)) { musPost('u', 0, nullptr); vibTap(); needRedraw = true; return; }
   if (musHitC(x, y, mPrevX, mCtlCY, 22)) { musPost('b', 0, nullptr); vibTap(); needRedraw = true; return; }
   if (musHitC(x, y, mNextX, mCtlCY, 22)) { musPost('n', 0, nullptr); vibTap(); needRedraw = true; return; }
-  if (musHitC(x, y, mShufX, mCtlCY, 20)) { musShuffle = !musShuffle; musPrefsDirty = true; musPrefsMs = millis(); vibTap(); needRedraw = true; return; }
+  if (musHitC(x, y, mShufX, mCtlCY, 20)) {
+    musShufMode = (musShufMode + 1) % 3; musPrefsDirty = true; musPrefsMs = millis(); vibTap();
+    showToast(musShufMode == 0 ? "Acak: mati" : (musShufMode == 1 ? "Acak: biasa" : "Acak: AI (RYNE)"));
+    needRedraw = true; return;
+  }
+  if (musHitC(x, y, mTitX + mTitW - 8, mSubY + 4, 14)) {          // hati = suka
+    musPost('k', 0, nullptr); musLiked = !musLiked; vibTap(); needRedraw = true; return;
+  }
   if (musHitC(x, y, mRepX, mCtlCY, 20)) { musRepeat = (musRepeat + 1) % 3; musPrefsDirty = true; musPrefsMs = millis(); vibTap(); needRedraw = true; return; }
 
   if (musHitC(x, y, mVolIcX, mVolY + 7, 12)) {      // ikon speaker = bisu / kembalikan

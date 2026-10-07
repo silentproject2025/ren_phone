@@ -70,14 +70,20 @@ patch("phone.ino", phone)
 
 wf = ".github/workflows/build-firmware.yml"
 if os.path.exists(wf):
-    patch(wf, [("workflow: salin file Musik",
-        "          cp wakeword_renphone.ino build_sketch/\n",
-        "          cp wakeword_renphone.ino build_sketch/\n          cp musicbt_renphone.ino build_sketch/\n          cp rplink.h build_sketch/\n",
-        "cp musicbt_renphone.ino build_sketch/")])
+    patch(wf, [
+      ("workflow: salin file Musik",
+       "          cp wakeword_renphone.ino build_sketch/\n",
+       "          cp wakeword_renphone.ino build_sketch/\n          cp musicbt_renphone.ino build_sketch/\n          cp rplink.h build_sketch/\n",
+       "cp musicbt_renphone.ino build_sketch/"),
+      ("workflow: salin ryne_engine.h",
+       "          cp rplink.h build_sketch/\n",
+       "          cp rplink.h build_sketch/\n          cp ryne_engine.h build_sketch/\n",
+       "cp ryne_engine.h build_sketch/"),
+    ])
 else:
     print("[info ] workflow tidak ada, lewati")
 
-for f in ("musicbt_renphone.ino", "rplink.h"):
+for f in ("musicbt_renphone.ino", "rplink.h", "ryne_engine.h"):
     if not os.path.exists(f):
         print(f"[PERHATIAN] {f} belum ada di folder ini -- salin dari bundle")
 print("Selesai.")

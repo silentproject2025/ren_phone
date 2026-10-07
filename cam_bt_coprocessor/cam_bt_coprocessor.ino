@@ -12,11 +12,11 @@
  *    S3 GPIO16 (RX) <- CAM GPIO14 (TX)
  *    GND            -- GND
  *    5V (pin 5V CAM, BUKAN 3V3)
- *  Kartu SD di CAM TIDAK dipakai (jangan di-mount: pin 12-15 dipakai link).
+ *  Kartu SD di CAM TIDAK dipakai: CABUT kartunya dari slot (GPIO13/14 tersambung ke slot SD).
  *  UART0 (GPIO1/3) bebas buat flash & log debug.
  *
  *  Arduino IDE / arduino-cli:
- *    Board : ESP32 Wrover Module (atau AI Thinker ESP32-CAM)
+ *    Board : AI Thinker ESP32-CAM (PSRAM 4MB), Partition Scheme: Huge APP
  *    PSRAM : Enabled
  *    Library: AudioTools, ESP32-A2DP (pschatzmann)
  *
@@ -80,6 +80,9 @@ static volatile int32_t  trackEndSilence = 0;
 static volatile uint32_t bytesPlayedTotal = 0;
 static volatile int      gainCur = 0, gainTarget = 256;  // 0..256, ramp per sample
 static volatile uint8_t  curSeq = 0;
+// fitur audio utk RYNE (S3): dihitung dari PCM SEBELUM gain/volume, jadi mencerminkan lagu, bukan volume pendengar
+static volatile uint32_t accSum = 0, accCnt = 0, accZc = 0;
+static int16_t           accPrev = 0;
 static bool              endedSent = false;
 
 static volatile bool     btConnected = false;
@@ -180,9 +183,14 @@ int32_t IRAM_ATTR getSoundData(Frame* fb, int32_t frameCount) {
   if (tr < byteCount) memset((uint8_t*)fb + tr, 0, byteCount - tr);
   bytesPlayedTotal += (uint32_t)tr;
 
-  // ramp gain per sample (jeda/lanjut tanpa "tek", ~6 ms)
+  // ramp gain per sample (jeda/lanjut tanpa "tek", ~6 ms) + akumulasi fitur audio
   int g = gainCur, gt = gainTarget;
+  uint32_t aS = 0, aZ = 0; int16_t pv = accPrev;
   for (int32_t i = 0; i < frameCount; i++) {
+    int16_t sm = fb[i].channel1;
+    aS += (uint32_t)(sm < 0 ? -(int32_t)sm : (int32_t)sm);
+    if ((sm ^ pv) < 0) aZ++;
+    pv = sm;
     if (g < gt) g++; else if (g > gt) g--;
     if (g != 256) {
       fb[i].channel1 = (int16_t)(((int32_t)fb[i].channel1 * g) >> 8);
@@ -190,6 +198,7 @@ int32_t IRAM_ATTR getSoundData(Frame* fb, int32_t frameCount) {
     }
   }
   gainCur = g;
+  accPrev = pv; accSum += aS; accZc += aZ; accCnt += (uint32_t)frameCount;
 
   btCbRunning = false;
   return frameCount;
@@ -404,9 +413,12 @@ static void linkRxTask(void* param) {
 //  [0] flags: b0 bt, b1 playing, b2 scanning, b3 paused, b4 streamEnded, b5 decodeDone
 //  [1] volume  [2] txgain  [3..6] ruang kosong ring MP3 (u32 LE, = "kredit" S3)
 //  [7] isi ring PCM (%)  [8..11] posisi putar ms (u32 LE)  [12] seq
+//  [13..14] energi: rata2 |sampel kiri| (u16 LE, 0..32767)
+//  [15..16] zero-crossing per 1024 sampel (u16 LE) = proxy "kecerahan"
+//  (v1 S3 cukup baca 13 byte; v2 baca 17 byte utk RYNE)
 // ----------------------------------------------------------
 static void sendStatus() {
-  uint8_t b[13];
+  uint8_t b[17];
   uint8_t fl = 0;
   if (btConnected)               fl |= 1;
   if (haveTrack && !paused)      fl |= 2;
@@ -421,6 +433,11 @@ static void sendStatus() {
   uint32_t ms = (uint32_t)(((uint64_t)bytesPlayedTotal * 1000ULL) / BYTES_PER_SEC);
   b[8] = ms & 0xFF; b[9] = (ms >> 8) & 0xFF; b[10] = (ms >> 16) & 0xFF; b[11] = (ms >> 24) & 0xFF;
   b[12] = curSeq;
+  uint32_t sS = accSum, sC = accCnt, sZ = accZc;      // ambil lalu kurangi (aman thd penulis di callback BT)
+  accSum -= sS; accCnt -= sC; accZc -= sZ;
+  uint16_t en = sC ? (uint16_t)(sS / sC) : 0;
+  uint16_t zr = sC ? (uint16_t)(((uint64_t)sZ * 1024ULL) / sC) : 0;
+  b[13] = en & 0xFF; b[14] = en >> 8; b[15] = zr & 0xFF; b[16] = zr >> 8;
   rpSend(Serial2, RP_STATUS, b, sizeof(b));
 }
 

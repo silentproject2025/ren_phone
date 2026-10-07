@@ -25,7 +25,7 @@
 #define RP_TXGAIN   'T'   // payload: [0..7]
 
 // ---- CAM -> S3 ----
-#define RP_STATUS   'S'   // tiap 40ms, 13 byte (lihat bt_coprocessor.ino sendStatus)
+#define RP_STATUS   'S'   // tiap 40ms, 17 byte (lihat cam_bt_coprocessor.ino sendStatus)
 #define RP_ENDED    'E'   // lagu habis diputar. payload: [seq]
 #define RP_SCANRES  'L'   // hasil scan. payload: [rssi int8][nama...]
 #define RP_SCANDONE 'W'   // scan selesai
