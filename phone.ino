@@ -4874,11 +4874,11 @@ const float HOME_SPRING_K      = 0.00055f;// kekakuan pegas tepi (1/ms^2)
 const float HOME_SPRING_C      = 0.036f;  // redaman pegas (1/ms) -- zeta ~0.77 = melenting tipis
 const float HOME_PRESS_IN_MS   = 90.0f;   // durasi ikon mengecil pas ditekan
 const float HOME_PRESS_OUT_MS  = 160.0f;  // durasi ikon balik pas dilepas
-int homeCols(){ return currentOrient==ORIENT_LANDSCAPE ? 3 : 2; }
-int homeCardW(){ int cols=homeCols(); return (SCR_W - (cols+1)*8)/cols; }
+int homeCols(){ return currentOrient==ORIENT_LANDSCAPE ? 4 : 3; } // HOME-ICON-BULAT: dulu 3/2 kolom (kartu besar)
+int homeCardW(){ int cols=homeCols(); return (SCR_W - (cols+1)*10)/cols; } // HOME-ICON-BULAT: gap 10 = sama dgn drawHome/touch
 // v71 REDESIGN: kartu app dipertinggi dikit (60->68) krn ikon diperbesar &
 // jarak ikon-ke-label dilebarin biar lebih lega/gak sumpek (lihat drawHome).
-int homeCardH(){ return 88; } // v-baru: 68->88, kartu kaca penuh butuh ruang lbh (icon+label di dalam kartu)
+int homeCardH(){ return 62; } // HOME-ICON-BULAT: ikon bulat kecil + label, tanpa kartu kaca (dulu 88) // v-baru: 68->88, kartu kaca penuh butuh ruang lbh (icon+label di dalam kartu)
 // v72 REDESIGN (permintaan user: dock kegedean & kurang menarik, minta
 // dikecilkan+dipercantik, gaya iOS): tinggi dock diciutin dr 46->38 & lift
 // dr tepi bawah diperkecil dikit (10->8) biar tetep "melayang" tp gak makan
@@ -4983,6 +4983,17 @@ bool loadWallpaper(){
   return true;
 }
 
+// HOME-ICON-BULAT: label di bawah ikon bulat, dipotong pakai '.' kalau lebih lebar dari sel
+void homeDrawLabel(LGFX_Sprite& s,const char* name,int cx,int y,int maxW){
+  char buf[24]; strncpy(buf,name,sizeof(buf)-1); buf[sizeof(buf)-1]=0;
+  s.setTextSize(1);
+  int n=(int)strlen(buf); bool cut=false;
+  while(n>3 && s.textWidth(buf)>maxW){ buf[--n]=0; cut=true; }
+  if(cut && n>=1) buf[n-1]='.';
+  int w=s.textWidth(buf);
+  s.setCursor(cx-w/2,y); s.print(buf);
+}
+
 void drawHome(LGFX_Sprite& s,float sc){
   // v106: mode PITA -- cuma area grid (bandTop..bandBot) yg digambar; status
   // bar, header, kolom cari, dock & keyboard DILEWATI (isinya tetap dari
@@ -5040,7 +5051,7 @@ void drawHome(LGFX_Sprite& s,float sc){
 
   int cols=homeCols(), cw=homeCardW(), ch=homeCardH();
   int gap=10, gridTop=homeGridTop(); // v-baru: gap 8->10, kartu lbh gede sekarang butuh nafas lbh lega
-  int iconR = min(cw,ch-18)/2 - 6; if(iconR>26) iconR=26; if(iconR<14) iconR=14;
+  int iconR = min(cw,ch-16)/2 - 2; if(iconR>24) iconR=24; if(iconR<14) iconR=14; // HOME-ICON-BULAT
 
   if(searching){
     // v-baru: selagi ada teks pencarian, grid HASIL FILTER dirender statis
@@ -5063,15 +5074,13 @@ void drawHome(LGFX_Sprite& s,float sc){
         float pa = homePressAmt(i);
         uint16_t tileTint = blend565(T().surface2, apps[i].color, 46);
         uint8_t tileAlpha = (uint8_t)constrain(150+(int)(pa*55),0,255);
-        drawGlassPanel(s, x, y, cw, ch, 16, tileTint, tileAlpha);
+        (void)tileTint; (void)tileAlpha; // HOME-ICON-BULAT: tanpa kartu kaca
         int cx=x+cw/2, cy=y+(ch-16)/2;
         int rEff = iconR - (int)lroundf(pa*iconR*0.12f);
         drawAppIcon(s, apps[i].sym, cx, cy, rEff, apps[i].color);
         drawNotifBadge(s, cx, cy, iconR, appNotifCount[i]);
         s.setTextColor(T().text);s.setTextSize(1);
-        int nl=s.textWidth(apps[i].name);
-        s.setCursor(x+cw/2-nl/2, y+ch-14);
-        s.print(apps[i].name);
+        homeDrawLabel(s, apps[i].name, x+cw/2, y+ch-14, cw+6);
       }
     }
   } else {
@@ -5101,15 +5110,13 @@ void drawHome(LGFX_Sprite& s,float sc){
       float pa = homePressAmt(i);
       uint16_t tileTint = blend565(T().surface2, apps[i].color, 46);
       uint8_t tileAlpha = (uint8_t)constrain(150+(int)(pa*55),0,255);
-      drawGlassPanel(s, x, y, cw, ch, 16, tileTint, tileAlpha);
+      (void)tileTint; (void)tileAlpha; // HOME-ICON-BULAT: tanpa kartu kaca
       int cx=x+cw/2, cy=y+(ch-16)/2;
       int rEff = iconR - (int)lroundf(pa*iconR*0.12f);
       drawAppIcon(s, apps[i].sym, cx, cy, rEff, apps[i].color);
       drawNotifBadge(s, cx, cy, iconR, appNotifCount[i]);
       s.setTextColor(T().text);s.setTextSize(1);
-      int nl=s.textWidth(apps[i].name);
-      s.setCursor(x+cw/2-nl/2, y+ch-14);
-      s.print(apps[i].name);
+      homeDrawLabel(s, apps[i].name, x+cw/2, y+ch-14, cw+6);
     }
     if(band) s.setClipRect(0,bandTop,SCR_W,bandH); else s.clearClipRect(); // v105/v106: akhir clip grid (mode pita: balik ke clip pita, rel scroll masih di dalamnya)
 
