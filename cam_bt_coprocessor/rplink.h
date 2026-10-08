@@ -23,6 +23,10 @@
 #define RP_SCAN     'A'   // mulai scan perangkat BT
 #define RP_CONNECT  'C'   // payload: nama perangkat (teks, tanpa NUL)
 #define RP_TXGAIN   'T'   // payload: [0..7]
+#define RP_BTMODE   'B'   // payload: [1=Bluetooth nyala, 0=mati] (tombol BT di Control Center)
+#ifndef RP_PING
+#define RP_PING     'G'   // keepalive S3 -> CAM, tanpa payload (CAM mengabaikannya)
+#endif
 
 // ---- CAM -> S3 ----
 #define RP_STATUS   'S'   // tiap 40ms, 17 byte (lihat cam_bt_coprocessor.ino sendStatus)

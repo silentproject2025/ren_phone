@@ -3586,9 +3586,12 @@ bool  ccAnimating=false;
 float ccAnimFromH=0, ccAnimToH=0;
 unsigned long ccAnimStartMs=0;
 const float CC_ANIM_MS = 200.0f;
-#define CC_COLS 3
-#define CC_ROWS 3
-#define CC_ITEMS 9
+#define CC_ITEMS 10 // +Bluetooth (index 9)
+int ccCols(){ return currentOrient==ORIENT_LANDSCAPE ? 5 : 3; } // landscape 5x2, portrait 3x4 -> 10 tombol muat
+#define CC_COLS ccCols()
+#define CC_ROWS ((CC_ITEMS+CC_COLS-1)/CC_COLS)
+// Bluetooth (modul ESP32-CAM) -- definisi di musicbt_renphone.ino
+bool btCcEnabled(); bool btCcConnected(); void btCcToggle();
 int ccPanelH(); // forward decl - didefinisikan di bawah, dipakai openControlCenter()
 void ccSnapBtnAnim(); // v108 forward decl (definisi di bawah, dekat drawCCIcon)
 void openControlCenter(){
@@ -3655,6 +3658,7 @@ void ccActOrient(){
     showToast("Auto-rotate dimatikan (manual)");
   }
 }
+void ccActBluetooth(){ btCcToggle(); } // nyalakan/matikan Bluetooth (modul CAM)
 void ccActShake(){
   shakeEnabled = !shakeEnabled;
   saveShakePref();
@@ -3692,7 +3696,7 @@ void ccActSilent(){
 //  - Slider Brightness sekarang bisa di-DRAG (dulu cuma bereaksi di
 //    ketukan pertama, gak ikut jari).
 // =============================================
-float ccBtnAnim[CC_ITEMS]={0,0,0,0,0,0,0,0,0}; // 0=OFF..1=ON, ditarik pelan ke status asli
+float ccBtnAnim[CC_ITEMS]={0}; // 0=OFF..1=ON, ditarik pelan ke status asli
 int   ccPressIdx=-1;
 unsigned long ccPressMs=0;
 const unsigned long CC_PRESS_MS=140;
@@ -3707,6 +3711,7 @@ bool ccActiveState(int i){
     case 5: return shakeEnabled;
     case 7: return npxOn;
     case 8: return !vibEnabled;
+    case 9: return btCcEnabled(); // Bluetooth nyala = tombol terisi
     default: return false; // 3 Tema, 4 Orientasi, 6 Kunci = aksi sekali tekan, bukan toggle
   }
 }
@@ -3809,6 +3814,23 @@ void drawCCIcon(LGFX_Sprite& s, int idx, int cx, int cy, int r, bool active, uin
       s.fillCircle(cx,cy-r+4,2, active?T().bg:(uint16_t)0x001F);
       break;
     }
+    case 9: { // Bluetooth: rune "B" (+ titik hijau kalau TWS terhubung)
+      int h=r-3; if(h<6) h=6;
+      int w=(h*55)/100; if(w<3) w=3;
+      int q=h/2;
+      for(int dx=0;dx<2;dx++){ // 2 garis berdampingan -> rune lebih tebal & jelas
+        s.drawLine(cx+dx,cy-h, cx+dx,cy+h, ic);
+        s.drawLine(cx+dx,cy-h, cx+w+dx,cy-q, ic);
+        s.drawLine(cx+w+dx,cy-q, cx-w+dx,cy+q, ic);
+        s.drawLine(cx+dx,cy+h, cx+w+dx,cy+q, ic);
+        s.drawLine(cx+w+dx,cy+q, cx-w+dx,cy-q, ic);
+      }
+      if(btCcConnected()){
+        s.fillCircle(cx+r-1,cy-r+3,4,fillCol);
+        s.fillCircle(cx+r-1,cy-r+3,3,T().good);
+      }
+      break;
+    }
     case 8: { // Mode Senyap: lonceng, dicoret kalau getar lg dimatikan (active=true -> getar OFF)
       s.fillTriangle(cx,cy-8,cx-7,cy+3,cx+7,cy+3,ic);
       s.fillRoundRect(cx-3,cy+4,6,3,1,ic);
@@ -3845,7 +3867,7 @@ void drawControlCenter(LGFX_Sprite& s){
     int ccx=x+cw/2, ccy=y+crad;
 
     // pop-in bergantian: tombol ke-i mulai sedikit lebih lambat
-    float li=(openP-0.20f-0.035f*i)/0.45f;
+    float li=(openP-0.20f-0.03f*i)/0.45f;
     if(li<=0.0f) continue;
     if(li>1.0f) li=1.0f;
     float u=1.0f-li; float pop=1.0f-u*u*u; // ease-out cubic
@@ -3892,7 +3914,7 @@ void ccTouch(int x,int y){
   if(y>ph) { closeControlCenter(); return; }
 
   int cw=ccCardW(), ch=ccCardH(), gap=ccGap(), top=ccGridTop(), gx=ccGridX();
-  void(*actions[CC_ITEMS])() = { ccActWifi, ccActAirplane, ccActDnd, ccActTheme, ccActOrient, ccActShake, nullptr, ccActNeopixel, ccActSilent };
+  void(*actions[CC_ITEMS])() = { ccActWifi, ccActAirplane, ccActDnd, ccActTheme, ccActOrient, ccActShake, nullptr, ccActNeopixel, ccActSilent, ccActBluetooth };
   for(int i=0;i<CC_ITEMS;i++){
     int col=i%CC_COLS, row=i/CC_COLS;
     int bx=gx+col*(cw+gap);
@@ -3917,9 +3939,17 @@ void ccTouch(int x,int y){
 // =============================================
 // Setiap ikon digambar dgn bentuk yg berhubungan dgn fungsinya, dgn warna
 // kontras (bg = warna teks/garis, fg tetap dipakai utk latar lingkaran).
+// Warna glyph ikon dipilih dari KECERAHAN lingkaran: lingkaran terang -> glyph gelap,
+// lingkaran gelap -> glyph putih. Dulu selalu T().bg, jadi di tema Light/Pastel (bg terang)
+// glyph nyaris tak terlihat, dan di App Switcher (lingkaran surface2 gelap) glyph gelap-on-gelap.
+uint16_t appIconInk(uint16_t c){
+  int r=((c>>11)&31)*255/31, g=((c>>5)&63)*255/63, b=(c&31)*255/31;
+  int lum=(r*299+g*587+b*114)/1000;
+  return lum>=120 ? (uint16_t)0x1082 : (uint16_t)0xFFFF;
+}
 void drawAppIcon(LGFX_Sprite& s, char sym, int cx, int cy, int r, uint16_t bgCircle){
   s.fillCircle(cx,cy,r,bgCircle);
-  uint16_t ic = T().bg; // warna vektor ikon (kontras dgn lingkaran berwarna)
+  uint16_t ic = appIconInk(bgCircle); // warna vektor ikon (kontras dgn lingkaran berwarna)
   switch(sym){
     case 'J': { // Jam: wajah jam + jarum
       s.drawCircle(cx,cy,r-3,ic);
@@ -4484,7 +4514,7 @@ void initAppColors(){
   apps[0].color=T().accent;   apps[1].color=T().accent2;
   apps[2].color=0x07FF;       apps[3].color=0xF81F;
   apps[4].color=0xFFE0;       apps[5].color=T().good;
-  apps[6].color=0xFD40;       apps[7].color=0x3ADF;
+  apps[6].color=0xFD40;       apps[7].color=0x5D7F;
   apps[8].color=0xFBE0; // MJPEG player - warna oranye
   apps[9].color=0xF800; // Update FW - warna merah (menonjol/perlu perhatian)
   apps[10].color=0x07E0; // Baterai - warna hijau
@@ -4501,16 +4531,23 @@ void initAppColors(){
   apps[14].color=0x861F; // TicTacToe - ungu
   apps[15].color=0xFB40; // Breakout - oranye kemerahan
   apps[16].color=0xFDA0; // Trivia Quiz - kuning-oranye cerah (BARU v14)
-  apps[17].color=0x3A5F; // Astronomi (APOD NASA) - biru indigo spt langit malam (BARU v21)
+  apps[17].color=0x7CBF; // Astronomi (APOD NASA) - biru indigo spt langit malam (BARU v21)
   // ---- v22: warna app astronomi tambahan ----
   apps[18].color=0xFBC0; // NEO Asteroid - oranye debu asteroid
   apps[19].color=0x1F9F; // Bumi EPIC - biru samudra Bumi
-  apps[20].color=0x781F; // Galeri NASA - ungu (tema galeri/kreatif)
+  apps[20].color=0xC37F; // Galeri NASA - ungu (tema galeri/kreatif)
   apps[21].color=0xF81F; // Neopixel - magenta terang (kesan lampu RGB nyala)
   apps[23].color=0x07FF; // HWmonitor - cyan terang (kesan teknis/monitoring)
-  apps[24].color=0x4A1F; // Labirin - biru-ungu spooky (kesan kejar-kejaran/hantu)
-  apps[25].color=0xC2E2; // Inferno - oranye membara ala lorong neraka (BARU v74)
-  apps[26].color=0xE1C6; // NES - merah klasik ala kaset NES (BARU v86)
+  apps[24].color=0x8BDF; // Labirin - biru-ungu terang
+  apps[25].color=0xFB80; // Inferno - oranye membara
+  apps[26].color=0xF187; // NES - merah klasik
+  // v-baru: index 22 & 27-31 dulu TIDAK PERNAH diisi -> default 0 = HITAM (ikon gak keliatan).
+  apps[22].color=0xFB2E; // Mic Level - merah koral
+  apps[27].color=0xA745; // DOOM - hijau limau
+  apps[28].color=0x3FF9; // PPU Demo - mint/aqua
+  apps[29].color=0xFB28; // Pomodoro - tomat
+  apps[30].color=0xB41F; // Wake Word - ungu muda
+  apps[31].color=0xFA12; // Musik - pink terang
 }
 
 int appIndexForScreen(Screen s){

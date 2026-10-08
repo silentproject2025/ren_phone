@@ -87,6 +87,7 @@ static bool              endedSent = false;
 
 static volatile bool     btConnected = false;
 static uint32_t          btDisconnectedAt = 0;
+static volatile bool     btEnabled = true;   // saklar BT dari S3 (tombol Control Center)
 static volatile bool     isScanning = false, scanDone = false;
 
 static uint8_t           volumeNow = 80;
@@ -279,10 +280,24 @@ static void sendScanResults() {
   rpSend(Serial2, RP_SCANDONE, nullptr, 0);
 }
 
+// Saklar Bluetooth dari tombol Control Center (RP_BTMODE).
+static void btSetEnabled(bool on) {
+  btEnabled = on;
+  if (on) {
+    a2dp.set_auto_reconnect(true);
+    btDisconnectedAt = millis();     // loop() akan memanggil reconnect() setelah jeda
+  } else {
+    a2dp.set_auto_reconnect(false);
+    btDisconnectedAt = 0;            // hentikan upaya reconnect manual
+    if (btConnected) a2dp.disconnect();
+  }
+}
+
 static void connectTo(const char* name) {
   strncpy(savedBTName, name, sizeof(savedBTName) - 1);
   savedBTName[sizeof(savedBTName) - 1] = 0;
   prefsDirty = true;
+  btEnabled = true;                  // menyambung ke TWS = BT otomatis nyala
   a2dp.set_auto_reconnect(true);
   a2dp.start(savedBTName);
 }
@@ -389,7 +404,7 @@ static void handleFrame(uint8_t type, const uint8_t* p, uint16_t len) {
       doFlush();
       haveTrack = false;
       break;
-    case RP_SCAN: case RP_CONNECT: case RP_TXGAIN:
+    case RP_SCAN: case RP_CONNECT: case RP_TXGAIN: case RP_BTMODE:
       queueCmd(type, p, len);
       break;
     default: break;
@@ -503,6 +518,7 @@ void loop() {
     if (c.type == RP_SCAN)         startScan();
     else if (c.type == RP_CONNECT) connectTo((const char*)c.data);   // data sudah NUL-terminated
     else if (c.type == RP_TXGAIN && c.len >= 1) { applyTxGain(c.data[0]); prefsDirty = true; }
+    else if (c.type == RP_BTMODE && c.len >= 1) btSetEnabled(c.data[0] != 0);
   }
 
   if (volDirty) { volDirty = false; volumeNow = pendingVol; a2dp.set_volume(volumeNow); }
@@ -518,7 +534,7 @@ void loop() {
   uint32_t now = millis();
   if (now - lastStatus >= STATUS_INTERVAL_MS) { lastStatus = now; sendStatus(); }
 
-  if (!btConnected && btDisconnectedAt > 0 && now - btDisconnectedAt > BT_RECONNECT_MS) {
+  if (btEnabled && !btConnected && btDisconnectedAt > 0 && now - btDisconnectedAt > BT_RECONNECT_MS) {
     btDisconnectedAt = now;
     a2dp.reconnect();
   }

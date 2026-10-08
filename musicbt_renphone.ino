@@ -53,6 +53,8 @@ static File          musFile;
 static volatile bool     musCamAlive = false;
 static volatile uint32_t musLastStatusMs = 0;
 static volatile bool     musBtConn = false;
+static volatile bool     musBtOn = true;      // saklar BT dari Control Center (NVS "music"/"bton")
+static bool              musBtOnLoaded = false;
 static volatile uint32_t musPlayedMs = 0;
 static volatile bool     musEnded = false;
 static volatile bool     musHello = false;
@@ -409,9 +411,16 @@ static void musHandleReq(uint8_t t, int32_t a, const char* s) {
       rpSend(Serial1, RP_SCAN, nullptr, 0);
       break;
     case 'c':
+      musBtOn = true; // menyambung ke TWS = BT nyala (disimpan di musicLoopPoll)
       musConnecting = true; musConnectStart = millis();
       rpSend(Serial1, RP_CONNECT, (const uint8_t*)s, (uint16_t)strlen(s));
       break;
+    case 'B': {                                   // saklar Bluetooth (Control Center)
+      uint8_t m = a ? 1 : 0;
+      rpSend(Serial1, RP_BTMODE, &m, 1);
+      if (!m) musConnecting = false;
+      break;
+    }
     case 'r': musScanPlaylist(); break;
     case 'k':                                     // tombol suka (toggle) untuk lagu terpilih
       if (ryne && musCur >= 0) {
@@ -495,8 +504,10 @@ static void musTask(void* arg) {
       musHello = false;
       if (musLoaded) { musLoaded = false; musStreaming = false; if (musFile) musFile.close(); musToast("Modul BT restart"); }
       uint8_t v = (uint8_t)musVol; rpSend(Serial1, RP_VOLUME, &v, 1);
+      if (!musBtOn) { uint8_t m = 0; rpSend(Serial1, RP_BTMODE, &m, 1); }
     } else if (musCamAlive && !prevAlive) {
       uint8_t v = (uint8_t)musVol; rpSend(Serial1, RP_VOLUME, &v, 1);
+      if (!musBtOn) { uint8_t m = 0; rpSend(Serial1, RP_BTMODE, &m, 1); }
     }
     prevAlive = musCamAlive;
 
@@ -607,6 +618,29 @@ void musicEnter() {
 }
 void musicExit() {}
 
+// ---- API untuk tombol Bluetooth di Control Center (dipanggil dari loop utama, bukan task) ----
+bool btCcEnabled() {
+  if (!musBtOnLoaded) {
+    musBtOnLoaded = true;
+    Preferences p; p.begin("music", true);
+    musBtOn = p.getBool("bton", true);
+    p.end();
+    if (!musBtOn) musBegin();   // link harus hidup supaya CAM diberi tahu BT mati setelah boot
+  }
+  return musBtOn;
+}
+bool btCcConnected() { return musStarted && musBtOn && musBtConn; }
+void btCcToggle() {
+  bool wasStarted = musStarted;
+  btCcEnabled();                 // pastikan nilai tersimpan sudah ter-load
+  musBegin();                    // nyalakan link ke CAM kalau belum (no-op kalau sudah)
+  musBtOn = !musBtOn;
+  { Preferences p; p.begin("music", false); p.putBool("bton", musBtOn); p.end(); }
+  musPost('B', musBtOn ? 1 : 0, nullptr);
+  if (wasStarted && !musCamAlive) showToast("Modul BT tidak terdeteksi");
+  else showToast(musBtOn ? "Bluetooth aktif" : "Bluetooth mati");
+}
+
 // dipanggil TERUS dari loop() utama (murah kalau app belum pernah dibuka)
 void musicLoopPoll() {
   if (!musStarted) return;
@@ -621,6 +655,11 @@ void musicLoopPoll() {
   static bool prevConn = false;
   if (musBtConn != prevConn) {
     prevConn = musBtConn;
+    if (musBtConn) {                             // tersambung = BT pasti nyala -> samakan & simpan
+      Preferences bp; bp.begin("music", true); bool saved = bp.getBool("bton", true); bp.end();
+      if (!saved) { Preferences bw; bw.begin("music", false); bw.putBool("bton", true); bw.end(); }
+      musBtOn = true; musBtOnLoaded = true;
+    }
     if (onScr || musLoaded) showToast(musBtConn ? "TWS terhubung" : "TWS terputus");
     needRedraw = true;
   }
@@ -857,20 +896,31 @@ static void musDrawPlayer(LGFX_Sprite& s) {
   musDrawChips(s);
   musDrawCover(s, playing, title);
 
-  // judul (gulir kalau kepanjangan)
+  // judul: kalau muat -> diam di tengah/kiri. Kalau kepanjangan -> SATU salinan saja yang
+  // bergeser (jeda di awal, geser ke kiri sampai ujung, jeda, lalu balik). Dulu 2 salinan
+  // digambar bersamaan (efek loop) dan text-wrap masih aktif -> kelihatan seperti 2 judul.
   s.setTextSize(2); s.setTextColor(T().text);
+  s.setTextWrap(false, false);
   int tw = s.textWidth(title);
   s.setClipRect(mTitX, mTitY - 1, mTitW, 19);
   if (tw <= mTitW) {
     int tx = mLand ? mTitX : mTitX + (mTitW - tw) / 2;
     s.setCursor(tx, mTitY); s.print(title);
   } else {
-    int span = tw + 40;
-    int off = (int)((millis() / 25) % (uint32_t)span);
-    s.setCursor(mTitX - off, mTitY);        s.print(title);
-    s.setCursor(mTitX - off + span, mTitY); s.print(title);
+    int range = tw - mTitW + 6;                       // jarak geser total (piksel)
+    const uint32_t TT_PAUSE = 1200, TT_MS_PER_PX = 30;
+    uint32_t moveMs = (uint32_t)range * TT_MS_PER_PX;
+    uint32_t ph = millis() % (2 * (TT_PAUSE + moveMs));
+    int off;
+    if (ph < TT_PAUSE)                    off = 0;
+    else if (ph < TT_PAUSE + moveMs)      off = (int)((ph - TT_PAUSE) / TT_MS_PER_PX);
+    else if (ph < 2 * TT_PAUSE + moveMs)  off = range;
+    else                                  off = range - (int)((ph - 2 * TT_PAUSE - moveMs) / TT_MS_PER_PX);
+    if (off < 0) off = 0; if (off > range) off = range;
+    s.setCursor(mTitX - off, mTitY); s.print(title);
   }
   s.clearClipRect();
+  s.setTextWrap(true, true);                          // kembalikan default LovyanGFX
 
   // info
   char sub[64];
