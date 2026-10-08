@@ -29,8 +29,8 @@
 #include <esp_heap_caps.h>
 #include <math.h>
 
-#define MUS_UART_RX     16
-#define MUS_UART_TX     17
+#define MUS_UART_RX     42
+#define MUS_UART_TX     41
 #define MUS_DIR         "/music"
 #define MUS_MAX_TRACKS  200
 #define MUS_VOL_STEP    8
