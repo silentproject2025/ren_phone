@@ -4,8 +4,8 @@
 //  S3 = MASTER. ESP32-CAM (firmware cam_bt_coprocessor) = co-prosesor
 //  Bluetooth A2DP. Alur: SD S3 -> UART 921600 -> CAM (decode MP3) -> TWS.
 //
-//  Kabel:  S3 GPIO17 (TX) -> CAM GPIO13 (RX)
-//          S3 GPIO16 (RX) <- CAM GPIO14 (TX)
+//  Kabel:  S3 GPIO41 (TX) -> CAM GPIO13 (RX)
+//          S3 GPIO42 (RX) <- CAM GPIO14 (TX)
 //          GND -- GND
 //
 //  Pola sama dgn app NES/DOOM: file .ino terpisah, patch kecil di phone.ino
@@ -57,6 +57,7 @@ static volatile uint32_t musPlayedMs = 0;
 static volatile bool     musEnded = false;
 static volatile bool     musHello = false;
 static volatile uint32_t musCredit = 0, musSentSince = 0;
+static volatile uint32_t musRxBytes = 0, musRxFrames = 0, musRxErr = 0;   // diagnosa link CAM -> S3
 
 // ---- milik S3 ----
 static std::vector<String> musList;
@@ -437,7 +438,9 @@ static void musTask(void* arg) {
     while (avail-- > 0) {
       int c = Serial1.read();
       if (c < 0) break;
-      if (!P.feed((uint8_t)c)) continue;
+      musRxBytes++;
+      if (!P.feed((uint8_t)c)) { musRxErr = P.errors; continue; }
+      musRxFrames++;
       switch (P.type) {
         case RP_STATUS:
           if (P.len >= 13) {
@@ -481,6 +484,11 @@ static void musTask(void* arg) {
       }
     }
     if (musCamAlive && millis() - musLastStatusMs > 1500) musCamAlive = false;
+    {   // keepalive ke CAM (utk LED diagnosa CAM)
+      static uint32_t lastPing = 0;
+      uint32_t np = millis();
+      if (np - lastPing >= 1000) { lastPing = np; rpSend(Serial1, RP_PING, nullptr, 0); }
+    }
 
     // ---- 2. CAM baru nyala / baru terdeteksi -> kirim ulang volume ----
     if (musHello) {
@@ -883,7 +891,11 @@ static void musDrawPlayer(LGFX_Sprite& s) {
   s.setCursor(mLand ? mTitX : mTitX + (mTitW - sw) / 2, mSubY); s.print(sub);
   musDrawHeart(s, mTitX + mTitW - 8, mSubY + 4, musLiked ? 0xF9A6 : blend565(T().bg, T().text, 70));
 
-  if (mVibeY >= 0) {                                   // baris vibe (RYNE)
+  if (!musCamAlive) {                                  // diagnosa: apa yg masuk dari CAM?
+    char dg[56];
+    snprintf(dg, sizeof(dg), "link: rx %uB  frame %u  salah %u", (unsigned)musRxBytes, (unsigned)musRxFrames, (unsigned)musRxErr);
+    s.setTextColor(T().danger); s.setCursor(mTitX, mVibeY >= 0 ? mVibeY : mSubY + 11); s.print(dg);
+  } else if (mVibeY >= 0) {                            // baris vibe (RYNE)
     uint16_t vc = musHsv(vi * 45.f, 0.7f, 0.95f);
     s.fillCircle(mTitX + 4, mVibeY + 4, 3, vc);
     char vb[40];
