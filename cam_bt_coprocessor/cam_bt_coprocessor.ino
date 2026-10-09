@@ -61,7 +61,7 @@
 #define BYTES_PER_SEC         176400  // 44.1kHz * 2ch * 16bit
 #define DEC_MIN_BLOCK         (14*1024) // blok kontigu RAM internal minimal sblm bangun ulang decoder Helix
 #define DIAG_INTERVAL_MS      5000      // log diagnosa memori/link ke Serial USB-TTL CAM
-#define RP_AVRCP_ENABLE       0         // 0 = matikan total AVRCP Target (utk isolasi bug memori/link); tombol earbuds tidak jalan
+#define RP_AVRCP_ENABLE       1         // 0 = matikan total AVRCP Target (utk isolasi bug memori/link); tombol earbuds tidak jalan
 
 static const esp_power_level_t txGainEnum[TX_GAIN_LEVELS] = {
   ESP_PWR_LVL_N12, ESP_PWR_LVL_N9, ESP_PWR_LVL_N6, ESP_PWR_LVL_N3,
@@ -289,9 +289,8 @@ static void avrcpSetupFilter() {
     esp_avrc_psth_bit_mask_operation(ESP_AVRC_BIT_MASK_OP_SET, &cs, ESP_AVRC_PT_CMD_VOL_DOWN);
   }
   esp_avrc_tg_set_psth_cmd_filter(ESP_AVRC_PSTH_FILTER_SUPPORTED_CMD, &cs);
-  esp_avrc_rn_evt_cap_mask_t es; memset(&es, 0, sizeof(es));
-  esp_avrc_rn_evt_bit_mask_operation(ESP_AVRC_BIT_MASK_OP_SET, &es, ESP_AVRC_RN_VOLUME_CHANGE);
-  esp_avrc_tg_set_rn_evt_cap(&es);
+  // Volume absolut (RN_VOLUME_CHANGE) SENGAJA tidak diiklankan: callback belum menjawab register_notification,
+  // earbuds bisa terus menunggu/retry dan bikin stack BT macet (suspect watchdog task). Tombol passthrough tetap jalan.
   Serial.printf("[AVRCP] filter terpasang | heap %u->%u blokMax=%u\n", (unsigned)h0, (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap());
 }
 
