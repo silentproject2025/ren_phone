@@ -616,7 +616,7 @@ void drawWake(LGFX_Sprite& s){
     s.fillCircle(SCR_W-8-tw-8,30,3,sc); }
 
   int cardX=14, cardY=42, cardW=SCR_W-28, cardH=62;
-  s.fillRoundRect(cardX,cardY,cardW,cardH,8,T().surface);
+  iosRR(s,cardX,cardY,cardW,cardH,8,T().surface);
   int barX=cardX+8, barW=cardW-16;
 
   // ---- bar level suara ----
@@ -664,26 +664,26 @@ void drawWake(LGFX_Sprite& s){
       else if(wkEnrollMsg==4){ msg="Panjangnya beda jauh, ulangi"; mc=T().danger; }
     }
     if(msg[0]){ s.setTextColor(mc); int mw=s.textWidth(msg); s.setCursor(SCR_W/2-mw/2,178); s.print(msg); }
-    s.fillRoundRect(110,190,100,22,8,T().surface2);
+    iosRR(s,110,190,100,22,8,T().surface2);
     s.setTextColor(T().subtext); { int bw=s.textWidth("Batal"); s.setCursor(160-bw/2,197); s.print("Batal"); }
   } else {
     char ib[48]; snprintf(ib,sizeof(ib),"Terdeteksi %dx  |  %d sampel tersimpan",(int)wkFireCount,(int)wkTplCount);
     s.setTextColor(T().subtext); s.setCursor(14,110); s.print(ib);
 
-    s.fillRoundRect(14,126,140,30,8, wkEnabled?T().danger:T().accent);
+    iosRR(s,14,126,140,30,8, wkEnabled?T().danger:T().accent);
     s.setTextColor(T().bg);
     { const char* l=wkEnabled?"Matikan":"Aktifkan"; int w=s.textWidth(l); s.setCursor(14+70-w/2,137); s.print(l); }
-    s.fillRoundRect(160,126,146,30,8,T().surface2);
+    iosRR(s,160,126,146,30,8,T().surface2);
     s.setTextColor(T().accent);
     { const char* l=(wkTplCount>0)?"Rekam ulang":"Rekam kata kunci"; int w=s.textWidth(l); s.setCursor(160+73-w/2,137); s.print(l); }
 
     s.setTextColor(T().subtext); s.setCursor(14,172); s.print("Sensitivitas");
-    s.fillRoundRect(150,164,26,24,7,T().surface2);
+    iosRR(s,150,164,26,24,7,T().surface2);
     s.setTextColor(T().accent); { int w=s.textWidth("<"); s.setCursor(163-w/2,172); s.print("<"); }
-    s.fillRoundRect(180,164,90,24,7,T().surface);
+    iosRR(s,180,164,90,24,7,T().surface);
     int si=wkSensIdx; if(si<0||si>4) si=2;
     s.setTextColor(T().text); { int w=s.textWidth(WK_SENS_NAME[si]); s.setCursor(225-w/2,172); s.print(WK_SENS_NAME[si]); }
-    s.fillRoundRect(274,164,26,24,7,T().surface2);
+    iosRR(s,274,164,26,24,7,T().surface2);
     s.setTextColor(T().accent); { int w=s.textWidth(">"); s.setCursor(287-w/2,172); s.print(">"); }
 
     s.setTextColor(T().subtext);

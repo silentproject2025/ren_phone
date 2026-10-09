@@ -2861,7 +2861,7 @@ void drawKb(LGFX_Sprite& s){
       // v72: sudut tombol dibulatin dikit lbh (3->5) -- kesan keycap lbh
       // lembut ala keyboard HP asli. Posisi/ukuran kotak TIDAK berubah
       // (tetap sama persis dgn perhitungan kbTouch()).
-      s.fillRoundRect(kx,ry,kw,kh,5,T().surface2);
+      iosRR(s,kx,ry,kw,kh,5,T().surface2);
       s.setTextColor(T().text); s.setTextSize(1);
       s.setCursor(kx+kw/2-3,ry+kh/2-4);
       s.print(lay[r][c]);
@@ -2873,7 +2873,7 @@ void drawKb(LGFX_Sprite& s){
   // (pola segitiga sederhana) -- gaya keyboard HP asli, bukan singkatan
   // teks. Kotak/warna status aktif (SHF/123 nyala) TETAP sama persis.
   uint16_t shfBg = kbMode==KB_UPPER?T().accent:T().surface2;
-  s.fillRoundRect(4,cy,40,kh,5,shfBg);
+  iosRR(s,4,cy,40,kh,5,shfBg);
   {
     uint16_t ic = kbMode==KB_UPPER? T().bg : T().text;
     int acx=4+20, acy=cy+kh/2;
@@ -2881,13 +2881,13 @@ void drawKb(LGFX_Sprite& s){
     s.fillRect(acx-3,acy+2,6,4,ic);
   }
   uint16_t numBg = kbMode==KB_NUM?T().accent:T().surface2;
-  s.fillRoundRect(48,cy,44,kh,5,numBg);
+  iosRR(s,48,cy,44,kh,5,numBg);
   s.setTextColor(kbMode==KB_NUM?T().bg:T().text);s.setTextSize(1);
   s.setCursor(54,cy+kh/2-4);s.print(kbMode==KB_NUM?"ABC":"123");
-  s.fillRoundRect(96,cy,max(40,spaceW),kh,5,T().surface2);
+  iosRR(s,96,cy,max(40,spaceW),kh,5,T().surface2);
   s.setTextColor(T().text);
   s.setCursor(96+max(40,spaceW)/2-24,cy+kh/2-4);s.print("SPACE");
-  s.fillRoundRect(SCR_W-88,cy,84,kh,5,T().danger);
+  iosRR(s,SCR_W-88,cy,84,kh,5,T().danger);
   {
     int acx=SCR_W-88+42, acy=cy+kh/2;
     s.fillTriangle(acx-8,acy, acx,acy-6, acx,acy+6, 0xFFFF); // panah ke kiri (backspace)
@@ -2985,6 +2985,48 @@ void uiText(LGFX_Sprite& s,int x,int y,const char* str,uint16_t col,bool shadow,
   if(shadow){ s.setTextColor(0x0000); s.setCursor(x+1,y+1); s.print(str); if(bold){ s.setCursor(x+2,y+1); s.print(str); } }
   s.setTextColor(col); s.setCursor(x,y); s.print(str);
   if(bold){ s.setCursor(x+1,y); s.print(str); }
+}
+
+// =====================================================================
+// iOS KIT -- gaya iOS dipakai bersama SEMUA app (bukan cuma Home/Lock/CC)
+// =====================================================================
+#define IOS_ORANGE 0xFCA0  // oranye iOS (tombol operator kalkulator dll)
+#define IOS_GREEN  0x362B  // hijau iOS (switch ON)
+
+// Radius otomatis dari bentuk kotak: persegi-ish = squircle kecil, tombol
+// lebar-pendek = PIL penuh, kartu/baris lebar = sudut 10px (inset grouped).
+int iosRadius(int w,int h,int r){
+  int rr;
+  if(w<=h*16/10)                 rr=(r+2<5)?5:(r+2);
+  else if(w<=h*32/10 && h<=34)   rr=h/2;
+  else                           rr=(r<10)?10:r;
+  if(rr>h/2) rr=h/2;
+  if(rr>w/2) rr=w/2;
+  if(rr<0) rr=0;
+  return rr;
+}
+// pengganti s.fillRoundRect(x,y,w,h,r,c) -- geometri & hit-test TIDAK berubah, cuma sudutnya
+void iosRR(LGFX_Sprite& s,int x,int y,int w,int h,int r,uint16_t c){
+  if(w<=0||h<=0) return;
+  s.fillRoundRect(x,y,w,h,iosRadius(w,h,r),c);
+}
+// Switch ala iOS 34x20: trek hijau/abu + kenop putih bersayap bayangan
+void iosSwitch(LGFX_Sprite& s,int x,int y,bool on){
+  uint16_t tr = on ? (uint16_t)IOS_GREEN : blend565(T().surface2,0xFFFF,45);
+  s.fillRoundRect(x,y,34,20,10,tr);
+  int kx = on ? x+24 : x+10, ky=y+10;
+  s.fillCircle(kx,ky+1,8,blend565(tr,0x0000,90));
+  s.fillCircle(kx,ky,8,0xFFFF);
+}
+// Chevron tebal "<" (2 garis) buat tombol Kembali
+void iosChevron(LGFX_Sprite& s,int cx,int cy,uint16_t col){
+  s.drawLine(cx+3,cy-6,cx-3,cy,col); s.drawLine(cx-3,cy,cx+3,cy+6,col);
+  s.drawLine(cx+4,cy-6,cx-2,cy,col); s.drawLine(cx-2,cy,cx+4,cy+6,col);
+}
+// Judul halaman: tebal, putih (gaya nav-bar title iOS) -- gantiin teks kecil berwarna
+void iosTitle(LGFX_Sprite& s,int x,int y,const char* t){
+  s.setTextSize(1);
+  uiText(s,x,y,t,T().text,false,true);
 }
 
 uint16_t battColor(){ return (battPercent<=15)?T().danger:(battPercent<=35)?T().accent:T().good; }
@@ -3493,16 +3535,21 @@ void drawDynamicIsland(LGFX_Sprite& s){
 // =============================================
 // BACK BUTTON
 // =============================================
-#define BACK_W 62
+#define BACK_W 68
 #define BACK_H 24
 int backX(){ return 4; }
 int backY(){ return SCR_H-BACK_H-3; }
 
 void drawBack(LGFX_Sprite& s){
   if(kbVisible)return;
-  s.fillRoundRect(backX(),backY(),BACK_W,BACK_H,6,T().surface2);
-  s.setTextColor(T().accent);s.setTextSize(1);
-  s.setCursor(backX()+10,backY()+8);s.print("< Back");
+  // iOS: pil kaca + chevron + "Kembali" (warna aksen), plus home-indicator tipis di dasar layar
+  int bx=backX(), by=backY(), cy=by+BACK_H/2;
+  drawGlassCard(s,bx,by,BACK_W,BACK_H,BACK_H/2,T().surface2,170);
+  iosChevron(s,bx+11,cy,T().accent);
+  s.setTextColor(T().accent); s.setTextSize(1);
+  s.setCursor(bx+21,by+8); s.print("Kembali");
+  int hiW=84, hiX=SCR_W/2-hiW/2;
+  if(hiX>bx+BACK_W+6) s.fillRoundRect(hiX,SCR_H-5,hiW,3,1,blend565(T().bg,T().text,150));
 }
 
 bool isBack(int x,int y){
@@ -5601,14 +5648,14 @@ void drawSnake(LGFX_Sprite& s){
     uint16_t c = (i==0)?T().accent:T().good;
     s.fillRoundRect(snakeBody[i].x*SNAKE_CELL, top+snakeBody[i].y*SNAKE_CELL, SNAKE_CELL-1, SNAKE_CELL-1, 2, c);
   }
-  s.fillRoundRect(snakeFoodX*SNAKE_CELL, top+snakeFoodY*SNAKE_CELL, SNAKE_CELL-1, SNAKE_CELL-1, 4, T().danger);
+  iosRR(s,snakeFoodX*SNAKE_CELL, top+snakeFoodY*SNAKE_CELL, SNAKE_CELL-1, SNAKE_CELL-1, 4, T().danger);
 
   char buf[24]; sprintf(buf,"Skor: %d",snakeScore);
   s.setTextColor(T().subtext); s.setTextSize(1); s.setCursor(6,STATUS_H+2); s.print(buf);
 
   if(snakeOver){
     int bx=SCR_W/2-72, by=SCR_H/2-32, bw=144, bh=64;
-    s.fillRoundRect(bx,by,bw,bh,10,T().surface);
+    iosRR(s,bx,by,bw,bh,10,T().surface);
     s.drawRoundRect(bx,by,bw,bh,10,T().danger);
     s.setTextColor(T().danger); s.setTextSize(1); s.setCursor(bx+30,by+14); s.print("GAME OVER");
     s.setTextColor(T().subtext); s.setCursor(bx+10,by+34); s.print("Ketuk layar utk ulang");
@@ -5703,8 +5750,8 @@ void drawFlap(LGFX_Sprite& s){
   flapTick();
   for(int i=0;i<FLAP_PIPE_COUNT;i++){
     int gy=flapPipes[i].gapY;
-    s.fillRoundRect(flapPipes[i].x, STATUS_H, FLAP_PIPE_W, max(0,gy-FLAP_GAP/2-STATUS_H), 4, T().good);
-    s.fillRoundRect(flapPipes[i].x, gy+FLAP_GAP/2, FLAP_PIPE_W, max(0,SCR_H-(gy+FLAP_GAP/2)), 4, T().good);
+    iosRR(s,flapPipes[i].x, STATUS_H, FLAP_PIPE_W, max(0,gy-FLAP_GAP/2-STATUS_H), 4, T().good);
+    iosRR(s,flapPipes[i].x, gy+FLAP_GAP/2, FLAP_PIPE_W, max(0,SCR_H-(gy+FLAP_GAP/2)), 4, T().good);
   }
   s.fillCircle(FLAP_BIRD_X, (int)flapY, FLAP_BIRD_R, T().accent);
 
@@ -5718,7 +5765,7 @@ void drawFlap(LGFX_Sprite& s){
   }
   if(flapOver){
     int bx=SCR_W/2-72, by=SCR_H/2-32, bw=144, bh=64;
-    s.fillRoundRect(bx,by,bw,bh,10,T().surface);
+    iosRR(s,bx,by,bw,bh,10,T().surface);
     s.drawRoundRect(bx,by,bw,bh,10,T().danger);
     s.setTextColor(T().danger); s.setTextSize(1); s.setCursor(bx+30,by+14); s.print("GAME OVER");
     s.setTextColor(T().subtext); s.setCursor(bx+10,by+34); s.print("Ketuk layar utk ulang");
@@ -5818,14 +5865,14 @@ void draw2048(LGFX_Sprite& s){
 
   int boardW = 4*G2048_CELL+5*G2048_GAP;
   int gx = SCR_W/2-boardW/2, gy = STATUS_H+22;
-  s.fillRoundRect(gx,gy,boardW,boardW,8,T().surface);
+  iosRR(s,gx,gy,boardW,boardW,8,T().surface);
   for(int r=0;r<4;r++){
     for(int c=0;c<4;c++){
       int v=g2048Board[r][c];
       int cx=gx+G2048_GAP+c*(G2048_CELL+G2048_GAP);
       int cy=gy+G2048_GAP+r*(G2048_CELL+G2048_GAP);
       uint16_t cc = (v==0)?T().surface2 : (v<=4?T().good : v<=32?T().accent : v<=256?T().accent2 : T().danger);
-      s.fillRoundRect(cx,cy,G2048_CELL,G2048_CELL,6,cc);
+      iosRR(s,cx,cy,G2048_CELL,G2048_CELL,6,cc);
       if(v>0){
         char vb[6]; sprintf(vb,"%d",v);
         int vw=s.textWidth(vb)*(v<100?2:1);
@@ -5838,7 +5885,7 @@ void draw2048(LGFX_Sprite& s){
 
   if(g2048Over || g2048Win){
     int bx=SCR_W/2-72, by=SCR_H/2-32, bw=144, bh=64;
-    s.fillRoundRect(bx,by,bw,bh,10,T().surface);
+    iosRR(s,bx,by,bw,bh,10,T().surface);
     s.drawRoundRect(bx,by,bw,bh,10,g2048Win?T().good:T().danger);
     s.setTextColor(g2048Win?T().good:T().danger); s.setTextSize(1);
     s.setCursor(bx+30,by+14); s.print(g2048Win?"KAMU MENANG!":"GAME OVER");
@@ -5975,7 +6022,7 @@ void tttAiMove(){
 
 void drawTttSetup(LGFX_Sprite& s){
   s.fillSprite(T().bg); drawStatusBar(s);
-  s.setTextColor(T().accent); s.setTextSize(1); s.setCursor(8,26); s.print("Tic-Tac-Toe");
+  iosTitle(s,8,26,"Tic-Tac-Toe");
   s.setTextColor(T().subtext); s.setCursor(8,38); s.print("Pilih mode & ukuran papan");
 
   s.setTextColor(T().subtext); s.setCursor(8,tttModeBtnY()-12); s.print("Mode:");
@@ -5984,7 +6031,7 @@ void drawTttSetup(LGFX_Sprite& s){
   for(int i=0;i<2;i++){
     int bx=8+i*(bw+8);
     bool sel=(tttMode==i);
-    s.fillRoundRect(bx,by,bw,bh,6,sel?T().accent:T().surface2);
+    iosRR(s,bx,by,bw,bh,6,sel?T().accent:T().surface2);
     s.setTextColor(sel?T().bg:T().text); s.setTextSize(1);
     int lw=s.textWidth(modeLabels[i]);
     s.setCursor(bx+bw/2-lw/2,by+bh/2-4); s.print(modeLabels[i]);
@@ -5998,7 +6045,7 @@ void drawTttSetup(LGFX_Sprite& s){
   for(int i=0;i<3;i++){
     int bx=8+i*(sbw+6);
     bool sel=(tttN==sizes[i]);
-    s.fillRoundRect(bx,sby,sbw,sbh,6,sel?T().accent:T().surface2);
+    iosRR(s,bx,sby,sbw,sbh,6,sel?T().accent:T().surface2);
     s.setTextColor(sel?T().bg:T().text); s.setTextSize(1);
     int lw=s.textWidth(sizeLabels[i]);
     s.setCursor(bx+sbw/2-lw/2,sby+5); s.print(sizeLabels[i]);
@@ -6007,7 +6054,7 @@ void drawTttSetup(LGFX_Sprite& s){
   }
 
   int stY=tttStartBtnY(), stH=tttStartBtnH();
-  s.fillRoundRect(8,stY,SCR_W-16,stH,8,T().good);
+  iosRR(s,8,stY,SCR_W-16,stH,8,T().good);
   s.setTextColor(T().bg); s.setTextSize(2);
   const char* startLbl="Mulai Main";
   int slw=(int)strlen(startLbl)*12;
@@ -6049,7 +6096,7 @@ void drawTtt(LGFX_Sprite& s){
 
   // v20: tombol "Ganti" -- balik ke halaman setup kapan saja utk ganti
   // mode/ukuran papan tanpa harus keluar-masuk app.
-  s.fillRoundRect(SCR_W-64,24,58,18,4,T().surface2);
+  iosRR(s,SCR_W-64,24,58,18,4,T().surface2);
   s.setTextColor(T().accent); s.setCursor(SCR_W-58,29); s.print("Ganti");
 
   int cellW = min(SCR_W-40, SCR_H-STATUS_H-100)/n;
@@ -6057,7 +6104,7 @@ void drawTtt(LGFX_Sprite& s){
   for(int i=0;i<n*n;i++){
     int r=i/n, c=i%n;
     int cx=gx+c*cellW, cy=gy+r*cellW;
-    s.fillRoundRect(cx+2,cy+2,cellW-4,cellW-4,6,T().surface);
+    iosRR(s,cx+2,cy+2,cellW-4,cellW-4,6,T().surface);
     if(tttBoard[i]=='X'){
       s.setTextColor(T().accent); s.setTextSize(2);
       s.setCursor(cx+cellW/2-6,cy+cellW/2-8); s.print("X");
@@ -6074,7 +6121,7 @@ void drawTtt(LGFX_Sprite& s){
     else msg = (tttWinner=='X')?"X Menang!":"O Menang!";
     int bx=SCR_W/2-72, by=gy+cellW*n+14, bw=144, bh=44;
     if(by+bh>backY()-4) by=backY()-4-bh; // v20: jaga2 kotak hasil gak kepotong di papan besar (5x5)
-    s.fillRoundRect(bx,by,bw,bh,10,T().surface);
+    iosRR(s,bx,by,bw,bh,10,T().surface);
     s.drawRoundRect(bx,by,bw,bh,10,T().accent);
     s.setTextColor(T().text); s.setTextSize(1);
     s.setCursor(SCR_W/2-(int)strlen(msg)*3,by+10); s.print(msg);
@@ -6236,7 +6283,7 @@ void drawBrk(LGFX_Sprite& s){
   }
   if(brkOver || brkWin){
     int bx=SCR_W/2-72, by=SCR_H/2-32, bw=144, bh=64;
-    s.fillRoundRect(bx,by,bw,bh,10,T().surface);
+    iosRR(s,bx,by,bw,bh,10,T().surface);
     s.drawRoundRect(bx,by,bw,bh,10,brkWin?T().good:T().danger);
     s.setTextColor(brkWin?T().good:T().danger); s.setTextSize(1);
     s.setCursor(bx+30,by+14); s.print(brkWin?"MENANG!":"GAME OVER");
@@ -6265,7 +6312,7 @@ void brkTouch(int x,int y,bool held,bool isNew){
 void clockEnter(){} void clockExit(){}
 void drawClock(LGFX_Sprite& s){
   s.fillSprite(T().bg);drawStatusBar(s);
-  s.setTextColor(T().accent);s.setTextSize(1);s.setCursor(8,28);s.print("Jam");
+  iosTitle(s,8,28,"Jam");
   struct tm t;bool ok=ntpSynced&&getLocalTime(&t);
   if(ok){
     char tb[9];sprintf(tb,"%02d:%02d:%02d",t.tm_hour,t.tm_min,t.tm_sec);
@@ -6408,7 +6455,7 @@ void pomoExit(){}
 // disentuh sama sekali -- formula btnY/x1/x2/x3 tetap identik versi lama.
 void drawPomo(LGFX_Sprite& s){
   s.fillSprite(T().bg);drawStatusBar(s);
-  s.setTextColor(T().accent);s.setTextSize(1);s.setCursor(8,26);s.print("Pomodoro");
+  iosTitle(s,8,26,"Pomodoro");
 
   uint16_t phaseColor = pomoPhaseColor(pomoPhase);
   const char* phaseLabel = pomoPhaseLabel(pomoPhase);
@@ -6477,9 +6524,9 @@ void drawPomo(LGFX_Sprite& s){
     int fLabelY=56, fRowY=fLabelY+12;
     s.setTextColor(T().subtext);s.setCursor(panelX,fLabelY);s.print("Durasi Fokus");
     int fAx1=panelX, fPillX=fAx1+arrowW+gap, fAx2=fPillX+pillW+gap;
-    s.fillRoundRect(fAx1,fRowY,arrowW,rowH,7,T().surface2);
+    iosRR(s,fAx1,fRowY,arrowW,rowH,7,T().surface2);
     s.setTextColor(T().accent);{const char*c="<";int cw=s.textWidth(c);s.setCursor(fAx1+arrowW/2-cw/2,fRowY+rowH/2-4);s.print(c);}
-    s.fillRoundRect(fAx2,fRowY,arrowW,rowH,7,T().surface2);
+    iosRR(s,fAx2,fRowY,arrowW,rowH,7,T().surface2);
     {const char*c=">";int cw=s.textWidth(c);s.setCursor(fAx2+arrowW/2-cw/2,fRowY+rowH/2-4);s.print(c);}
     drawGlassPanel(s,fPillX,fRowY,pillW,rowH,7,T().accent,70); // v114: chip kaca, tint tipis warna Fokus
     char fb[8]; sprintf(fb,"%d menit",POMO_FOCUS_OPTS[pomoFocusIdx]);
@@ -6490,9 +6537,9 @@ void drawPomo(LGFX_Sprite& s){
     int jLabelY=fRowY+rowH+14, jRowY=jLabelY+12;
     s.setTextColor(T().subtext);s.setCursor(panelX,jLabelY);s.print("Istirahat Pendek");
     int jAx1=panelX, jPillX=jAx1+arrowW+gap, jAx2=jPillX+pillW+gap;
-    s.fillRoundRect(jAx1,jRowY,arrowW,rowH,7,T().surface2);
+    iosRR(s,jAx1,jRowY,arrowW,rowH,7,T().surface2);
     s.setTextColor(T().good);{const char*c="<";int cw=s.textWidth(c);s.setCursor(jAx1+arrowW/2-cw/2,jRowY+rowH/2-4);s.print(c);}
-    s.fillRoundRect(jAx2,jRowY,arrowW,rowH,7,T().surface2);
+    iosRR(s,jAx2,jRowY,arrowW,rowH,7,T().surface2);
     {const char*c=">";int cw=s.textWidth(c);s.setCursor(jAx2+arrowW/2-cw/2,jRowY+rowH/2-4);s.print(c);}
     drawGlassPanel(s,jPillX,jRowY,pillW,rowH,7,T().good,70); // v114: chip kaca, tint tipis warna Jeda
     char jb[8]; sprintf(jb,"%d menit",POMO_SHORT_OPTS[pomoShortIdx]);
@@ -6647,8 +6694,8 @@ const char* calcLabelAt(int r,int c){
 
 void drawCalc(LGFX_Sprite& s){
   s.fillSprite(T().bg);drawStatusBar(s);
-  s.setTextColor(T().accent);s.setTextSize(1);s.setCursor(8,25);s.print("Kalkulator");
-  s.fillRoundRect(4,STATUS_H+8,SCR_W-8,22,4,T().surface);
+  iosTitle(s,8,25,"Kalkulator");
+  iosRR(s,4,STATUS_H+8,SCR_W-8,22,4,T().surface);
   s.setTextColor(T().text);s.setTextSize(2);
   int tw2=calcInput.length()*12;
   s.setCursor(max(8,SCR_W-12-tw2),STATUS_H+11);s.print(calcInput);
@@ -6660,9 +6707,9 @@ void drawCalc(LGFX_Sprite& s){
       bool isSci = (r==0);
       bool isOp  = !isSci && (!strcmp(l,"/")||!strcmp(l,"x")||!strcmp(l,"-")||!strcmp(l,"+"));
       bool isEq  = (r==5&&c==2);
-      uint16_t bg = isEq?T().accent2:(isOp?T().accent:(isSci?T().surface2:T().surface));
-      uint16_t fg = (isOp||isEq)?T().bg:T().text;
-      s.fillRoundRect(x,y,w,h,6,bg);
+      uint16_t bg = (isEq||isOp)?(uint16_t)IOS_ORANGE:(isSci?T().surface2:T().surface);
+      uint16_t fg = (isOp||isEq)?(uint16_t)0xFFFF:T().text;
+      s.fillRoundRect(x,y,w,h,h/2,bg); // iOS: tombol pil/bulat penuh
       s.setTextColor(fg);s.setTextSize(isSci?1:2);
       int cwPx = isSci?6:12;
       int lw=strlen(l)*cwPx;
@@ -6802,11 +6849,11 @@ void sensorEnter(){} void sensorExit(){}
 
 void drawSensor(LGFX_Sprite& s){
   s.fillSprite(T().bg);drawStatusBar(s);
-  s.setTextColor(T().accent2);s.setTextSize(1);s.setCursor(8,26);s.print("Orientasi 3D");
+  iosTitle(s,8,26,"Orientasi 3D");
 
   if(!mpuReady){
     int bx=16, by=52, bw=SCR_W-32, bh=SCR_H-52-40;
-    s.fillRoundRect(bx,by,bw,bh,10,T().surface);
+    iosRR(s,bx,by,bw,bh,10,T().surface);
     s.setTextColor(T().danger);s.setTextSize(1);
     s.setCursor(bx+10,by+12);s.print("MPU6050 tidak terdeteksi");
     s.setTextColor(T().subtext);
@@ -6814,7 +6861,7 @@ void drawSensor(LGFX_Sprite& s){
     s.setCursor(bx+10,by+46);s.print("SDA -> GPIO 15");
     s.setCursor(bx+10,by+58);s.print("SCL -> GPIO 7");
     s.setCursor(bx+10,by+70);s.print("VCC -> 3V3, GND -> GND");
-    s.fillRoundRect(bx+10,by+bh-30,bw-20,22,6,T().accent);
+    iosRR(s,bx+10,by+bh-30,bw-20,22,6,T().accent);
     s.setTextColor(T().bg);s.setCursor(bx+bw/2-30,by+bh-24);s.print("Coba Lagi");
     drawBack(s); drawToast(s);
     return;
@@ -6920,7 +6967,7 @@ void drawSettings(LGFX_Sprite& s){
   checkWifiScanComplete();
 
   s.fillSprite(T().bg);drawStatusBar(s);
-  s.setTextColor(T().good);s.setTextSize(1);s.setCursor(8,26);s.print("Pengaturan");
+  iosTitle(s,8,26,"Pengaturan");
 
   // v104: ROMBAK TOTAL interaksi SPI Overclock -- versi lama (v103) tiap
   // ketuk LANGSUNG cycle+restart, jadi kalau mau lompat jauh (mis. 60ke80)
@@ -6950,12 +6997,12 @@ void drawSettings(LGFX_Sprite& s){
   } else {
     ocY=24; ocArrowW=18; ocX=74; ocPillX=ocX+ocArrowW; ocPillW=52;
   }
-  s.fillRoundRect(ocX,ocY,ocArrowW,18,4,T().surface2);
+  iosRR(s,ocX,ocY,ocArrowW,18,4,T().surface2);
   s.setTextColor(T().accent);s.setFont(&lgfx::fonts::Font0);s.setCursor(ocX+6,ocY+5);s.print("<");
-  s.fillRoundRect(ocPillX+ocPillW+2,ocY,ocArrowW,18,4,T().surface2);
+  iosRR(s,ocPillX+ocPillW+2,ocY,ocArrowW,18,4,T().surface2);
   s.setTextColor(T().accent);s.setCursor(ocPillX+ocPillW+2+6,ocY+5);s.print(">");
   s.setFont(&lgfx::fonts::Font0); // v104: font balik ke default eksplisit spy gak "nempel" ke elemen setelahnya
-  s.fillRoundRect(ocPillX,ocY,ocPillW,18,4, ocDirty?T().accent2:T().surface2);
+  iosRR(s,ocPillX,ocY,ocPillW,18,4, ocDirty?T().accent2:T().surface2);
   s.setTextColor(ocDirty?T().bg:T().subtext);
   char ocBuf[10]; sprintf(ocBuf,"%dMHz",SPI_OC_OPTIONS[spiOcPendingIdx]);
   int ocTw=s.textWidth(ocBuf);
@@ -6964,12 +7011,10 @@ void drawSettings(LGFX_Sprite& s){
   // Toggle Auto-Rotate (di sebelah kiri tombol Pindai)
   int arW=62;
   int arX = SCR_W-74-arW-6;
-  s.fillRoundRect(arX,24,arW,18,4, autoRotateEnabled?T().good:T().surface2);
-  s.setTextColor(autoRotateEnabled?T().bg:T().subtext);
-  s.setCursor(arX+4,29);
-  s.print(autoRotateEnabled?"Rot:ON":"Rot:OFF");
+  s.setTextColor(T().text); s.setCursor(arX,29); s.print("Rot");
+  iosSwitch(s,arX+arW-34,23,autoRotateEnabled); // iOS: switch (area ketuk lama tetap sama)
 
-  s.fillRoundRect(SCR_W-74,24,66,18,4,wifiScanning?T().surface2:T().accent);
+  iosRR(s,SCR_W-74,24,66,18,4,wifiScanning?T().surface2:T().accent);
   s.setTextColor(wifiScanning?T().subtext:T().bg);
   s.setCursor(SCR_W-68,29);
   s.print(wifiScanning?"Memindai":"Pindai");
@@ -6978,7 +7023,7 @@ void drawSettings(LGFX_Sprite& s){
   if(ocOwnRow) rowY += 34; // v111: kasih tempat baris SPI OC baru (ocY 46-64) + celah kecil
   int rowW = SCR_W-16;
   
-  s.fillRoundRect(8,rowY,rowW,26,6,T().surface);
+  iosRR(s,8,rowY,rowW,26,6,T().surface);
   s.setTextColor(T().text);s.setCursor(14,rowY+8);s.print("Cerah:");
   s.fillRoundRect(58,rowY+9,rowW-90,7,3,T().divider);
   s.fillRoundRect(59,rowY+10,map(brightness,0,255,0,rowW-92),5,2,T().accent);
@@ -6989,14 +7034,14 @@ void drawSettings(LGFX_Sprite& s){
   // v66: panel Tema digabung sama panel pilihan Font (2 baris tombol
   // dalam 1 kotak) biar gak nambah blok baru penuh & bikin layar Setting
   // kepanjangan (layar cuma 240px tinggi, udah pas-pasan dari sononya).
-  s.fillRoundRect(8,rowY,rowW,46,6,T().surface);
+  iosRR(s,8,rowY,rowW,46,6,T().surface);
   s.setTextColor(T().text);s.setCursor(14,rowY+8);s.print("Tema:");
   int tbtnW=(rowW-50)/THEME_COUNT;
   for(int i=0;i<THEME_COUNT;i++){
     uint16_t bg=(i==themeIdx)?T().accent:T().surface2;
     uint16_t fg=(i==themeIdx)?T().bg:T().text;
     int tx=52+i*tbtnW;
-    s.fillRoundRect(tx,rowY+2,tbtnW-3,20,4,bg);
+    iosRR(s,tx,rowY+2,tbtnW-3,20,4,bg);
     s.setTextColor(fg);s.setTextSize(1);
     int nl=s.textWidth(themes[i].name);
     s.setCursor(tx+(tbtnW-3)/2-nl/2,rowY+6);s.print(themes[i].name);
@@ -7008,11 +7053,11 @@ void drawSettings(LGFX_Sprite& s){
   int fArrowW=20, fGap=2;
   int fCtrlW = rowW-50; // v67: sama persis budget lebar yg dipake baris Tema di atasnya
   int fPillX=52+fArrowW+fGap, fPillW=fCtrlW-2*fArrowW-2*fGap;
-  s.fillRoundRect(52,rowY+26,fArrowW,18,4,T().surface2);
+  iosRR(s,52,rowY+26,fArrowW,18,4,T().surface2);
   s.setTextColor(T().accent);s.setFont(&lgfx::fonts::Font0);s.setCursor(52+7,rowY+30);s.print("<");
-  s.fillRoundRect(fPillX+fPillW+fGap,rowY+26,fArrowW,18,4,T().surface2);
+  iosRR(s,fPillX+fPillW+fGap,rowY+26,fArrowW,18,4,T().surface2);
   s.setTextColor(T().accent);s.setCursor(fPillX+fPillW+fGap+7,rowY+30);s.print(">");
-  s.fillRoundRect(fPillX,rowY+26,fPillW,18,4,T().accent);
+  iosRR(s,fPillX,rowY+26,fPillW,18,4,T().accent);
   s.setTextColor(T().bg);
   // v67 (dulu v66): nama font ini SENGAJA selalu diukur & digambar pake
   // Font0 (bawaan) apapun uiFontIdx yg lagi aktif -- supaya label pilihan
@@ -7026,7 +7071,7 @@ void drawSettings(LGFX_Sprite& s){
 
 
   rowY+=48;
-  s.fillRoundRect(8,rowY,rowW,36,6,T().surface);
+  iosRR(s,8,rowY,rowW,36,6,T().surface);
   s.setTextColor(T().subtext);s.setCursor(14,rowY+4);
   s.print("Daftar WiFi (ketuk utk pilih):");
 
@@ -7043,7 +7088,7 @@ void drawSettings(LGFX_Sprite& s){
       bool isSelected = (settSSID == scannedWifis[i].ssid);
       uint16_t pBg = isSelected ? T().accent : T().surface2;
       uint16_t pFg = isSelected ? T().bg : T().text;
-      s.fillRoundRect(wx,rowY+16,wifiPillW-2,16,4,pBg);
+      iosRR(s,wx,rowY+16,wifiPillW-2,16,4,pBg);
       s.setTextColor(pFg);s.setCursor(wx+4,rowY+20);
       String dispSSID = scannedWifis[i].ssid;
       if(dispSSID.length()>8) dispSSID = dispSSID.substring(0,7)+".";
@@ -7052,7 +7097,7 @@ void drawSettings(LGFX_Sprite& s){
   }
 
   rowY+=36; // v66: dirapatkan dr 38->36 buat kompensasi panel Tema+Font yg jd lebih tinggi
-  s.fillRoundRect(8,rowY,rowW,22,4,settFocus==0?T().surface2:T().surface);
+  iosRR(s,8,rowY,rowW,22,4,settFocus==0?T().surface2:T().surface);
   s.setTextColor(T().subtext);s.setCursor(14,rowY+6);s.print("SSID:");
   s.setTextColor(T().text);s.setCursor(54,rowY+6);
   String sd2=settSSID.length()?settSSID:"(ketuk / pilih di atas)";
@@ -7060,26 +7105,26 @@ void drawSettings(LGFX_Sprite& s){
   s.print(sd2.c_str());
   
   rowY+=22; // v66: dirapatkan dr 24->22
-  s.fillRoundRect(8,rowY,rowW-28,22,4,settFocus==1?T().surface2:T().surface);
+  iosRR(s,8,rowY,rowW-28,22,4,settFocus==1?T().surface2:T().surface);
   s.setTextColor(T().subtext);s.setCursor(14,rowY+6);s.print("Pass:");
   s.setTextColor(T().text);s.setCursor(54,rowY+6);
   if(settPass.length()){
     if(settShowPass)s.print(settPass.substring(0,18).c_str());
     else for(int i=0;i<(int)settPass.length()&&i<18;i++)s.print("*");
   } else s.print("(ketuk)");
-  s.fillRoundRect(8+rowW-24,rowY,24,22,4,T().surface2);
+  iosRR(s,8+rowW-24,rowY,24,22,4,T().surface2);
   s.setTextColor(T().accent);s.setCursor(8+rowW-18,rowY+6);s.print(settShowPass?"H":"S");
   
   rowY+=24; // v66: dirapatkan dr 26->24
   int btnW=(rowW-8)/2;
-  s.fillRoundRect(8,rowY,btnW,24,6,T().accent);
+  iosRR(s,8,rowY,btnW,24,6,T().accent);
   s.setTextColor(T().bg);s.setCursor(16,rowY+7);s.print("Sambungkan");
-  s.fillRoundRect(SCR_W/2+4,rowY,btnW,24,6,T().surface2);
+  iosRR(s,SCR_W/2+4,rowY,btnW,24,6,T().surface2);
   s.setTextColor(T().text);s.setCursor(SCR_W/2+10,rowY+7);s.print("Kalibrasi Ulang");
 
   // ---- BARU: Kalibrasi sensor gerak MPU6050 ----
   rowY+=26; // v66: dirapatkan dr 28->26
-  s.fillRoundRect(8,rowY,rowW,24,6, mpuReady?T().accent2:T().surface2);
+  iosRR(s,8,rowY,rowW,24,6, mpuReady?T().accent2:T().surface2);
   s.setTextColor(mpuReady?T().bg:T().subtext);s.setTextSize(1);
   s.setCursor(14,rowY+8);
   s.print(mpuReady?"Kalibrasi Sensor Gerak (MPU6050)":"MPU6050 tidak terdeteksi");
@@ -7281,13 +7326,13 @@ void notepadRequestConfirm(int act){
 
 void drawNotepad(LGFX_Sprite& s){
   s.fillSprite(T().bg);drawStatusBar(s);
-  s.setTextColor(T().accent);s.setTextSize(1);s.setCursor(8,26);s.print("Notepad");
+  iosTitle(s,8,26,"Notepad");
   
-  s.fillRoundRect(SCR_W-70,24,62,18,4,T().danger);
+  iosRR(s,SCR_W-70,24,62,18,4,T().danger);
   s.setTextColor(0xFFFF);s.setCursor(SCR_W-56,29);s.print("Hapus");
   
   int bot = kbVisible ? kbY()-4 : backY()-6;
-  s.fillRoundRect(4,44,SCR_W-8,bot-44,6,T().surface);
+  iosRR(s,4,44,SCR_W-8,bot-44,6,T().surface);
   s.setTextColor(T().text);s.setTextSize(1);s.setTextWrap(true);
   s.setCursor(10,50);s.print((noteText+"|").c_str());
   
@@ -7298,15 +7343,15 @@ void drawNotepad(LGFX_Sprite& s){
     s.fillRect(0,0,SCR_W,SCR_H,0x0000); // dim overlay
     int dw = min(SCR_W-40, 220), dh=104;
     int dx=(SCR_W-dw)/2, dy=(SCR_H-dh)/2;
-    s.fillRoundRect(dx,dy,dw,dh,8,T().surface);
+    iosRR(s,dx,dy,dw,dh,8,T().surface);
     s.drawRoundRect(dx,dy,dw,dh,8,T().divider);
     s.setTextColor(T().text); s.setTextSize(1);
     s.setCursor(dx+12,dy+14); s.print("Simpan perubahan");
     s.setCursor(dx+12,dy+28); s.print("catatan ini?");
     int bw=(dw-24)/2, bh=30, by=dy+dh-40;
-    s.fillRoundRect(dx+8,by,bw,bh,6,T().good);
+    iosRR(s,dx+8,by,bw,bh,6,T().good);
     s.setTextColor(0xFFFF); s.setCursor(dx+8+bw/2-24,by+bh/2-4); s.print("Simpan");
-    s.fillRoundRect(dx+16+bw,by,bw,bh,6,T().danger);
+    iosRR(s,dx+16+bw,by,bw,bh,6,T().danger);
     s.setCursor(dx+16+bw+bw/2-20,by+bh/2-4); s.print("Buang");
   }
 
@@ -7414,14 +7459,14 @@ void drawCanvasScreen(LGFX_Sprite& s){
   }
   
   int r2Y = ty + 22;
-  s.fillRoundRect(4,r2Y,56,18,4,T().surface2);
+  iosRR(s,4,r2Y,56,18,4,T().surface2);
   s.setTextColor(T().accent);s.setCursor(10,r2Y+5);s.print("< Back");
   
-  s.fillRoundRect(66,r2Y,60,18,4,T().surface2);
+  iosRR(s,66,r2Y,60,18,4,T().surface2);
   s.setTextColor(T().text);char bs[8];sprintf(bs,"B:%d",brushSize);
   s.setCursor(76,r2Y+5);s.print(bs);
   
-  s.fillRoundRect(SCR_W-64,r2Y,60,18,4,T().danger);
+  iosRR(s,SCR_W-64,r2Y,60,18,4,T().danger);
   s.setTextColor(0xFFFF);s.setCursor(SCR_W-52,r2Y+5);s.print("CLR");
   
   drawToast(s);
@@ -7543,11 +7588,11 @@ void drawAiChat(LGFX_Sprite& s){
   s.print(((int)s.textWidth(aiTitleFull) <= titleBudget) ? aiTitleFull : aiTitleShort);
   
   bool hasKey = (geminiApiKey.length() > 0 && geminiApiKey != "YOUR_GEMINI_API_KEY_HERE");
-  s.fillRoundRect(SCR_W-72,24,68,18,4,hasKey?T().good:T().danger);
+  iosRR(s,SCR_W-72,24,68,18,4,hasKey?T().good:T().danger);
   s.setTextColor(0xFFFF);s.setCursor(SCR_W-66,29);
   s.print(hasKey?"Key: OK":"Key: Edit");
 
-  s.fillRoundRect(SCR_W-118,24,40,18,4,T().surface2);
+  iosRR(s,SCR_W-118,24,40,18,4,T().surface2);
   s.setTextColor(T().text);s.setCursor(SCR_W-113,29);
   s.print("Mem");
 
@@ -7555,7 +7600,7 @@ void drawAiChat(LGFX_Sprite& s){
   // ditaruh di ruang kosong header, antara judul & tombol Mem/Key.
   int micBtnX=aiMicBtnX(), micBtnW=AI_MIC_BTN_W;
   uint16_t micCol = micRecording? T().danger : (micTranscribing? T().surface2 : T().accent2);
-  s.fillRoundRect(micBtnX,24,micBtnW,18,4,micCol);
+  iosRR(s,micBtnX,24,micBtnW,18,4,micCol);
   s.setTextColor(0xFFFF); s.setCursor(micBtnX+4,29);
   s.print(micRecording? "Stop" : (micTranscribing? "..." : "Mic"));
 
@@ -7565,7 +7610,7 @@ void drawAiChat(LGFX_Sprite& s){
   int chatH   = chatBot - chatTop;
 
   // ---- Satu area chat gabungan (Kamu + Gemini), dibungkus & discroll ----
-  s.fillRoundRect(4,chatTop,SCR_W-8,chatH,6,T().surface);
+  iosRR(s,4,chatTop,SCR_W-8,chatH,6,T().surface);
 
   int lineH = 10;
   int innerX = 10, innerW = (SCR_W-8) - 12;
@@ -7641,7 +7686,7 @@ void drawAiChat(LGFX_Sprite& s){
     // ikut berubah.
     int clearW = 30;
     int clearX = SCR_W-90; // = (posisi lama tombol Kirim) - gap(4) - clearW(30) - gap(4)... lihat perhitungan di aiTouch
-    s.fillRoundRect(4,inputY,SCR_W-98,22,4,T().surface);
+    iosRR(s,4,inputY,SCR_W-98,22,4,T().surface);
     s.setTextColor(T().subtext);s.setCursor(10,inputY+6);
     String ipDisp = aiPrompt.length() ? aiPrompt : "Ketik pertanyaan...";
     if((int)ipDisp.length()>maxChars) ipDisp = ipDisp.substring(0, maxChars>3?maxChars-3:maxChars) + "..";
@@ -7650,11 +7695,11 @@ void drawAiChat(LGFX_Sprite& s){
     // v20: tombol "Hapus" -- kosongkan aiPrompt sekali ketuk, supaya user
     // TIDAK PERLU menghapus satu-huruf-satu-huruf lewat tombol backspace
     // keyboard virtual kalau mau mengetik ulang dari nol.
-    s.fillRoundRect(clearX,inputY,clearW,22,4,aiPrompt.length()?T().danger:T().surface2);
+    iosRR(s,clearX,inputY,clearW,22,4,aiPrompt.length()?T().danger:T().surface2);
     s.setTextColor(aiPrompt.length()?0xFFFF:T().subtext);
     s.setCursor(clearX+clearW/2-3,inputY+6);s.print("X");
 
-    s.fillRoundRect(SCR_W-56,inputY,52,22,4,aiLoading?T().surface2:T().accent);
+    iosRR(s,SCR_W-56,inputY,52,22,4,aiLoading?T().surface2:T().accent);
     s.setTextColor(aiLoading?T().subtext:T().bg);s.setCursor(SCR_W-48,inputY+6);
     s.print("Kirim");
   }
@@ -7819,11 +7864,11 @@ void drawFileExplorer(LGFX_Sprite& s){
   }
 
   if(expViewFileName.length() > 0){
-    s.fillRoundRect(SCR_W-64,24,58,18,4,T().surface2);
+    iosRR(s,SCR_W-64,24,58,18,4,T().surface2);
     s.setTextColor(T().accent);s.setCursor(SCR_W-54,29);s.print("Tutup");
 
     int viewTop=44, viewBot=backY()-6, viewH=viewBot-viewTop;
-    s.fillRoundRect(4,viewTop,SCR_W-8,viewH,6,T().surface);
+    iosRR(s,4,viewTop,SCR_W-8,viewH,6,T().surface);
     s.setTextColor(T().accent2);s.setCursor(10,viewTop+6);s.print("File: ");
     s.setTextColor(T().text);s.print(expViewFileName.c_str());
     s.drawFastHLine(10,viewTop+20,SCR_W-20,T().divider);
@@ -7886,7 +7931,7 @@ void drawFileExplorer(LGFX_Sprite& s){
     for(int i = 0; i < itemsPerPage && (startIdx + i) < expFileCount; i++){
       int idx = startIdx + i;
       int itemY = listY + i * (itemH + 4);
-      s.fillRoundRect(4,itemY,SCR_W-8,itemH,6,T().surface);
+      iosRR(s,4,itemY,SCR_W-8,itemH,6,T().surface);
       
       s.setTextColor(T().accent2);s.setCursor(10,itemY+8);s.print("[F]");
       s.setTextColor(T().text);s.setCursor(32,itemY+8);
@@ -7894,21 +7939,21 @@ void drawFileExplorer(LGFX_Sprite& s){
       if(fn.length() > 16) fn = fn.substring(0,14) + "..";
       s.print(fn.c_str());
 
-      s.fillRoundRect(SCR_W-84,itemY+3,36,20,4,T().surface2);
+      iosRR(s,SCR_W-84,itemY+3,36,20,4,T().surface2);
       s.setTextColor(T().good);s.setCursor(SCR_W-76,itemY+8);s.print("Buka");
 
-      s.fillRoundRect(SCR_W-44,itemY+3,36,20,4,T().danger);
+      iosRR(s,SCR_W-44,itemY+3,36,20,4,T().danger);
       s.setTextColor(0xFFFF);s.setCursor(SCR_W-38,itemY+8);s.print("Hps");
     }
   }
 
   int pageY = backY() - 2;
   if(expScrollPage > 0){
-    s.fillRoundRect(SCR_W-120,pageY,54,22,4,T().surface2);
+    iosRR(s,SCR_W-120,pageY,54,22,4,T().surface2);
     s.setTextColor(T().text);s.setCursor(SCR_W-110,pageY+6);s.print("< Prev");
   }
   if((expScrollPage + 1) * itemsPerPage < expFileCount){
-    s.fillRoundRect(SCR_W-60,pageY,54,22,4,T().surface2);
+    iosRR(s,SCR_W-60,pageY,54,22,4,T().surface2);
     s.setTextColor(T().text);s.setCursor(SCR_W-52,pageY+6);s.print("Next >");
   }
 
@@ -8283,7 +8328,7 @@ void drawMjpegPlayer(LGFX_Sprite& s){
   s.fillSprite(T().bg);drawStatusBar(s);
   s.setTextColor(0xFBE0);s.setTextSize(1);s.setCursor(8,26);s.print("MJPEG Player");
 
-  s.fillRoundRect(SCR_W-70,24,64,18,4,T().surface2);
+  iosRR(s,SCR_W-70,24,64,18,4,T().surface2);
   s.setTextColor(T().accent);s.setCursor(SCR_W-62,29);s.print("Scan");
 
   int listY = 44;
@@ -8305,7 +8350,7 @@ void drawMjpegPlayer(LGFX_Sprite& s){
     for(int i=0; i<itemsPerPage && (startIdx+i)<mjpegFileCount; i++){
       int idx = startIdx+i;
       int itemY = listY + i*(itemH+4);
-      s.fillRoundRect(4,itemY,SCR_W-8,itemH,6,T().surface);
+      iosRR(s,4,itemY,SCR_W-8,itemH,6,T().surface);
 
       s.setTextColor(0xFBE0);s.setCursor(10,itemY+8);s.print("[V]");
       s.setTextColor(T().text);s.setCursor(32,itemY+8);
@@ -8313,18 +8358,18 @@ void drawMjpegPlayer(LGFX_Sprite& s){
       if(fn.length() > 15) fn = fn.substring(0,13) + "..";
       s.print(fn.c_str());
 
-      s.fillRoundRect(SCR_W-64,itemY+3,56,20,4,T().good);
+      iosRR(s,SCR_W-64,itemY+3,56,20,4,T().good);
       s.setTextColor(T().bg);s.setCursor(SCR_W-56,itemY+8);s.print("Play");
     }
   }
 
   int pageY = backY() - 2;
   if(mjpegScrollPage > 0){
-    s.fillRoundRect(SCR_W-120,pageY,54,22,4,T().surface2);
+    iosRR(s,SCR_W-120,pageY,54,22,4,T().surface2);
     s.setTextColor(T().text);s.setCursor(SCR_W-110,pageY+6);s.print("< Prev");
   }
   if((mjpegScrollPage+1)*itemsPerPage < mjpegFileCount){
-    s.fillRoundRect(SCR_W-60,pageY,54,22,4,T().surface2);
+    iosRR(s,SCR_W-60,pageY,54,22,4,T().surface2);
     s.setTextColor(T().text);s.setCursor(SCR_W-52,pageY+6);s.print("Next >");
   }
 
@@ -8665,7 +8710,7 @@ void drawUpdate(LGFX_Sprite& s){
   s.fillSprite(T().bg); drawStatusBar(s);
   s.setTextColor(0xF800); s.setTextSize(1); s.setCursor(8,26); s.print("Update Firmware");
 
-  s.fillRoundRect(SCR_W-64,24,58,18,4,T().surface2);
+  iosRR(s,SCR_W-64,24,58,18,4,T().surface2);
   s.setTextColor(T().accent); s.setCursor(SCR_W-58,29); s.print("Scan");
 
   s.setTextColor(T().subtext); s.setCursor(8,UPD_ROW0); s.print("Lokal - file .bin di /update:");
@@ -8679,7 +8724,7 @@ void drawUpdate(LGFX_Sprite& s){
     for(int i=0;i<UPD_ITEMS_PAGE && (startIdx+i)<updFileCount;i++){
       int idx = startIdx+i;
       int itemY = UPD_ITEM_Y + i*(UPD_ITEM_H+UPD_ITEM_GAP);
-      s.fillRoundRect(4,itemY,SCR_W-8,UPD_ITEM_H,5,T().surface);
+      iosRR(s,4,itemY,SCR_W-8,UPD_ITEM_H,5,T().surface);
       s.setTextColor(T().text); s.setCursor(8,itemY+6);
       String fn = updFileList[idx];
       String fnDisp = fn;
@@ -8687,17 +8732,17 @@ void drawUpdate(LGFX_Sprite& s){
       s.print(fnDisp.c_str());
 
       bool pendingThis = (updPendingConfirm == ("sd:"+fn)) && millis()<=updPendingUntil;
-      s.fillRoundRect(SCR_W-70,itemY+2,64,UPD_ITEM_H-4,4, pendingThis?T().danger:T().good);
+      iosRR(s,SCR_W-70,itemY+2,64,UPD_ITEM_H-4,4, pendingThis?T().danger:T().good);
       s.setTextColor(T().bg); s.setCursor(SCR_W-64,itemY+6);
       s.print(pendingThis?"Yakin?":"Pasang");
     }
     if(updFileCount > UPD_ITEMS_PAGE){
       if(updScrollPage>0){
-        s.fillRoundRect(SCR_W-120,UPD_NAV_Y,54,UPD_NAV_H,4,T().surface2);
+        iosRR(s,SCR_W-120,UPD_NAV_Y,54,UPD_NAV_H,4,T().surface2);
         s.setTextColor(T().text); s.setCursor(SCR_W-112,UPD_NAV_Y+4); s.print("< Prev");
       }
       if((updScrollPage+1)*UPD_ITEMS_PAGE < updFileCount){
-        s.fillRoundRect(SCR_W-60,UPD_NAV_Y,54,UPD_NAV_H,4,T().surface2);
+        iosRR(s,SCR_W-60,UPD_NAV_Y,54,UPD_NAV_H,4,T().surface2);
         s.setTextColor(T().text); s.setCursor(SCR_W-54,UPD_NAV_Y+4); s.print("Next >");
       }
     }
@@ -8707,7 +8752,7 @@ void drawUpdate(LGFX_Sprite& s){
 
   s.setTextColor(T().subtext); s.setCursor(8,UPD_WIFI_LABEL_Y); s.print("WiFi - unduh dari URL:");
 
-  s.fillRoundRect(8,UPD_URL_Y,SCR_W-16,UPD_URL_H,4,T().surface);
+  iosRR(s,8,UPD_URL_Y,SCR_W-16,UPD_URL_H,4,T().surface);
   s.setTextColor(T().text); s.setCursor(12,UPD_URL_Y+6);
   String uDisp = updUrl.length() ? updUrl : "(ketuk utk isi URL firmware.bin)";
   if(uDisp.length()>34) uDisp = uDisp.substring(0,32)+"..";
@@ -8715,7 +8760,7 @@ void drawUpdate(LGFX_Sprite& s){
 
   bool pendingWifi = (updPendingConfirm == ("wifi:"+updUrl)) && millis()<=updPendingUntil;
   uint16_t wifiBtnColor = (!wifiConnected) ? T().surface2 : (pendingWifi ? T().danger : T().accent);
-  s.fillRoundRect(8,UPD_BTN_Y,SCR_W-16,UPD_BTN_H,6, wifiBtnColor);
+  iosRR(s,8,UPD_BTN_Y,SCR_W-16,UPD_BTN_H,6, wifiBtnColor);
   s.setTextColor((!wifiConnected) ? T().subtext : T().bg); s.setCursor(14,UPD_BTN_Y+7);
   s.print(!wifiConnected ? "WiFi tidak terhubung" : (pendingWifi ? "Yakin? Ketuk lagi" : "Unduh & Pasang"));
 
@@ -9575,7 +9620,7 @@ void drawBatteryApp(LGFX_Sprite& s){
   drawStatusBar(s);
   s.setTextColor(0x07E0);s.setTextSize(1);s.setCursor(8,26);s.print("Baterai");
 
-  s.fillRoundRect(SCR_W-70,24,64,18,4,T().surface2);
+  iosRR(s,SCR_W-70,24,64,18,4,T().surface2);
   s.setTextColor(T().accent);s.setCursor(SCR_W-62,29);s.print("Refresh");
 
   // --- Ikon baterai besar, terisi sesuai persen ---
@@ -9985,8 +10030,7 @@ void triviaEnter(){ triviaPage=TRV_SETUP; triviaCatScrollY=0; }
 void triviaExit(){}
 
 void drawTriviaSetup(LGFX_Sprite& s){
-  s.setTextColor(T().accent); s.setTextSize(1);
-  s.setCursor(8,25); s.print("Trivia Quiz - Pilih Tema");
+  iosTitle(s,8,25,"Trivia Quiz - Pilih Tema");
 
   TriviaLayout L = triviaCalcLayout();
   int cols=triviaCatCols(), cw=triviaCatCardW(), ch=triviaCatCardH(), gap=6;
@@ -9997,7 +10041,7 @@ void drawTriviaSetup(LGFX_Sprite& s){
     if(y+ch<top || y>bottom) continue;
     bool sel=(i==triviaSelCat);
     uint16_t bg = sel? triviaCats[i].color : T().surface;
-    s.fillRoundRect(x,y,cw,ch,8,bg);
+    iosRR(s,x,y,cw,ch,8,bg);
     if(sel) s.drawRoundRect(x,y,cw,ch,8,T().text);
     s.setTextColor(sel?T().bg:T().text); s.setTextSize(1);
     int nl=s.textWidth(triviaCats[i].name);
@@ -10010,7 +10054,7 @@ void drawTriviaSetup(LGFX_Sprite& s){
   int dw=(SCR_W-16)/4;
   for(int i=0;i<4;i++){
     int x=8+i*dw; bool sel=(i==triviaSelDiff);
-    s.fillRoundRect(x,L.diffY,dw-4,22,5, sel?T().accent:T().surface2);
+    iosRR(s,x,L.diffY,dw-4,22,5, sel?T().accent:T().surface2);
     s.setTextColor(sel?T().bg:T().text);
     int nl=s.textWidth(triviaDiffNames[i]);
     s.setCursor(x+(dw-4)/2-nl/2, L.diffY+7);
@@ -10022,7 +10066,7 @@ void drawTriviaSetup(LGFX_Sprite& s){
   int aw=(SCR_W-16)/3;
   for(int i=0;i<3;i++){
     int x=8+i*aw; bool sel=(i==triviaSelAmount);
-    s.fillRoundRect(x,L.amtY,aw-4,22,5, sel?T().accent2:T().surface2);
+    iosRR(s,x,L.amtY,aw-4,22,5, sel?T().accent2:T().surface2);
     char b[10]; sprintf(b,"%d Soal",triviaAmountOpts[i]);
     int nl=s.textWidth(b);
     s.setTextColor(sel?T().bg:T().text);
@@ -10030,7 +10074,7 @@ void drawTriviaSetup(LGFX_Sprite& s){
     s.print(b);
   }
 
-  s.fillRoundRect(8,L.startY,SCR_W-16,28,8,T().good);
+  iosRR(s,8,L.startY,SCR_W-16,28,8,T().good);
   s.setTextColor(T().bg); s.setTextSize(2);
   const char* lbl="Mulai Kuis";
   int lw=strlen(lbl)*12;
@@ -10053,7 +10097,7 @@ void drawTriviaQuestion(LGFX_Sprite& s){
   if(triviaCur<0||triviaCur>=triviaCount) return;
   TriviaQuestion& q = triviaQs[triviaCur];
 
-  s.fillRoundRect(6,STATUS_H+3,96,16,4,triviaCats[triviaSelCat].color);
+  iosRR(s,6,STATUS_H+3,96,16,4,triviaCats[triviaSelCat].color);
   s.setTextColor(T().bg); s.setTextSize(1);
   s.setCursor(11,STATUS_H+7); s.print(triviaCats[triviaSelCat].name);
 
@@ -10080,7 +10124,7 @@ void drawTriviaQuestion(LGFX_Sprite& s){
       if(i==q.correctIdx) bg=T().good;
       else if(i==triviaSelected) bg=T().danger;
     }
-    s.fillRoundRect(x,y,w,h,6,bg);
+    iosRR(s,x,y,w,h,6,bg);
     bool hi = triviaAnswered && (i==q.correctIdx || i==triviaSelected);
     s.setTextColor(hi?T().bg:T().text); s.setTextSize(1);
     String line = String(letters[i])+". "+q.answers[i];
@@ -10105,12 +10149,12 @@ void drawTriviaResult(LGFX_Sprite& s){
   s.setTextColor(T().subtext); s.setTextSize(1);
   s.setCursor(cx-(int)strlen(msg)*3, STATUS_H+74); s.print(msg);
 
-  s.fillRoundRect(8, STATUS_H+96, SCR_W-16, 26, 7, T().good);
+  iosRR(s,8, STATUS_H+96, SCR_W-16, 26, 7, T().good);
   s.setTextColor(T().bg); s.setTextSize(1);
   const char* l1="Main Lagi (tema sama)";
   s.setCursor(cx-(int)strlen(l1)*3, STATUS_H+106); s.print(l1);
 
-  s.fillRoundRect(8, STATUS_H+128, SCR_W-16, 26, 7, T().surface2);
+  iosRR(s,8, STATUS_H+128, SCR_W-16, 26, 7, T().surface2);
   s.setTextColor(T().text);
   const char* l2="Ganti Tema";
   s.setCursor(cx-(int)strlen(l2)*3, STATUS_H+138); s.print(l2);
@@ -10125,7 +10169,7 @@ void drawTriviaError(LGFX_Sprite& s){
     s.setTextColor(T().text); s.setCursor(8, STATUS_H+36+i*11); s.print(aiLinesBuf[i].text.c_str());
   }
   int by=STATUS_H+36+6*11+10;
-  s.fillRoundRect(8,by,SCR_W-16,26,7,T().accent);
+  iosRR(s,8,by,SCR_W-16,26,7,T().accent);
   s.setTextColor(T().bg); s.setTextSize(1);
   const char* l="Coba Lagi";
   s.setCursor(SCR_W/2-(int)strlen(l)*3, by+10); s.print(l);
@@ -10514,14 +10558,14 @@ void drawMaze(LGFX_Sprite& s){
 
   if(mazePageState==MAZE_LEVEL_CLEAR){
     int bx=SCR_W/2-70, by=SCR_H/2-24, bw=140, bh=48;
-    s.fillRoundRect(bx,by,bw,bh,10,T().surface);
+    iosRR(s,bx,by,bw,bh,10,T().surface);
     s.drawRoundRect(bx,by,bw,bh,10,T().good);
     char lb[24]; snprintf(lb,sizeof(lb),"Level %d Selesai!",mazeLevel-1>0?mazeLevel-1:mazeLevel);
     s.setTextColor(T().good); s.setTextSize(1);
     int tw=(int)s.textWidth(lb); s.setCursor(SCR_W/2-tw/2,by+18); s.print(lb);
   } else if(mazePageState==MAZE_GAME_OVER){
     int bx=SCR_W/2-76, by=SCR_H/2-40, bw=152, bh=80;
-    s.fillRoundRect(bx,by,bw,bh,10,T().surface);
+    iosRR(s,bx,by,bw,bh,10,T().surface);
     s.drawRoundRect(bx,by,bw,bh,10,T().danger);
     s.setTextColor(T().danger); s.setTextSize(1); s.setCursor(bx+34,by+10); s.print("GAME OVER");
     char lb[40]; snprintf(lb,sizeof(lb),"Skor: %d (Lv%d)",mazeScore,mazeLevel);
@@ -12133,7 +12177,7 @@ void infGameOverBtnRectAt(int slot,int panelBy,int &bx,int &by,int &bw,int &bh){
   by = panelBy+52+slot*24;
 }
 void infDrawMenuButton(LGFX_Sprite& s,int bx,int by,int bw,int bh,const char* label,bool accent){
-  s.fillRoundRect(bx,by,bw,bh,7, accent? blend565(T().accent,0x0000,60) : T().surface2);
+  iosRR(s,bx,by,bw,bh,7, accent? blend565(T().accent,0x0000,60) : T().surface2);
   s.drawRoundRect(bx,by,bw,bh,7, accent? T().accent : T().subtext);
   s.setTextColor(T().text); s.setTextSize(1);
   int tw=(int)s.textWidth(label);
@@ -12733,7 +12777,7 @@ void drawInf(LGFX_Sprite& s){
 
   // ---- Senjata (viewmodel) + recoil & muzzle flash ----
   int gunY=vpTop+vpH-(int)(infGunKick*10);
-  s.fillRoundRect(SCR_W/2-16,gunY-30,32,34,4,INF_GUN_METAL);
+  iosRR(s,SCR_W/2-16,gunY-30,32,34,4,INF_GUN_METAL);
   s.fillRoundRect(SCR_W/2-6,gunY-52,12,26,3,INF_GUN_DARK);
   s.fillCircle(SCR_W/2,gunY-52,5,infWeaponColor());
   if(millis()<infMuzzleFlashUntil){
@@ -12743,7 +12787,7 @@ void drawInf(LGFX_Sprite& s){
 
   // ---- HUD: bar nyawa, skor/level, sisa nyawa, minimap ----
   int hbX=8,hbY=vpTop+vpH-46,hbW=90,hbH=10;
-  s.fillRoundRect(hbX-2,hbY-12,hbW+4,hbH+16,4,blend565(T().surface,0x0000,60));
+  iosRR(s,hbX-2,hbY-12,hbW+4,hbH+16,4,blend565(T().surface,0x0000,60));
   s.setTextColor(T().subtext); s.setTextSize(1); s.setCursor(hbX,hbY-11); s.print("NYAWA");
   s.fillRoundRect(hbX,hbY,hbW,hbH,3,T().surface2);
   int hbFill=(int)(hbW*constrain(infHealth/infMaxHealth,0.0f,1.0f));
@@ -12873,7 +12917,7 @@ void drawInf(LGFX_Sprite& s){
     // nampilin dialog/hasil.
     s.fillRect(0,vpTop,SCR_W,vpH, blend565(T().bg,0x0000,150));
     int bx=SCR_W/2-76,by=vpTop+vpHalf-24,bw=152,bh=48;
-    s.fillRoundRect(bx,by,bw,bh,10,T().surface);
+    iosRR(s,bx,by,bw,bh,10,T().surface);
     s.drawRoundRect(bx,by,bw,bh,10,T().good);
     char lb[32]; snprintf(lb,sizeof(lb),"Zona %d Bersih!",infLevel);
     s.setTextColor(T().good); s.setTextSize(1);
@@ -12884,7 +12928,7 @@ void drawInf(LGFX_Sprite& s){
     // beda sumber level tiap tombol LANJUTKAN.
     s.fillRect(0,vpTop,SCR_W,vpH, blend565(T().bg,0x0000,150)); // v76: gelapkan latar belakang panel
     int bx=SCR_W/2-95,by=vpTop+vpHalf-64,bw=190,bh=128;
-    s.fillRoundRect(bx,by,bw,bh,10,T().surface);
+    iosRR(s,bx,by,bw,bh,10,T().surface);
     s.drawRoundRect(bx,by,bw,bh,10,T().danger);
     s.setTextColor(T().danger); s.setTextSize(1); s.setCursor(bx+48,by+8); s.print("KAU TEWAS");
     char lb[40]; snprintf(lb,sizeof(lb),"Skor: %d (Lv%d)",infScore,infLevel);
@@ -13191,7 +13235,7 @@ void drawNumPad(LGFX_Sprite& s){
       const char* label=numPadLayout[idx];
       int x=4+c*(kw+4), y=y0+r*(kh+4);
       bool special = !strcmp(label,"Hapus") || !strcmp(label,"Selesai");
-      s.fillRoundRect(x,y,kw,kh,6, special? T().accent2 : T().surface2);
+      iosRR(s,x,y,kw,kh,6, special? T().accent2 : T().surface2);
       s.setTextColor(special? T().bg : T().text); s.setTextSize(1);
       int tw=s.textWidth(label);
       s.setCursor(x+kw/2-tw/2,y+kh/2-4); s.print(label);
@@ -13870,7 +13914,7 @@ void drawApodError(LGFX_Sprite& s){
     s.setTextColor(T().text); s.setCursor(8,STATUS_H+36+i*11); s.print(aiLinesBuf[i].text.c_str());
   }
   int by=STATUS_H+36+6*11+10;
-  s.fillRoundRect(8,by,SCR_W-16,26,7,T().accent);
+  iosRR(s,8,by,SCR_W-16,26,7,T().accent);
   s.setTextColor(T().bg); s.setTextSize(1);
   const char* l="Coba Lagi";
   s.setCursor(SCR_W/2-(int)strlen(l)*3,by+10); s.print(l);
@@ -13890,11 +13934,11 @@ void drawApod(LGFX_Sprite& s){
   int xNext=SCR_W-4-btnW;
   int xPrev=xNext-gap-btnW;
   int xLang=xPrev-gap-44;
-  s.fillRoundRect(xLang,24,44,btnH,4,T().surface2);
+  iosRR(s,xLang,24,44,btnH,4,T().surface2);
   s.setTextColor(T().accent); s.setCursor(xLang+4,29); s.print(apodShowEnglish?"Lihat ID":"Lihat EN");
-  s.fillRoundRect(xPrev,24,btnW,btnH,4,T().surface2);
+  iosRR(s,xPrev,24,btnW,btnH,4,T().surface2);
   s.setTextColor(T().accent); s.setCursor(xPrev+10,29); s.print("<");
-  s.fillRoundRect(xNext,24,btnW,btnH,4,T().surface2);
+  iosRR(s,xNext,24,btnW,btnH,4,T().surface2);
   s.setTextColor(T().accent); s.setCursor(xNext+10,29); s.print(">");
 
   int imgTop=apodImgTop(), imgH=apodImgAreaH();
@@ -13914,7 +13958,7 @@ void drawApod(LGFX_Sprite& s){
 
   int textTop=apodTextTop(), textBot=apodTextBottom();
   int textH=textBot-textTop;
-  s.fillRoundRect(4,textTop,SCR_W-8,textH,6,T().surface);
+  iosRR(s,4,textTop,SCR_W-8,textH,6,T().surface);
 
   int innerX=10, innerW=(SCR_W-8)-12;
   int maxChars=innerW/6; if(maxChars<6) maxChars=6;
@@ -14123,7 +14167,7 @@ bool drawNasaError(LGFX_Sprite& s, const char* title, const String& msg){
     s.setTextColor(T().text); s.setCursor(8,STATUS_H+36+i*11); s.print(aiLinesBuf[i].text.c_str());
   }
   int by=STATUS_H+36+6*11+10;
-  s.fillRoundRect(8,by,SCR_W-16,26,7,T().accent);
+  iosRR(s,8,by,SCR_W-16,26,7,T().accent);
   s.setTextColor(T().bg); s.setTextSize(1);
   const char* l="Coba Lagi";
   s.setCursor(SCR_W/2-(int)strlen(l)*3,by+10); s.print(l);
@@ -14391,7 +14435,7 @@ void drawNeoList(LGFX_Sprite& s){
       if(i>=neoCount) break;
       int ry=top+r*rowH;
       NeoObj& o=neoList[i];
-      s.fillRoundRect(6,ry+2,SCR_W-12,rowH-6,6,T().surface);
+      iosRR(s,6,ry+2,SCR_W-12,rowH-6,6,T().surface);
       s.setTextColor(o.hazardous?T().danger:T().text); s.setTextSize(1);
       String nm=o.name; if((int)nm.length()>28) nm=nm.substring(0,28);
       s.setCursor(12,ry+8); s.print(nm);
@@ -14418,7 +14462,7 @@ void drawNeoDetail(LGFX_Sprite& s){
   if(neoSelIdx<0 || neoSelIdx>=neoCount){ neoPage=NEO_LIST; return; }
   NeoObj& o=neoList[neoSelIdx];
 
-  s.fillRoundRect(6,22,70,20,5,T().surface2);
+  iosRR(s,6,22,70,20,5,T().surface2);
   s.setTextColor(T().accent); s.setTextSize(1); s.setCursor(12,28); s.print("< Daftar");
 
   int maxChars=(SCR_W-16)/6;
@@ -14820,8 +14864,8 @@ void drawEpicView(LGFX_Sprite& s){
 
   if(epicCount>0){
     int navY=imgTop+imgH+6;
-    s.fillRoundRect(6,navY,50,20,5,T().surface2); s.setTextColor(T().accent); s.setCursor(16,navY+5); s.print("<");
-    s.fillRoundRect(SCR_W-56,navY,50,20,5,T().surface2); s.setTextColor(T().accent); s.setCursor(SCR_W-46,navY+5); s.print(">");
+    iosRR(s,6,navY,50,20,5,T().surface2); s.setTextColor(T().accent); s.setCursor(16,navY+5); s.print("<");
+    iosRR(s,SCR_W-56,navY,50,20,5,T().surface2); s.setTextColor(T().accent); s.setCursor(SCR_W-46,navY+5); s.print(">");
     char cnt[24]; snprintf(cnt,sizeof(cnt),"%d/%d",epicIdx+1,epicCount);
     s.setTextColor(T().text); s.setCursor(SCR_W/2-(int)strlen(cnt)*3,navY+5); s.print(cnt);
 
@@ -15185,7 +15229,7 @@ int imgLibSearchRightX(){ return SCR_W-4; }
 int imgLibSearchTopY(){ return imgLibImgTop()+4; }
 
 void drawImgLibEmpty(LGFX_Sprite& s){
-  s.setTextColor(T().accent); s.setTextSize(1); s.setCursor(8,26); s.print("Galeri NASA");
+  iosTitle(s,8,26,"Galeri NASA");
   s.setTextColor(T().subtext); s.setTextSize(1);
   const char* m1="Ketuk ikon kaca pembesar di";
   const char* m2="pojok kanan utk mencari foto NASA";
@@ -15213,8 +15257,8 @@ void drawImgLibView(LGFX_Sprite& s){
   }
 
   int navY=imgTop+imgH+6;
-  s.fillRoundRect(6,navY,50,20,5,T().surface2); s.setTextColor(T().accent); s.setCursor(16,navY+5); s.print("<");
-  s.fillRoundRect(SCR_W-56,navY,50,20,5,T().surface2); s.setTextColor(T().accent); s.setCursor(SCR_W-46,navY+5); s.print(">");
+  iosRR(s,6,navY,50,20,5,T().surface2); s.setTextColor(T().accent); s.setCursor(16,navY+5); s.print("<");
+  iosRR(s,SCR_W-56,navY,50,20,5,T().surface2); s.setTextColor(T().accent); s.setCursor(SCR_W-46,navY+5); s.print(">");
   char cnt[24]; snprintf(cnt,sizeof(cnt),"%d/%d",imgLibCount?imgLibIdx+1:0,imgLibCount);
   s.setTextColor(T().text); s.setCursor(SCR_W/2-(int)strlen(cnt)*3,navY+5); s.print(cnt);
 
@@ -15315,10 +15359,10 @@ int npxBrightY(){ return npxRainbowBtnY()+48; }
 
 void drawNpxApp(LGFX_Sprite& s){
   s.fillSprite(T().bg); drawStatusBar(s);
-  s.setTextColor(T().accent); s.setTextSize(1); s.setCursor(8,26); s.print("Neopixel");
+  iosTitle(s,8,26,"Neopixel");
 
   int btnW=npxHeaderBtnW();
-  s.fillRoundRect(SCR_W-8-btnW,22,btnW,22,6, npxOn?T().good:T().surface2);
+  iosRR(s,SCR_W-8-btnW,22,btnW,22,6, npxOn?T().good:T().surface2);
   s.setTextColor(npxOn?T().bg:T().subtext); s.setCursor(SCR_W-8-btnW+14,28);
   s.print(npxOn?"ON":"OFF");
 
@@ -15340,7 +15384,7 @@ void drawNpxApp(LGFX_Sprite& s){
 
   int rbY=npxRainbowBtnY();
   bool rbActive = npxOn && npxMode==1;
-  s.fillRoundRect(gl,rbY,sw,32,8, rbActive?T().accent:T().surface2);
+  iosRR(s,gl,rbY,sw,32,8, rbActive?T().accent:T().surface2);
   s.setTextColor(rbActive?T().bg:T().text); s.setTextSize(1);
   const char* rl="Rainbow";
   s.setCursor(SCR_W/2-(int)strlen(rl)*3,rbY+12); s.print(rl);
@@ -15349,7 +15393,7 @@ void drawNpxApp(LGFX_Sprite& s){
   s.setTextColor(T().subtext); s.setCursor(gl,by-14); s.print("Kecerahan");
   s.fillRoundRect(gl,by,sw,9,4,T().divider);
   int fillW = map(npxBrightness,0,255,0,sw);
-  s.fillRoundRect(gl,by,fillW,9,4,T().accent);
+  iosRR(s,gl,by,fillW,9,4,T().accent);
   s.fillCircle(gl+fillW,by+4,7,T().bg);
   s.fillCircle(gl+fillW,by+4,5,T().accent);
 
@@ -15720,7 +15764,7 @@ void drawMicLvl(LGFX_Sprite& s){
   drawStatusBar(s);
   s.setTextColor(0x07E0); s.setTextSize(1); s.setCursor(8,26); s.print("Mic Level (INMP441)");
 
-  s.fillRoundRect(SCR_W-84,24,78,18,4,T().surface2);
+  iosRR(s,SCR_W-84,24,78,18,4,T().surface2);
   s.setTextColor(T().accent); s.setCursor(SCR_W-78,29); s.print("Reset Peak");
 
   bool micBusy = (micRecording || micTranscribing || micTaskHandle!=NULL);
@@ -15731,7 +15775,7 @@ void drawMicLvl(LGFX_Sprite& s){
   int pct = (int)(micLvlRms*100.0f);
   uint16_t lvlColor = (pct>=85)?T().danger : (pct>=55)?T().accent : T().good;
   int fillW = constrain((barW-4)*pct/100, 0, barW-4);
-  if(fillW>0) s.fillRoundRect(barX+2,barY+2,fillW,barH-4,4,lvlColor);
+  if(fillW>0) iosRR(s,barX+2,barY+2,fillW,barH-4,4,lvlColor);
 
   // garis peak-hold
   int peakX = barX+2 + constrain((int)((barW-4)*micLvlPeak),0,barW-4);
@@ -15925,7 +15969,7 @@ void drawHwmon(LGFX_Sprite& s){
   drawStatusBar(s);
   s.setTextColor(0x07FF); s.setTextSize(1); s.setCursor(8,26); s.print("HWmonitor");
 
-  s.fillRoundRect(SCR_W-84,24,78,18,4,T().surface2);
+  iosRR(s,SCR_W-84,24,78,18,4,T().surface2);
   s.setTextColor(T().accent); s.setCursor(SCR_W-78,29); s.print("Reset Min/Max");
 
   // v100: tombol "Tes Speaker" DIHAPUS -- fitur speaker dicabut total dr proyek ini

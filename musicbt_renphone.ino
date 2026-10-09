@@ -1086,7 +1086,7 @@ static void musDrawList(LGFX_Sprite& s) {
   s.fillTriangle(bx0 + bw3 / 2, mBotY + 9, bx0 + bw3 / 2 - 7, mBotY + 19, bx0 + bw3 / 2 + 7, mBotY + 19, T().text);
   musPanel(s, bx1, mBotY, bw3, mBotH, 10, T().surface2, 210);
   s.fillTriangle(bx1 + bw3 / 2, mBotY + 19, bx1 + bw3 / 2 - 7, mBotY + 9, bx1 + bw3 / 2 + 7, mBotY + 9, T().text);
-  s.fillRoundRect(bx2, mBotY, bw3, mBotH, 10, T().accent);
+  iosRR(s,bx2, mBotY, bw3, mBotH, 10, T().accent);
   musDrawLabel(s, "Pemutar", bx2, mBotY, bw3, mBotH, T().bg);
 }
 
@@ -1126,7 +1126,7 @@ static void musDrawScan(LGFX_Sprite& s) {
   int bw2 = (SCR_W - 24 - 6) / 2;
   musPanel(s, 12, mBotY, bw2, mBotH, 10, T().surface2, 210);
   musDrawLabel(s, "Pindai ulang", 12, mBotY, bw2, mBotH, T().text);
-  s.fillRoundRect(12 + bw2 + 6, mBotY, bw2, mBotH, 10, T().accent);
+  iosRR(s,12 + bw2 + 6, mBotY, bw2, mBotH, 10, T().accent);
   musDrawLabel(s, "Pemutar", 12 + bw2 + 6, mBotY, bw2, mBotH, T().bg);
 }
 
