@@ -6975,7 +6975,23 @@ int loadSpiOcPref(){
   return 0; // fallback: kalau NVS somehow kesimpen angka yg gak ada di daftar, jangan crash -- balik ke paling aman
 }
 
+
+// =====================================================================
+// PENGATURAN ala iOS -- state layout & sentuhan (daftar scroll, tap-saat-lepas)
+// =====================================================================
+enum { SR_TITLE=0, SR_SECT, SR_BRIGHT, SR_THEME, SR_FONT, SR_ROT, SR_SPI, SR_SPIAPPLY,
+       SR_SCAN, SR_WIFI, SR_NONET, SR_SSID, SR_PASS, SR_CONNECT, SR_MPU, SR_TCAL };
+#define SETT_MAXROWS 40
+int settRT[SETT_MAXROWS], settRG[SETT_MAXROWS], settRY[SETT_MAXROWS], settRH[SETT_MAXROWS], settRA[SETT_MAXROWS];
+const char* settRL[SETT_MAXROWS];
+int settRowN=0, settTotalH=0;
+float settScroll=0;
+int settTouchMode=0;            // 0 diam, 1 menunggu (tap/scroll), 2 geser slider, 3 scroll
+int settTouchX0=0, settTouchY0=0, settTouchLastY=0;
+unsigned long settTouchT0=0, settTcalArmUntil=0;
+
 void settingsEnter(){ 
+  settScroll=0; settTouchMode=0; settTcalArmUntil=0;
   settSSID=String(WIFI_SSID); 
   settPass=String(WIFI_PASSWORD); 
   startWifiScan();
@@ -6983,339 +6999,347 @@ void settingsEnter(){
 }
 void settingsExit(){}
 
+int settAreaTop(){ return STATUS_H; }
+int settAreaBot(){ return kbVisible ? (kbY()-2) : (backY()-4); }
+
+void settAddRow(int type,int grp,int h,int arg,const char* lbl,int& y){
+  if(settRowN>=SETT_MAXROWS) return;
+  settRT[settRowN]=type; settRG[settRowN]=grp; settRY[settRowN]=y; settRH[settRowN]=h; settRA[settRowN]=arg; settRL[settRowN]=lbl;
+  settRowN++; y+=h;
+}
+
+// Satu-satunya sumber posisi baris: dipakai gambar DAN hit-test (gak mungkin meleset)
+void settBuildLayout(){
+  settRowN=0; int y=4; int g=1;
+  settAddRow(SR_TITLE,0,36,0,"Pengaturan",y);
+
+  settAddRow(SR_SECT,0,22,0,"TAMPILAN",y);
+  settAddRow(SR_BRIGHT,g,34,0,nullptr,y);
+  settAddRow(SR_THEME,g,52,0,nullptr,y);
+  settAddRow(SR_FONT,g,34,0,nullptr,y);
+  settAddRow(SR_ROT,g,34,0,nullptr,y); g++;
+
+  settAddRow(SR_SECT,0,26,0,"KINERJA",y);
+  settAddRow(SR_SPI,g,38,0,nullptr,y);
+  if(spiOcPendingIdx!=spiOcIdx) settAddRow(SR_SPIAPPLY,g,34,0,nullptr,y);
+  g++;
+
+  settAddRow(SR_SECT,0,26,0,"WI-FI",y);
+  settAddRow(SR_SCAN,g,34,0,nullptr,y);
+  if(!wifiScanning && scannedWifiNum==0) settAddRow(SR_NONET,g,30,0,nullptr,y);
+  for(int i=0;i<scannedWifiNum && i<5;i++) settAddRow(SR_WIFI,g,32,i,nullptr,y);
+  settAddRow(SR_SSID,g,34,0,nullptr,y);
+  settAddRow(SR_PASS,g,34,0,nullptr,y);
+  settAddRow(SR_CONNECT,g,36,0,nullptr,y); g++;
+
+  settAddRow(SR_SECT,0,26,0,"SENSOR & LAYAR",y);
+  settAddRow(SR_MPU,g,34,0,nullptr,y);
+  settAddRow(SR_TCAL,g,34,0,nullptr,y); g++;
+
+  y+=14; settTotalH=y;
+}
+float settMaxScroll(){ int vis=settAreaBot()-settAreaTop(); int m=settTotalH-vis; return m>0?(float)m:0.0f; }
+
+String settFit(LGFX_Sprite& s,String v,int maxW){
+  while(v.length()>1 && s.textWidth(v.c_str())>maxW) v.remove(v.length()-1);
+  return v;
+}
+void settTextR(LGFX_Sprite& s,int xr,int ty,const char* str,uint16_t col){
+  s.setTextColor(col); s.setCursor(xr-s.textWidth(str),ty); s.print(str);
+}
+void settChevron(LGFX_Sprite& s,int cx,int cy,uint16_t col){ // ">" tipis
+  s.drawLine(cx-2,cy-4,cx+2,cy,col); s.drawLine(cx+2,cy,cx-2,cy+4,col);
+}
+
 void drawSettings(LGFX_Sprite& s){
   checkWifiScanComplete();
+  settBuildLayout();
+
+  // keyboard terbuka: geser daftar supaya kolom yg lagi diisi tetap kelihatan di atas keyboard
+  if(kbVisible){
+    int want=(settFocus==0)?SR_SSID:SR_PASS;
+    for(int i=0;i<settRowN;i++) if(settRT[i]==want){
+      int vis=settAreaBot()-settAreaTop(); int bottom=settRY[i]+settRH[i]+10;
+      if(bottom-(int)settScroll>vis) settScroll=(float)(bottom-vis);
+    }
+  }
+  float mxs=settMaxScroll(); if(settScroll>mxs) settScroll=mxs; if(settScroll<0) settScroll=0;
 
   iosBackdrop(s); drawStatusBar(s);
-  iosTitle(s,8,26,"Pengaturan");
+  const int top=settAreaTop(), bot=settAreaBot();
+  const int cx=10, cw=SCR_W-20;
+  const int oy=top-(int)lroundf(settScroll);
+  s.setClipRect(0,top,SCR_W,bot-top);
+  s.setFont(&lgfx::fonts::Font0);
+  s.setTextSize(1);
 
-  // v104: ROMBAK TOTAL interaksi SPI Overclock -- versi lama (v103) tiap
-  // ketuk LANGSUNG cycle+restart, jadi kalau mau lompat jauh (mis. 60ke80)
-  // harus tekan+reboot 4x. Sekarang gaya "< 70MHz >": geser2 dulu pakai
-  // panah (spiOcPendingIdx, CUMA visual, BELUM diterapkan, BELUM restart),
-  // baru kalau sudah fix ketuk PIL TENGAHNYA sendiri buat terapkan+restart
-  // SEKALI aja.
-  // v111 FIX bug "SPI Overclock gak keliatan di Settings": posisi kontrol
-  // ini (ocX=74) didesain asumsi SCR_W=320 (landscape) spy pas di celah
-  // kosong sebelum tombol Auto-Rotate. Tombol Auto-Rotate posisinya dihitung
-  // dari SCR_W-74-arW-6 -- pas SCR_W=240 (device lagi PORTRAIT), itung2an
-  // ini jatuh ke x=98, NUMPUK LANGSUNG di atas pill+panah-kanan SPI OC (yg
-  // ada di x 92-164), dan krn Auto-Rotate digambar BELAKANGAN, ia nimpa
-  // SPI OC total -- makanya kontrolnya "hilang" pas HP dipegang portrait
-  // (padahal kodenya jalan normal, cuma ketutup). Landscape (SCR_H cuma
-  // 240, "pas-pasan" -- lihat catatan v66) TETAP pakai layout satu-baris
-  // lama krn di situ emang muat & vertikal space mepet. Portrait (SCR_H
-  // 320, jauh lebih longgar) dikasih baris SENDIRI di bawah baris judul
-  // biar gak numpuk lagi -- lihat rowY+=34 tambahan di bawah nanti.
-  bool ocOwnRow = (currentOrient != ORIENT_LANDSCAPE);
-  bool ocDirty = (spiOcPendingIdx != spiOcIdx); // ada pilihan yg blm diterapkan?
-  int ocArrowW, ocX, ocPillX, ocPillW, ocY;
-  if(ocOwnRow){
-    ocY=46; ocArrowW=20; ocX=64; ocPillX=ocX+ocArrowW+2;
-    ocPillW = SCR_W-8-ocX-2*ocArrowW-4; // full-width penuh spy jelas, layar portrait longgar
-    s.setTextColor(T().text);s.setFont(&lgfx::fonts::Font0);s.setCursor(8,ocY+5);s.print("SPI OC:");
-  } else {
-    ocY=24; ocArrowW=18; ocX=74; ocPillX=ocX+ocArrowW; ocPillW=52;
+  // 1) kartu kaca per grup + garis pemisah antar baris
+  for(int i=0;i<settRowN;){
+    int g=settRG[i]; if(g==0){ i++; continue; }
+    int j=i; while(j+1<settRowN && settRG[j+1]==g) j++;
+    int gy=oy+settRY[i], gh=settRY[j]+settRH[j]-settRY[i];
+    if(gy+gh>top && gy<bot){
+      drawGlassCard(s,cx,gy,cw,gh,12,T().surface,215);
+      for(int k=i;k<j;k++){
+        int ly=oy+settRY[k]+settRH[k];
+        if(ly>top && ly<bot) s.drawFastHLine(cx+14,ly,cw-14,T().divider);
+      }
+    }
+    i=j+1;
   }
-  iosRR(s,ocX,ocY,ocArrowW,18,4,T().surface2);
-  s.setTextColor(T().accent);s.setFont(&lgfx::fonts::Font0);s.setCursor(ocX+6,ocY+5);s.print("<");
-  iosRR(s,ocPillX+ocPillW+2,ocY,ocArrowW,18,4,T().surface2);
-  s.setTextColor(T().accent);s.setCursor(ocPillX+ocPillW+2+6,ocY+5);s.print(">");
-  s.setFont(&lgfx::fonts::Font0); // v104: font balik ke default eksplisit spy gak "nempel" ke elemen setelahnya
-  iosRR(s,ocPillX,ocY,ocPillW,18,4, ocDirty?T().accent2:T().surface2);
-  s.setTextColor(ocDirty?T().bg:T().subtext);
-  char ocBuf[10]; sprintf(ocBuf,"%dMHz",SPI_OC_OPTIONS[spiOcPendingIdx]);
-  int ocTw=s.textWidth(ocBuf);
-  s.setCursor(ocPillX+ocPillW/2-ocTw/2,ocY+5); s.print(ocBuf);
 
-  // Toggle Auto-Rotate (di sebelah kiri tombol Pindai)
-  int arW=62;
-  int arX = SCR_W-74-arW-6;
-  s.setTextColor(T().text); s.setCursor(arX,29); s.print("Rot");
-  iosSwitch(s,arX+arW-34,23,autoRotateEnabled); // iOS: switch (area ketuk lama tetap sama)
-
-  iosRR(s,SCR_W-74,24,66,18,4,wifiScanning?T().surface2:T().accent);
-  s.setTextColor(wifiScanning?T().subtext:T().bg);
-  s.setCursor(SCR_W-68,29);
-  s.print(wifiScanning?"Memindai":"Pindai");
-
-  int rowY = STATUS_H+12;
-  if(ocOwnRow) rowY += 34; // v111: kasih tempat baris SPI OC baru (ocY 46-64) + celah kecil
-  int rowW = SCR_W-16;
-  
-  iosRR(s,8,rowY,rowW,26,6,T().surface);
-  s.setTextColor(T().text);s.setCursor(14,rowY+8);s.print("Cerah:");
-  s.fillRoundRect(58,rowY+9,rowW-90,7,3,T().divider);
-  s.fillRoundRect(59,rowY+10,map(brightness,0,255,0,rowW-92),5,2,T().accent);
-  char bb[6];sprintf(bb,"%d%%",brightness*100/255);
-  s.setTextColor(T().subtext);s.setCursor(rowW-28,rowY+8);s.print(bb);
-  
-  rowY+=28;
-  // v66: panel Tema digabung sama panel pilihan Font (2 baris tombol
-  // dalam 1 kotak) biar gak nambah blok baru penuh & bikin layar Setting
-  // kepanjangan (layar cuma 240px tinggi, udah pas-pasan dari sononya).
-  iosRR(s,8,rowY,rowW,46,6,T().surface);
-  s.setTextColor(T().text);s.setCursor(14,rowY+8);s.print("Tema:");
-  int tbtnW=(rowW-50)/THEME_COUNT;
-  for(int i=0;i<THEME_COUNT;i++){
-    uint16_t bg=(i==themeIdx)?T().accent:T().surface2;
-    uint16_t fg=(i==themeIdx)?T().bg:T().text;
-    int tx=52+i*tbtnW;
-    iosRR(s,tx,rowY+2,tbtnW-3,20,4,bg);
-    s.setTextColor(fg);s.setTextSize(1);
-    int nl=s.textWidth(themes[i].name);
-    s.setCursor(tx+(tbtnW-3)/2-nl/2,rowY+6);s.print(themes[i].name);
+  // 2) isi tiap baris
+  for(int i=0;i<settRowN;i++){
+    int ry=oy+settRY[i], rh=settRH[i];
+    if(ry+rh<=top || ry>=bot) continue;
+    int ty=ry+rh/2-4;
+    int xl=cx+14, xr=cx+cw-14;
+    s.setTextSize(1);
+    switch(settRT[i]){
+      case SR_TITLE:
+        s.setTextSize(2); uiText(s,cx+2,ry+10,settRL[i],T().text,false,true); s.setTextSize(1);
+        break;
+      case SR_SECT:
+        s.setTextColor(T().subtext); s.setCursor(cx+14,ry+rh-13); s.print(settRL[i]);
+        break;
+      case SR_BRIGHT: {
+        s.setTextColor(T().text); s.setCursor(xl,ty); s.print("Kecerahan");
+        int x0=cx+92, x1=cx+cw-50, my=ry+rh/2;
+        s.fillRoundRect(x0,my-2,x1-x0,4,2,blend565(T().surface2,0xFFFF,60));
+        int kx=x0+(constrain((int)brightness,10,255)-10)*(x1-x0)/245;
+        if(kx>x0) s.fillRoundRect(x0,my-2,kx-x0,4,2,T().accent);
+        s.fillCircle(kx,my+1,8,blend565(T().surface,0x0000,120));
+        s.fillCircle(kx,my,8,0xFFFF);
+        char bb[8]; sprintf(bb,"%d%%",brightness*100/255);
+        settTextR(s,xr,ty,bb,T().subtext);
+        } break;
+      case SR_THEME: {
+        s.setTextColor(T().text); s.setCursor(xl,ry+14); s.print("Tema");
+        int x0=cx+64, step=(cw-76)/THEME_COUNT;
+        for(int t=0;t<THEME_COUNT;t++){
+          int tcx=x0+step*t+step/2, tcy=ry+19;
+          s.fillCircle(tcx,tcy,9,themes[t].bg);
+          s.drawCircle(tcx,tcy,9,blend565(themes[t].bg,0xFFFF,110));
+          s.fillCircle(tcx,tcy,4,themes[t].accent);
+          if(t==themeIdx){ s.drawCircle(tcx,tcy,12,T().accent); s.drawCircle(tcx,tcy,11,T().accent); }
+        }
+        const char* nm=themes[themeIdx].name;
+        s.setTextColor(T().subtext); s.setCursor(x0+(step*THEME_COUNT)/2-s.textWidth(nm)/2,ry+37); s.print(nm);
+        } break;
+      case SR_FONT:
+        s.setTextColor(T().text); s.setCursor(xl,ty); s.print("Font");
+        settChevron(s,xr-3,ty+4,T().subtext);
+        settTextR(s,xr-12,ty,uiFontNames[uiFontIdx],T().subtext);
+        break;
+      case SR_ROT:
+        s.setTextColor(T().text); s.setCursor(xl,ty); s.print("Rotasi Otomatis");
+        iosSwitch(s,xr-34,ry+(rh-20)/2,autoRotateEnabled);
+        break;
+      case SR_SPI: {
+        s.setTextColor(T().text); s.setCursor(xl,ty-4); s.print("SPI Overclock");
+        s.setTextColor(T().subtext); s.setCursor(xl,ty+6); s.print(spiOcPendingIdx!=spiOcIdx?"Belum diterapkan":"Kecepatan layar");
+        int sw=108, sx=xr-sw, sy=ry+(rh-22)/2;
+        s.fillRoundRect(sx,sy,sw,22,11,T().surface2);
+        int selx=sx+2+spiOcPendingIdx*(sw/2-2);
+        s.fillRoundRect(selx,sy+2,sw/2-2,18,9,T().accent);
+        for(int k=0;k<2;k++){
+          char lb[8]; sprintf(lb,"%dMHz",SPI_OC_OPTIONS[k]);
+          s.setTextColor(k==spiOcPendingIdx?(uint16_t)0xFFFF:T().subtext);
+          s.setCursor(sx+k*(sw/2)+(sw/2)/2-s.textWidth(lb)/2,sy+7); s.print(lb);
+        }
+        } break;
+      case SR_SPIAPPLY:
+        s.setTextSize(1); uiText(s,cx+cw/2-s.textWidth("Terapkan & Mulai Ulang")/2-1,ty,"Terapkan & Mulai Ulang",T().accent,false,true);
+        break;
+      case SR_SCAN:
+        s.setTextColor(wifiScanning?T().subtext:T().accent); s.setCursor(xl,ty); s.print("Pindai Jaringan");
+        if(wifiScanning){
+          int dots=(int)((millis()/300)%4); char sb[12]="Memindai"; for(int d=0;d<dots;d++) strcat(sb,".");
+          settTextR(s,xr,ty,sb,T().subtext); needRedraw=true; // animasi titik selagi memindai
+        }
+        break;
+      case SR_NONET:
+        s.setTextColor(T().subtext); s.setCursor(xl,ty); s.print("Tidak ada jaringan. Ketuk Pindai.");
+        break;
+      case SR_WIFI: {
+        int w=settRA[i];
+        bool sel=(settSSID==scannedWifis[w].ssid);
+        if(sel){ // centang
+          s.drawLine(xl,ty+4,xl+3,ty+7,T().accent); s.drawLine(xl+3,ty+7,xl+9,ty+1,T().accent);
+          s.drawLine(xl,ty+5,xl+3,ty+8,T().accent); s.drawLine(xl+3,ty+8,xl+9,ty+2,T().accent);
+        }
+        String nm=settFit(s,scannedWifis[w].ssid,cw-14-14-14-36);
+        s.setTextColor(sel?T().accent:T().text); s.setCursor(xl+16,ty); s.print(nm.c_str());
+        int lv=(scannedWifis[w].rssi>-60)?3:((scannedWifis[w].rssi>-75)?2:1);
+        for(int b=0;b<3;b++){ int bh=3+b*3; s.fillRect(xr-14+b*5,ty+8-bh,3,bh,b<lv?T().text:T().divider); }
+        } break;
+      case SR_SSID: {
+        s.setTextColor(T().text); s.setCursor(xl,ty); s.print("SSID");
+        bool has=settSSID.length()>0;
+        String v=settFit(s,has?settSSID:String("Ketuk untuk isi"),cw-28-50);
+        settTextR(s,xr,ty,v.c_str(),(kbVisible&&settFocus==0)?T().accent:(has?T().subtext:T().divider));
+        } break;
+      case SR_PASS: {
+        s.setTextColor(T().text); s.setCursor(xl,ty); s.print("Kata Sandi");
+        String v;
+        if(settPass.length()==0) v="Ketuk untuk isi";
+        else if(settShowPass) v=settPass.substring(0,18);
+        else { for(int k=0;k<(int)settPass.length()&&k<18;k++) v+="*"; }
+        v=settFit(s,v,cw-28-50-44);
+        settTextR(s,xr-46,ty,v.c_str(),(kbVisible&&settFocus==1)?T().accent:(settPass.length()?T().subtext:T().divider));
+        settTextR(s,xr,ty,settShowPass?"Tutup":"Lihat",T().accent);
+        } break;
+      case SR_CONNECT:
+        uiText(s,cx+cw/2-s.textWidth("Sambungkan")/2-1,ty,"Sambungkan",T().accent,false,true);
+        break;
+      case SR_MPU:
+        s.setTextColor(mpuReady?T().accent:T().subtext); s.setCursor(xl,ty); s.print("Kalibrasi Sensor Gerak");
+        if(!mpuReady) settTextR(s,xr,ty,"Tidak terdeteksi",T().subtext);
+        break;
+      case SR_TCAL:
+        s.setTextColor(T().danger); s.setCursor(xl,ty); s.print("Kalibrasi Layar Sentuh");
+        if(millis()<settTcalArmUntil){ settTextR(s,xr,ty,"Ketuk lagi",T().danger); needRedraw=true; }
+        break;
+    }
   }
-  // v67: baris Font sekarang gaya "geser" (< Nama Font >) -- bukan lagi
-  // N tombol sejajar -- biar bisa nampung 6 pilihan gaya huruf tanpa
-  // bikin tombol jadi kesempitan/nama kepotong di layar 320px lebar.
-  s.setTextColor(T().text);s.setCursor(14,rowY+32);s.print("Font:");
-  int fArrowW=20, fGap=2;
-  int fCtrlW = rowW-50; // v67: sama persis budget lebar yg dipake baris Tema di atasnya
-  int fPillX=52+fArrowW+fGap, fPillW=fCtrlW-2*fArrowW-2*fGap;
-  iosRR(s,52,rowY+26,fArrowW,18,4,T().surface2);
-  s.setTextColor(T().accent);s.setFont(&lgfx::fonts::Font0);s.setCursor(52+7,rowY+30);s.print("<");
-  iosRR(s,fPillX+fPillW+fGap,rowY+26,fArrowW,18,4,T().surface2);
-  s.setTextColor(T().accent);s.setCursor(fPillX+fPillW+fGap+7,rowY+30);s.print(">");
-  iosRR(s,fPillX,rowY+26,fPillW,18,4,T().accent);
-  s.setTextColor(T().bg);
-  // v67 (dulu v66): nama font ini SENGAJA selalu diukur & digambar pake
-  // Font0 (bawaan) apapun uiFontIdx yg lagi aktif -- supaya label pilihan
-  // font tetap konsisten ukurannya & gak ikut membesar/berubah pas user
-  // lagi coba-coba pilihan lain.
-  int fl=s.textWidth(uiFontNames[uiFontIdx]);
-  s.setCursor(fPillX+fPillW/2-fl/2,rowY+30);s.print(uiFontNames[uiFontIdx]);
-  // v68: gak perlu setFont balik ke uiFontList[uiFontIdx] lagi di sini --
-  // layar Settings sekarang SELALU dipaksa Klasik dari pusat (renderCurrentFrame),
-  // font custom cuma aktif di layar Notepad/AI Chat.
+  s.clearClipRect();
 
-
-  rowY+=48;
-  iosRR(s,8,rowY,rowW,36,6,T().surface);
-  s.setTextColor(T().subtext);s.setCursor(14,rowY+4);
-  s.print("Daftar WiFi (ketuk utk pilih):");
-
-  if(wifiScanning){
-    s.setTextColor(T().accent);s.setCursor(14,rowY+18);
-    s.print("Memindai jaringan sekitar...");
-  } else if(scannedWifiNum==0){
-    s.setTextColor(T().danger);s.setCursor(14,rowY+18);
-    s.print("Tidak ada WiFi. Ketuk [Pindai]");
-  } else {
-    int wifiPillW=(rowW-12)/3;
-    for(int i=0;i<3 && i<scannedWifiNum;i++){
-      int wx=12+i*(wifiPillW+4);
-      bool isSelected = (settSSID == scannedWifis[i].ssid);
-      uint16_t pBg = isSelected ? T().accent : T().surface2;
-      uint16_t pFg = isSelected ? T().bg : T().text;
-      iosRR(s,wx,rowY+16,wifiPillW-2,16,4,pBg);
-      s.setTextColor(pFg);s.setCursor(wx+4,rowY+20);
-      String dispSSID = scannedWifis[i].ssid;
-      if(dispSSID.length()>8) dispSSID = dispSSID.substring(0,7)+".";
-      s.print(dispSSID.c_str());
+  // indikator scroll
+  if(mxs>0){
+    int railTop=top+6, railH=(bot-top)-12;
+    if(railH>20){
+      s.fillRoundRect(SCR_W-5,railTop,3,railH,1,blend565(T().surface,0xFFFF,50));
+      int thumbH=max(16,(int)(railH*(float)(bot-top)/(float)settTotalH));
+      int thumbY=railTop+(int)((railH-thumbH)*(settScroll/mxs));
+      s.fillRoundRect(SCR_W-5,thumbY,3,thumbH,1,T().accent);
     }
   }
 
-  rowY+=36; // v66: dirapatkan dr 38->36 buat kompensasi panel Tema+Font yg jd lebih tinggi
-  iosRR(s,8,rowY,rowW,22,4,settFocus==0?T().surface2:T().surface);
-  s.setTextColor(T().subtext);s.setCursor(14,rowY+6);s.print("SSID:");
-  s.setTextColor(T().text);s.setCursor(54,rowY+6);
-  String sd2=settSSID.length()?settSSID:"(ketuk / pilih di atas)";
-  if(sd2.length()>22)sd2=sd2.substring(0,22)+"..";
-  s.print(sd2.c_str());
-  
-  rowY+=22; // v66: dirapatkan dr 24->22
-  iosRR(s,8,rowY,rowW-28,22,4,settFocus==1?T().surface2:T().surface);
-  s.setTextColor(T().subtext);s.setCursor(14,rowY+6);s.print("Pass:");
-  s.setTextColor(T().text);s.setCursor(54,rowY+6);
-  if(settPass.length()){
-    if(settShowPass)s.print(settPass.substring(0,18).c_str());
-    else for(int i=0;i<(int)settPass.length()&&i<18;i++)s.print("*");
-  } else s.print("(ketuk)");
-  iosRR(s,8+rowW-24,rowY,24,22,4,T().surface2);
-  s.setTextColor(T().accent);s.setCursor(8+rowW-18,rowY+6);s.print(settShowPass?"H":"S");
-  
-  rowY+=24; // v66: dirapatkan dr 26->24
-  int btnW=(rowW-8)/2;
-  iosRR(s,8,rowY,btnW,24,6,T().accent);
-  s.setTextColor(T().bg);s.setCursor(16,rowY+7);s.print("Sambungkan");
-  iosRR(s,SCR_W/2+4,rowY,btnW,24,6,T().surface2);
-  s.setTextColor(T().text);s.setCursor(SCR_W/2+10,rowY+7);s.print("Kalibrasi Ulang");
-
-  // ---- BARU: Kalibrasi sensor gerak MPU6050 ----
-  rowY+=26; // v66: dirapatkan dr 28->26
-  iosRR(s,8,rowY,rowW,24,6, mpuReady?T().accent2:T().surface2);
-  s.setTextColor(mpuReady?T().bg:T().subtext);s.setTextSize(1);
-  s.setCursor(14,rowY+8);
-  s.print(mpuReady?"Kalibrasi Sensor Gerak (MPU6050)":"MPU6050 tidak terdeteksi");
-
-  if(kbVisible)drawKb(s);else drawBack(s);
+  if(kbVisible) drawKb(s); else drawBack(s);
   drawToast(s);
 }
 
-void settingsTouch(int x,int y,bool held,bool isNew){
-  if(kbVisible){
-    if(!isNew) return;
-    int y0=kbY();
-    if(y<y0-2){kbVisible=false;kbTarget=nullptr;settFocus=-1;}
-    else kbTouch(x,y);
-    needRedraw=true;
-    return;
-  }
-  if(!isNew) return;
-  
-  if(isBack(x,y)){ navBack(); return; }
+int settRowAt(int y){
+  int cy=y-settAreaTop()+(int)lroundf(settScroll);
+  for(int i=0;i<settRowN;i++) if(settRG[i]>0 && cy>=settRY[i] && cy<settRY[i]+settRH[i]) return i;
+  return -1;
+}
+void settSetBrightnessFromX(int x){
+  int cx=10, cw=SCR_W-20; int x0=cx+92, x1=cx+cw-50;
+  brightness=(uint8_t)constrain(map(constrain(x,x0,x1),x0,x1,10,255),10,255);
+  display.setBrightness(brightness);
+  needRedraw=true;
+}
 
-  // v104: ROMBAK TOTAL -- panah kiri/kanan cuma geser spiOcPendingIdx
-  // (visual doang, BELUM diterapkan/restart). Restart CUMA kejadian kalau
-  // user ketuk PIL TENGAHNYA SENDIRI (dan cuma kalau ada perubahan beneran
-  // drpd yg lagi aktif) -- jadi mau lompat 60->80, geser2 dulu bebas,
-  // reboot cuma sekali pas beneran fix pilihannya.
-  // v111: hit-test HARUS SAMA PERSIS logikanya kayak drawSettings() di
-  // atas (lihat catatan v111 di sana) -- kalau nggak, ketukan gak bakal
-  // ketemu sama yg keliatan di layar.
-  bool ocOwnRow = (currentOrient != ORIENT_LANDSCAPE);
-  int ocArrowW, ocX, ocPillX, ocPillW, ocY;
-  if(ocOwnRow){
-    ocY=46; ocArrowW=20; ocX=64; ocPillX=ocX+ocArrowW+2;
-    ocPillW = SCR_W-8-ocX-2*ocArrowW-4;
-  } else {
-    ocY=24; ocArrowW=18; ocX=74; ocPillX=ocX+ocArrowW; ocPillW=52;
-  }
-  if(x>=ocX && x<=ocX+ocArrowW && y>=ocY && y<=ocY+18){
-    if(spiOcPendingIdx>0){ spiOcPendingIdx--; needRedraw=true; }
-    return;
-  }
-  if(x>=ocPillX+ocPillW+2 && x<=ocPillX+ocPillW+2+ocArrowW && y>=ocY && y<=ocY+18){
-    if(spiOcPendingIdx<1){ spiOcPendingIdx++; needRedraw=true; }
-    return;
-  }
-  if(x>=ocPillX && x<=ocPillX+ocPillW && y>=ocY && y<=ocY+18){
-    if(spiOcPendingIdx == spiOcIdx){
-      showToast("Sudah aktif di MHz ini");
-    } else {
-      spiOcIdx = spiOcPendingIdx;
-      saveSpiOcPref();
-      showToast("Menerapkan & restart...");
-      renderCurrentFrame(); push(); // v104 FIX: showToast() cuma nyimpen state, gak langsung gambar -- paksa 1 siklus render+blit manual di sini spy toast BENERAN kelihatan sebelum layar mati krn restart (tanpa ini, delay() di bawah cuma nge-freeze layar KOSONG, toast gak sempet ke-render sama sekali)
-      delay(500); // kasih waktu toast keliatan sebentar sblm restart
-      ESP.restart();
-    }
-    return;
-  }
-
-  int arW=62;
-  int arX = SCR_W-74-arW-6;
-  if(x>=arX && x<=arX+arW && y>=24 && y<=42){
-    autoRotateEnabled = !autoRotateEnabled;
-    saveAutoRotatePref();
-    showToast(autoRotateEnabled?"Auto-rotate aktif":"Auto-rotate mati");
-    needRedraw=true;
-    return;
-  }
-
-  if(x>=SCR_W-74 && x<=SCR_W-8 && y>=24 && y<=42){
-    if(!wifiScanning){ startWifiScan(); showToast("Memindai..."); }
-    return;
-  }
-
-  int rowW = SCR_W-16;
-  int rowY = STATUS_H+12;
-  if(ocOwnRow) rowY += 34; // v111: HARUS sama dgn drawSettings()
-
-  if(x>=58&&x<=58+rowW-90&&y>=rowY&&y<=rowY+26){
-    brightness=constrain(map(x-58,0,rowW-90,10,255),10,255);
-    display.setBrightness(brightness);
-    needRedraw=true;
-    return;
-  }
-
-  rowY+=28;
-  int tbtnW=(rowW-50)/THEME_COUNT;
-  if(y>=rowY&&y<=rowY+22){ // v66: dibatasi ke baris atas panel aja (baris bawah skrg punya tombol Font)
-    for(int i=0;i<THEME_COUNT;i++){
-      int tx=52+i*tbtnW;
-      if(x>=tx&&x<=tx+tbtnW-3){
-        themeIdx=i;saveTheme();initAppColors();
-        showToast("Tema diganti");needRedraw=true;return;
+// Ketukan (diproses saat jari DILEPAS, supaya bisa dibedakan dari scroll)
+void settTap(int x,int y){
+  int r=settRowAt(y); if(r<0) return;
+  const int cx=10, cw=SCR_W-20, xr=cx+cw-14;
+  switch(settRT[r]){
+    case SR_THEME: {
+      int x0=cx+64, step=(cw-76)/THEME_COUNT;
+      int t=(x-x0)/step;
+      if(x>=x0 && t>=0 && t<THEME_COUNT){
+        themeIdx=t; saveTheme(); initAppColors();
+        showToast("Tema diganti"); needRedraw=true;
       }
-    }
-  }
-  // v67: baris ke-2 di panel yg sama -- tombol geser Font (< Nama >)
-  if(y>=rowY+26 && y<=rowY+44){
-    int fArrowW=20, fGap=2;
-    int fCtrlW = rowW-50;
-    int fPillW = fCtrlW-2*fArrowW-2*fGap;
-    int fRightArrowX = 52+fArrowW+fGap+fPillW+fGap;
-    if(x>=52 && x<=52+fArrowW){
-      uiFontIdx=(uiFontIdx-1+UI_FONT_COUNT)%UI_FONT_COUNT; saveFontPref();
-      showToast((String("Font: ")+uiFontNames[uiFontIdx]).c_str());
-      needRedraw=true;return;
-    }
-    if(x>=fRightArrowX && x<=fRightArrowX+fArrowW){
+      } break;
+    case SR_FONT:
       uiFontIdx=(uiFontIdx+1)%UI_FONT_COUNT; saveFontPref();
       showToast((String("Font: ")+uiFontNames[uiFontIdx]).c_str());
-      needRedraw=true;return;
-    }
-  }
-
-  rowY+=48;
-  if(y>=rowY+14 && y<=rowY+34 && !wifiScanning && scannedWifiNum>0){
-    int wifiPillW=(rowW-12)/3;
-    for(int i=0;i<3 && i<scannedWifiNum;i++){
-      int wx=12+i*(wifiPillW+4);
-      if(x>=wx && x<=wx+wifiPillW-2){
-        settSSID = scannedWifis[i].ssid;
-        settPass = "";
-        settFocus = 1; kbTarget = &settPass; kbVisible = true; kbMode = KB_LOWER;
-        showToast(settSSID.c_str());
-        needRedraw=true;
-        return;
+      needRedraw=true; break;
+    case SR_ROT:
+      autoRotateEnabled=!autoRotateEnabled; saveAutoRotatePref();
+      showToast(autoRotateEnabled?"Auto-rotate aktif":"Auto-rotate mati");
+      needRedraw=true; break;
+    case SR_SPI: {
+      int sw=108, sx=xr-sw;
+      if(x>=sx && x<=sx+sw){ spiOcPendingIdx=(x<sx+sw/2)?0:1; needRedraw=true; }
+      } break;
+    case SR_SPIAPPLY:
+      spiOcIdx=spiOcPendingIdx; saveSpiOcPref();
+      showToast("Menerapkan & restart...");
+      renderCurrentFrame(); push(); // toast harus sempat kelihatan sebelum layar mati karena restart
+      delay(500); ESP.restart();
+      break;
+    case SR_SCAN:
+      if(!wifiScanning){ startWifiScan(); showToast("Memindai..."); }
+      break;
+    case SR_WIFI: {
+      int w=settRA[r];
+      if(w>=0 && w<scannedWifiNum){
+        settSSID=scannedWifis[w].ssid; settPass="";
+        settFocus=1; kbTarget=&settPass; kbVisible=true; kbMode=KB_LOWER;
+        showToast(settSSID.c_str()); needRedraw=true;
       }
-    }
-  }
-
-  rowY+=36; // v66: samain dgn drawSettings (dulu 38)
-  if(y>=rowY&&y<=rowY+22){ 
-    settFocus=0;kbTarget=&settSSID;kbVisible=true;kbMode=KB_LOWER;
-    needRedraw=true;return; 
-  }
-
-  rowY+=22; // v66: samain dgn drawSettings (dulu 24)
-  if(y>=rowY&&y<=rowY+22){
-    if(x>=8+rowW-24){ settShowPass=!settShowPass; needRedraw=true; return; }
-    settFocus=1;kbTarget=&settPass;kbVisible=true;kbMode=KB_LOWER;needRedraw=true;return;
-  }
-
-  rowY+=24; // v66: samain dgn drawSettings (dulu 26)
-  int btnW=(rowW-8)/2;
-  if(y>=rowY&&y<=rowY+24){
-    if(x>=8&&x<=8+btnW){
+      } break;
+    case SR_SSID:
+      settFocus=0; kbTarget=&settSSID; kbVisible=true; kbMode=KB_LOWER; needRedraw=true; break;
+    case SR_PASS:
+      if(x>=xr-44){ settShowPass=!settShowPass; needRedraw=true; }
+      else { settFocus=1; kbTarget=&settPass; kbVisible=true; kbMode=KB_LOWER; needRedraw=true; }
+      break;
+    case SR_CONNECT:
       settSSID.toCharArray(WIFI_SSID,64);
       settPass.toCharArray(WIFI_PASSWORD,64);
-      saveWifiCreds();connectWifi(true); // v48: true = minta toast hasil konek muncul otomatis pas kelar (lihat wifiAnnounceResult di wifiConnectStep)
+      saveWifiCreds(); connectWifi(true);
       showToast("Menghubungkan WiFi...");
-      needRedraw=true;
-      return;
-    }
-    if(x>=SCR_W/2+4 && x<=SCR_W/2+4+btnW){
-      Preferences p;p.begin("touch_cal",false);p.putBool("done",false);p.end();
-      ESP.restart();
-      return;
-    }
+      needRedraw=true; break;
+    case SR_MPU:
+      if(mpuReady){ calibrateMPU(); needRedraw=true; }
+      else showToast("Sensor MPU6050 tidak terdeteksi");
+      break;
+    case SR_TCAL:
+      // aman dari salah ketuk: harus diketuk 2x dalam 2,5 detik (ini me-restart perangkat)
+      if(millis()<settTcalArmUntil){
+        Preferences p; p.begin("touch_cal",false); p.putBool("done",false); p.end();
+        ESP.restart();
+      } else { settTcalArmUntil=millis()+2500; showToast("Ketuk lagi untuk kalibrasi layar"); needRedraw=true; }
+      break;
   }
+}
 
-  // ---- BARU: tombol Kalibrasi Sensor Gerak (MPU6050) ----
-  rowY+=26; // v66: samain dgn drawSettings (dulu 28)
-  if(y>=rowY&&y<=rowY+24){
-    if(mpuReady){
-      calibrateMPU();
-      needRedraw=true;
-    } else {
-      showToast("Sensor MPU6050 tidak terdeteksi");
+// Dipanggil tiap iterasi loop() selagi layar Pengaturan terbuka (tanpa keyboard)
+void settingsPointerTick(bool touched,bool wasT,int tx,int ty){
+  if(wifiScanning) checkWifiScanComplete();
+  settBuildLayout();
+  if(touched && !wasT){
+    settTouchX0=tx; settTouchY0=ty; settTouchLastY=ty; settTouchT0=millis(); settTouchMode=0;
+    if(isBack(tx,ty)){ navBack(); return; }
+    if(ty>=settAreaTop() && ty<settAreaBot()){
+      int r=settRowAt(ty);
+      if(r>=0 && settRT[r]==SR_BRIGHT){ settTouchMode=2; settSetBrightnessFromX(tx); }
+      else settTouchMode=1;
     }
     return;
   }
+  if(touched && wasT){
+    if(settTouchMode==2){ settSetBrightnessFromX(tx); }
+    else if(settTouchMode==1 || settTouchMode==3){
+      if(settTouchMode==1 && abs(ty-settTouchY0)>8) settTouchMode=3;
+      if(settTouchMode==3){
+        settScroll+=(float)(settTouchLastY-ty);
+        float mx=settMaxScroll(); if(settScroll>mx) settScroll=mx; if(settScroll<0) settScroll=0;
+        needRedraw=true;
+      }
+    }
+    settTouchLastY=ty;
+    return;
+  }
+  if(!touched && wasT){
+    if(settTouchMode==1 && millis()-settTouchT0<600) settTap(settTouchX0,settTouchY0);
+    settTouchMode=0;
+  }
+}
+
+// Jalur sentuh generik: sekarang HANYA untuk keyboard (sisanya lewat settingsPointerTick)
+void settingsTouch(int x,int y,bool held,bool isNew){
+  if(!kbVisible) return;
+  if(!isNew) return;
+  int y0=kbY();
+  if(y<y0-2){ kbVisible=false; kbTarget=nullptr; settFocus=-1; }
+  else kbTouch(x,y);
+  needRedraw=true;
 }
 
 // =============================================
@@ -16782,6 +16806,7 @@ void loop(){
     if(needRedraw){renderCurrentFrame();push();needRedraw=false;}
 
   } else {
+    if(curScreen()==SCR_SETTINGS && !kbVisible) settingsPointerTick(touched,wasTouched,tx,ty); // Pengaturan ala iOS: scroll + tap-saat-lepas
     int idx=appIndexForScreen(curScreen());
     if(idx>=0){
       bool held = touched&&wasTouched;
