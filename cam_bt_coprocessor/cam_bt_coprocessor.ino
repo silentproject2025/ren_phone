@@ -61,7 +61,7 @@
 #define BYTES_PER_SEC         176400  // 44.1kHz * 2ch * 16bit
 #define DEC_MIN_BLOCK         (14*1024) // blok kontigu RAM internal minimal sblm bangun ulang decoder Helix
 #define DIAG_INTERVAL_MS      5000      // log diagnosa memori/link ke Serial USB-TTL CAM
-#define RP_AVRCP_ENABLE       1         // 0 = matikan total AVRCP Target (utk isolasi bug memori/link); tombol earbuds tidak jalan
+#define RP_AVRCP_ENABLE       0         // 0 = matikan total AVRCP Target (utk isolasi bug memori/link); tombol earbuds tidak jalan
 
 static const esp_power_level_t txGainEnum[TX_GAIN_LEVELS] = {
   ESP_PWR_LVL_N12, ESP_PWR_LVL_N9, ESP_PWR_LVL_N6, ESP_PWR_LVL_N3,
