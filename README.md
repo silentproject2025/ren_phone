@@ -126,6 +126,7 @@ SD Card ──▶ ESP32-S3 (master) ──UART 921600──▶ ESP32-CAM ──A
 - Halaman **TWS** untuk scan dan sambung ke perangkat Bluetooth; nama perangkat terakhir diingat oleh CAM dan disambung ulang otomatis.
 - Musik tetap jalan walau pindah app (task terpisah), dan otomatis jeda saat TWS putus lalu lanjut saat tersambung lagi.
 - **Mode acak 3 pilihan**: mati, biasa, atau **AI (RYNE v2)**.
+- **AVRCP (kontrol dari earbuds)**: tombol play/pause, next, prev, dan volume di TWS langsung mengendalikan app Musik. ESP32-CAM menangkap perintah AVRCP lalu meneruskannya ke S3 lewat frame `RP_KEY`. Sebagian earbuds hanya mengirim sebagian tombol, tergantung merek.
 
 ### RYNE v2 — rekomendasi lagu on-device
 

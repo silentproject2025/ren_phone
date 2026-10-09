@@ -20,8 +20,9 @@
  *    PSRAM : Enabled
  *    Library: AudioTools, ESP32-A2DP (pschatzmann)
  *
- *  Batasan v1: MP3 Layer III 44.1 kHz stereo saja (WAV/EQ/crossfade/AVRCP
+ *  Batasan v1: MP3 Layer III 44.1 kHz stereo saja (WAV/EQ/crossfade
  *  sengaja belum ikut).
+ *  AVRCP Target: tombol earbuds (play/pause/next/prev/vol) diteruskan ke S3 lewat RP_KEY.
  * ============================================================
  */
 #include <Arduino.h>
@@ -29,6 +30,7 @@
 #include <esp_bt.h>
 #include <esp_bt_main.h>
 #include <esp_gap_bt_api.h>
+#include <esp_avrc_api.h>
 #include "AudioTools.h"
 #include "AudioTools/AudioCodecs/CodecMP3Helix.h"
 #include "BluetoothA2DPSource.h"
@@ -205,14 +207,86 @@ int32_t IRAM_ATTR getSoundData(Frame* fb, int32_t frameCount) {
   return frameCount;
 }
 
+// ----------------------------------------------------------
+// AVRCP TARGET: tombol di earbuds -> antrean -> loop() kirim RP_KEY ke S3
+// (callback jalan di task BT, jadi JANGAN kirim UART dari sini -- cukup masukkan ke antrean)
+// ----------------------------------------------------------
+#define KEY_PLAY    1
+#define KEY_PAUSE   2
+#define KEY_NEXT    3
+#define KEY_PREV    4
+#define KEY_VOLUP   5
+#define KEY_VOLDOWN 6
+#define KEY_ABSVOL  7
+
+struct KeyEvt { uint8_t code; uint8_t arg; };
+static QueueHandle_t       keyQ = nullptr;
+static volatile bool       avrcpStackReady = false;
+static volatile bool       avrcpNeedInit = false;
+static uint32_t            avrcpInitAt = 0;
+
+static void keyPush(uint8_t code, uint8_t arg) {
+  if (!keyQ) return;
+  KeyEvt e; e.code = code; e.arg = arg;
+  xQueueSend(keyQ, &e, 0);
+}
+
+static void avrc_tg_callback(esp_avrc_tg_cb_event_t ev, esp_avrc_tg_cb_param_t* p) {
+  if (ev == ESP_AVRC_TG_PASSTHROUGH_CMD_EVT) {
+    if (p->psth_cmd.key_state != 0) return;          // 0 = ditekan; abaikan event "dilepas"
+    switch (p->psth_cmd.key_code) {
+      case ESP_AVRC_PT_CMD_PLAY:     keyPush(KEY_PLAY, 0);    break;
+      case ESP_AVRC_PT_CMD_PAUSE:    keyPush(KEY_PAUSE, 0);   break;
+      case ESP_AVRC_PT_CMD_STOP:     keyPush(KEY_PAUSE, 0);   break;
+      case ESP_AVRC_PT_CMD_FORWARD:  keyPush(KEY_NEXT, 0);    break;
+      case ESP_AVRC_PT_CMD_BACKWARD: keyPush(KEY_PREV, 0);    break;
+      case ESP_AVRC_PT_CMD_VOL_UP:   keyPush(KEY_VOLUP, 0);   break;
+      case ESP_AVRC_PT_CMD_VOL_DOWN: keyPush(KEY_VOLDOWN, 0); break;
+      default: break;
+    }
+  } else if (ev == ESP_AVRC_TG_SET_ABSOLUTE_VOLUME_CMD_EVT) {
+    keyPush(KEY_ABSVOL, (uint8_t)(p->set_abs_vol.volume & 0x7F));
+  }
+}
+
+static void avrcpStackInit() {
+  esp_err_t r = esp_avrc_tg_init();
+  avrcpStackReady = (r == ESP_OK || r == ESP_ERR_INVALID_STATE);   // INVALID_STATE = sudah di-init library
+  Serial.printf("[AVRCP] tg_init=%d ready=%d\n", (int)r, (int)avrcpStackReady);
+}
+
+// dipanggil ~0,5 dtk setelah TWS tersambung (urutan sama dengan proyek referensi)
+static void avrcpSetupFilter() {
+  if (!avrcpStackReady) return;
+  if (esp_avrc_tg_register_callback(avrc_tg_callback) != ESP_OK) { Serial.println("[AVRCP] register_callback gagal"); return; }
+  esp_avrc_psth_bit_mask_t cs; memset(&cs, 0, sizeof(cs));
+  if (esp_avrc_tg_get_psth_cmd_filter(ESP_AVRC_PSTH_FILTER_ALLOWED_CMD, &cs) != ESP_OK) {
+    memset(&cs, 0, sizeof(cs));
+    esp_avrc_psth_bit_mask_operation(ESP_AVRC_BIT_MASK_OP_SET, &cs, ESP_AVRC_PT_CMD_PLAY);
+    esp_avrc_psth_bit_mask_operation(ESP_AVRC_BIT_MASK_OP_SET, &cs, ESP_AVRC_PT_CMD_PAUSE);
+    esp_avrc_psth_bit_mask_operation(ESP_AVRC_BIT_MASK_OP_SET, &cs, ESP_AVRC_PT_CMD_STOP);
+    esp_avrc_psth_bit_mask_operation(ESP_AVRC_BIT_MASK_OP_SET, &cs, ESP_AVRC_PT_CMD_FORWARD);
+    esp_avrc_psth_bit_mask_operation(ESP_AVRC_BIT_MASK_OP_SET, &cs, ESP_AVRC_PT_CMD_BACKWARD);
+    esp_avrc_psth_bit_mask_operation(ESP_AVRC_BIT_MASK_OP_SET, &cs, ESP_AVRC_PT_CMD_VOL_UP);
+    esp_avrc_psth_bit_mask_operation(ESP_AVRC_BIT_MASK_OP_SET, &cs, ESP_AVRC_PT_CMD_VOL_DOWN);
+  }
+  esp_avrc_tg_set_psth_cmd_filter(ESP_AVRC_PSTH_FILTER_SUPPORTED_CMD, &cs);
+  esp_avrc_rn_evt_cap_mask_t es; memset(&es, 0, sizeof(es));
+  esp_avrc_rn_evt_bit_mask_operation(ESP_AVRC_BIT_MASK_OP_SET, &es, ESP_AVRC_RN_VOLUME_CHANGE);
+  esp_avrc_tg_set_rn_evt_cap(&es);
+  Serial.println("[AVRCP] filter terpasang");
+}
+
 void onConnectionChanged(esp_a2d_connection_state_t state, void* obj) {
   if (state == ESP_A2D_CONNECTION_STATE_CONNECTED) {
     btConnected = true; btDisconnectedAt = 0;
     applyTxGain(txGain);
     a2dp.set_volume(volumeNow);
+    avrcpInitAt = millis(); avrcpNeedInit = true;     // pasang filter AVRCP 0,5 dtk lagi (dari loop)
     Serial.println("[BT] Terhubung");
   } else {
     btConnected = false;
+    avrcpNeedInit = false;
     btDisconnectedAt = millis();
     Serial.println("[BT] Terputus");
   }
@@ -491,6 +565,7 @@ void setup() {
                 (unsigned)(inRing.size / 1024), (unsigned)(pcmRing.size / 1024), hasPSRAM ? "ya" : "TIDAK");
 
   cmdQ = xQueueCreate(8, sizeof(Cmd));
+  keyQ = xQueueCreate(12, sizeof(KeyEvt));
 
   Serial2.setRxBufferSize(8192);
   Serial2.begin(RP_BAUD, SERIAL_8N1, LINK_RX_PIN, LINK_TX_PIN);
@@ -504,6 +579,7 @@ void setup() {
   a2dp.start(savedBTName[0] ? savedBTName : BT_DEFAULT_NAME);
   delay(300);
   applyTxGain(txGain);
+  avrcpStackInit();
 
   uint8_t ver = 1;
   rpSend(Serial2, RP_HELLO, &ver, 1);
@@ -519,6 +595,25 @@ void loop() {
     else if (c.type == RP_CONNECT) connectTo((const char*)c.data);   // data sudah NUL-terminated
     else if (c.type == RP_TXGAIN && c.len >= 1) { applyTxGain(c.data[0]); prefsDirty = true; }
     else if (c.type == RP_BTMODE && c.len >= 1) btSetEnabled(c.data[0] != 0);
+  }
+
+  // AVRCP: pasang filter setelah TWS tersambung (jeda 0,5 dtk, seperti proyek referensi)
+  if (avrcpNeedInit && btConnected && millis() - avrcpInitAt >= 500) {
+    avrcpNeedInit = false;
+    avrcpSetupFilter();
+  }
+  // tombol earbuds -> S3. Kirim UART HANYA dari sini (satu pengirim = frame tidak saling menyela)
+  {
+    static uint32_t lastKeyMs = 0; static uint8_t lastKey = 0;
+    KeyEvt ke;
+    while (xQueueReceive(keyQ, &ke, 0) == pdTRUE) {
+      uint32_t tk = millis();
+      if (ke.code <= KEY_PREV && ke.code == lastKey && tk - lastKeyMs < 250) continue;  // buang pantulan tombol
+      lastKey = ke.code; lastKeyMs = tk;
+      uint8_t kb[2] = { ke.code, ke.arg };
+      rpSend(Serial2, RP_KEY, kb, 2);
+      Serial.printf("[AVRCP] key=%u arg=%u\n", (unsigned)ke.code, (unsigned)ke.arg);
+    }
   }
 
   if (volDirty) { volDirty = false; volumeNow = pendingVol; a2dp.set_volume(volumeNow); }

@@ -34,6 +34,8 @@
 #define RP_SCANRES  'L'   // hasil scan. payload: [rssi int8][nama...]
 #define RP_SCANDONE 'W'   // scan selesai
 #define RP_HELLO    'R'   // CAM baru boot
+#define RP_KEY      'K'   // tombol earbuds (AVRCP). payload: [kode][arg]
+                          //   kode: 1 play, 2 pause/stop, 3 next, 4 prev, 5 vol+, 6 vol-, 7 volume absolut (arg 0..127)
 
 struct RpParser {
   uint8_t  st = 0;

@@ -433,6 +433,22 @@ static void musHandleReq(uint8_t t, int32_t a, const char* s) {
   }
 }
 
+// ---- tombol earbuds (AVRCP) yang diteruskan CAM lewat RP_KEY ----
+//  kode: 1 play, 2 pause/stop, 3 next, 4 prev, 5 vol+, 6 vol-, 7 volume absolut (arg 0..127)
+static void musSetVol(int v);   // definisi di bagian UI di bawah
+static void musOnKey(uint8_t code, uint8_t arg) {
+  switch (code) {
+    case 1: if (!musLoaded || musPaused) musPost('u', 0, nullptr); break;   // PLAY: hanya kalau sedang berhenti/jeda
+    case 2: if (musLoaded && !musPaused) musPost('u', 0, nullptr); break;   // PAUSE/STOP: hanya kalau sedang main
+    case 3: musPost('n', 0, nullptr); break;
+    case 4: musPost('b', 0, nullptr); break;
+    case 5: musSetVol((int)musVol + 8); break;
+    case 6: musSetVol((int)musVol - 8); break;
+    case 7: musSetVol((int)arg); break;
+    default: break;
+  }
+}
+
 // =====================================================================
 //  TASK UTAMA LINK (core 0, stack PSRAM)
 // =====================================================================
@@ -489,6 +505,7 @@ static void musTask(void* arg) {
           break;
         case RP_SCANDONE: musScanning = false; break;
         case RP_HELLO:    musHello = true; break;
+        case RP_KEY:      if (P.len >= 1) musOnKey(P.payload[0], P.len >= 2 ? P.payload[1] : 0); break;
         default: break;
       }
     }
