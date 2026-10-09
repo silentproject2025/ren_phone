@@ -1142,6 +1142,7 @@ extern float mpuTempC;
 extern float smoothRoll, smoothPitch;
 extern float battVoltage;
 extern int   battPercent;
+extern bool  battCharging; // v109: true = lagi di-charge (diisi dari pembacaan arus INA219 nanti)
 
 // v49 FIX build error "'showToast' was not declared in this scope": auto
 // prototype generator arduino-cli (berbasis ctags) ternyata gak konsisten
@@ -3067,7 +3068,8 @@ void iosBackdrop(LGFX_Sprite& s){
   }
 }
 
-uint16_t battColor(){ return (battPercent<=15)?T().danger:(battPercent<=35)?T().accent:T().good; }
+uint16_t battColor(){ return (battPercent<=15)?T().danger:(battPercent<=35)?(uint16_t)0xFD20:T().good; } // v109: ambar tetap, bukan aksen tema (di tema Full Dark aksen = biru)
+bool btCcEnabled(); bool btCcConnected(); // v109: dipakai drawStatusBar (definisi di musicbt_renphone.ino)
 
 // Posisi tombol play & next di kartu musik (dipakai gambar DAN hit-test)
 void homeMusBtnPos(int x,int w,int& playCx,int& nextCx){ nextCx=x+w-26; playCx=nextCx-34; }
@@ -3186,6 +3188,7 @@ void drawStatusBar(LGFX_Sprite& s){
   const bool wp = ov && wallpaperReady;
   uint16_t fg  = wp ? (uint16_t)0xFFFF : T().text;
   uint16_t fg2 = wp ? (uint16_t)0xDEFB : T().subtext;
+  uint16_t fgDim = blend565(T().surface, fg2, 90); // v109: lengkung sinyal WiFi yg lemah/mati
   if(!ov){
     s.fillRect(0,0,SCR_W,STATUS_H,T().surface);
     s.drawFastHLine(0,STATUS_H,SCR_W,T().divider);
@@ -3200,12 +3203,17 @@ void drawStatusBar(LGFX_Sprite& s){
 
   // --- Baterai: kapsul + persen ---
   int bw=24,bh=11, bx=rx-bw, by=6;
-  uint16_t bc = battColor();
+  uint16_t bc = battCharging ? T().good : battColor();
   s.drawRoundRect(bx,by,bw-2,bh,3,fg2);
   s.fillRoundRect(bx+bw-2,by+3,2,bh-6,1,fg2); // kutub kecil
   int innerW = bw-2-6;
   int fillW = constrain((innerW*battPercent)/100,0,innerW);
   if(fillW>0) s.fillRoundRect(bx+3,by+3,fillW,bh-6,1,bc);
+  if(battCharging){ // v109: petir kecil di tengah kapsul
+    int zx=bx+(bw-2)/2, zy=by+bh/2;
+    s.fillTriangle(zx+2,by+1, zx-3,zy+1, zx,zy+1, 0xFFFF);
+    s.fillTriangle(zx,zy, zx+3,zy-1, zx-2,by+bh-2, 0xFFFF);
+  }
   rx = bx-4;
   char pctBuf[6]; sprintf(pctBuf,"%d%%",battPercent);
   int pctW = s.textWidth(pctBuf);
@@ -3221,10 +3229,11 @@ void drawStatusBar(LGFX_Sprite& s){
     s.fillTriangle(acx-5,acy+6, acx+5,acy+6, acx,acy-1, fg2);
     rx -= 4;
   } else if(wifiConnected){
+    int rssi=WiFi.RSSI(); int lv=(rssi>-60)?3:(rssi>-72)?2:1; // v109: kuat sinyal -> 1..3 lengkung menyala
     rx -= 9;
     s.fillCircle(rx,16,2,fg);
-    s.drawArc(rx,18,5,4,210,330,fg);
-    s.drawArc(rx,18,9,8,210,330,fg);
+    s.drawArc(rx,18,5,4,210,330,(lv>=2)?fg:fgDim);
+    s.drawArc(rx,18,9,8,210,330,(lv>=3)?fg:fgDim);
     rx -= 12;
   } else {
     rx -= 12;
@@ -3236,6 +3245,18 @@ void drawStatusBar(LGFX_Sprite& s){
     rx -= 4;
   }
 
+  // --- Bluetooth (v109): nyala = abu, tersambung = aksen/putih ---
+  if(btCcEnabled()){
+    rx -= 8;
+    uint16_t btc = btCcConnected() ? (wp?(uint16_t)0xFFFF:T().accent) : fg2;
+    int b0=rx, y0=5;
+    s.drawLine(b0,y0,b0,y0+12,btc);
+    s.drawLine(b0,y0,b0+3,y0+3,btc);
+    s.drawLine(b0+3,y0+3,b0-3,y0+9,btc);
+    s.drawLine(b0-3,y0+3,b0+3,y0+9,btc);
+    s.drawLine(b0+3,y0+9,b0,y0+12,btc);
+    rx -= 6;
+  }
   // --- SD ---
   if(sdReady){
     rx -= 12; uiText(s,rx,7,"SD",T().good,wp,false);
@@ -3855,12 +3876,12 @@ int ccCircleD(){
   if(d<24) d=24;
   return d;
 }
-int ccCardH(){ return ccCircleD(); } // v108: label dihapus -> tinggi sel = diameter lingkaran
+int ccCardH(){ return currentOrient==ORIENT_LANDSCAPE ? 54 : 50; } // v109: TILE BESAR (ikon + label), bukan lingkaran polos lagi
 int ccGridX(){ return ccMarginX()+ccGap(); }
 int ccGridTop(){ return STATUS_H+6; }
 int ccGridH(){ return CC_ROWS*ccCardH() + (CC_ROWS-1)*ccGap(); }
 int ccSliderLabelY(){ return ccGridTop()+ccGridH()+8; }
-int ccSliderTrackY(){ return ccSliderLabelY()+10; } // v108: label "Brightness" dihapus, track naik dikit
+int ccSliderTrackY(){ return ccSliderLabelY()+14; } // v109: label Kecerahan + persen balik lagi, track turun dikit
 int ccContentBottom(){ return ccSliderTrackY()+14; }
 int ccPanelH(){
   int needed = ccContentBottom()+12;   // + ruang utk drag-handle di bawah
@@ -4086,7 +4107,7 @@ void drawControlCenter(LGFX_Sprite& s){
     int col=i%CC_COLS, row=i/CC_COLS;
     int x=gx+col*(cw+gap);
     int y=top+row*(ch+gap);
-    int ccx=x+cw/2, ccy=y+crad;
+    int ccx=x+cw/2, ccy=y+ch/2;
 
     // pop-in bergantian: tombol ke-i mulai sedikit lebih lambat
     float li=(openP-0.20f-0.03f*i)/0.45f;
@@ -4100,23 +4121,35 @@ void drawControlCenter(LGFX_Sprite& s){
       float pt=(float)(nowMs-ccPressMs)/(float)CC_PRESS_MS; if(pt>1.0f) pt=1.0f;
       rs *= 1.0f-0.12f*sinf(pt*PI);
     }
-    int r=(int)(crad*rs+0.5f); if(r<2) r=2;
+    // v109: tile persegi membulat (bukan lingkaran): ikon di atas, label kecil di bawah
+    int tw2=(int)(cw*rs+0.5f), th2=(int)(ch*rs+0.5f); if(tw2<6) tw2=6; if(th2<6) th2=6;
+    int tx=ccx-tw2/2, ty=ccy-th2/2, trad=min(14,th2/2);
 
     float a=ccBtnAnim[i];
-    // UI-OVERHAUL: tombol kaca -- idle sedikit lebih terang dari panel, aktif = aksen + glow lembut
     uint16_t glassIdle = blend565(T().surface2,0xFFFF,24);
     uint16_t fillC = lerpColor565(glassIdle, T().accent, a);
-    if(a>0.05f) s.fillCircle(ccx,ccy,r+3,blend565(T().surface,T().accent,(uint8_t)(80.0f*a)));
-    s.fillCircle(ccx,ccy,r,fillC);
-    s.drawCircle(ccx,ccy,r,blend565(fillC,0xFFFF,60));
-    if(r>8) s.drawArc(ccx,ccy,r-2,r-2,205,335,blend565(fillC,0xFFFF,90));
-    if(li>=0.85f){ // ikon (vektor, ukuran tetap) baru muncul setelah lingkaran hampir penuh
+    if(a>0.05f) s.fillRoundRect(tx-2,ty-2,tw2+4,th2+4,trad+2,blend565(T().surface,T().accent,(uint8_t)(70.0f*a)));
+    s.fillRoundRect(tx,ty,tw2,th2,trad,fillC);
+    s.drawRoundRect(tx,ty,tw2,th2,trad,blend565(fillC,0xFFFF,50));
+    if(li>=0.85f){ // ikon + label baru muncul setelah tile hampir penuh
+      static const char* ccLbl[CC_ITEMS]={"Wi-Fi","Pesawat","DND","Tema","Rotasi","Goyang","Kunci","LED","Senyap","BT"};
       uint16_t icC = lerpColor565(T().text, T().bg, a);
-      drawCCIcon(s, i, ccx, ccy, iconR, a>0.5f, icC, fillC);
+      int ir = iconR>14 ? 14 : iconR;
+      drawCCIcon(s, i, ccx, ty+th2/2-7, ir, a>0.5f, icC, fillC);
+      s.setFont(&lgfx::fonts::Font0); s.setTextSize(1);
+      s.setTextColor(lerpColor565(T().subtext, T().bg, a));
+      s.setCursor(ccx-s.textWidth(ccLbl[i])/2, ty+th2-13);
+      s.print(ccLbl[i]);
     }
   }
 
-  // Slider Brightness: garis tipis + knob, tanpa label.
+  // Slider Brightness: label + persen (v109), garis tebal + knob.
+  if(openP>0.7f){
+    char bp[8]; sprintf(bp,"%d%%",(int)(brightness*100/255));
+    s.setFont(&lgfx::fonts::Font0); s.setTextSize(1);
+    s.setTextColor(T().subtext); s.setCursor(gx,ccSliderLabelY()); s.print("Kecerahan");
+    s.setTextColor(T().text);    s.setCursor(gx+(pw-gap*2)-s.textWidth(bp),ccSliderLabelY()); s.print(bp);
+  }
   int sx=gx, sw=pw-gap*2, sy=ccSliderTrackY();
   float sp=(openP-0.55f)/0.45f; if(sp>1.0f) sp=1.0f;
   if(sp>0.0f){
@@ -9646,6 +9679,7 @@ void mpuUpdate(){
 #define BATTERY_CAPACITY_MAH 2300 // kapasitas baterai yang dipakai user
 float battVoltage = 3.7f;
 int   battPercent = 100;
+bool  battCharging = false; // v109: belum ada sensor arus -> selalu false sampai INA219 dipasang
 bool  battWarnedLow = false, battWarnedCritical = false;
 
 void battUpdate(){
