@@ -62,6 +62,8 @@ static volatile uint32_t musCredit = 0, musSentSince = 0;
 static volatile uint32_t musRxBytes = 0, musRxFrames = 0, musRxErr = 0;   // diagnosa link CAM -> S3
 static volatile uint32_t musRingKb = 0;                  // ukuran ring MP3 di CAM (KB), dari status v3 (0 = CAM versi lama)
 static volatile uint32_t musCamHeapKb = 0, musCamBlkKb = 0;   // RAM internal CAM: bebas & blok kontigu terbesar
+static char              musRstMsg[40] = {0};            // alasan restart CAM terakhir (crash/brownout/watchdog)
+static volatile uint32_t musRstAt = 0;
 static volatile bool     musCamDecErr = false;           // CAM melapor decoder mati (memori)
 
 // ---- milik S3 ----
@@ -481,7 +483,9 @@ static bool musStartTrack(int idx, int prevHow) {
   musDurMs = kbps ? (uint32_t)((body * 8ULL) / kbps) : 0;   // bytes*8 / kbps = ms
   musKbps = kbps; musSr = sr;
   if (sr != 44100) musToast("MP3 bukan 44.1kHz, nada bergeser");
-  musFile.seek(0);
+  // JANGAN kirim tag ID3 ke CAM: cover JPEG ratusan KB di dalamnya penuh pola 0xFF yg mirip sync-word MP3 ->
+  // decoder Helix memproses sampah, beban CPU/stack melonjak (khas file kbps tinggi yg bawa cover besar).
+  if (off > 0 && off < (uint32_t)musFile.size()) musFile.seek(off); else musFile.seek(0);
 
   musEndCurrent(prevHow);                       // bukukan lagu sebelumnya (reward) SEBELUM musPlayedMs di-reset
   musSeq++;
@@ -673,7 +677,20 @@ static void musTask(void* arg) {
           }
           break;
         case RP_SCANDONE: musScanning = false; break;
-        case RP_HELLO:    musHello = true; break;
+        case RP_HELLO:
+          if (P.len >= 2) {
+            const char* nm = nullptr;
+            switch (P.payload[1]) {            // kode esp_reset_reason()
+              case 4: nm = "panic/crash"; break;
+              case 5: nm = "watchdog int"; break;
+              case 6: nm = "watchdog task"; break;
+              case 7: nm = "watchdog"; break;
+              case 9: nm = "brownout (daya)"; break;
+              default: break;
+            }
+            if (nm) { snprintf(musRstMsg, sizeof(musRstMsg), "CAM restart: %s", nm); musRstAt = millis(); musToast(musRstMsg); }
+          }
+          musHello = true; break;
         case RP_KEY:      if (P.len >= 1) musOnKey(P.payload[0], P.len >= 2 ? P.payload[1] : 0); break;
         default: break;
       }
@@ -1172,8 +1189,12 @@ static void musDrawPlayer(LGFX_Sprite& s) {
 
   if (!musCamAlive) {                                  // diagnosa: apa yg masuk dari CAM?
     char dg[56];
-    snprintf(dg, sizeof(dg), "link: rx %uB  frame %u  salah %u", (unsigned)musRxBytes, (unsigned)musRxFrames, (unsigned)musRxErr);
+    // muat 1 baris layar: f=frame sah, e=frame rusak, RAM = heap bebas/blok terbesar CAM pada status TERAKHIR sebelum diam, mati = detik sejak status terakhir
+    snprintf(dg, sizeof(dg), "f%u e%u RAM%uK/%uK mati %us", (unsigned)musRxFrames, (unsigned)musRxErr,
+             (unsigned)musCamHeapKb, (unsigned)musCamBlkKb, (unsigned)((millis() - musLastStatusMs) / 1000));
     s.setTextColor(T().danger); s.setCursor(mTitX, mVibeY >= 0 ? mVibeY : mSubY + 11); s.print(dg);
+  } else if (musRstMsg[0] && millis() - musRstAt < 120000) {   // CAM baru restart krn crash/brownout: tampil 2 menit
+    s.setTextColor(T().danger); s.setCursor(mTitX, mVibeY >= 0 ? mVibeY : mSubY + 11); s.print(musRstMsg);
   } else if (mVibeY >= 0) {                            // baris vibe (RYNE)
     uint16_t vc = musHsv(vi * 45.f, 0.7f, 0.95f);
     s.fillCircle(mTitX + 4, mVibeY + 4, 3, vc);

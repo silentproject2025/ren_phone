@@ -28,6 +28,7 @@
 #include <Arduino.h>
 #include <Preferences.h>
 #include <esp_bt.h>
+#include <esp_system.h>
 #include <esp_bt_main.h>
 #include <esp_gap_bt_api.h>
 #include <esp_avrc_api.h>
@@ -567,7 +568,11 @@ static void sendStatus() {
   b[13] = en & 0xFF; b[14] = en >> 8; b[15] = zr & 0xFF; b[16] = zr >> 8;
   uint32_t ringKb = inRing.size / 1024; if (ringKb > 0xFFFF) ringKb = 0xFFFF;
   b[17] = ringKb & 0xFF; b[18] = (ringKb >> 8) & 0xFF;
-  uint32_t hk = ESP.getFreeHeap() / 1024, mk = ESP.getMaxAllocHeap() / 1024;
+  // getMaxAllocHeap() menyisir seluruh heap di bawah kunci heap -> JANGAN tiap 40 ms. Cukup 1x/dtk.
+  static uint32_t hkC = 0, mkC = 0, hAt = 0;
+  uint32_t nowH = millis();
+  if (nowH - hAt >= 1000) { hAt = nowH; hkC = ESP.getFreeHeap() / 1024; mkC = ESP.getMaxAllocHeap() / 1024; }
+  uint32_t hk = hkC, mk = mkC;
   b[19] = hk > 255 ? 255 : (uint8_t)hk; b[20] = mk > 255 ? 255 : (uint8_t)mk;
   rpSend(Serial2, RP_STATUS, b, sizeof(b));
 }
@@ -623,8 +628,10 @@ void setup() {
   applyTxGain(txGain);
   avrcpStackInit();
 
-  uint8_t ver = 1;
-  rpSend(Serial2, RP_HELLO, &ver, 1);
+  // HELLO v2: [versi][alasan reset]. S3 menampilkan di layar kalau CAM restart krn crash/brownout/watchdog
+  uint8_t hello[2] = { 1, (uint8_t)esp_reset_reason() };
+  Serial.printf("[BOOT] alasan reset=%d (1 nyala, 3 sw, 4 panic, 5/6/7 watchdog, 9 brownout)\n", (int)hello[1]);
+  rpSend(Serial2, RP_HELLO, hello, 2);
 }
 
 void loop() {
