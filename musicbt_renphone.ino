@@ -959,7 +959,7 @@ static void musDrawPlayer(LGFX_Sprite& s) {
     s.setCursor(mTitX - off, mTitY); s.print(title);
   }
   s.clearClipRect();
-  s.setTextWrap(true, true);                          // kembalikan default LovyanGFX
+  s.setTextWrap(false, false);                        // samakan dgn baseline app lain (jangan bocorkan wrapY=true ke Home)
 
   // info
   char sub[64];

@@ -8810,6 +8810,7 @@ void renderCurrentFrame(){
   // layar lain ke daftar ini (misal APOD/Trivia), tinggal tambah di sini.
   bool screenAllowsCustomFont = (curScreen()==SCR_NOTEPAD || curScreen()==SCR_AICHAT);
   canvas.setFont(screenAllowsCustomFont ? uiFontList[uiFontIdx] : &lgfx::fonts::Font0);
+  canvas.setTextWrap(false); // reset state teks tiap frame: app yg lupa/bocorin wrap gak bikin layar lain numpuk
   if(appSwitcherOpen){
     drawAppSwitcher(canvas); // v96: App Switcher -- modal penuh, gantiin base+overlay lain sepenuhnya selagi kebuka
   } else if(locked){
