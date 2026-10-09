@@ -811,8 +811,10 @@ Theme themes[] = {
   { "AMOLED", 0x0000,0x1082,0x2104,0xFD40,0x04FF,0xFFFF,0x8C51,0x2104,0x07E0,0xF800 },
   { "Light",  0xEF5D,0xFFFF,0xDEFB,0xFD00,0x001F,0x0000,0x6B4D,0xC618,0x03E0,0xD000 },
   { "Pastel", 0xFF1F,0xFFFF,0xFF9F,0xFB16,0x5D9F,0x39C7,0x9C92,0xFEB7,0x2FE7,0xE8B4 },
+  // iOS: hitam murni + kartu #1C1C1E/#2C2C2E + biru sistem #0A84FF + ungu #BF5AF2 + hijau/merah sistem
+  { "iOS",    0x0000,0x18E3,0x2965,0x0C3F,0xBADE,0xFFFF,0x8C72,0x39C7,0x368B,0xFA27 },
 };
-#define THEME_COUNT 5
+#define THEME_COUNT 6
 int themeIdx = 0;
 Theme& T() { return themes[themeIdx]; }
 
@@ -986,8 +988,10 @@ void drawGlassCircle(LGFX_Sprite& s, int cx,int cy,int r, uint16_t tint, uint8_t
 
 void saveTheme(){ Preferences p; p.begin("ui",false); p.putInt("theme",themeIdx); p.end(); }
 void loadTheme(){
-  Preferences p; p.begin("ui",true);
-  themeIdx = p.getInt("theme",0); p.end();
+  Preferences p; p.begin("ui",false);
+  themeIdx = p.getInt("theme",0);
+  if(p.getInt("thv",0)<2){ themeIdx=THEME_COUNT-1; p.putInt("theme",themeIdx); p.putInt("thv",2); } // tema iOS jadi default SEKALI; bisa diganti lagi di Pengaturan
+  p.end();
   if(themeIdx<0||themeIdx>=THEME_COUNT) themeIdx=0;
 }
 
@@ -3008,7 +3012,14 @@ int iosRadius(int w,int h,int r){
 // pengganti s.fillRoundRect(x,y,w,h,r,c) -- geometri & hit-test TIDAK berubah, cuma sudutnya
 void iosRR(LGFX_Sprite& s,int x,int y,int w,int h,int r,uint16_t c){
   if(w<=0||h<=0) return;
-  s.fillRoundRect(x,y,w,h,iosRadius(w,h,r),c);
+  int rr=iosRadius(w,h,r);
+  bool card = !(w<=h*16/10) && !(w<=h*32/10 && h<=34); // baris/kartu lebar
+  if(card && h>=20){ drawGlassCard(s,x,y,w,h,rr,c,225); return; } // kaca: bayangan + pantulan + rim
+  s.fillRoundRect(x,y,w,h,rr,c);
+  if(h>=14 && w>=2*rr+6){ // tombol: rim tipis + kilap atas
+    s.drawRoundRect(x,y,w,h,rr,blend565(c,0xFFFF,46));
+    s.drawFastHLine(x+rr,y+1,w-2*rr,blend565(c,0xFFFF,70));
+  }
 }
 // Switch ala iOS 34x20: trek hijau/abu + kenop putih bersayap bayangan
 void iosSwitch(LGFX_Sprite& s,int x,int y,bool on){
@@ -3027,6 +3038,15 @@ void iosChevron(LGFX_Sprite& s,int cx,int cy,uint16_t col){
 void iosTitle(LGFX_Sprite& s,int x,int y,const char* t){
   s.setTextSize(1);
   uiText(s,x,y,t,T().text,false,true);
+}
+// Latar ala iOS: gradasi halus (glow aksen di atas memudar ke warna dasar) -- gantiin fillSprite polos
+void iosBackdrop(LGFX_Sprite& s){
+  s.fillSprite(T().bg);
+  int span=SCR_H*7/10; if(span<1) span=1;
+  for(int y=0;y<span;y+=6){
+    int a=(int)(46*(span-y)/span); if(a<2) break;
+    s.fillRect(0,y,SCR_W,6,blend565(T().bg,T().accent,(uint8_t)a));
+  }
 }
 
 uint16_t battColor(){ return (battPercent<=15)?T().danger:(battPercent<=35)?T().accent:T().good; }
@@ -6311,7 +6331,7 @@ void brkTouch(int x,int y,bool held,bool isNew){
 // =============================================
 void clockEnter(){} void clockExit(){}
 void drawClock(LGFX_Sprite& s){
-  s.fillSprite(T().bg);drawStatusBar(s);
+  iosBackdrop(s); drawStatusBar(s);
   iosTitle(s,8,28,"Jam");
   struct tm t;bool ok=ntpSynced&&getLocalTime(&t);
   if(ok){
@@ -6454,7 +6474,7 @@ void pomoExit(){}
 // kiri sendiri gak ada area sentuh). Baris tombol bawah SENGAJA gak
 // disentuh sama sekali -- formula btnY/x1/x2/x3 tetap identik versi lama.
 void drawPomo(LGFX_Sprite& s){
-  s.fillSprite(T().bg);drawStatusBar(s);
+  iosBackdrop(s); drawStatusBar(s);
   iosTitle(s,8,26,"Pomodoro");
 
   uint16_t phaseColor = pomoPhaseColor(pomoPhase);
@@ -6693,7 +6713,7 @@ const char* calcLabelAt(int r,int c){
 }
 
 void drawCalc(LGFX_Sprite& s){
-  s.fillSprite(T().bg);drawStatusBar(s);
+  iosBackdrop(s); drawStatusBar(s);
   iosTitle(s,8,25,"Kalkulator");
   iosRR(s,4,STATUS_H+8,SCR_W-8,22,4,T().surface);
   s.setTextColor(T().text);s.setTextSize(2);
@@ -6848,7 +6868,7 @@ void draw3DPhoneBox(LGFX_Sprite& s,int cx,int cy,float rollDeg,float pitchDeg,fl
 void sensorEnter(){} void sensorExit(){}
 
 void drawSensor(LGFX_Sprite& s){
-  s.fillSprite(T().bg);drawStatusBar(s);
+  iosBackdrop(s); drawStatusBar(s);
   iosTitle(s,8,26,"Orientasi 3D");
 
   if(!mpuReady){
@@ -6966,7 +6986,7 @@ void settingsExit(){}
 void drawSettings(LGFX_Sprite& s){
   checkWifiScanComplete();
 
-  s.fillSprite(T().bg);drawStatusBar(s);
+  iosBackdrop(s); drawStatusBar(s);
   iosTitle(s,8,26,"Pengaturan");
 
   // v104: ROMBAK TOTAL interaksi SPI Overclock -- versi lama (v103) tiap
@@ -7325,7 +7345,7 @@ void notepadRequestConfirm(int act){
 }
 
 void drawNotepad(LGFX_Sprite& s){
-  s.fillSprite(T().bg);drawStatusBar(s);
+  iosBackdrop(s); drawStatusBar(s);
   iosTitle(s,8,26,"Notepad");
   
   iosRR(s,SCR_W-70,24,62,18,4,T().danger);
@@ -7577,7 +7597,7 @@ void drawAiTypingDots(LGFX_Sprite& s, int x, int y, uint16_t color){
 int aiMicBtnX(){ return (SCR_W-118) - 6 - AI_MIC_BTN_W; }
 
 void drawAiChat(LGFX_Sprite& s){
-  s.fillSprite(T().bg);drawStatusBar(s);
+  iosBackdrop(s); drawStatusBar(s);
   s.setTextWrap(false);
   s.setTextColor(T().accent);s.setTextSize(1);s.setCursor(8,26);
   // v27: judul dipendekin otomatis kalau layar sempit (mis. orientasi
@@ -7851,7 +7871,7 @@ void fileExpEnter(){
 void fileExpExit(){}
 
 void drawFileExplorer(LGFX_Sprite& s){
-  s.fillSprite(T().bg);drawStatusBar(s);
+  iosBackdrop(s); drawStatusBar(s);
   s.setTextColor(0x3ADF);s.setTextSize(1);s.setCursor(8,26);s.print("File Explorer");
 
   if(wifiConnected && webServerRunning){
@@ -8325,7 +8345,7 @@ void mjpegEnter(){
 void mjpegExit(){}
 
 void drawMjpegPlayer(LGFX_Sprite& s){
-  s.fillSprite(T().bg);drawStatusBar(s);
+  iosBackdrop(s); drawStatusBar(s);
   s.setTextColor(0xFBE0);s.setTextSize(1);s.setCursor(8,26);s.print("MJPEG Player");
 
   iosRR(s,SCR_W-70,24,64,18,4,T().surface2);
@@ -8707,7 +8727,7 @@ void updEnter(){
 void updExit(){}
 
 void drawUpdate(LGFX_Sprite& s){
-  s.fillSprite(T().bg); drawStatusBar(s);
+  iosBackdrop(s); drawStatusBar(s);
   s.setTextColor(0xF800); s.setTextSize(1); s.setCursor(8,26); s.print("Update Firmware");
 
   iosRR(s,SCR_W-64,24,58,18,4,T().surface2);
@@ -10176,7 +10196,7 @@ void drawTriviaError(LGFX_Sprite& s){
 }
 
 void drawTrivia(LGFX_Sprite& s){
-  s.fillSprite(T().bg); drawStatusBar(s);
+  iosBackdrop(s); drawStatusBar(s);
   switch(triviaPage){
     case TRV_SETUP:    drawTriviaSetup(s); break;
     case TRV_LOADING:  drawTriviaLoading(s); break;
