@@ -2677,6 +2677,7 @@ void notepadRequestConfirm(int act); // act: 1=Back, 2=Home -> tampilkan dialog 
 // Home  = geser TURUN (kesan "menutup/pulang", searah swipe unlock)
 // =============================================
 void renderCurrentFrame(); // forward decl - dipakai utk render frame BARU sblm animasi
+struct HomeRect{ int x,y,w,h; }; // harus di atas: prototype otomatis Arduino
 // UI-OVERHAUL: API musik utk widget Home/Lock (definisi di musicbt_renphone.ino)
 bool homeMusStarted(); bool homeMusLoaded(); bool homeMusPlaying(); float homeMusProgress();
 void homeMusTitle(char* out,int cap); void homeMusToggle(); void homeMusNext();
@@ -5074,7 +5075,6 @@ int homeDockY(){ return SCR_H-38-8; }
 // UI-OVERHAUL home: layout WIDGET (koordinat RUANG KONTEN = belum dikurangi scroll).
 // Landscape: jam (kiri) + baterai (kanan) di baris 1, kartu musik di baris 2.
 // Portrait : jam, kartu musik, baterai (bar) bertumpuk. Grid app mulai di bawahnya.
-struct HomeRect{ int x,y,w,h; };
 bool homeIsLand(){ return currentOrient==ORIENT_LANDSCAPE; }
 HomeRect homeWClock(){ HomeRect r; r.x=10; r.y=STATUS_H+28; r.h=homeIsLand()?70:80; r.w=homeIsLand()?188:SCR_W-20; return r; }
 HomeRect homeWMusic(){ HomeRect r; r.x=10; r.w=SCR_W-20; if(homeIsLand()){ r.y=STATUS_H+28+70+6; r.h=54; } else { r.y=STATUS_H+28+80+8; r.h=58; } return r; }
