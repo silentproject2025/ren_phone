@@ -424,7 +424,7 @@ static void decodeTask(void* param) {
       haveTrack = false;                 // callback BT -> diam, tidak nyentuh ring
       rebuild();
       uint32_t t0 = millis();
-      while (btCbRunning && millis() - t0 < 50) taskYIELD();
+      while (btCbRunning && millis() - t0 < 50) vTaskDelay(1);   // vTaskDelay, bukan taskYIELD: biar IDLE0 kebagian CPU (anti watchdog task)
       vTaskDelay(pdMS_TO_TICKS(2));
       pcmRing.reset(); inRing.reset();
       streamEnded = false; decodeDone = false; trackEnded = false;
@@ -455,7 +455,10 @@ static void decodeTask(void* param) {
     uint32_t n = inRing.read(buf, av > IN_CHUNK ? IN_CHUNK : av);
     enc->write(buf, n);
     inBytesTrack += n;
-    taskYIELD();
+    // ANTI WATCHDOG TASK: taskYIELD() cuma ngalah ke task berprioritas SAMA/lebih tinggi, jadi IDLE0 (prioritas 0)
+    // bisa kelaparan kalau decoder terus sibuk -> task watchdog -> CAM restart. Sekarang selalu kasih jeda nyata.
+    if (pcmRing.avail() > pcmRing.size / 2) vTaskDelay(pdMS_TO_TICKS(5));   // buffer PCM udah separuh+ -> santai
+    else                                    vTaskDelay(1);                   // butuh kejar -> jeda minimum 1 tick
   }
 }
 
