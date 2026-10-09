@@ -60,6 +60,9 @@ static volatile bool     musEnded = false;
 static volatile bool     musHello = false;
 static volatile uint32_t musCredit = 0, musSentSince = 0;
 static volatile uint32_t musRxBytes = 0, musRxFrames = 0, musRxErr = 0;   // diagnosa link CAM -> S3
+static volatile uint32_t musRingKb = 0;                  // ukuran ring MP3 di CAM (KB), dari status v3 (0 = CAM versi lama)
+static volatile uint32_t musCamHeapKb = 0, musCamBlkKb = 0;   // RAM internal CAM: bebas & blok kontigu terbesar
+static volatile bool     musCamDecErr = false;           // CAM melapor decoder mati (memori)
 
 // ---- milik S3 ----
 static std::vector<String> musList;
@@ -308,6 +311,151 @@ static bool musParseMp3(uint32_t* sr, uint32_t* kbps, uint32_t* off) {
   return false;
 }
 
+
+// =====================================================================
+//  COVER ART (ID3v2 APIC -> JPEG -> sprite)  -- hanya JPEG baseline
+//  Dibaca di task musik setelah audio mulai mengalir; UI cuma menggambar sprite jadi.
+// =====================================================================
+#define MUS_COVER_SZ    120                 // sprite cover selalu 120x120 (layar landscape diskala di UI)
+#define MUS_COVER_MAX   (1536 * 1024)       // frame APIC lebih besar dari ini dilewati (hemat PSRAM)
+
+static LGFX_Sprite   musCvA(&display), musCvB(&display);      // dobel-buffer: task isi yg 'belakang', UI baca yg 'depan'
+static LGFX_Sprite*  musCvP[2] = { &musCvA, &musCvB };
+static LGFX_Sprite   musCvTmp(&display);                      // hasil decode ukuran asli (sementara)
+static PsramJpeg     musCvJpeg;
+static volatile int  musCoverCur = 0;
+static volatile bool musCoverReady = false;
+static volatile bool musCoverWant = false;
+static uint32_t      musCoverReqMs = 0;
+static char          musCoverPath[96];
+
+static uint32_t musSynchsafe(const uint8_t* p) {
+  return ((uint32_t)(p[0] & 0x7F) << 21) | ((uint32_t)(p[1] & 0x7F) << 14) |
+         ((uint32_t)(p[2] & 0x7F) << 7)  |  (uint32_t)(p[3] & 0x7F);
+}
+static uint32_t musBE32(const uint8_t* p) {
+  return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | (uint32_t)p[3];
+}
+static uint32_t musDeunsync(uint8_t* d, uint32_t n) {             // buang byte 0x00 sisipan setelah 0xFF
+  uint32_t w = 0;
+  for (uint32_t i = 0; i < n; i++) { d[w++] = d[i]; if (d[i] == 0xFF && i + 1 < n && d[i + 1] == 0x00) i++; }
+  return w;
+}
+
+// cari frame gambar (APIC / PIC) di tag ID3v2.2/2.3/2.4. Return buffer PSRAM berisi byte gambar mentah (free() oleh pemanggil)
+static uint8_t* musReadApic(File& f, uint32_t* outLen) {
+  *outLen = 0;
+  uint8_t h[10];
+  f.seek(0);
+  if (f.read(h, 10) != 10 || h[0] != 'I' || h[1] != 'D' || h[2] != '3') return nullptr;
+  uint8_t ver = h[3], tflags = h[5];
+  if (ver < 2 || ver > 4) return nullptr;
+  uint32_t end = 10 + musSynchsafe(h + 6);
+  if (end > (uint32_t)f.size()) end = (uint32_t)f.size();
+  uint32_t pos = 10;
+  if (ver >= 3 && (tflags & 0x40)) {                              // extended header: lompati
+    uint8_t e[4];
+    if (f.read(e, 4) != 4) return nullptr;
+    pos = 10 + ((ver == 4) ? musSynchsafe(e) : (musBE32(e) + 4));
+  }
+  const int hl = (ver == 2) ? 6 : 10;
+  while (pos + hl <= end) {
+    uint8_t fh[10];
+    f.seek(pos);
+    if (f.read(fh, hl) != hl || fh[0] == 0) break;               // 0 = padding
+    uint32_t fs = (ver == 2) ? (((uint32_t)fh[3] << 16) | ((uint32_t)fh[4] << 8) | fh[5])
+                : (ver == 3) ? musBE32(fh + 4) : musSynchsafe(fh + 4);
+    if (fs == 0 || pos + hl + fs > end) break;
+    bool isPic = (ver == 2) ? (fh[0] == 'P' && fh[1] == 'I' && fh[2] == 'C')
+                            : (fh[0] == 'A' && fh[1] == 'P' && fh[2] == 'I' && fh[3] == 'C');
+    if (isPic) {
+      bool skip = false, dli = false, unsync = (ver < 4) ? ((tflags & 0x80) != 0) : false;
+      if (ver == 3 && (fh[9] & 0xC0)) skip = true;                // terkompres/terenkripsi
+      if (ver == 4) {
+        if (fh[9] & 0x0C) skip = true;
+        dli = (fh[9] & 0x01) != 0;
+        unsync = ((fh[9] & 0x02) != 0) || ((tflags & 0x80) != 0);
+      }
+      if (skip || fs > MUS_COVER_MAX) return nullptr;
+      uint8_t* buf = (uint8_t*)heap_caps_malloc(fs, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+      if (!buf) return nullptr;
+      f.seek(pos + hl);
+      if ((uint32_t)f.read(buf, fs) != fs) { free(buf); return nullptr; }
+      uint8_t* d = buf; uint32_t n = fs;
+      if (dli) { if (n <= 4) { free(buf); return nullptr; } d += 4; n -= 4; }
+      if (unsync) n = musDeunsync(d, n);
+      if (n < 8) { free(buf); return nullptr; }
+      uint8_t enc = d[0]; uint32_t p = 1;
+      if (ver == 2) p += 3;                                       // format 3 huruf ("JPG"/"PNG")
+      else { while (p < n && d[p]) p++; p++; }                    // MIME (null-terminated)
+      p++;                                                        // tipe gambar (front cover dll)
+      if (enc == 1 || enc == 2) { while (p + 1 < n && !(d[p] == 0 && d[p + 1] == 0)) p += 2; p += 2; }   // deskripsi UTF-16
+      else                      { while (p < n && d[p]) p++; p++; }                                     // deskripsi 1 byte
+      if (p + 4 >= n) { free(buf); return nullptr; }
+      memmove(buf, d + p, n - p);
+      *outLen = n - p;
+      return buf;
+    }
+    pos += hl + fs;
+  }
+  return nullptr;
+}
+
+static int musCoverDraw(JPEGDRAW* d) {
+  musCvTmp.pushImage(d->x, d->y, d->iWidth, d->iHeight, (lgfx::swap565_t*)d->pPixels);
+  return 1;
+}
+
+static bool musLoadCover(const char* path) {
+  File f = SD_MMC.open(path, FILE_READ);
+  if (!f) return false;
+  uint32_t len = 0;
+  uint8_t* img = musReadApic(f, &len);
+  f.close();
+  if (!img) return false;
+  if (len < 4 || img[0] != 0xFF || img[1] != 0xD8) { free(img); return false; }   // bukan JPEG (mis. PNG) -> tetap piringan hitam
+
+  bool ok = false;
+  if (musCvJpeg->openRAM(img, (int)len, musCoverDraw)) {
+    int iw = musCvJpeg->getWidth(), ih = musCvJpeg->getHeight();
+    int sh = (iw < ih) ? iw : ih;
+    int scale = 0, shiftAmt = 0;
+    if      (sh >= MUS_COVER_SZ * 8) { scale = JPEG_SCALE_EIGHTH;  shiftAmt = 3; }
+    else if (sh >= MUS_COVER_SZ * 4) { scale = JPEG_SCALE_QUARTER; shiftAmt = 2; }
+    else if (sh >= MUS_COVER_SZ * 2) { scale = JPEG_SCALE_HALF;    shiftAmt = 1; }
+    int dw = iw >> shiftAmt, dh = ih >> shiftAmt;
+    if (iw > 0 && ih > 0 && dw > 0 && dh > 0 && (uint32_t)dw * (uint32_t)dh * 2u <= 1200u * 1024u) {
+      musCvTmp.deleteSprite();
+      musCvTmp.setPsram(true);
+      if (musCvTmp.createSprite(dw, dh)) {
+        musCvTmp.fillSprite(0);
+        musCvJpeg->setPixelType(RGB565_BIG_ENDIAN);
+        int r = musCvJpeg->decode(0, 0, scale);              // progressive JPEG ditolak JPEGDEC -> r = 0
+        if (r) {
+          int back = 1 - (int)musCoverCur;
+          LGFX_Sprite* dst = musCvP[back];
+          dst->deleteSprite();
+          dst->setPsram(true);
+          if (dst->createSprite(MUS_COVER_SZ, MUS_COVER_SZ)) {
+            dst->fillSprite(0);
+            float z1 = (float)MUS_COVER_SZ / dw, z2 = (float)MUS_COVER_SZ / dh;
+            float z = (z1 > z2) ? z1 : z2;                   // "cover": isi penuh persegi, tepi yg lebih panjang dipotong
+            musCvTmp.pushRotateZoom(dst, MUS_COVER_SZ / 2.0f, MUS_COVER_SZ / 2.0f, 0.0f, z, z);
+            musCoverCur = back;
+            musCoverReady = true;
+            ok = true;
+          }
+        }
+      }
+      musCvTmp.deleteSprite();
+    }
+    musCvJpeg->close();
+  }
+  free(img);
+  if (ok) needRedraw = true;
+  return ok;
+}
+
 // =====================================================================
 //  KONTROL LAGU (task)
 // =====================================================================
@@ -344,6 +492,10 @@ static bool musStartTrack(int idx, int prevHow) {
   musCur = idx; musLoaded = true; musPaused = false; musEnded = false;
   musPlayedMs = 0; musStreaming = true; musFileDone = false;
   musPrefsDirty = true; musPrefsMs = millis();
+  musCoverReady = false;                         // cover lama jangan tampil utk lagu baru
+  strncpy(musCoverPath, musList[idx].c_str(), sizeof(musCoverPath) - 1);
+  musCoverPath[sizeof(musCoverPath) - 1] = 0;
+  musCoverWant = true; musCoverReqMs = millis();
   if (ryne) {
     ryne->onTrackStart(idx, millis());
     musEngineCur = idx;
@@ -402,6 +554,7 @@ static void musHandleReq(uint8_t t, int32_t a, const char* s) {
     case 's':
       musEndCurrent(3);
       musLoaded = false; musStreaming = false;
+      musCoverReady = false; musCoverWant = false;
       if (musFile) musFile.close();
       rpSend(Serial1, RP_STOP, nullptr, 0);
       break;
@@ -478,6 +631,22 @@ static void musTask(void* arg) {
                           ((uint32_t)P.payload[10] << 16) | ((uint32_t)P.payload[11] << 24);
             musLastStatusMs = millis();
             musCamAlive = true;
+            if (P.len >= 21) {                         // status v3: ukuran ring + RAM CAM
+              musRingKb    = (uint32_t)P.payload[17] | ((uint32_t)P.payload[18] << 8);
+              musCamHeapKb = P.payload[19];
+              musCamBlkKb  = P.payload[20];
+            }
+            {   // decoder CAM mati (alokasi Helix gagal) -> berhenti, jangan loncat2 lagu diam-diam
+              bool de = (fl & 64) != 0;
+              if (de && !musCamDecErr && musLoaded) {
+                musCamDecErr = true;
+                char tb[48];
+                snprintf(tb, sizeof(tb), "Decoder CAM gagal (RAM %uK)", (unsigned)musCamBlkKb);
+                musToast(tb);
+                musPost('s', 0, nullptr);
+              }
+              if (!de) musCamDecErr = false;
+            }
             if (P.len >= 17 && ryne) {                 // energi & kecerahan audio (CAM v2)
               uint32_t en = (uint32_t)P.payload[13] | ((uint32_t)P.payload[14] << 8);
               uint32_t zc = (uint32_t)P.payload[15] | ((uint32_t)P.payload[16] << 8);
@@ -569,10 +738,18 @@ static void musTask(void* arg) {
       }
     }
 
+    // ---- 5c. cover art: dimuat SETELAH audio mulai mengalir (buffer CAM ~3 dtk PCM menutup jeda decode) ----
+    if (musCoverWant && millis() - musCoverReqMs > 600) {
+      musCoverWant = false;
+      musLoadCover(musCoverPath);
+    }
+
     // ---- 6. streaming file -> CAM (kredit dari status CAM) ----
     if (musStreaming && !musFileDone) {
       int32_t freeEst = (int32_t)musCredit - (int32_t)musSentSince;
-      if (freeEst > MUS_CREDIT_MIN) {
+      int32_t need = MUS_CREDIT_MIN;                 // ring CAM kecil (mis. 24KB tanpa PSRAM) -> ambang 24KB gak akan pernah tercapai
+      if (musRingKb) { int32_t lim = (int32_t)(musRingKb * 1024 / 3); if (lim < need) need = lim; }
+      if (freeEst > need) {
         int n = musFile.read(musBlk, 4096);
         if (n <= 0) {
           rpSend(Serial1, RP_FINISH, nullptr, 0);
@@ -865,6 +1042,19 @@ static void musTrunc(char* nm, int maxc) {
 
 // ---- cover: warna unik per judul + piringan hitam berputar ----
 static void musDrawCover(LGFX_Sprite& s, bool playing, const char* title) {
+  if (musCoverReady) {                              // cover asli dari tag ID3 (APIC)
+    LGFX_Sprite* cv = musCvP[musCoverCur];
+    if (cv->width() == MUS_COVER_SZ) {
+      int x = mCovX, y = mCovY, S = mCovS;
+      if (S == MUS_COVER_SZ) cv->pushSprite(&s, x, y);
+      else {
+        float z = (float)S / MUS_COVER_SZ;
+        cv->pushRotateZoom(&s, x + S / 2.0f, y + S / 2.0f, 0.0f, z, z);
+      }
+      s.drawRoundRect(x - 1, y - 1, S + 2, S + 2, 2, blend565(T().bg, T().text, 60));
+      return;
+    }
+  }
   uint32_t hsh = 5381;
   for (const char* q = title; *q; q++) hsh = hsh * 33 + (uint8_t)*q;
   float hue = (float)(hsh % 360);

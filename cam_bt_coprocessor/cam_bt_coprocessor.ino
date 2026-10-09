@@ -58,6 +58,8 @@
 #define TX_GAIN_DEFAULT       7
 #define TX_GAIN_LEVELS        8
 #define BYTES_PER_SEC         176400  // 44.1kHz * 2ch * 16bit
+#define DEC_MIN_BLOCK         (14*1024) // blok kontigu RAM internal minimal sblm bangun ulang decoder Helix
+#define DIAG_INTERVAL_MS      5000      // log diagnosa memori/link ke Serial USB-TTL CAM
 
 static const esp_power_level_t txGainEnum[TX_GAIN_LEVELS] = {
   ESP_PWR_LVL_N12, ESP_PWR_LVL_N9, ESP_PWR_LVL_N6, ESP_PWR_LVL_N3,
@@ -77,6 +79,9 @@ static volatile bool     haveTrack    = false;
 static volatile bool     paused       = false;
 static volatile bool     trackEnded   = false;
 static volatile bool     prefillReady = false;
+static volatile bool     decErr       = false;   // decoder tidak menghasilkan PCM sama sekali (biasanya RAM internal habis/terfragmentasi)
+static volatile uint32_t pcmProduced  = 0;       // byte PCM yg keluar dari decoder utk track ini
+static TaskHandle_t      decodeTaskH = nullptr, linkTaskH = nullptr;
 static volatile bool     btCbRunning  = false;
 static volatile int32_t  trackEndSilence = 0;
 static volatile uint32_t bytesPlayedTotal = 0;
@@ -125,6 +130,7 @@ class PcmSink : public Print {
       if (n > fr) n = fr;
       pcmRing.write(data + done, n);
       done += n;
+      pcmProduced += n;
     }
     return len;
   }
@@ -385,12 +391,19 @@ static void decodeTask(void* param) {
 
   MP3DecoderHelix*     codec = nullptr;
   EncodedAudioStream*  enc   = nullptr;
+  uint32_t inBytesTrack = 0;                 // byte MP3 yg sudah disuapkan ke decoder utk track ini
   auto rebuild = [&]() {
     if (enc)   { enc->end(); delete enc; enc = nullptr; }
     if (codec) { delete codec; codec = nullptr; }
+    // Helix butuh beberapa blok kontigu (~10KB). Kalau RAM internal terfragmentasi, kasih waktu stack BT lepas buffer.
+    for (int i = 0; i < 6 && ESP.getMaxAllocHeap() < DEC_MIN_BLOCK; i++) vTaskDelay(pdMS_TO_TICKS(40));
+    uint32_t blk = ESP.getMaxAllocHeap();
+    if (blk < DEC_MIN_BLOCK) Serial.printf("[DEC] PERINGATAN: blok terbesar cuma %u B (< %u) -> decoder bisa gagal\n", (unsigned)blk, (unsigned)DEC_MIN_BLOCK);
     codec = new MP3DecoderHelix();
     enc   = new EncodedAudioStream(&pcmSink, codec);
     enc->begin();
+    Serial.printf("[DEC] decoder dibangun. heap=%u blokMax=%u min=%u\n",
+                  (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap(), (unsigned)ESP.getMinFreeHeap());
   };
   rebuild();
 
@@ -404,6 +417,7 @@ static void decodeTask(void* param) {
       pcmRing.reset(); inRing.reset();
       streamEnded = false; decodeDone = false; trackEnded = false;
       trackEndSilence = 0; prefillReady = false; bytesPlayedTotal = 0;
+      pcmProduced = 0; inBytesTrack = 0;
       flushReq = false;
       continue;
     }
@@ -414,6 +428,12 @@ static void decodeTask(void* param) {
       // urutan penting: baca streamEnded DULU baru cek ring lagi
       if (streamEnded.load() && inRing.avail() == 0) {
         enc->end();                      // bilas sisa frame di decoder
+        if (inBytesTrack > 16384 && pcmProduced == 0) {
+          // MP3 masuk puluhan KB tapi nol PCM keluar = decoder mati (alokasi Helix gagal). JANGAN dianggap "lagu habis"
+          decErr = true;
+          Serial.printf("[DEC] ERROR: %u B MP3 masuk, 0 B PCM keluar. heap=%u blokMax=%u\n",
+                        (unsigned)inBytesTrack, (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap());
+        }
         decodeDone = true;
         continue;
       }
@@ -422,6 +442,7 @@ static void decodeTask(void* param) {
     }
     uint32_t n = inRing.read(buf, av > IN_CHUNK ? IN_CHUNK : av);
     enc->write(buf, n);
+    inBytesTrack += n;
     taskYIELD();
   }
 }
@@ -448,6 +469,7 @@ static void handleFrame(uint8_t type, const uint8_t* p, uint16_t len) {
   switch (type) {
     case RP_BEGIN:
       curSeq = (len >= 1) ? p[0] : 0;
+      decErr = false;
       doFlush();
       paused = false; gainTarget = 256; gainCur = 0;
       endedSent = false;
@@ -475,6 +497,7 @@ static void handleFrame(uint8_t type, const uint8_t* p, uint16_t len) {
       if (len >= 1) { pendingVol = p[0] > 127 ? 127 : p[0]; volDirty = true; }
       break;
     case RP_STOP:
+      decErr = false;
       doFlush();
       haveTrack = false;
       break;
@@ -504,10 +527,13 @@ static void linkRxTask(void* param) {
 //  [7] isi ring PCM (%)  [8..11] posisi putar ms (u32 LE)  [12] seq
 //  [13..14] energi: rata2 |sampel kiri| (u16 LE, 0..32767)
 //  [15..16] zero-crossing per 1024 sampel (u16 LE) = proxy "kecerahan"
-//  (v1 S3 cukup baca 13 byte; v2 baca 17 byte utk RYNE)
+//  [16] ... lihat di atas; flags b6 = decoder error (RAM)
+//  [17..18] ukuran ring MP3 dalam KB (u16 LE) -> S3 menyesuaikan ambang kredit
+//  [19] heap bebas RAM internal (KB, maks 255)  [20] blok kontigu terbesar (KB, maks 255)
+//  (v1 S3 cukup baca 13 byte; v2 baca 17 byte utk RYNE; v3 baca 21 byte)
 // ----------------------------------------------------------
 static void sendStatus() {
-  uint8_t b[17];
+  uint8_t b[21];
   uint8_t fl = 0;
   if (btConnected)               fl |= 1;
   if (haveTrack && !paused)      fl |= 2;
@@ -515,6 +541,7 @@ static void sendStatus() {
   if (paused)                    fl |= 8;
   if (streamEnded.load())        fl |= 16;
   if (decodeDone)                fl |= 32;
+  if (decErr)                    fl |= 64;
   b[0] = fl; b[1] = volumeNow; b[2] = (uint8_t)txGain;
   uint32_t fr = inRing.freeSpace();
   b[3] = fr & 0xFF; b[4] = (fr >> 8) & 0xFF; b[5] = (fr >> 16) & 0xFF; b[6] = (fr >> 24) & 0xFF;
@@ -527,6 +554,10 @@ static void sendStatus() {
   uint16_t en = sC ? (uint16_t)(sS / sC) : 0;
   uint16_t zr = sC ? (uint16_t)(((uint64_t)sZ * 1024ULL) / sC) : 0;
   b[13] = en & 0xFF; b[14] = en >> 8; b[15] = zr & 0xFF; b[16] = zr >> 8;
+  uint32_t ringKb = inRing.size / 1024; if (ringKb > 0xFFFF) ringKb = 0xFFFF;
+  b[17] = ringKb & 0xFF; b[18] = (ringKb >> 8) & 0xFF;
+  uint32_t hk = ESP.getFreeHeap() / 1024, mk = ESP.getMaxAllocHeap() / 1024;
+  b[19] = hk > 255 ? 255 : (uint8_t)hk; b[20] = mk > 255 ? 255 : (uint8_t)mk;
   rpSend(Serial2, RP_STATUS, b, sizeof(b));
 }
 
@@ -570,8 +601,8 @@ void setup() {
   Serial2.setRxBufferSize(8192);
   Serial2.begin(RP_BAUD, SERIAL_8N1, LINK_RX_PIN, LINK_TX_PIN);
 
-  xTaskCreatePinnedToCore(decodeTask, "decode", DECODE_TASK_STACK, nullptr, 3, nullptr, 0);
-  xTaskCreatePinnedToCore(linkRxTask, "linkrx", 4096, nullptr, 4, nullptr, 1);
+  xTaskCreatePinnedToCore(decodeTask, "decode", DECODE_TASK_STACK, nullptr, 3, &decodeTaskH, 0);
+  xTaskCreatePinnedToCore(linkRxTask, "linkrx", 4096, nullptr, 4, &linkTaskH, 1);
 
   a2dp.set_on_connection_state_changed(onConnectionChanged, nullptr);
   a2dp.set_volume(volumeNow);
@@ -620,7 +651,7 @@ void loop() {
 
   if (scanDone) { scanDone = false; sendScanResults(); }
 
-  if (trackEnded && !endedSent) {
+  if (trackEnded && !endedSent && !decErr) {
     endedSent = true;
     uint8_t sq = curSeq;
     rpSend(Serial2, RP_ENDED, &sq, 1);
@@ -628,6 +659,21 @@ void loop() {
 
   uint32_t now = millis();
   if (now - lastStatus >= STATUS_INTERVAL_MS) { lastStatus = now; sendStatus(); }
+
+  {   // diagnosa memori + link (lihat Serial Monitor CAM, 115200). Stack 'free' kecil (<1KB) = stack hampir jebol.
+    static uint32_t lastDiag = 0;
+    if (now - lastDiag >= DIAG_INTERVAL_MS) {
+      lastDiag = now;
+      Serial.printf("[DIAG] heap=%uK min=%uK blokMax=%uK | stack bebas dec=%u link=%u loop=%u | ringMP3=%u%% PCM=%u%% | rxErr=%u decErr=%d bt=%d\n",
+        (unsigned)(ESP.getFreeHeap() / 1024), (unsigned)(ESP.getMinFreeHeap() / 1024), (unsigned)(ESP.getMaxAllocHeap() / 1024),
+        decodeTaskH ? (unsigned)uxTaskGetStackHighWaterMark(decodeTaskH) : 0u,
+        linkTaskH   ? (unsigned)uxTaskGetStackHighWaterMark(linkTaskH)   : 0u,
+        (unsigned)uxTaskGetStackHighWaterMark(nullptr),
+        inRing.size  ? (unsigned)((uint64_t)inRing.avail()  * 100 / inRing.size)  : 0u,
+        pcmRing.size ? (unsigned)((uint64_t)pcmRing.avail() * 100 / pcmRing.size) : 0u,
+        (unsigned)parser.errors, (int)decErr, (int)btConnected);
+    }
+  }
 
   if (btEnabled && !btConnected && btDisconnectedAt > 0 && now - btDisconnectedAt > BT_RECONNECT_MS) {
     btDisconnectedAt = now;

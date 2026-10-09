@@ -121,6 +121,7 @@ SD Card ──▶ ESP32-S3 (master) ──UART 921600──▶ ESP32-CAM ──A
             playlist, RYNE                     buffer PCM, kirim A2DP
 ```
 
+- **Cover lagu dari ID3 tag**: kalau MP3 punya gambar cover (ID3v2.2/2.3/2.4, frame APIC) berformat **JPEG baseline**, app Musik menampilkannya menggantikan piringan hitam. PNG, JPEG progressive, atau lagu tanpa cover otomatis kembali ke piringan hitam.
 - **Letakkan lagu di `/music`** pada SD Card (maks 200 lagu, format **MP3 Layer III 44,1 kHz stereo**).
 - Pemutar punya cover warna unik per judul dengan piringan hitam berputar, equalizer, slider volume, progress bar, dan tombol acak/ulang/suka. Judul panjang akan bergeser (satu salinan, dengan jeda di awal dan di ujung).
 - Halaman **TWS** untuk scan dan sambung ke perangkat Bluetooth; nama perangkat terakhir diingat oleh CAM dan disambung ulang otomatis.
