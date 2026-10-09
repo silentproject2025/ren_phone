@@ -813,8 +813,12 @@ Theme themes[] = {
   { "Pastel", 0xFF1F,0xFFFF,0xFF9F,0xFB16,0x5D9F,0x39C7,0x9C92,0xFEB7,0x2FE7,0xE8B4 },
   // iOS: hitam murni + kartu #1C1C1E/#2C2C2E + biru sistem #0A84FF + ungu #BF5AF2 + hijau/merah sistem
   { "iOS",    0x0000,0x18E3,0x2965,0x0C3F,0xBADE,0xFFFF,0x8C72,0x39C7,0x368B,0xFA27 },
+  // Full Dark: hitam murni (0,0,0) + abu NETRAL (R=G=B, tanpa tint kuning/biru) + aksen biru dingin.
+  // Tema "Dark"/"AMOLED" lama pakai aksen 0xFD40 (oranye-kuning) -> itu yg bikin UI keliatan kekuningan.
+  // Surface #121212/#1E1E1E, divider #2A2A2A, text #F2F2F2, subtext #8E8E8E, aksen #5AA9FF/#A78BFA.
+  { "Full Dark", 0x0000,0x1082,0x18E3,0x5D5F,0xA45F,0xF79E,0x8C71,0x2945,0x3EB1,0xFAEB },
 };
-#define THEME_COUNT 6
+#define THEME_COUNT 7
 int themeIdx = 0;
 Theme& T() { return themes[themeIdx]; }
 
@@ -990,7 +994,7 @@ void saveTheme(){ Preferences p; p.begin("ui",false); p.putInt("theme",themeIdx)
 void loadTheme(){
   Preferences p; p.begin("ui",false);
   themeIdx = p.getInt("theme",0);
-  if(p.getInt("thv",0)<2){ themeIdx=THEME_COUNT-1; p.putInt("theme",themeIdx); p.putInt("thv",2); } // tema iOS jadi default SEKALI; bisa diganti lagi di Pengaturan
+  if(p.getInt("thv",0)<2){ themeIdx=5; p.putInt("theme",themeIdx); p.putInt("thv",2); } // tema iOS jadi default SEKALI; bisa diganti lagi di Pengaturan
   p.end();
   if(themeIdx<0||themeIdx>=THEME_COUNT) themeIdx=0;
 }
