@@ -3045,16 +3045,17 @@ void drawClockCard(LGFX_Sprite& s,int x,int y,int w,int h){
   struct tm t; bool ok=ntpSynced&&getLocalTime(&t);
   char tb[6]; if(ok) sprintf(tb,"%02d:%02d",t.tm_hour,t.tm_min); else strcpy(tb,"--:--");
   s.setTextSize(1);
-  uiText(s,x+14,y+10,ok?homeGreeting(t.tm_hour):"Halo",T().accent,false,true);
+  uiText(s,x+14,y+8,ok?homeGreeting(t.tm_hour):"Halo",T().accent,false,true);
   s.setFont(&lgfx::fonts::FreeSansBold9pt7b);
-  int sz=4;
-  for(;sz>=2;sz--){ s.setTextSize(sz); if(s.textWidth(tb)<=w-28) break; }
+  // ukuran angka dihitung dari TINGGI kartu (sisakan ruang sapaan di atas & tanggal di bawah),
+  // lalu dikecilkan sampai muat lebar. Tinggi angka ~14px per satuan ukuran.
+  float sz=(float)(h-38)/14.0f; if(sz>4.0f) sz=4.0f; sz=floorf(sz*4.0f)/4.0f; if(sz<1.5f) sz=1.5f;
   s.setTextSize(sz);
-  int fh=s.fontHeight();
-  int cyc=y+h/2+4;
+  while(sz>1.5f && s.textWidth(tb)>w-28){ sz-=0.25f; s.setTextSize(sz); }
   s.setTextColor(T().text);
-  s.setCursor(x+12,cyc-(fh*48)/100); // angka jam ~ di tengah-bawah kartu (perkiraan metrik font; geser di sini kalau perlu)
-  s.print(tb);
+  s.setTextDatum(lgfx::textdatum_t::baseline_left); // dipatok ke garis dasar angka, bukan perkiraan metrik font
+  s.drawString(tb,x+14,y+h-18);
+  s.setTextDatum(lgfx::textdatum_t::top_left);
   s.setFont(&lgfx::fonts::Font0); // Home selalu Font0 (lihat renderCurrentFrame)
   s.setTextSize(1);
   if(ok){
@@ -5076,11 +5077,11 @@ int homeDockY(){ return SCR_H-38-8; }
 // Landscape: jam (kiri) + baterai (kanan) di baris 1, kartu musik di baris 2.
 // Portrait : jam, kartu musik, baterai (bar) bertumpuk. Grid app mulai di bawahnya.
 bool homeIsLand(){ return currentOrient==ORIENT_LANDSCAPE; }
-HomeRect homeWClock(){ HomeRect r; r.x=10; r.y=STATUS_H+28; r.h=homeIsLand()?70:80; r.w=homeIsLand()?188:SCR_W-20; return r; }
-HomeRect homeWMusic(){ HomeRect r; r.x=10; r.w=SCR_W-20; if(homeIsLand()){ r.y=STATUS_H+28+70+6; r.h=54; } else { r.y=STATUS_H+28+80+8; r.h=58; } return r; }
+HomeRect homeWClock(){ HomeRect r; r.x=10; r.y=STATUS_H+28; r.h=homeIsLand()?66:80; r.w=homeIsLand()?188:SCR_W-20; return r; }
+HomeRect homeWMusic(){ HomeRect r; r.x=10; r.w=SCR_W-20; if(homeIsLand()){ r.y=STATUS_H+28+66+6; r.h=48; } else { r.y=STATUS_H+28+80+8; r.h=58; } return r; }
 HomeRect homeWBatt(){
   HomeRect r;
-  if(homeIsLand()){ r.x=206; r.y=STATUS_H+28; r.w=SCR_W-216; r.h=70; }
+  if(homeIsLand()){ r.x=206; r.y=STATUS_H+28; r.w=SCR_W-216; r.h=66; }
   else { r.x=10; r.y=STATUS_H+28+80+8+58+8; r.w=SCR_W-20; r.h=44; }
   return r;
 }
