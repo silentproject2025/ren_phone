@@ -60,6 +60,7 @@
 #define BYTES_PER_SEC         176400  // 44.1kHz * 2ch * 16bit
 #define DEC_MIN_BLOCK         (14*1024) // blok kontigu RAM internal minimal sblm bangun ulang decoder Helix
 #define DIAG_INTERVAL_MS      5000      // log diagnosa memori/link ke Serial USB-TTL CAM
+#define RP_AVRCP_ENABLE       1         // 0 = matikan total AVRCP Target (utk isolasi bug memori/link); tombol earbuds tidak jalan
 
 static const esp_power_level_t txGainEnum[TX_GAIN_LEVELS] = {
   ESP_PWR_LVL_N12, ESP_PWR_LVL_N9, ESP_PWR_LVL_N6, ESP_PWR_LVL_N3,
@@ -256,14 +257,24 @@ static void avrc_tg_callback(esp_avrc_tg_cb_event_t ev, esp_avrc_tg_cb_param_t* 
 }
 
 static void avrcpStackInit() {
+#if !RP_AVRCP_ENABLE
+  Serial.println("[AVRCP] DIMATIKAN (RP_AVRCP_ENABLE=0)");
+  return;
+#endif
+  uint32_t h0 = ESP.getFreeHeap(), b0 = ESP.getMaxAllocHeap();
   esp_err_t r = esp_avrc_tg_init();
   avrcpStackReady = (r == ESP_OK || r == ESP_ERR_INVALID_STATE);   // INVALID_STATE = sudah di-init library
-  Serial.printf("[AVRCP] tg_init=%d ready=%d\n", (int)r, (int)avrcpStackReady);
+  Serial.printf("[AVRCP] tg_init=%d ready=%d | heap %u->%u  blokMax %u->%u\n", (int)r, (int)avrcpStackReady,
+                (unsigned)h0, (unsigned)ESP.getFreeHeap(), (unsigned)b0, (unsigned)ESP.getMaxAllocHeap());
 }
 
 // dipanggil ~0,5 dtk setelah TWS tersambung (urutan sama dengan proyek referensi)
 static void avrcpSetupFilter() {
+#if !RP_AVRCP_ENABLE
+  return;
+#endif
   if (!avrcpStackReady) return;
+  uint32_t h0 = ESP.getFreeHeap();
   if (esp_avrc_tg_register_callback(avrc_tg_callback) != ESP_OK) { Serial.println("[AVRCP] register_callback gagal"); return; }
   esp_avrc_psth_bit_mask_t cs; memset(&cs, 0, sizeof(cs));
   if (esp_avrc_tg_get_psth_cmd_filter(ESP_AVRC_PSTH_FILTER_ALLOWED_CMD, &cs) != ESP_OK) {
@@ -280,7 +291,7 @@ static void avrcpSetupFilter() {
   esp_avrc_rn_evt_cap_mask_t es; memset(&es, 0, sizeof(es));
   esp_avrc_rn_evt_bit_mask_operation(ESP_AVRC_BIT_MASK_OP_SET, &es, ESP_AVRC_RN_VOLUME_CHANGE);
   esp_avrc_tg_set_rn_evt_cap(&es);
-  Serial.println("[AVRCP] filter terpasang");
+  Serial.printf("[AVRCP] filter terpasang | heap %u->%u blokMax=%u\n", (unsigned)h0, (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap());
 }
 
 void onConnectionChanged(esp_a2d_connection_state_t state, void* obj) {
