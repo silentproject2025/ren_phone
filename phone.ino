@@ -2677,6 +2677,11 @@ void notepadRequestConfirm(int act); // act: 1=Back, 2=Home -> tampilkan dialog 
 // Home  = geser TURUN (kesan "menutup/pulang", searah swipe unlock)
 // =============================================
 void renderCurrentFrame(); // forward decl - dipakai utk render frame BARU sblm animasi
+// UI-OVERHAUL: API musik utk widget Home/Lock (definisi di musicbt_renphone.ino)
+bool homeMusStarted(); bool homeMusLoaded(); bool homeMusPlaying(); float homeMusProgress();
+void homeMusTitle(char* out,int cap); void homeMusToggle(); void homeMusNext();
+const char* homeGreeting(int hour);   // definisi di dekat drawHome
+uint16_t appIconInk(uint16_t c);      // definisi di dekat drawAppIcon
 // v33: forward decl manual -- parameter bertipe namespaced (lgfx::touch_point_t&)
 // berisiko kena bug parsing ctags yg sama spt kasus 'diNotify' (lihat README),
 // jadi didaftarkan eksplisit drpd mengandalkan auto-prototype arduino-cli.
@@ -2950,50 +2955,194 @@ void drawToast(LGFX_Sprite& s){
 // =============================================
 // STATUS BAR
 // =============================================
+// =====================================================================
+// UI-OVERHAUL "Aurora Glass" -- helper bersama (Home, Lock Screen, status bar)
+// =====================================================================
+// Kaca RINGAN utk kartu yg ikut scroll: sampel warna rata-rata wallpaper di
+// bawah kartu SEKALI (bukan grid 8x6 spt drawGlassPanel), lalu tint + gradasi
+// vertikal halus + rim + bayangan. Murah dirender tiap frame scroll.
+void drawGlassCard(LGFX_Sprite& s,int x,int y,int w,int h,int r,uint16_t tint,uint8_t a){
+  if(w<=0||h<=0||y>=SCR_H||y+h<=0) return;
+  uint16_t base=glassSampleAvg(s,x,y,w,h,4);
+  uint16_t fillC=blend565(base,tint,a);
+  s.fillRoundRect(x,y+2,w,h,r,blend565(base,0x0000,70)); // bayangan tipis
+  s.fillRoundRect(x,y,w,h,r,fillC);
+  for(int dy=0;dy<h;dy++){ // pantulan cahaya: terang di atas, memudar ke bawah
+    float t=1.0f-(float)dy/(float)h;
+    uint8_t al=(uint8_t)(40.0f*t*t);
+    if(al<2) break;
+    int inset=0;
+    if(dy<r){ float d=(float)(r-dy)-0.5f; float q=(float)r*(float)r-d*d; if(q<0) q=0; inset=(int)ceilf((float)r-sqrtf(q)); }
+    s.drawFastHLine(x+inset,y+dy,w-2*inset,blend565(fillC,0xFFFF,al));
+  }
+  s.drawRoundRect(x,y,w,h,r,blend565(fillC,0xFFFF,70));
+}
+
+// Teks dgn bayangan 1px (biar kebaca di wallpaper apapun) & opsi "tebal"
+// (cetak 2x geser 1px -- tanpa ganti font, jadi aman utk font pilihan user).
+void uiText(LGFX_Sprite& s,int x,int y,const char* str,uint16_t col,bool shadow,bool bold){
+  if(shadow){ s.setTextColor(0x0000); s.setCursor(x+1,y+1); s.print(str); if(bold){ s.setCursor(x+2,y+1); s.print(str); } }
+  s.setTextColor(col); s.setCursor(x,y); s.print(str);
+  if(bold){ s.setCursor(x+1,y); s.print(str); }
+}
+
+uint16_t battColor(){ return (battPercent<=15)?T().danger:(battPercent<=35)?T().accent:T().good; }
+
+// Posisi tombol play & next di kartu musik (dipakai gambar DAN hit-test)
+void homeMusBtnPos(int x,int w,int& playCx,int& nextCx){ nextCx=x+w-26; playCx=nextCx-34; }
+
+// Kartu musik: cover piringan, judul, status, progres, (opsional) tombol kontrol
+void drawMusicMini(LGFX_Sprite& s,int x,int y,int w,int h,bool ctrl){
+  drawGlassCard(s,x,y,w,h,16,T().surface,150);
+  int cy=y+h/2;
+  bool started=homeMusStarted(), loaded=homeMusLoaded(), playing=homeMusPlaying();
+  int cr=(h>=50)?18:14, ccx=x+12+cr;
+  uint16_t disc=T().accent2;
+  s.fillCircle(ccx,cy,cr,disc);
+  s.drawCircle(ccx,cy,cr-4,blend565(disc,0x0000,90));
+  s.fillCircle(ccx,cy,cr/3+1,blend565(disc,0xFFFF,130));
+  s.fillCircle(ccx,cy,2,blend565(disc,0x0000,170));
+  int tx=ccx+cr+10;
+  int pc,nc; homeMusBtnPos(x,w,pc,nc);
+  int maxX=(ctrl&&started)?(pc-20):(x+w-34);
+  char title[56];
+  if(started) homeMusTitle(title,sizeof(title)); else strcpy(title,"Musik");
+  const char* sub=!started?"Ketuk untuk membuka":(!loaded?"Siap diputar":(playing?"Sedang diputar":"Dijeda"));
+  s.setTextSize(1);
+  int n=(int)strlen(title); bool cut=false;
+  while(n>3 && s.textWidth(title)>(maxX-tx)){ title[--n]=0; cut=true; }
+  if(cut && n>=2){ title[n-1]='.'; title[n-2]='.'; }
+  int ty1=(h>=50)?y+10:y+8, ty2=(h>=50)?y+23:y+20;
+  uiText(s,tx,ty1,title,T().text,false,true);
+  s.setTextColor(T().subtext); s.setCursor(tx,ty2); s.print(sub);
+  if(started&&loaded){ // progres tipis
+    int bx=tx, bw=maxX-tx, by=y+h-11;
+    if(bw>10){
+      s.fillRoundRect(bx,by,bw,3,1,blend565(T().surface,0xFFFF,60));
+      int fw=(int)(bw*homeMusProgress());
+      if(fw>0) s.fillRoundRect(bx,by,fw,3,1,T().accent);
+    }
+  }
+  uint16_t ink=appIconInk(T().accent);
+  if(ctrl&&started){
+    s.fillCircle(pc,cy,14,T().accent);
+    if(playing){ s.fillRect(pc-5,cy-6,4,12,ink); s.fillRect(pc+1,cy-6,4,12,ink); }
+    else s.fillTriangle(pc-4,cy-7,pc-4,cy+7,pc+6,cy,ink);
+    s.fillCircle(nc,cy,11,blend565(T().surface2,0xFFFF,40));
+    s.fillTriangle(nc-5,cy-5,nc-5,cy+5,nc+3,cy,T().text);
+    s.fillRect(nc+4,cy-5,2,10,T().text);
+  } else if(!ctrl && started && loaded){
+    int gx=x+w-22;
+    if(playing){ s.fillRect(gx-4,cy-6,3,12,T().accent); s.fillRect(gx+1,cy-6,3,12,T().accent); }
+    else s.fillTriangle(gx-4,cy-6,gx-4,cy+6,gx+5,cy,T().accent);
+  }
+}
+
+// Kartu jam: sapaan, jam besar (font sans tebal), tanggal
+void drawClockCard(LGFX_Sprite& s,int x,int y,int w,int h){
+  drawGlassCard(s,x,y,w,h,18,T().surface,150);
+  struct tm t; bool ok=ntpSynced&&getLocalTime(&t);
+  char tb[6]; if(ok) sprintf(tb,"%02d:%02d",t.tm_hour,t.tm_min); else strcpy(tb,"--:--");
+  s.setTextSize(1);
+  uiText(s,x+14,y+10,ok?homeGreeting(t.tm_hour):"Halo",T().accent,false,true);
+  s.setFont(&lgfx::fonts::FreeSansBold9pt7b);
+  int sz=4;
+  for(;sz>=2;sz--){ s.setTextSize(sz); if(s.textWidth(tb)<=w-28) break; }
+  s.setTextSize(sz);
+  int fh=s.fontHeight();
+  int cyc=y+h/2+4;
+  s.setTextColor(T().text);
+  s.setCursor(x+12,cyc-(fh*48)/100); // angka jam ~ di tengah-bawah kartu (perkiraan metrik font; geser di sini kalau perlu)
+  s.print(tb);
+  s.setFont(&lgfx::fonts::Font0); // Home selalu Font0 (lihat renderCurrentFrame)
+  s.setTextSize(1);
+  if(ok){
+    const char* days[]={"Min","Sen","Sel","Rab","Kam","Jum","Sab"};
+    const char* mons[]={"Jan","Feb","Mar","Apr","Mei","Jun","Jul","Agu","Sep","Okt","Nov","Des"};
+    char db[24]; snprintf(db,sizeof(db),"%s, %d %s",days[t.tm_wday],t.tm_mday,mons[t.tm_mon]);
+    s.setTextColor(T().subtext); s.setCursor(x+14,y+h-14); s.print(db);
+  }
+}
+
+// Kartu baterai: cincin (kartu tinggi) atau bar horizontal (kartu pendek)
+void drawBattWidget(LGFX_Sprite& s,int x,int y,int w,int h){
+  drawGlassCard(s,x,y,w,h,18,T().surface,150);
+  uint16_t bc=battColor();
+  char pb[8]; sprintf(pb,"%d",battPercent);
+  if(h>=60){
+    int cx=x+w/2, cy=y+h/2;
+    int ro=min(h/2-6,w/2-6), ri=ro-6;
+    uint16_t track=blend565(T().surface,0xFFFF,50);
+    s.fillArc(cx,cy,ri,ro,0.0f,180.0f,track);
+    s.fillArc(cx,cy,ri,ro,180.0f,360.0f,track);
+    float a1=270.0f+battPercent*3.6f;
+    if(battPercent>0){
+      if(a1<=360.0f) s.fillArc(cx,cy,ri,ro,270.0f,a1,bc);
+      else { s.fillArc(cx,cy,ri,ro,270.0f,360.0f,bc); s.fillArc(cx,cy,ri,ro,0.0f,a1-360.0f,bc); }
+    }
+    s.setTextSize(battPercent>=100?1:2);
+    int tw=s.textWidth(pb), th=(battPercent>=100)?8:16;
+    s.setTextColor(T().text); s.setCursor(cx-tw/2,cy-th/2); s.print(pb);
+    s.setTextSize(1);
+  } else {
+    s.setTextSize(1);
+    s.setTextColor(T().subtext); s.setCursor(x+14,y+9); s.print("Baterai");
+    char pf[8]; sprintf(pf,"%d%%",battPercent);
+    int tw=s.textWidth(pf);
+    s.setTextColor(bc); s.setCursor(x+w-14-tw,y+9); s.print(pf);
+    int bx=x+14, bw=w-28, by=y+h-14;
+    s.fillRoundRect(bx,by,bw,7,3,blend565(T().surface,0xFFFF,50));
+    int fw=(bw*battPercent)/100;
+    if(fw>0) s.fillRoundRect(bx,by,max(fw,6),7,3,bc);
+  }
+}
+
+// STATUS BAR: di Home transparan di atas wallpaper (teks putih + bayangan),
+// di layar lain tetap bar solid spt biasa. Jam tebal, baterai bentuk kapsul.
 void drawStatusBar(LGFX_Sprite& s){
-  s.fillRect(0,0,SCR_W,STATUS_H,T().surface);
-  s.drawFastHLine(0,STATUS_H,SCR_W,T().divider);
+  const bool ov = (curScreen()==SCR_HOME);
+  const bool wp = ov && wallpaperReady;
+  uint16_t fg  = wp ? (uint16_t)0xFFFF : T().text;
+  uint16_t fg2 = wp ? (uint16_t)0xDEFB : T().subtext;
+  if(!ov){
+    s.fillRect(0,0,SCR_W,STATUS_H,T().surface);
+    s.drawFastHLine(0,STATUS_H,SCR_W,T().divider);
+  }
   struct tm t;
   bool ok=ntpSynced&&getLocalTime(&t);
-  s.setTextColor(ok?T().text:T().subtext);s.setTextSize(1);
-  if(ok){char b[6];sprintf(b,"%02d:%02d",t.tm_hour,t.tm_min);s.setCursor(8,7);s.print(b);}
-  else{s.setCursor(8,7);s.print("--:--");}
+  s.setTextSize(1);
+  char tb[6]; if(ok) sprintf(tb,"%02d:%02d",t.tm_hour,t.tm_min); else strcpy(tb,"--:--");
+  uiText(s,10,7,tb,ok?fg:fg2,wp,true);
 
-  int rx = SCR_W-6; // kursor kanan, bergerak ke kiri tiap elemen ditambah
+  int rx = SCR_W-8; // kursor kanan, bergerak ke kiri tiap elemen ditambah
 
-  // --- Baterai: ikon kotak terisi + teks persen (paling kanan) ---
-  int bw=16,bh=9, bx=rx-bw, by=7;
-  uint16_t bc = (battPercent<=15)?T().danger:(battPercent<=35)?T().accent:T().good;
-  // v72: sudut ikon baterai dibulatin dikit (radius 2/1) -- kesan lbh
-  // "kapsul" halus ala status bar HP asli, drpd kotak lancip polos.
-  s.drawRoundRect(bx,by,bw-2,bh,2,T().subtext);
-  s.fillRect(bx+bw-2,by+2,2,bh-4,T().subtext); // kutub kecil baterai
-  int innerW = bw-6;
+  // --- Baterai: kapsul + persen ---
+  int bw=24,bh=11, bx=rx-bw, by=6;
+  uint16_t bc = battColor();
+  s.drawRoundRect(bx,by,bw-2,bh,3,fg2);
+  s.fillRoundRect(bx+bw-2,by+3,2,bh-6,1,fg2); // kutub kecil
+  int innerW = bw-2-6;
   int fillW = constrain((innerW*battPercent)/100,0,innerW);
-  if(fillW>0) s.fillRoundRect(bx+2,by+2,fillW,bh-4,1,bc);
-  rx = bx-3;
+  if(fillW>0) s.fillRoundRect(bx+3,by+3,fillW,bh-6,1,bc);
+  rx = bx-4;
   char pctBuf[6]; sprintf(pctBuf,"%d%%",battPercent);
   int pctW = s.textWidth(pctBuf);
   rx -= pctW;
-  s.setTextColor(bc); s.setCursor(rx,7); s.print(pctBuf);
-  rx -= 6;
+  uiText(s,rx,7,pctBuf,bc,wp,false);
+  rx -= 8;
 
-  // --- Wifi / pesawat / tanpa sinyal ---
-  // v72: ikon huruf mentah ("A"/"X") diganti vektor kecil, POLA SAMA PERSIS
-  // dgn drawCCIcon() idx=0 (wifi) & idx=1 (airplane) di Control Center --
-  // biar ikonografinya konsisten senasib di seluruh UI, bukan cuma nempel
-  // beda gaya per tempat.
+  // --- Wifi / pesawat / tanpa sinyal (pola sama dgn drawCCIcon idx 0/1) ---
   if(airplaneMode){
     rx -= 12;
     int acx=rx, acy=12;
-    s.fillTriangle(acx,acy-5, acx-3,acy+5, acx+3,acy+5, T().subtext);
-    s.fillTriangle(acx-5,acy+6, acx+5,acy+6, acx,acy-1, T().subtext);
+    s.fillTriangle(acx,acy-5, acx-3,acy+5, acx+3,acy+5, fg2);
+    s.fillTriangle(acx-5,acy+6, acx+5,acy+6, acx,acy-1, fg2);
     rx -= 4;
   } else if(wifiConnected){
     rx -= 9;
-    s.fillCircle(rx,16,2,T().good);
-    s.drawArc(rx,18,5,4,210,330,T().good);
-    s.drawArc(rx,18,9,8,210,330,T().good);
+    s.fillCircle(rx,16,2,fg);
+    s.drawArc(rx,18,5,4,210,330,fg);
+    s.drawArc(rx,18,9,8,210,330,fg);
     rx -= 12;
   } else {
     rx -= 12;
@@ -3007,18 +3156,12 @@ void drawStatusBar(LGFX_Sprite& s){
 
   // --- SD ---
   if(sdReady){
-    s.setTextColor(T().good);
-    rx -= 12; s.setCursor(rx,7); s.print("SD");
+    rx -= 12; uiText(s,rx,7,"SD",T().good,wp,false);
     rx -= 6;
   }
   // --- DND ---
   if(dndMode){
-    s.setTextColor(T().accent);
-    rx -= 18; s.setCursor(rx,7); s.print("DND");
-  }
-
-  if(curScreen()==SCR_HOME && !controlCenterOpen){
-    s.fillRoundRect(SCR_W/2-12,STATUS_H+2,24,3,2,T().divider);
+    rx -= 18; uiText(s,rx,7,"DND",T().accent,wp,false);
   }
 }
 
@@ -3477,78 +3620,70 @@ void drawLockScreen(LGFX_Sprite& s){
     return;
   }
 
-  if(wallpaperReady) wallpaperImg.pushSprite(&s,0,0); // v48: wallpaper skrg jg dipasang di Lock Screen, bukan cuma Home
-  else s.fillSprite(T().bg);                          // fallback: warna solid tema spt semula
-  const char* days[]={"Min","Sen","Sel","Rab","Kam","Jum","Sab"};
-  const char* mons[]={"Jan","Feb","Mar","Apr","Mei","Jun","Jul","Agu","Sep","Okt","Nov","Des"};
-  char db[28]=""; if(ok) sprintf(db,"%s, %02d %s %04d",days[t.tm_wday],t.tm_mday,mons[t.tm_mon],t.tm_year+1900);
+  // UI-OVERHAUL lock: wallpaper + tanggal & jam bergaya iOS + chip baterai + kartu musik + hint
+  if(wallpaperReady) wallpaperImg.pushSprite(&s,0,0);
+  else s.fillSprite(T().bg);
+  const char* ldays[]={"Minggu","Senin","Selasa","Rabu","Kamis","Jumat","Sabtu"};
+  const char* lmons[]={"Jan","Feb","Mar","Apr","Mei","Jun","Jul","Agu","Sep","Okt","Nov","Des"};
+  char db[32]=""; if(ok) snprintf(db,sizeof(db),"%s, %d %s",ldays[t.tm_wday],t.tm_mday,lmons[t.tm_mon]);
+  int lift=(int)lockDragY;
+  uint16_t fg  = wallpaperReady ? (uint16_t)0xFFFF : T().text;
+  uint16_t fg2 = wallpaperReady ? (uint16_t)0xDEFB : T().subtext;
 
-  // v72 REDESIGN (permintaan user: gaya iOS -- "bulat, kaca gelap, familiar"):
-  // font jam diganti dr digital 7-segment (Font7, kesannya kalkulator/jam
-  // meja) ke FreeSansBold9pt7b yg lebih ke arah sans modern spt jam Lock
-  // Screen HP asli. Font7 dulu dipakai apa adanya (tanpa scale) krn emang
-  // udah gede secara desain; font sans ini proporsional & lebih kecil per
-  // pt, jadi dibesarin pakai setTextSize(3) biar levelnya sepadan. Teknik
-  // outline/shadow 8-arah (v52) DIPERTAHANKAN persis -- itu independen dr
-  // jenis font, tetap perlu spy jam kebaca jelas di atas wallpaper apapun.
-  // Offset shadow dinaikin dikit (2->3px) krn goresan font sans-bold ini
-  // agak lebih tebal drpd Font7 di ukuran besar.
-  // CATATAN: posisi vertikal (ty) blm sempat dites di layar fisik dgn font
-  // baru ini -- kalau pas di-flash ternyata jam kepotong/ketinggian, tinggal
-  // geser angka "-70" di baris ty di bawah (misal jadi -60 atau -55).
+  // chip baterai (kanan atas)
+  {
+    char pb[8]; sprintf(pb,"%d%%",battPercent);
+    s.setTextSize(1);
+    int pw=s.textWidth(pb)+36, px=SCR_W-pw-10, py=8;
+    drawGlassCard(s,px,py,pw,20,10,T().surface,140);
+    uint16_t bc=battColor();
+    s.drawRoundRect(px+9,py+5,16,10,3,fg2);
+    s.fillRect(px+25,py+8,2,4,fg2);
+    int fw=(10*battPercent)/100; if(fw>0) s.fillRoundRect(px+11,py+7,fw,6,1,bc);
+    s.setTextColor(fg); s.setCursor(px+31,py+6); s.print(pb);
+  }
+
+  // jam besar (font sans tebal) + bayangan lembut
   s.setFont(&lgfx::fonts::FreeSansBold9pt7b);
   s.setTextSize(3);
   int tw = s.textWidth(tb);
+  int fh = s.fontHeight();
   int tx = SCR_W/2 - tw/2;
-  int ty = SCR_H/2-70-(int)lockDragY;
-
-  // v72: ikon gembok kecil di atas jam -- sentuhan "familiar" khas Lock
-  // Screen HP asli. Bentuknya sama persis pola gembok drawCCIcon(idx=6) di
-  // Control Center, cuma digambar langsung (bukan lewat fungsi itu) krn
-  // ukuran/posisinya beda. Dikasih shadow gelap 1px jg spy tetap kebaca di
-  // wallpaper apapun, senada teknik outline jam di bawahnya.
-  int lockIconY = ty-22;
-  for(int ox=-1;ox<=1;ox++) for(int oy=-1;oy<=1;oy++){
-    if(ox==0&&oy==0) continue;
-    s.drawRoundRect(SCR_W/2-7+ox,lockIconY-1+oy,14,11,2,0x0000);
-    s.drawArc(SCR_W/2+ox,lockIconY-3+oy,6,5,180,360,0x0000);
+  int ty = SCR_H/2-70-lift;
+  {
+    uint16_t under=glassSampleAvg(s,tx,ty,tw,fh,3);
+    uint16_t sh=blend565(under,0x0000,170);
+    s.setTextColor(sh); s.setCursor(tx+3,ty+3); s.print(tb);
+    s.setTextColor(blend565(under,0x0000,110)); s.setCursor(tx+2,ty+2); s.print(tb);
   }
-  s.drawRoundRect(SCR_W/2-7,lockIconY-1,14,11,2,T().text);
-  s.drawArc(SCR_W/2,lockIconY-3,6,5,180,360,T().text);
-
-  s.setTextColor(0x0000);
-  int shadowOfs[8][2]={{-3,-3},{0,-3},{3,-3},{-3,0},{3,0},{-3,3},{0,3},{3,3}};
-  for(int k=0;k<8;k++){ s.setCursor(tx+shadowOfs[k][0], ty+shadowOfs[k][1]); s.print(tb); }
-  s.setTextColor(T().text);
-  s.setCursor(tx, ty);
-  s.print(tb);
+  s.setTextColor(fg); s.setCursor(tx,ty); s.print(tb);
   s.setTextSize(1);
-  s.setFont(&lgfx::fonts::Font0); // v68: lock screen bukan layar "bacaan lapang", jadi tetap paksa Klasik (bukan font custom pilihan user)
+  s.setFont(&lgfx::fonts::Font0); // lock screen selalu Klasik (bukan font custom pilihan user)
 
+  // gembok kecil + tanggal di atas jam
+  int lockIconY = ty-22;
+  s.drawRoundRect(SCR_W/2-7,lockIconY-1,14,11,2,fg);
+  s.drawArc(SCR_W/2,lockIconY-3,6,5,180,360,fg);
   if(ok){
     int dw=(int)s.textWidth(db);
-    int dy = SCR_H/2+8-(int)lockDragY;
-    s.setTextSize(1);
-    s.setTextColor(0x0000);
-    int dOfs[4][2]={{-1,0},{1,0},{0,-1},{0,1}};
-    for(int k=0;k<4;k++){ s.setCursor(SCR_W/2-dw/2+dOfs[k][0], dy+dOfs[k][1]); s.print(db); }
-    s.setTextColor(T().subtext);
-    s.setCursor(SCR_W/2-dw/2, dy);
-    s.print(db);
+    uiText(s,SCR_W/2-dw/2,ty+2,db,fg2,true,false);
   }
 
-  // v72 REDESIGN: tanda "^" mentah di teks diganti chevron vektor tipis di
-  // ATAS pill (bukan nempel di kiri-kanan tulisan) -- pola "swipe up" yg
-  // lebih familiar/mirip hint Lock Screen HP asli. Pill kacanya dibikin
-  // dikit lbh pekat (130, dulu 110) senada arah "kaca gelap" di CC/dock.
+  // kartu musik mini (hanya kalau ada lagu aktif)
+  if(homeMusStarted() && homeMusLoaded()){
+    int cw=SCR_W-40, cy0=SCR_H-100-lift;
+    drawMusicMini(s,20,cy0,cw,46,false);
+  }
+
+  // hint geser (pill kaca + chevron)
   const char* hint="Geser ke atas utk buka";
   int hw=(int)s.textWidth(hint);
   int hintPillY = SCR_H-38;
   drawGlassPanel(s, SCR_W/2-hw/2-14, hintPillY, hw+28, 26, 13, T().surface, 130);
   int chevY = hintPillY-9;
-  s.drawLine(SCR_W/2-6,chevY+4, SCR_W/2,chevY,   T().subtext);
-  s.drawLine(SCR_W/2,  chevY,   SCR_W/2+6,chevY+4,T().subtext);
-  s.setTextColor(T().subtext); s.setTextSize(1);
+  s.drawLine(SCR_W/2-6,chevY+4, SCR_W/2,chevY,   fg2);
+  s.drawLine(SCR_W/2,  chevY,   SCR_W/2+6,chevY+4,fg2);
+  s.setTextColor(fg2); s.setTextSize(1);
   s.setCursor(SCR_W/2-hw/2, SCR_H-24);
   s.print(hint);
 }
@@ -3881,8 +4016,13 @@ void drawControlCenter(LGFX_Sprite& s){
     int r=(int)(crad*rs+0.5f); if(r<2) r=2;
 
     float a=ccBtnAnim[i];
-    uint16_t fillC = lerpColor565(T().surface2, T().accent, a);
+    // UI-OVERHAUL: tombol kaca -- idle sedikit lebih terang dari panel, aktif = aksen + glow lembut
+    uint16_t glassIdle = blend565(T().surface2,0xFFFF,24);
+    uint16_t fillC = lerpColor565(glassIdle, T().accent, a);
+    if(a>0.05f) s.fillCircle(ccx,ccy,r+3,blend565(T().surface,T().accent,(uint8_t)(80.0f*a)));
     s.fillCircle(ccx,ccy,r,fillC);
+    s.drawCircle(ccx,ccy,r,blend565(fillC,0xFFFF,60));
+    if(r>8) s.drawArc(ccx,ccy,r-2,r-2,205,335,blend565(fillC,0xFFFF,90));
     if(li>=0.85f){ // ikon (vektor, ukuran tetap) baru muncul setelah lingkaran hampir penuh
       uint16_t icC = lerpColor565(T().text, T().bg, a);
       drawCCIcon(s, i, ccx, ccy, iconR, a>0.5f, icC, fillC);
@@ -3894,13 +4034,19 @@ void drawControlCenter(LGFX_Sprite& s){
   float sp=(openP-0.55f)/0.45f; if(sp>1.0f) sp=1.0f;
   if(sp>0.0f){
     int tw=(int)(sw*sp);
-    s.fillRoundRect(sx,sy,tw,4,2,T().divider);
+    // UI-OVERHAUL: track tebal 8px, isi aksen + highlight, knob berbayang
+    s.fillRoundRect(sx,sy-2,tw,8,4,blend565(T().surface,0xFFFF,45));
     int fillW = map(brightness,0,255,0,sw);
     if(fillW>tw) fillW=tw;
-    if(fillW>0) s.fillRoundRect(sx,sy,fillW,4,2,T().accent);
+    if(fillW>0){
+      s.fillRoundRect(sx,sy-2,max(fillW,8),8,4,T().accent);
+      if(fillW>12) s.drawFastHLine(sx+4,sy-1,fillW-8,blend565(T().accent,0xFFFF,100));
+    }
     if(sp>=1.0f){
-      int kr = ccSliderDrag ? 8 : 6; // knob membesar dikit selagi di-drag
-      s.fillCircle(sx+fillW,sy+2,kr,T().text);
+      int kr = ccSliderDrag ? 9 : 7; // knob membesar dikit selagi di-drag
+      s.fillCircle(sx+fillW,sy+3,kr+1,blend565(T().surface,0x0000,120));
+      s.fillCircle(sx+fillW,sy+2,kr,0xFFFF);
+      s.fillCircle(sx+fillW,sy+2,kr-4,T().accent);
     }
   }
   s.clearClipRect();
@@ -4496,7 +4642,8 @@ int homeFilteredCount = 0;
 // (isSwiping) -- supaya highlight-nya cuma nyala pas beneran "nekan", gak
 // ikut nempel selagi jari lagi geser scroll grid.
 int homeSearchRightX(){ return SCR_W-8; }
-int homeSearchTopY(){ return STATUS_H+2; }
+extern float homeScrollY; // UI-OVERHAUL: ikon cari ikut scroll saat tertutup (definisi di bawah)
+int homeSearchTopY(){ if(homeSearchBar.open||homeSearchBar.animating) return STATUS_H+2; return STATUS_H+2-(int)lroundf(homeScrollY); }
 bool homeSearchActive(){ return homeSearchBar.open && homeSearchInput.length()>0; }
 void homeRecomputeFilter(){
   homeFilteredCount=0;
@@ -4924,11 +5071,26 @@ int homeCardH(){ return 62; } // HOME-ICON-BULAT: ikon bulat kecil + label, tanp
 int homeDockY(){ return SCR_H-38-8; }
 // v71 REDESIGN: header (sapaan+jam+tanggal) butuh ruang lebih (dulu cuma
 // jam doang), grid ikon digeser turun dikit buat nampung.
-int homeGridTop(){ return STATUS_H+46; } // v-baru: naik dr +62 (header dipadatkan)
+// UI-OVERHAUL home: layout WIDGET (koordinat RUANG KONTEN = belum dikurangi scroll).
+// Landscape: jam (kiri) + baterai (kanan) di baris 1, kartu musik di baris 2.
+// Portrait : jam, kartu musik, baterai (bar) bertumpuk. Grid app mulai di bawahnya.
+struct HomeRect{ int x,y,w,h; };
+bool homeIsLand(){ return currentOrient==ORIENT_LANDSCAPE; }
+HomeRect homeWClock(){ HomeRect r; r.x=10; r.y=STATUS_H+28; r.h=homeIsLand()?70:80; r.w=homeIsLand()?188:SCR_W-20; return r; }
+HomeRect homeWMusic(){ HomeRect r; r.x=10; r.w=SCR_W-20; if(homeIsLand()){ r.y=STATUS_H+28+70+6; r.h=54; } else { r.y=STATUS_H+28+80+8; r.h=58; } return r; }
+HomeRect homeWBatt(){
+  HomeRect r;
+  if(homeIsLand()){ r.x=206; r.y=STATUS_H+28; r.w=SCR_W-216; r.h=70; }
+  else { r.x=10; r.y=STATUS_H+28+80+8+58+8; r.w=SCR_W-20; r.h=44; }
+  return r;
+}
+int homeWidgetsEnd(){ HomeRect b=homeWBatt(), m=homeWMusic(); return max(b.y+b.h,m.y+m.h); }
+int homeGridTop(){ return homeWidgetsEnd()+30; } // UI-OVERHAUL: grid di bawah blok widget (+ ruang utk judul "Semua App")
+int homeResultsTop(){ return STATUS_H+34; }      // hasil pencarian dirender dari atas layar
 // v105: batas ATAS area grid yg boleh digambar/di-tap. Header (sapaan+jam+
 // tanggal) berakhir di sekitar STATUS_H+50, jadi ikon yg discroll ke atas
 // dipotong di sini (bukan lagi nimpa status bar/jam/kolom cari).
-int homeGridClipTop(){ return STATUS_H+40; } // v-baru: naik dr +54 (header dipadatkan)
+int homeGridClipTop(){ return STATUS_H+1; } // UI-OVERHAUL: seluruh konten (widget+grid) scroll bareng, batas atas = tepat di bawah status bar
 // v105: posisi scroll float -> piksel bulat. lroundf (bukan (int) yg
 // memotong ke arah nol) supaya gak ada "diam 1px" pas posisi melintasi 0.
 int homeScrollPx(float sc){ return (int)lroundf(sc); }
@@ -5032,86 +5194,41 @@ void homeDrawLabel(LGFX_Sprite& s,const char* name,int cx,int y,int maxW){
 }
 
 void drawHome(LGFX_Sprite& s,float sc){
-  // v106: mode PITA -- cuma area grid (bandTop..bandBot) yg digambar; status
-  // bar, header, kolom cari, dock & keyboard DILEWATI (isinya tetap dari
-  // frame penuh terakhir di canvas, & memang gak berubah selagi scroll).
+  // UI-OVERHAUL home "Aurora Glass": widget dulu (jam, kartu musik, baterai), grid app di bawahnya.
+  // Widget + grid scroll BARENG sbg satu konten (pakai mesin scroll v105 yg sudah ada). Cuma status bar
+  // & dock yg diam -> mode PITA (v106) tetap jalan: yg digambar ulang cuma area antara status bar & dock.
   const bool band = homeBandMode;
-  const int bandTop = homeGridClipTop(), bandBot = homeDockY()-4, bandH = bandBot-bandTop;
-  if(band) s.setClipRect(0,bandTop,SCR_W,bandH); // pushSprite/fillRect ikut ke-clip -> wallpaper cuma di-blit utk pita
-  if(wallpaperReady) wallpaperImg.pushSprite(&s,0,0); // v47: wallpaper custom kalau ada (v102: parallax tilt DICABUT lagi atas permintaan user, balik ke statis biasa)
-  else if(band) s.fillRect(0,bandTop,SCR_W,bandH,T().bg);
-  else s.fillSprite(T().bg);                          // fallback: warna solid tema spt semula
+  const int clipTop = homeGridClipTop(), contentBot = homeDockY()-4, contentH = contentBot-clipTop;
+  if(band) s.setClipRect(0,clipTop,SCR_W,contentH);
+  if(wallpaperReady) wallpaperImg.pushSprite(&s,0,0);
+  else if(band) s.fillRect(0,clipTop,SCR_W,contentH,T().bg);
+  else s.fillSprite(T().bg);
   if(!band) drawStatusBar(s);
 
-  // =============================================
-  // v71 REDESIGN HOME (permintaan user: "rombak UI Home") --
-  // Header lama cuma jam doang, sekarang: sapaan (Pagi/Siang/Sore/Malam)
-  // + jam gede + baris tanggal, semua center. Kartu app grid lama pakai
-  // kotak kaca per-item (berat digambar krn drawGlassPanel nyampel &
-  // blur tiap panggilan) -- sekarang flat: cuma lingkaran ikon + label,
-  // gak ada kotak pembatas, kesannya lebih modern/lapang & lebih ringan
-  // dirender (kotak kaca CUMA dipakai di dock skrg, bukan tiap kartu).
-  // =============================================
-  if(!band){ // v106: header (sapaan+jam+tanggal) dilewati di mode pita
-  // v-baru: ROMBAK layout header (permintaan user "rombak besar-besaran").
-  // Dulu 3 baris (sapaan / jam gede / tanggal) makan ~60px tinggi. Sekarang
-  // sapaan+tanggal DIGABUNG jadi 1 baris tipis di atas jam (baris tanggal
-  // terpisah DIHAPUS) -- total tinggi header turun, sisa ruangnya dikasih
-  // ke grid app (lihat homeGridTop()/homeGridClipTop() yg ikut disesuaikan
-  // di bawah). Jam tetap gede & center, jadi fokus utama header spt semula.
-  struct tm t; bool ok=ntpSynced&&getLocalTime(&t);
-  int hy=STATUS_H+2;
-  s.setTextColor(T().subtext); s.setTextSize(1);
-  const char* greet = ok? homeGreeting(t.tm_hour) : "Halo";
-  char line1[40];
-  if(ok){
-    const char* days[]={"Min","Sen","Sel","Rab","Kam","Jum","Sab"};
-    const char* mons[]={"Jan","Feb","Mar","Apr","Mei","Jun","Jul","Agu","Sep","Okt","Nov","Des"};
-    snprintf(line1,sizeof(line1),"%s - %s, %d %s",greet,days[t.tm_wday],t.tm_mday,mons[t.tm_mon]);
-  } else strcpy(line1,greet);
-  int gw=s.textWidth(line1); s.setCursor(SCR_W/2-gw/2, hy); s.print(line1);
-
-  s.setTextColor(T().text); s.setTextSize(3);
-  char tb[6]; if(ok)sprintf(tb,"%02d:%02d",t.tm_hour,t.tm_min);else strcpy(tb,"--:--");
-  int tw=s.textWidth(tb);
-  s.setCursor(SCR_W/2-tw/2, hy+13); s.print(tb);
-
-  } // akhir if(!band) header
-  // v-baru: kolom cari app -- ikon kaca pembesar di pojok kanan-atas
-  // header, pola PERSIS reuse drawSearchBar/searchBarHit yg sudah dipakai
-  // di APOD/NeoWs/EPIC/Galeri NASA (lihat homeSearchRightX/TopY di dekat
-  // definisi apps[]). Diletakkan SETELAH header jam/tanggal digambar biar
-  // nimpa di atasnya kalau kebetulan tumpang tindih dikit di layar sempit.
   bool searching = homeSearchActive();
   homeRecomputeFilter();
-  if(!band) drawSearchBar(s, homeSearchBar, homeSearchRightX(), homeSearchTopY(), homeSearchInput, "Cari app...");
-
   int cols=homeCols(), cw=homeCardW(), ch=homeCardH();
-  int gap=10, gridTop=homeGridTop(); // v-baru: gap 8->10, kartu lbh gede sekarang butuh nafas lbh lega
-  int iconR = min(cw,ch-16)/2 - 2; if(iconR>24) iconR=24; if(iconR<14) iconR=14; // HOME-ICON-BULAT
+  int gap=10, gridTop=homeGridTop();
+  int iconR = min(cw,ch-16)/2 - 2; if(iconR>24) iconR=24; if(iconR<14) iconR=14;
+  int scPx = homeScrollPx(sc);
+  if(!band) s.setClipRect(0,clipTop,SCR_W,contentH);
+  const bool wp = wallpaperReady;
 
   if(searching){
-    // v-baru: selagi ada teks pencarian, grid HASIL FILTER dirender statis
-    // dari atas (tanpa scroll) -- query pendek biasanya cuma nyisain
-    // sedikit hasil jadi jarang perlu di-scroll; ini simplifikasi sengaja
-    // biar gak perlu mesin scroll kedua terpisah dari grid utama.
+    // hasil pencarian: grid hasil filter dirender statis dari atas (tanpa widget & tanpa scroll)
+    int rt=homeResultsTop();
     if(homeFilteredCount==0){
       const char* msg="Tidak ada app cocok";
       s.setTextColor(T().subtext); s.setTextSize(1);
       int mw=s.textWidth(msg);
-      s.setCursor(SCR_W/2-mw/2, gridTop+20); s.print(msg);
+      s.setCursor(SCR_W/2-mw/2, rt+20); s.print(msg);
     } else {
       for(int k=0;k<homeFilteredCount;k++){
         int i=homeFilteredIdx[k];
         int col=k%cols, row=k/cols;
-        int x=gap+col*(cw+gap), y=gridTop+row*(ch+gap);
-        if(y>homeDockY()-4) continue;
-        // v-baru: ROMBAK BESAR -- kartu kaca penuh per app (gantiin cincin
-        // tipis v105), di-tint pakai warna khas app-nya sendiri.
+        int x=gap+col*(cw+gap), y=rt+row*(ch+gap);
+        if(y>contentBot) continue;
         float pa = homePressAmt(i);
-        uint16_t tileTint = blend565(T().surface2, apps[i].color, 46);
-        uint8_t tileAlpha = (uint8_t)constrain(150+(int)(pa*55),0,255);
-        (void)tileTint; (void)tileAlpha; // HOME-ICON-BULAT: tanpa kartu kaca
         int cx=x+cw/2, cy=y+(ch-16)/2;
         int rEff = iconR - (int)lroundf(pa*iconR*0.12f);
         drawAppIcon(s, apps[i].sym, cx, cy, rEff, apps[i].color);
@@ -5121,33 +5238,25 @@ void drawHome(LGFX_Sprite& s,float sc){
       }
     }
   } else {
-    // v105: grid di-clip di bawah header -- ikon yg discroll ke atas
-    // terpotong rapi di homeGridClipTop() (dulu nimpa status bar/jam/kolom
-    // cari & baru "pop" hilang pas SELURUH kartu sudah lewat).
-    int scPx = homeScrollPx(sc);
-    int clipTop = homeGridClipTop();
-    // v106: grid SEKARANG jg dipotong di ATAS dock (bandBot = dockY-4), bukan
-    // lagi nyelip di bawah kaca dock. Efeknya dock jadi 100% statis selagi
-    // scroll (gak perlu digambar ulang / di-push tiap frame) -- kaca dock
-    // sekarang "mengaburkan" wallpaper doang, bukan ikon yg lewat di bawahnya.
-    s.setClipRect(0, clipTop, SCR_W, (homeDockY()-4)-clipTop);
+    // ---- baris judul (ikut scroll) ----
+    s.setTextSize(1);
+    uiText(s,14,STATUS_H+8-scPx,"Accretion",wp?(uint16_t)0xFFFF:T().text,wp,true);
+
+    // ---- widget ----
+    HomeRect rc=homeWClock(); drawClockCard(s,rc.x,rc.y-scPx,rc.w,rc.h);
+    HomeRect rb=homeWBatt();  drawBattWidget(s,rb.x,rb.y-scPx,rb.w,rb.h);
+    HomeRect rm=homeWMusic(); drawMusicMini(s,rm.x,rm.y-scPx,rm.w,rm.h,true);
+
+    // ---- judul grid ----
+    s.setTextSize(1);
+    uiText(s,14,gridTop-20-scPx,"Semua App",wp?(uint16_t)0xDEFB:T().subtext,wp,false);
+
+    // ---- grid app ----
     for(int i=0;i<APP_COUNT;i++){
       int col=i%cols, row=i/cols;
       int x=gap+col*(cw+gap), y=gridTop+row*(ch+gap)-scPx;
-      if(y+ch<clipTop||y>homeDockY()-4)continue;
-      // v-baru: ROMBAK BESAR (gantiin cincin tipis v71/v105) -- tiap app
-      // sekarang kartu kaca PENUH, di-tint warna khasnya sendiri
-      // (apps[i].color) -- grid jadi berwarna-warni & jauh lbh "berisi"
-      // drpd ikon polos ngambang. Kartu ini di-render CUMA buat tile yg
-      // lolos clip (baris di atas: if(y+ch<clipTop||y>homeDockY()-4)
-      // continue) jadi yg digambar tiap frame cuma ~4-6 tile yg kelihatan,
-      // bukan smua 31 app -- biayanya senada Dock/Control Center yg udah
-      // lama jalan mulus, TAPI msh lbh berat drpd cincin polos dulu.
-      // Kalau kerasa nge-lag pas scroll cepat di hardware asli, kabari.
+      if(y+ch<clipTop||y>contentBot)continue;
       float pa = homePressAmt(i);
-      uint16_t tileTint = blend565(T().surface2, apps[i].color, 46);
-      uint8_t tileAlpha = (uint8_t)constrain(150+(int)(pa*55),0,255);
-      (void)tileTint; (void)tileAlpha; // HOME-ICON-BULAT: tanpa kartu kaca
       int cx=x+cw/2, cy=y+(ch-16)/2;
       int rEff = iconR - (int)lroundf(pa*iconR*0.12f);
       drawAppIcon(s, apps[i].sym, cx, cy, rEff, apps[i].color);
@@ -5155,56 +5264,47 @@ void drawHome(LGFX_Sprite& s,float sc){
       s.setTextColor(T().text);s.setTextSize(1);
       homeDrawLabel(s, apps[i].name, x+cw/2, y+ch-14, cw+6);
     }
-    if(band) s.setClipRect(0,bandTop,SCR_W,bandH); else s.clearClipRect(); // v105/v106: akhir clip grid (mode pita: balik ke clip pita, rel scroll masih di dalamnya)
 
-    // v71: indikator scroll -- rel tipis + "thumb" di tepi kanan area grid,
-    // nunjukin posisi scroll skrg (grid lama gak ada petunjuk visual apapun
-    // kalau kontennya bisa digeser).
+    // ---- indikator scroll ----
     int maxSc = homeMaxScroll();
     if(maxSc>0){
-      int railX=SCR_W-5, railTop=gridTop, railH=homeDockY()-6-gridTop;
+      int railX=SCR_W-5, railTop=clipTop+6, railH=contentBot-2-railTop;
       if(railH>20){
-        s.fillRoundRect(railX,railTop,3,railH,1,T().divider);
+        s.fillRoundRect(railX,railTop,3,railH,1,blend565(T().surface,0xFFFF,50));
         int thumbH=max(16,(int)(railH*railH/(float)(railH+maxSc)));
-        float fr = sc/(float)maxSc; if(fr<0.0f) fr=0.0f; if(fr>1.0f) fr=1.0f; // v105: thumb jangan keluar rel pas overscroll
+        float fr = sc/(float)maxSc; if(fr<0.0f) fr=0.0f; if(fr>1.0f) fr=1.0f;
         int thumbY=railTop+(int)((railH-thumbH)*fr);
         s.fillRoundRect(railX,thumbY,3,thumbH,1,T().accent);
       }
     }
   }
 
-  // v72 REDESIGN dock (permintaan user: kecilkan + percantik, gaya iOS) --
-  // tinggi diciutin (drawn di homeDockY(), lihat catatan di sana), sudut
-  // dibikin lebih bulat (18, dulu 16) biar kesan "squircle" ala iOS bukan
-  // kotak dibulatin biasa, & tiap ikon dikasih cincin tipis di belakangnya
-  // (pola PERSIS sama kayak cincin di grid Home) biar kelihatan "bertakik"
-  // rapi di dalam dock -- bukan cuma ikon nempel polos di atas kaca.
-  if(!band){ // v106: dock statis -- dilewati di mode pita
-  int dockY=homeDockY(), dockH=38;
-  drawGlassPanel(s, 6,dockY,SCR_W-12,dockH,18, T().surface2, 170);
-  s.drawFastHLine(10,dockY+1,SCR_W-20,blend565(T().surface2,T().accent,60)); // garis highlight tipis di atas dock, kesan "melayang"
-  int dockIdx[4]={0,4,6,7};
-  int dw=(SCR_W-12)/4;
-  int dockIconR=13; // v72: dikecilkan dr 16 -> 13, senada dock yg lebih ramping
-  for(int i=0;i<4;i++){
-    int di=dockIdx[i];
-    int cx=6+i*dw+dw/2, cy=dockY+dockH/2;
-    s.drawCircle(cx,cy,dockIconR+3,T().divider); // v72: cincin tipis, senada gaya ikon grid Home
-    drawAppIcon(s, apps[di].sym, cx, cy, dockIconR, apps[di].color);
+  // kolom cari (ikon ikut scroll saat tertutup; saat terbuka menempel di atas)
+  drawSearchBar(s, homeSearchBar, homeSearchRightX(), homeSearchTopY(), homeSearchInput, "Cari app...");
+
+  if(band) s.setClipRect(0,clipTop,SCR_W,contentH); else s.clearClipRect();
+
+  // dock kaca (statis, dilewati di mode pita)
+  if(!band){
+    int dockY=homeDockY(), dockH=38;
+    drawGlassPanel(s, 6,dockY,SCR_W-12,dockH,18, T().surface2, 150);
+    int dockIdx[4]={0,4,6,7};
+    int dw=(SCR_W-12)/4;
+    int dockIconR=14;
+    for(int i=0;i<4;i++){
+      int di=dockIdx[i];
+      int cx=6+i*dw+dw/2, cy=dockY+dockH/2;
+      drawAppIcon(s, apps[di].sym, cx, cy, dockIconR, apps[di].color);
+    }
   }
-  } // akhir if(!band) dock
-  // v-baru: keyboard qwerty ngambang di atas SEMUANYA selagi user lagi
-  // ngetik query pencarian -- pola persis sama dgn app lain (APOD dkk):
-  // kbVisible+kbTarget nunjuk ke homeSearchInput, drawKb() digambar
-  // paling akhir biar nutup dock/grid di baliknya.
   if(!band && kbVisible && kbTarget==&homeSearchInput) drawKb(s);
   drawToast(s);
-  // v106: mode pita -- clip pita SENGAJA dibiarkan aktif sampai renderHomeBandFrame() selesai
-  // (overlay lain yg digambar sesudah drawHome ikut ke-clip), lalu dibersihkan di sana.
+  // mode pita: clip pita SENGAJA dibiarkan aktif sampai renderHomeBandFrame() selesai
 }
 
 Screen homeCheck(int x,int y,float sc){
-  int dockY=homeDockY(), dockH=38; // v72: disamakan dgn tinggi dock baru di drawHome()
+  // UI-OVERHAUL: + hit-test widget (jam -> app Jam, baterai -> app Baterai, kartu musik -> kontrol/app Musik)
+  int dockY=homeDockY(), dockH=38;
   if(y>=dockY&&y<=dockY+dockH){
     int dockIdx[4]={0,4,6,7};
     int dw=(SCR_W-12)/4;
@@ -5213,10 +5313,27 @@ Screen homeCheck(int x,int y,float sc){
       if(abs(x-cx)<dw/2) return apps[dockIdx[i]].screen;
     }
   }
-  int cols=homeCols(), cw=homeCardW(), ch=homeCardH();
-  int gap=10, gridTop=homeGridTop(); // v-baru: samain persis sama drawHome() -- gap 8->10
-  if(y<homeGridClipTop()) return SCR_HOME; // v105: area header/status bar -- bukan bagian grid yg kelihatan
+  if(y<homeGridClipTop() || y>=dockY-4) return SCR_HOME;
   int scPx=homeScrollPx(sc);
+  if(!homeSearchActive()){
+    int yc=y+scPx; // koordinat ruang konten
+    HomeRect rm=homeWMusic();
+    if(x>=rm.x&&x<=rm.x+rm.w&&yc>=rm.y&&yc<=rm.y+rm.h){
+      if(homeMusStarted()){
+        int pc,nc; homeMusBtnPos(rm.x,rm.w,pc,nc);
+        int cy=rm.y+rm.h/2;
+        if(abs(x-pc)<=18&&abs(yc-cy)<=18){ homeMusToggle(); needRedraw=true; return SCR_HOME; }
+        if(abs(x-nc)<=16&&abs(yc-cy)<=18){ homeMusNext();   needRedraw=true; return SCR_HOME; }
+      }
+      return SCR_MUSIC;
+    }
+    HomeRect rc=homeWClock();
+    if(x>=rc.x&&x<=rc.x+rc.w&&yc>=rc.y&&yc<=rc.y+rc.h) return SCR_CLOCK;
+    HomeRect rb=homeWBatt();
+    if(x>=rb.x&&x<=rb.x+rb.w&&yc>=rb.y&&yc<=rb.y+rb.h) return SCR_BATTERY;
+  }
+  int cols=homeCols(), cw=homeCardW(), ch=homeCardH();
+  int gap=10, gridTop=homeGridTop();
   for(int i=0;i<APP_COUNT;i++){
     int col=i%cols,row=i/cols;
     int ax=gap+col*(cw+gap), ay=gridTop+row*(ch+gap)-scPx;
@@ -5307,7 +5424,7 @@ int homeIndexAt(int x,int y,float sc){
   if(homeSearchActive()){
     for(int k=0;k<homeFilteredCount;k++){
       int col=k%cols, row=k/cols;
-      int ax=gap+col*(cw+gap), ay=gridTop+row*(ch+gap);
+      int ax=gap+col*(cw+gap), ay=homeResultsTop()+row*(ch+gap); // UI-OVERHAUL: hasil dari atas layar
       if(x>=ax&&x<=ax+cw&&y>=ay&&y<=ay+ch) return homeFilteredIdx[k];
     }
     return -1;
@@ -16434,7 +16551,7 @@ void loop(){
     // pola sama persis dgn drawSearchBar dipakai di APOD/NeoWs/dll.
     if(newT){
       int sHit = searchBarHit(homeSearchBar, homeSearchRightX(), homeSearchTopY(), tx, ty);
-      if(sHit==1){ homeSearchInput=""; searchBarOpen(homeSearchBar); wasTouched=touched; delay(1); return; }
+      if(sHit==1){ homeScrollY=0; homeScrollVel=0; homeScrollSpringing=false; homeSearchInput=""; searchBarOpen(homeSearchBar); wasTouched=touched; delay(1); return; }
       if(sHit==2){ kbTarget=&homeSearchInput; kbVisible=true; kbMode=KB_LOWER; needRedraw=true; wasTouched=touched; delay(1); return; }
       if(sHit==3 || sHit==4){ searchBarCollapse(homeSearchBar); homeSearchInput=""; wasTouched=touched; delay(1); return; }
     }
@@ -16555,7 +16672,7 @@ void loop(){
       // (lihat renderHomeBandFrame). Selain itu (jam berubah, baterai, DI
       // bergerak, toast, kolom cari/keyboard, dll) tetap frame PENUH spt biasa.
       bool plainNow = !locked && !appSwitcherOpen && !controlCenterOpen && !notifShadeOpen && !homeAodActive && !diMenuOpen
-                      && !kbVisible && !searching && !toastVisibleNow()
+                      && !kbVisible && !searching && !toastVisibleNow() && !homeSearchBar.open && !homeSearchBar.animating
                       && ((int)(diCurY+diCurH) < homeGridClipTop());
       if(bandCand && !redrawBefore && !sbChanged && homeBandReady && plainNow){
         renderHomeBandFrame();

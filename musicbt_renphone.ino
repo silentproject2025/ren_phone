@@ -630,6 +630,22 @@ bool btCcEnabled() {
   return musBtOn;
 }
 bool btCcConnected() { return musStarted && musBtOn && musBtConn; }
+
+// ---- API untuk widget musik di Home & Lock Screen (dipanggil dari loop utama) ----
+bool homeMusStarted() { return musStarted; }
+bool homeMusLoaded()  { return musStarted && musLoaded; }
+bool homeMusPlaying() { return musStarted && musLoaded && !musPaused; }
+float homeMusProgress() {
+  if (!musStarted || !musLoaded || musDurMs == 0) return 0.0f;
+  float p = (float)musPlayedMs / (float)musDurMs;
+  return p < 0.0f ? 0.0f : (p > 1.0f ? 1.0f : p);
+}
+void homeMusTitle(char* out, int cap) {
+  if (!musStarted) { strncpy(out, "Musik", cap - 1); out[cap - 1] = 0; return; }
+  musGetTitle(out, cap, musCur);
+}
+void homeMusToggle() { if (musStarted) musPost('u', 0, nullptr); }
+void homeMusNext()   { if (musStarted) musPost('n', 0, nullptr); }
 void btCcToggle() {
   bool wasStarted = musStarted;
   btCcEnabled();                 // pastikan nilai tersimpan sudah ter-load
@@ -646,6 +662,12 @@ void musicLoopPoll() {
   if (!musStarted) return;
   uint32_t now = millis();
   bool onScr = (curScreen() == SCR_MUSIC);
+  {   // progres kartu musik di Home/Lock tetap jalan: redraw 1x/detik selagi lagu main
+    static uint32_t lastWidgetMs = 0;
+    if ((curScreen() == SCR_HOME || locked) && musLoaded && !musPaused && now - lastWidgetMs >= 1000) {
+      lastWidgetMs = now; needRedraw = true;
+    }
+  }
 
   if (musMsgPending) {
     musMsgPending = false;
