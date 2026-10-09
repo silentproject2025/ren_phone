@@ -1,3 +1,4 @@
+struct HomeRect{ int x,y,w,h; }; // harus paling atas: prototype otomatis Arduino
 // =================================================================
 // ren_phone v9 — FIX bug lock screen tidak bisa diusap ke atas
 // (kalibrasi touch & rotasi layar sekarang SELALU sinkron)
@@ -2677,7 +2678,6 @@ void notepadRequestConfirm(int act); // act: 1=Back, 2=Home -> tampilkan dialog 
 // Home  = geser TURUN (kesan "menutup/pulang", searah swipe unlock)
 // =============================================
 void renderCurrentFrame(); // forward decl - dipakai utk render frame BARU sblm animasi
-struct HomeRect{ int x,y,w,h; }; // harus di atas: prototype otomatis Arduino
 // UI-OVERHAUL: API musik utk widget Home/Lock (definisi di musicbt_renphone.ino)
 bool homeMusStarted(); bool homeMusLoaded(); bool homeMusPlaying(); float homeMusProgress();
 void homeMusTitle(char* out,int cap); void homeMusToggle(); void homeMusNext();
