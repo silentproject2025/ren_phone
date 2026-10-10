@@ -3669,6 +3669,8 @@ void aodWake(){
 // biasa tetap update berkala walau gak disentuh.
 void lockIdleTick(bool touched){
   if(touched){ aodWake(); return; }
+  // v110: swipe batal -> jam & kartu musik "meluncur" balik pelan (peluruhan eksponensial), bukan loncat langsung ke 0
+  if(!lockDragging && lockDragY>0.5f){ lockDragY*=0.70f; if(lockDragY<0.5f) lockDragY=0; needRedraw=true; }
   if(!aodActive && millis()-lastLockActivityMs>AOD_IDLE_MS){
     aodActive=true;
     display.setBrightness(AOD_BRIGHTNESS);
@@ -3800,12 +3802,13 @@ void drawLockScreen(LGFX_Sprite& s){
   // kartu musik mini (hanya kalau ada lagu aktif)
   if(homeMusStarted() && homeMusLoaded()){
     int cw=SCR_W-40, cy0=SCR_H-100-lift;
-    drawMusicMini(s,20,cy0,cw,46,false);
+    drawMusicMini(s,20,cy0,cw,46,true); // v110: ctrl=true -> tombol play/pause & next tampil (hit-test di lockScreenInput)
   }
 
   // hint geser (pill kaca + chevron)
   const char* hint="Geser ke atas utk buka";
   int hw=(int)s.textWidth(hint);
+  if(lift<12){ // v110: hint disembunyikan begitu jari mulai menarik ke atas
   int hintPillY = SCR_H-38;
   drawGlassPanel(s, SCR_W/2-hw/2-14, hintPillY, hw+28, 26, 13, T().surface, 130);
   int chevY = hintPillY-9;
@@ -3814,11 +3817,20 @@ void drawLockScreen(LGFX_Sprite& s){
   s.setTextColor(fg2); s.setTextSize(1);
   s.setCursor(SCR_W/2-hw/2, SCR_H-24);
   s.print(hint);
+  }
 }
 
 void lockScreenInput(bool touched,bool newT,int tx,int ty){
   static int startY=0;
   if(newT && aodActive){ aodWake(); return; } // v96: sentuhan pertama pas AOD cuma "bangunin", belum mulai gestur unlock
+  if(newT && homeMusStarted() && homeMusLoaded()){ // v110: ketuk tombol di kartu musik = kontrol, BUKAN mulai swipe unlock
+    int mcy0=SCR_H-100-(int)lockDragY, mpc, mnc;
+    homeMusBtnPos(20,SCR_W-40,mpc,mnc);
+    if(ty>=mcy0 && ty<=mcy0+46){
+      if(abs(tx-mpc)<=18){ homeMusToggle(); needRedraw=true; return; }
+      if(abs(tx-mnc)<=16){ homeMusNext();   needRedraw=true; return; }
+    }
+  }
   if(newT){ startY=ty; lockDragging=true; lockDragY=0; needRedraw=true; }
   else if(touched && lockDragging){
     int dy = startY-ty;
@@ -3829,8 +3841,9 @@ void lockScreenInput(bool touched,bool newT,int tx,int ty){
     if(lockDragY>50){
       locked=false; navGoHome();
       diNotify('D', "Terbuka", T().accent, 1100, false); // v95: event DI baru -- pil singkat pas layar dibuka
+      lockDragY=0;
     }
-    lockDragY=0; needRedraw=true;
+    needRedraw=true; // v110: kalau batal, lockDragY dibiarkan dan diluruhkan halus oleh lockIdleTick()
   }
 }
 
