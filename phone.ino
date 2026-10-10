@@ -6415,21 +6415,76 @@ void brkTouch(int x,int y,bool held,bool isNew){
 // =============================================
 void clockEnter(){} void clockExit(){}
 void drawClock(LGFX_Sprite& s){
+  // v110: Jam dirombak -- muka jam analog (kaca + tick + 3 jarum) + jam digital besar bergaya sama dgn lock screen.
+  // Landscape: analog di kiri, digital+tanggal di kanan. Portrait: analog di atas, digital di bawahnya.
   iosBackdrop(s); drawStatusBar(s);
   iosTitle(s,8,28,"Jam");
-  struct tm t;bool ok=ntpSynced&&getLocalTime(&t);
-  if(ok){
-    char tb[9];sprintf(tb,"%02d:%02d:%02d",t.tm_hour,t.tm_min,t.tm_sec);
-    s.setTextColor(T().text);s.setTextSize(3);s.setCursor(20,55);s.print(tb);
-    const char* days[]={"Min","Sen","Sel","Rab","Kam","Jum","Sab"};
-    const char* mons[]={"Jan","Feb","Mar","Apr","Mei","Jun","Jul","Agu","Sep","Okt","Nov","Des"};
-    char db[28];sprintf(db,"%s, %02d %s %04d",days[t.tm_wday],t.tm_mday,mons[t.tm_mon],t.tm_year+1900);
-    s.setTextColor(T().subtext);s.setTextSize(1);s.setCursor(20,100);s.print(db);
-    s.drawFastHLine(20,114,SCR_W-40,T().accent);
-    s.setTextColor(T().good);s.setCursor(20,120);s.print("NTP Sync OK");
-  } else {
-    s.setTextColor(T().danger);s.setTextSize(2);s.setCursor(20,80);s.print("Tidak sync");
+  struct tm t; bool ok=ntpSynced&&getLocalTime(&t);
+  const bool land=(SCR_W>=SCR_H);
+  const int top=STATUS_H+22, bot=backY()-6;
+  int avail=bot-top; if(avail<60) avail=60;
+  int R=avail/2-2; int rmax=land?72:84; if(R>rmax) R=rmax;
+  int cx,cy,x0,y0;
+  if(land){ cx=12+R+6; cy=top+avail/2; x0=cx+R+18; y0=cy-40; }
+  else    { cx=SCR_W/2; cy=top+R+4;   x0=12;       y0=cy+R+10; }
+
+  // muka jam
+  s.fillCircle(cx,cy,R,T().surface);
+  s.drawCircle(cx,cy,R,T().divider);
+  s.drawCircle(cx,cy,R-1,T().divider);
+  for(int i=0;i<12;i++){
+    float a=i*30.0f*DEG_TO_RAD, sa=sinf(a), ca=cosf(a);
+    int r1=(i%3==0)?R-10:R-6, r2=R-3;
+    uint16_t tc=(i%3==0)?T().text:T().subtext;
+    s.drawLine(cx+(int)(sa*r1),cy-(int)(ca*r1),cx+(int)(sa*r2),cy-(int)(ca*r2),tc);
+    if(i%3==0) s.drawLine(cx+(int)(sa*r1)+1,cy-(int)(ca*r1),cx+(int)(sa*r2)+1,cy-(int)(ca*r2),tc); // tick 12/3/6/9 lebih tebal
   }
+
+  if(ok){
+    float hA=((t.tm_hour%12)+t.tm_min/60.0f)*30.0f*DEG_TO_RAD;
+    float mA=(t.tm_min+t.tm_sec/60.0f)*6.0f*DEG_TO_RAD;
+    float sA=t.tm_sec*6.0f*DEG_TO_RAD;
+    auto hand=[&](float a,int len,int thick,uint16_t col){
+      int ex=cx+(int)(sinf(a)*len), ey=cy-(int)(cosf(a)*len);
+      for(int o=0;o<thick;o++){ s.drawLine(cx+o,cy,ex+o,ey,col); if(thick>1) s.drawLine(cx,cy+o,ex,ey+o,col); }
+    };
+    hand(hA,R*50/100,3,T().text);     // jarum jam
+    hand(mA,R*75/100,2,T().text);     // jarum menit
+    hand(sA,R*86/100,1,T().accent);   // jarum detik
+    s.fillCircle(cx,cy,3,T().accent); s.fillCircle(cx,cy,1,T().bg);
+
+    // jam digital besar (font sama dgn lock screen) -- ukuran dikecilkan otomatis sampai muat
+    const int wAvail = land ? (SCR_W-x0-8) : (SCR_W-24);
+    char hm[6]; sprintf(hm,"%02d:%02d",t.tm_hour,t.tm_min);
+    s.setFont(&lgfx::fonts::FreeSansBold9pt7b);
+    int sz=3; s.setTextSize(sz);
+    while(sz>1 && s.textWidth(hm)>wAvail){ sz--; s.setTextSize(sz); }
+    int tw=s.textWidth(hm), fh=s.fontHeight();
+    int tx = land ? x0 : (SCR_W/2-tw/2);
+    s.setTextColor(T().text); s.setCursor(tx,y0); s.print(hm);
+    s.setFont(&lgfx::fonts::Font0);
+    // detik kecil di kanan jam
+    char ss[4]; sprintf(ss,":%02d",t.tm_sec);
+    s.setTextSize(2); s.setTextColor(T().accent);
+    int sx=tx+tw+4;
+    if(sx+s.textWidth(ss)<=SCR_W-4){ s.setCursor(sx,y0+fh-22); s.print(ss); }
+    // tanggal lengkap
+    const char* days[]={"Minggu","Senin","Selasa","Rabu","Kamis","Jumat","Sabtu"};
+    const char* mons[]={"Jan","Feb","Mar","Apr","Mei","Jun","Jul","Agu","Sep","Okt","Nov","Des"};
+    char db[32]; snprintf(db,sizeof(db),"%s, %d %s %04d",days[t.tm_wday],t.tm_mday,mons[t.tm_mon],t.tm_year+1900);
+    int ds=2; s.setTextSize(ds);
+    if(s.textWidth(db)>wAvail){ ds=1; s.setTextSize(ds); }
+    int dw=s.textWidth(db);
+    s.setTextColor(T().subtext);
+    s.setCursor(land?x0:(SCR_W/2-dw/2), y0+fh+6); s.print(db);
+    s.setTextSize(1); s.setTextColor(T().good);
+    s.setCursor(land?x0:(SCR_W/2-s.textWidth("NTP sinkron")/2), y0+fh+6+(ds==2?20:12)); s.print("NTP sinkron");
+  } else {
+    s.setTextColor(T().danger); s.setTextSize(2);
+    s.setCursor(land?(cx+R+18):(SCR_W/2-60), land?cy-8:(cy+R+14)); s.print("Tidak sync");
+    s.setTextSize(1);
+  }
+  s.setFont(&lgfx::fonts::Font0); s.setTextSize(1);
   drawBack(s);drawToast(s);
 }
 void clockTouch(int x,int y,bool held,bool isNew){
@@ -6772,6 +6827,8 @@ String calcFormatFloat(float res){
   return String(res, 4);
 }
 
+// v110: umpan balik tekan -- tombol yg barusan diketuk menyala lebih terang ~140 ms (drawCalc menjadwalkan redraw sendiri)
+int calcPressR=-1, calcPressC=-1; unsigned long calcPressMs=0;
 void calcBtnRect(int r,int c,int& x,int& y,int& w,int& h){
   int top = STATUS_H + 34;
   int bottom = backY() - 6;
@@ -6803,6 +6860,12 @@ void drawCalc(LGFX_Sprite& s){
   s.setTextColor(T().text);s.setTextSize(2);
   int tw2=calcInput.length()*12;
   s.setCursor(max(8,SCR_W-12-tw2),STATUS_H+11);s.print(calcInput);
+  if(calcOp){ // v110: pratinjau operasi tertunda di kiri layar angka, mis. "12 +"
+    String pv=calcFormatFloat(calcA); pv+=' '; pv+=calcOp;
+    if(pv.length()>14) pv=pv.substring(0,14);
+    s.setTextSize(1); s.setTextColor(T().subtext); s.setCursor(10,STATUS_H+15); s.print(pv);
+    s.setTextColor(T().text); s.setTextSize(2);
+  }
   for(int r=0;r<6;r++){
     for(int c=0;c<4;c++){
       int x,y,w,h; calcBtnRect(r,c,x,y,w,h);
@@ -6811,8 +6874,10 @@ void drawCalc(LGFX_Sprite& s){
       bool isSci = (r==0);
       bool isOp  = !isSci && (!strcmp(l,"/")||!strcmp(l,"x")||!strcmp(l,"-")||!strcmp(l,"+"));
       bool isEq  = (r==5&&c==2);
-      uint16_t bg = (isEq||isOp)?(uint16_t)IOS_ORANGE:(isSci?T().surface2:T().surface);
-      uint16_t fg = (isOp||isEq)?(uint16_t)0xFFFF:T().text;
+      // v110: operator & "=" ikut warna aksen TEMA (bukan oranye tetap) -> di tema Full Dark jadi biru, tdk ada kuning
+      uint16_t bg = (isEq||isOp)?T().accent:(isSci?T().surface2:T().surface);
+      uint16_t fg = (isOp||isEq)?appIconInk(T().accent):T().text;
+      if(r==calcPressR && c==calcPressC && millis()-calcPressMs<140) bg=blend565(bg,0xFFFF,70);
       s.fillRoundRect(x,y,w,h,h/2,bg); // iOS: tombol pil/bulat penuh
       s.setTextColor(fg);s.setTextSize(isSci?1:2);
       int cwPx = isSci?6:12;
@@ -6821,6 +6886,7 @@ void drawCalc(LGFX_Sprite& s){
       s.print(l);
     }
   }
+  if(calcPressR>=0){ if(millis()-calcPressMs<140) needRedraw=true; else calcPressR=-1; } // jadwalkan redraw sampai highlight padam
   drawBack(s);
   drawToast(s);
 }
@@ -6896,6 +6962,7 @@ void calcTouch(int x,int y,bool held,bool isNew){
       int bx,by,bw,bh; calcBtnRect(r,c,bx,by,bw,bh);
       if(bw==0) continue;
       if(x>=bx&&x<=bx+bw&&y>=by&&y<=by+bh){
+        calcPressR=r; calcPressC=c; calcPressMs=millis();
         calcApplyLabel(calcLabelAt(r,c));
         needRedraw=true;
         return;
