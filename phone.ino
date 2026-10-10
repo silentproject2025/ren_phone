@@ -3866,6 +3866,7 @@ unsigned long ccAnimStartMs=0;
 const float CC_ANIM_MS = 200.0f;
 #define CC_ITEMS 11 // +Bluetooth (index 9), +Tangkap layar (index 10)
 int ccCols(){ return currentOrient==ORIENT_LANDSCAPE ? 6 : 3; } // landscape 6x2, portrait 3x4 -> 11 tombol muat
+void ccActScreenshot(); // definisi di features_renphone.ino
 #define CC_COLS ccCols()
 #define CC_ROWS ((CC_ITEMS+CC_COLS-1)/CC_COLS)
 // Bluetooth (modul ESP32-CAM) -- definisi di musicbt_renphone.ino
