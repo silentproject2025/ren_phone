@@ -1221,13 +1221,22 @@ static void musDrawPlayer(LGFX_Sprite& s) {
   s.setTextColor(T().subtext);
   s.setCursor(mBarX, mTimeY); s.print(t1);
   s.setCursor(mBarX + mBarW - s.textWidth(t2), mTimeY); s.print(t2);
-  s.fillRoundRect(mBarX, mBarY, mBarW, 6, 3, blend565(T().bg, T().text, 40));
   float pr = (musDurMs > 0) ? (float)musPlayedMs / (float)musDurMs : 0.f;
   if (pr > 1.f) pr = 1.f;
   int fw = (int)(pr * mBarW);
-  if (musLoaded && fw > 0) {
-    s.fillRoundRect(mBarX, mBarY, fw, 6, 3, T().accent);
-    s.fillCircle(mBarX + fw, mBarY + 3, 6, T().text);
+  if (!musLoaded) fw = 0;
+  // v109: BAR BERGELOMBANG -- bagian yg sudah diputar = gelombang sinus (bergerak saat play, lurus saat pause),
+  // sisa lagu = garis lurus tipis. Layar pemutar di-redraw ~10 fps jadi geraknya cukup halus.
+  s.fillRoundRect(mBarX + fw, mBarY + 2, mBarW - fw, 3, 1, blend565(T().bg, T().text, 40));
+  if (fw > 0) {
+    const float amp = playing ? 2.6f : 0.f;
+    const float ph = (float)(millis() % 1400) * (6.2832f / 1400.f);
+    int ky = mBarY + 3;
+    for (int x = 0; x <= fw; x++) {
+      ky = mBarY + 3 + (int)lroundf(amp * sinf(x * 0.30f - ph));
+      s.fillRect(mBarX + x, ky - 1, 1, 3, T().accent);
+    }
+    s.fillCircle(mBarX + fw, ky, 6, T().text);
   }
 
   // kontrol

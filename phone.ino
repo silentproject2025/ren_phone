@@ -2758,12 +2758,20 @@ float easeOutBackSoft(float p){
 #ifndef NAV_TRANS_MS
 #define NAV_TRANS_MS 260UL
 #endif
+// v109: bayangan tepi tipis (2 garis gelap) di sisi kiri layar yg ada di ATAS -- murah, tanpa alpha blend.
+// Selalu tertimpa frame berikutnya karena layar bawah digambar penuh dulu tiap frame.
+void navEdgeShadowV(int x){
+  if(x<=2 || x>=SCR_W) return;
+  display.drawFastVLine(x-1,0,SCR_H,0x2104);
+  display.drawFastVLine(x-2,0,SCR_H,0x0841);
+}
 void playNavTransition(NavAnim anim){
   canvas.pushSprite(&transShot,0,0); // simpan frame LAMA (canvas msh berisi layar sblm pindah)
   renderCurrentFrame();              // gambar frame BARU ke canvas (state navigasi sudah berubah)
 
   // Redupkan layar LAMA sekali (bukan tiap frame) -- kesan kedalaman.
-  transShot.fillRectAlpha(0,0,SCR_W,SCR_H,90,TFT_BLACK);
+  // v109: pada BACK yg di-dim bukan transShot (itu layar yg menutup, ada di ATAS), jadi dilewati.
+  if(anim!=NAV_ANIM_BACK) transShot.fillRectAlpha(0,0,SCR_W,SCR_H,90,TFT_BLACK);
 
   const int span = (anim==NAV_ANIM_HOME) ? SCR_H : SCR_W;
   const unsigned long t0 = millis();
@@ -2778,12 +2786,14 @@ void playNavTransition(NavAnim anim){
     if(offset>span) offset=span;
     if(offset!=lastOff){ // gak ada perubahan posisi = gak perlu kirim ulang ke SPI
       lastOff=offset;
-      if(anim==NAV_ANIM_PUSH){          // layar baru masuk dari KANAN
-        transShot.pushSprite(-offset,0);
+      if(anim==NAV_ANIM_PUSH){          // layar baru masuk dari KANAN; layar lama geser pelan (parallax 1/3)
+        transShot.pushSprite(-(offset/3),0);
         canvas.pushSprite(SCR_W-offset,0);
-      } else if(anim==NAV_ANIM_BACK){   // layar sblmnya masuk dari KIRI
+        navEdgeShadowV(SCR_W-offset);
+      } else if(anim==NAV_ANIM_BACK){   // layar yg ditutup geser ke KANAN di atas layar sebelumnya (yg geser pelan)
+        canvas.pushSprite(-((SCR_W-offset)/3),0);
         transShot.pushSprite(offset,0);
-        canvas.pushSprite(-SCR_W+offset,0);
+        navEdgeShadowV(offset);
       } else {                          // NAV_ANIM_HOME: geser TURUN
         transShot.pushSprite(0,offset);
         canvas.pushSprite(0,-SCR_H+offset);
