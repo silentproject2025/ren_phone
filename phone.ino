@@ -2765,6 +2765,16 @@ void navEdgeShadowV(int x){
   display.drawFastVLine(x-1,0,SCR_H,0x2104);
   display.drawFastVLine(x-2,0,SCR_H,0x0841);
 }
+// v110 FIX KEDIP: v109 menggambar layar bawah PENUH lalu layar atas menimpanya -> piksel yg tumpang tindih ditulis 2x per frame
+// dan LCD sempat menampilkan frame setengah jadi (kedip). Sekarang layar bawah dipotong (clip) HANYA di bagian yg masih kelihatan
+// (sampai 'edge' dikurangi 2 px utk bayangan), jadi tiap piksel ditulis SEKALI per frame, persis seperti v107.
+void navDrawLower(LGFX_Sprite& spr,int sx,int edge){
+  int lw = (edge>2 && edge<SCR_W) ? edge-2 : (edge>=SCR_W ? SCR_W : edge);
+  if(lw<=0) return;
+  display.setClipRect(0,0,lw,SCR_H);
+  spr.pushSprite(sx,0);
+  display.clearClipRect();
+}
 void playNavTransition(NavAnim anim){
   canvas.pushSprite(&transShot,0,0); // simpan frame LAMA (canvas msh berisi layar sblm pindah)
   renderCurrentFrame();              // gambar frame BARU ke canvas (state navigasi sudah berubah)
@@ -2787,13 +2797,13 @@ void playNavTransition(NavAnim anim){
     if(offset!=lastOff){ // gak ada perubahan posisi = gak perlu kirim ulang ke SPI
       lastOff=offset;
       if(anim==NAV_ANIM_PUSH){          // layar baru masuk dari KANAN; layar lama geser pelan (parallax 1/3)
-        transShot.pushSprite(-(offset/3),0);
-        canvas.pushSprite(SCR_W-offset,0);
+        navDrawLower(transShot,-(offset/3),SCR_W-offset);
         navEdgeShadowV(SCR_W-offset);
+        canvas.pushSprite(SCR_W-offset,0);
       } else if(anim==NAV_ANIM_BACK){   // layar yg ditutup geser ke KANAN di atas layar sebelumnya (yg geser pelan)
-        canvas.pushSprite(-((SCR_W-offset)/3),0);
-        transShot.pushSprite(offset,0);
+        navDrawLower(canvas,-((SCR_W-offset)/3),offset);
         navEdgeShadowV(offset);
+        transShot.pushSprite(offset,0);
       } else {                          // NAV_ANIM_HOME: geser TURUN
         transShot.pushSprite(0,offset);
         canvas.pushSprite(0,-SCR_H+offset);
