@@ -396,6 +396,57 @@ static void connectTo(const char* name) {
 // ----------------------------------------------------------
 // DECODE TASK (core 0): ring MP3 -> Helix -> ring PCM
 // ----------------------------------------------------------
+// ----------------------------------------------------------
+// MODE WAV (memo suara dari S3): PCM 16-bit MONO (biasanya 16 kHz) dilewatkan
+// TANPA Helix -> di-resample linear ke 44,1 kHz stereo -> langsung ke ring PCM.
+// Dikenali dari header "RIFF....WAVE" di awal track (44 byte header dilewati).
+// ----------------------------------------------------------
+static bool     wavMode = false;
+static uint32_t wavStep = 0;            // langkah fase 16.16 per sampel input = rate*65536/44100
+static uint32_t wavPos = 0;             // fase 16.16 di antara wavPrev dan sampel berikutnya
+static int16_t  wavPrev = 0;
+static bool     wavHavePrev = false;
+static uint8_t  wavOdd = 0;
+static bool     wavHasOdd = false;
+static int16_t  wavOut[256];            // 128 frame stereo
+static int      wavOutN = 0;
+
+static void wavReset() {
+  wavMode = false; wavPos = 0; wavPrev = 0;
+  wavHavePrev = false; wavHasOdd = false; wavOutN = 0;
+}
+static void wavFlush() {
+  if (wavOutN > 0) { pcmSink.write((const uint8_t*)wavOut, (size_t)wavOutN * 2); wavOutN = 0; }
+}
+static void wavBegin(const uint8_t* h) {
+  uint32_t rate = (uint32_t)h[24] | ((uint32_t)h[25] << 8) | ((uint32_t)h[26] << 16) | ((uint32_t)h[27] << 24);
+  if (rate < 4000 || rate > 48000) rate = 16000;
+  wavStep = (uint32_t)(((uint64_t)rate << 16) / 44100ULL);
+  wavPos = 0; wavPrev = 0; wavHavePrev = false; wavHasOdd = false; wavOutN = 0;
+  wavMode = true;
+}
+static void wavFeed(const uint8_t* d, uint32_t n) {
+  uint32_t i = 0;
+  while (i < n) {
+    int16_t smp;
+    if (wavHasOdd)          { smp = (int16_t)((uint16_t)wavOdd | ((uint16_t)d[i] << 8)); i++; wavHasOdd = false; }
+    else if (i + 1 < n)     { smp = (int16_t)((uint16_t)d[i] | ((uint16_t)d[i + 1] << 8)); i += 2; }
+    else                    { wavOdd = d[i]; wavHasOdd = true; i++; break; }
+    if (!wavHavePrev) { wavPrev = smp; wavHavePrev = true; continue; }
+    while (wavPos < 65536UL) {
+      int32_t o = (int32_t)wavPrev + ((((int32_t)smp - (int32_t)wavPrev) * (int32_t)(wavPos >> 4)) >> 12);
+      wavOut[wavOutN++] = (int16_t)o;      // L
+      wavOut[wavOutN++] = (int16_t)o;      // R
+      if (wavOutN >= 256) wavFlush();
+      wavPos += wavStep;
+    }
+    wavPos -= 65536UL;
+    wavPrev = smp;
+    if (flushReq) break;
+  }
+  wavFlush();
+}
+
 static void decodeTask(void* param) {
   uint8_t* buf = (uint8_t*)(psramFound() ? ps_malloc(IN_CHUNK) : malloc(IN_CHUNK));
   if (!buf) { Serial.println("[DEC] gagal alokasi"); vTaskDelete(nullptr); return; }
@@ -429,6 +480,7 @@ static void decodeTask(void* param) {
       streamEnded = false; decodeDone = false; trackEnded = false;
       trackEndSilence = 0; prefillReady = false; bytesPlayedTotal = 0;
       pcmProduced = 0; inBytesTrack = 0;
+      wavReset();
       flushReq = false;
       continue;
     }
@@ -452,7 +504,14 @@ static void decodeTask(void* param) {
       continue;
     }
     uint32_t n = inRing.read(buf, av > IN_CHUNK ? IN_CHUNK : av);
-    enc->write(buf, n);
+    if (inBytesTrack == 0 && n >= 44 && memcmp(buf, "RIFF", 4) == 0 && memcmp(buf + 8, "WAVE", 4) == 0) {
+      wavBegin(buf);                    // memo WAV: lewati Helix
+      wavFeed(buf + 44, n - 44);
+    } else if (wavMode) {
+      wavFeed(buf, n);
+    } else {
+      enc->write(buf, n);
+    }
     inBytesTrack += n;
     // ANTI WATCHDOG TASK: taskYIELD() cuma ngalah ke task berprioritas SAMA/lebih tinggi, jadi IDLE0 (prioritas 0)
     // bisa kelaparan kalau decoder terus sibuk -> task watchdog -> CAM restart. Sekarang selalu kasih jeda nyata.

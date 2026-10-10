@@ -619,7 +619,9 @@ enum Screen { SCR_HOME, SCR_CLOCK, SCR_CALC, SCR_SENSOR,
               SCR_WAKE,
               // app baru "Musik" -- S3 master, ESP32-CAM co-prosesor BT A2DP,
               // lihat file musicbt_renphone.ino + rplink.h.
-              SCR_MUSIC };
+              SCR_MUSIC,
+              // Stopwatch & Timer + Voice Memo -- lihat features_renphone.ino
+              SCR_STOPWATCH, SCR_MEMO };
 enum Orientation { ORIENT_LANDSCAPE = 0, ORIENT_PORTRAIT = 1 };
 
 // Dipindah ke atas — alasan sama dengan AiLine & Vec3f: arduino-cli men-generate
@@ -3862,8 +3864,8 @@ bool  ccAnimating=false;
 float ccAnimFromH=0, ccAnimToH=0;
 unsigned long ccAnimStartMs=0;
 const float CC_ANIM_MS = 200.0f;
-#define CC_ITEMS 10 // +Bluetooth (index 9)
-int ccCols(){ return currentOrient==ORIENT_LANDSCAPE ? 5 : 3; } // landscape 5x2, portrait 3x4 -> 10 tombol muat
+#define CC_ITEMS 11 // +Bluetooth (index 9), +Tangkap layar (index 10)
+int ccCols(){ return currentOrient==ORIENT_LANDSCAPE ? 6 : 3; } // landscape 6x2, portrait 3x4 -> 11 tombol muat
 #define CC_COLS ccCols()
 #define CC_ROWS ((CC_ITEMS+CC_COLS-1)/CC_COLS)
 // Bluetooth (modul ESP32-CAM) -- definisi di musicbt_renphone.ino
@@ -3900,7 +3902,7 @@ void closeControlCenter(){
 // membesar penuh memenuhi kolom.
 int ccMarginX(){ return 8; }  // v12: inset kiri/kanan panel -> kesan mengambang
 int ccPanelW(){ return SCR_W - ccMarginX()*2; }
-int ccGap(){ return 10; } // v108: minimalis -> lebih lega (v12: 7)
+int ccGap(){ return currentOrient==ORIENT_LANDSCAPE ? 6 : 10; } // landscape 6 kolom -> jarak dirapatkan biar label ("Pesawat") muat
 int ccCardW(){ return (ccPanelW() - ccGap()*(CC_COLS+1))/CC_COLS; } // lebar 1 kolom/sel
 int ccCircleD(){
   int cellW = ccCardW();
@@ -4107,6 +4109,17 @@ void drawCCIcon(LGFX_Sprite& s, int idx, int cx, int cy, int r, bool active, uin
       }
       break;
     }
+    case 10: { // Tangkap layar: 4 sudut bingkai (viewfinder) + titik tengah
+      int a=9, b=5;
+      for(int t=0;t<2;t++){
+        s.drawFastHLine(cx-a,cy-a+t,b,ic);       s.drawFastVLine(cx-a+t,cy-a,b,ic);
+        s.drawFastHLine(cx+a-b+1,cy-a+t,b,ic);   s.drawFastVLine(cx+a-t,cy-a,b,ic);
+        s.drawFastHLine(cx-a,cy+a-t,b,ic);       s.drawFastVLine(cx-a+t,cy+a-b+1,b,ic);
+        s.drawFastHLine(cx+a-b+1,cy+a-t,b,ic);   s.drawFastVLine(cx+a-t,cy+a-b+1,b,ic);
+      }
+      s.fillCircle(cx,cy,3,ic);
+      break;
+    }
     case 8: { // Mode Senyap: lonceng, dicoret kalau getar lg dimatikan (active=true -> getar OFF)
       s.fillTriangle(cx,cy-8,cx-7,cy+3,cx+7,cy+3,ic);
       s.fillRoundRect(cx-3,cy+4,6,3,1,ic);
@@ -4165,7 +4178,7 @@ void drawControlCenter(LGFX_Sprite& s){
     s.fillRoundRect(tx,ty,tw2,th2,trad,fillC);
     s.drawRoundRect(tx,ty,tw2,th2,trad,blend565(fillC,0xFFFF,50));
     if(li>=0.85f){ // ikon + label baru muncul setelah tile hampir penuh
-      static const char* ccLbl[CC_ITEMS]={"Wi-Fi","Pesawat","DND","Tema","Rotasi","Goyang","Kunci","LED","Senyap","BT"};
+      static const char* ccLbl[CC_ITEMS]={"Wi-Fi","Pesawat","DND","Tema","Rotasi","Goyang","Kunci","LED","Senyap","BT","Tangkap"};
       uint16_t icC = lerpColor565(T().text, T().bg, a);
       int ir = iconR>14 ? 14 : iconR;
       drawCCIcon(s, i, ccx, ty+th2/2-7, ir, a>0.5f, icC, fillC);
@@ -4213,7 +4226,7 @@ void ccTouch(int x,int y){
   if(y>ph) { closeControlCenter(); return; }
 
   int cw=ccCardW(), ch=ccCardH(), gap=ccGap(), top=ccGridTop(), gx=ccGridX();
-  void(*actions[CC_ITEMS])() = { ccActWifi, ccActAirplane, ccActDnd, ccActTheme, ccActOrient, ccActShake, nullptr, ccActNeopixel, ccActSilent, ccActBluetooth };
+  void(*actions[CC_ITEMS])() = { ccActWifi, ccActAirplane, ccActDnd, ccActTheme, ccActOrient, ccActShake, nullptr, ccActNeopixel, ccActSilent, ccActBluetooth, ccActScreenshot };
   for(int i=0;i<CC_ITEMS;i++){
     int col=i%CC_COLS, row=i/CC_COLS;
     int bx=gx+col*(cw+gap);
@@ -4560,6 +4573,21 @@ void drawAppIcon(LGFX_Sprite& s, char sym, int cx, int cy, int r, uint16_t bgCir
       s.fillRect(lx+hx-1, cy-rr/2, rx-lx+2, 3, ic);
       break;
     }
+    case 't': { // Stopwatch: muka bulat + tombol atas + jarum
+      int rr=max(8,r-6); int fy=cy+2;
+      s.drawCircle(cx,fy,rr,ic); s.drawCircle(cx,fy,rr-1,ic);
+      s.fillRect(cx-2,fy-rr-4,5,3,ic);
+      s.drawLine(cx,fy,cx+rr/2,fy-rr/2,ic); s.drawLine(cx+1,fy,cx+rr/2+1,fy-rr/2,ic);
+      s.fillCircle(cx,fy,2,ic);
+      break;
+    }
+    case 'v': { // Voice Memo: 5 batang gelombang suara
+      int rr=max(8,r-6);
+      int hs[5]={rr/2,rr,rr*3/2,rr,rr/2};
+      int bw=3, gp=3, x0=cx-(5*bw+4*gp)/2;
+      for(int i=0;i<5;i++) s.fillRoundRect(x0+i*(bw+gp),cy-hs[i]/2,bw,max(hs[i],3),1,ic);
+      break;
+    }
     default: {
       s.setTextColor(ic); s.setTextSize(2);
       char b[2]={sym,0};
@@ -4695,8 +4723,13 @@ void wakeBegin(); void wakeLoopPoll(); void wakeYieldMic(uint32_t holdMs);
 void musicEnter(); void musicExit();
 void drawMusic(LGFX_Sprite&); void musicTouch(int,int,bool,bool);
 void musicLoopPoll();
+// ---- features_renphone.ino: Stopwatch/Timer, Voice Memo, Screenshot, Cuaca ----
+void swEnter(); void swExit(); void drawSw(LGFX_Sprite&); void swTouch(int,int,bool,bool);
+void memoEnter(); void memoExit(); void drawMemo(LGFX_Sprite&); void memoTouch(int,int,bool,bool);
+void featuresLoopPoll(); void ccActScreenshot();
+void drawWeatherWidget(LGFX_Sprite&,int,int,int,int); void weatherRefreshNow();
 
-AppDef apps[32] = {
+AppDef apps[34] = {
   { "Jam",        'J', 0, clockEnter,    clockExit,    drawClock,        clockTouch,    SCR_CLOCK },
   { "Kalkulator", '+', 0, calcEnter,     calcExit,     drawCalc,         calcTouch,     SCR_CALC },
   { "Orientasi3D", '3', 0, sensorEnter,   sensorExit,   drawSensor,       sensorTouch,   SCR_SENSOR },
@@ -4742,8 +4775,12 @@ AppDef apps[32] = {
   { "Wake Word",  'w', 0, wakeEnter,    wakeExit,     drawWake,         wakeTouch,     SCR_WAKE },
   // ---- Musik: pemutar MP3 SD -> TWS lewat ESP32-CAM (kabel UART) ----
   { "Musik",      'm', 0, musicEnter,   musicExit,    drawMusic,        musicTouch,    SCR_MUSIC },
+  // ---- Stopwatch & Timer (tetap jalan di latar belakang) ----
+  { "Stopwatch",  't', 0, swEnter,      swExit,       drawSw,           swTouch,       SCR_STOPWATCH },
+  // ---- Voice Memo: rekam mic ke SD, putar lewat Musik BT ----
+  { "Voice Memo", 'v', 0, memoEnter,    memoExit,     drawMemo,         memoTouch,     SCR_MEMO },
 };
-#define APP_COUNT 32
+#define APP_COUNT 34
 
 // =============================================
 // NOTIFIKASI BADGE (BARU) -- angka kecil merah di pojok ikon app, mirip
@@ -4848,6 +4885,8 @@ void initAppColors(){
   apps[29].color=0xFB28; // Pomodoro - tomat
   apps[30].color=0xB41F; // Wake Word - ungu muda
   apps[31].color=0xFA12; // Musik - pink terang
+  apps[32].color=0xFD20; // Stopwatch - oranye
+  apps[33].color=0xF9A6; // Voice Memo - merah rekam
 }
 
 int appIndexForScreen(Screen s){
@@ -5236,7 +5275,13 @@ HomeRect homeWBatt(){
   else { r.x=10; r.y=STATUS_H+28+80+8+58+8; r.w=SCR_W-20; r.h=44; }
   return r;
 }
-int homeWidgetsEnd(){ HomeRect b=homeWBatt(), m=homeWMusic(); return max(b.y+b.h,m.y+m.h); }
+// Widget cuaca: baris tambahan DI BAWAH kartu musik/baterai (grid app otomatis turun
+// krn homeGridTop() memakai homeWidgetsEnd()). Data & gambar di features_renphone.ino.
+HomeRect homeWWeather(){
+  HomeRect b=homeWBatt(), m=homeWMusic(); HomeRect r;
+  r.x=10; r.w=SCR_W-20; r.y=max(b.y+b.h,m.y+m.h)+6; r.h=homeIsLand()?40:48; return r;
+}
+int homeWidgetsEnd(){ HomeRect b=homeWBatt(), m=homeWMusic(), w=homeWWeather(); return max(max(b.y+b.h,m.y+m.h),w.y+w.h); }
 int homeGridTop(){ return homeWidgetsEnd()+30; } // UI-OVERHAUL: grid di bawah blok widget (+ ruang utk judul "Semua App")
 int homeResultsTop(){ return STATUS_H+34; }      // hasil pencarian dirender dari atas layar
 // v105: batas ATAS area grid yg boleh digambar/di-tap. Header (sapaan+jam+
@@ -5398,6 +5443,7 @@ void drawHome(LGFX_Sprite& s,float sc){
     HomeRect rc=homeWClock(); drawClockCard(s,rc.x,rc.y-scPx,rc.w,rc.h);
     HomeRect rb=homeWBatt();  drawBattWidget(s,rb.x,rb.y-scPx,rb.w,rb.h);
     HomeRect rm=homeWMusic(); drawMusicMini(s,rm.x,rm.y-scPx,rm.w,rm.h,true);
+    HomeRect rw=homeWWeather(); drawWeatherWidget(s,rw.x,rw.y-scPx,rw.w,rw.h);
 
     // ---- judul grid ----
     s.setTextSize(1);
@@ -5483,6 +5529,8 @@ Screen homeCheck(int x,int y,float sc){
     if(x>=rc.x&&x<=rc.x+rc.w&&yc>=rc.y&&yc<=rc.y+rc.h) return SCR_CLOCK;
     HomeRect rb=homeWBatt();
     if(x>=rb.x&&x<=rb.x+rb.w&&yc>=rb.y&&yc<=rb.y+rb.h) return SCR_BATTERY;
+    HomeRect rw=homeWWeather();
+    if(x>=rw.x&&x<=rw.x+rw.w&&yc>=rw.y&&yc<=rw.y+rw.h){ weatherRefreshNow(); needRedraw=true; return SCR_HOME; }
   }
   int cols=homeCols(), cw=homeCardW(), ch=homeCardH();
   int gap=10, gridTop=homeGridTop();
@@ -16525,6 +16573,7 @@ void loop(){
   checkAiWatchdog();
   wakeLoopPoll(); // v115: urus hasil task wake word (simpan template, aksi pas terdeteksi) -- murah kalau gak ada kerjaan
   musicLoopPoll(); // Musik: toast/redraw/simpan prefs -- no-op kalau app belum pernah dibuka
+  featuresLoopPoll(); // Stopwatch/Timer tick, screenshot, Voice Memo, cuaca (features_renphone.ino)
   appMemGuardTick(); // v92: "batas aman RAM" -- kill cache RAM app astronomi paling lama nganggur kalau RAM internal mepet, lihat definisinya dekat appOnEnter/appOnExit
   diUpdate();              // v14: urus animasi/auto-collapse Dynamic Island
   triviaPeriodicUpdate();  // v14: urus spinner loading & auto-lanjut soal Trivia

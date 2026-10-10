@@ -92,6 +92,7 @@ static volatile uint32_t musKbps = 0, musSr = 0;
 static volatile bool musStreaming = false, musFileDone = false;
 static volatile bool musResumeOnBt = false;
 static uint8_t       musSeq = 0;
+static volatile bool musWavMode = false;     // true = yg sedang diputar adalah memo WAV (bukan playlist)
 
 static char          musScanName[MUS_SCAN_MAX][40];
 static int8_t        musScanRssi[MUS_SCAN_MAX];
@@ -487,6 +488,7 @@ static bool musStartTrack(int idx, int prevHow) {
   // decoder Helix memproses sampah, beban CPU/stack melonjak (khas file kbps tinggi yg bawa cover besar).
   if (off > 0 && off < (uint32_t)musFile.size()) musFile.seek(off); else musFile.seek(0);
 
+  musWavMode = false;                           // lagu playlist -> keluar dari mode memo
   musEndCurrent(prevHow);                       // bukukan lagu sebelumnya (reward) SEBELUM musPlayedMs di-reset
   musSeq++;
   uint8_t sq = musSeq;
@@ -533,6 +535,31 @@ static void musSendPause(bool pause) {
   rpSend(Serial1, RP_PAUSE, &v, 1);
 }
 
+// ---- Voice Memo: putar WAV (16 kHz mono 16-bit, header 44 byte) lewat jalur yg sama ----
+// WAV dikirim UTUH ke CAM; CAM mengenali "RIFF" lalu melewati decoder Helix
+// dan me-resample ke 44,1 kHz stereo. Tidak menyentuh playlist/RYNE.
+static void musPlayWav(const char* path) {
+  if (!musCamAlive) { musToast("Modul BT tidak terdeteksi"); return; }
+  if (!musBtConn)   { musToast("TWS belum terhubung"); return; }
+  if (musFile) musFile.close();
+  musFile = SD_MMC.open(path, FILE_READ);
+  if (!musFile) { musToast("Gagal membuka memo"); return; }
+  uint32_t sz = (uint32_t)musFile.size();
+  if (sz <= 44) { musFile.close(); musToast("Memo kosong"); return; }
+  musFile.seek(0);
+  musEndCurrent(3);                              // bukukan lagu yg sedang jalan (kalau ada)
+  musWavMode = true;
+  musSeq++;
+  uint8_t sq = musSeq;
+  musCredit = 0; musSentSince = 0;
+  rpSend(Serial1, RP_BEGIN, &sq, 1);
+  musLoaded = true; musPaused = false; musEnded = false;
+  musPlayedMs = 0; musStreaming = true; musFileDone = false;
+  musDurMs = (uint32_t)(((uint64_t)(sz - 44) * 1000ULL) / 32000ULL);
+  musKbps = 256; musSr = 16000;
+  musCoverReady = false; musCoverWant = false;
+}
+
 static void musHandleReq(uint8_t t, int32_t a, const char* s) {
   switch (t) {
     case 'p': musStartTrack((int)a, 2); break;
@@ -555,7 +582,9 @@ static void musHandleReq(uint8_t t, int32_t a, const char* s) {
       rpSend(Serial1, RP_VOLUME, &b, 1);
       break;
     }
+    case 'w': musPlayWav(s); break;
     case 's':
+      musWavMode = false;
       musEndCurrent(3);
       musLoaded = false; musStreaming = false;
       musCoverReady = false; musCoverWant = false;
@@ -728,6 +757,10 @@ static void musTask(void* arg) {
     MusReq rq;
     while (xQueueReceive(musQ, &rq, 0) == pdTRUE) musHandleReq(rq.t, rq.a, rq.s);
 
+    if (musEnded && musWavMode) {                 // memo selesai: berhenti, JANGAN lanjut ke playlist
+      musEnded = false; musWavMode = false; musLoaded = false; musStreaming = false;
+      if (musFile) musFile.close();
+    }
     // ---- 5. lagu habis -> berikutnya ----
     if (musEnded) {
       musEnded = false;
@@ -1431,3 +1464,14 @@ void musicTouch(int x, int y, bool held, bool isNew) {
   }
   if (musHit(x, y, mCovX, mCovY, mCovS, mCovS)) { musPost('u', 0, nullptr); vibTap(); needRedraw = true; return; }   // ketuk cover = play/pause
 }
+
+
+// =====================================================================
+//  API Voice Memo (dipakai features_renphone.ino)
+// =====================================================================
+void memoPrepareBt() { musBegin(); }
+void memoPlayFile(const char* path) { musBegin(); musPost('w', 0, path); }
+void memoStopPlay() { if (musWavMode && musQ) musPost('s', 0, nullptr); }
+bool memoPlayActive() { return musWavMode && musLoaded; }
+uint32_t memoPlayPosMs() { return musPlayedMs; }
+bool memoBtReady() { return musCamAlive && musBtConn; }
