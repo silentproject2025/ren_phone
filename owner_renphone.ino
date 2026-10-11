@@ -389,11 +389,11 @@ static void ownerLayout() {
   og_gap = 6;
   if (SCR_W > SCR_H) {                          // landscape: foto besar di kiri, tombol 2 kolom di kanan
     int leftW = 140;
-    og_ar = 48; og_acx = 8 + leftW / 2; og_acy = 100;
+    og_ar = 36; og_acx = 8 + leftW / 2; og_acy = 92;
     og_nameY = og_acy + og_ar + 8; og_nameMaxW = leftW - 4;
     og_bx = 8 + leftW + 6; og_bw2 = SCR_W - og_bx - 8; og_by0 = 52; og_bh = 34; og_gap = 8;
   } else {                                      // portrait: foto di atas, tombol 2 kolom di bawah
-    og_ar = 40; og_acx = SCR_W / 2; og_acy = 80;
+    og_ar = 36; og_acx = SCR_W / 2; og_acy = 80;
     og_nameY = og_acy + og_ar + 6; og_nameMaxW = SCR_W - 16;
     og_bx = 8; og_bw2 = SCR_W - 16; og_by0 = 166; og_bh = 32;
   }
