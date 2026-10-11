@@ -9624,7 +9624,7 @@ void bootDrawAmbientGlow(int cx,int cy,int r,float a){
 // tipis 1px di atas/bawahnya)
 void bootDrawHorizonLine(int cx,int y,int halfW,float alpha){
   if(halfW<2 || alpha<=0.01f) return;
-  const uint16_t ORG=bootRGB(255,120,30), WHT=bootRGB(255,240,220);
+  const uint16_t ORG=bootRGB(70,70,78), WHT=bootRGB(165,165,174); // v117: abu-abu (dulu oranye)
   for(int dx=-halfW; dx<halfW; dx+=2){
     float f=1.0f-fabsf((float)dx)/(float)halfW;
     f=f*f;
@@ -9644,7 +9644,7 @@ void bootDrawNyxText(int cx,int cy,int gap,float tp){
   const int n=5, cw=18;
   int totalW=n*cw+(n-1)*gap;
   int x0=cx-totalW/2, ty=cy-14;
-  uint16_t shadow=lerpColor565(0x0000,bootRGB(255,110,30),0.40f*tp);
+  uint16_t shadow=lerpColor565(0x0000,bootRGB(80,80,88),0.55f*tp); // v117: abu-abu (dulu oranye)
   uint16_t txt=lerpColor565(0x0000,0xFFFF,tp);
   canvas.setTextSize(3);
   for(int pass=0;pass<2;pass++){
@@ -13909,6 +13909,7 @@ bool nasaDownloadImageToPsram(const String& imgUrl){
 PsramJpeg apodJpeg;
 LGFX_Sprite apodImg(&display); // sprite persisten khusus gambar APOD (dipakai spy gak perlu decode ulang tiap redraw)
 bool  apodImgReady=false;
+String apodImgNote=""; // v117: alasan gambar gak tampil (format gak didukung / unduh gagal) -- ditampilkan di kotak gambar
 int   apodImgW=0, apodImgH=0;
 
 enum ApodPage { APOD_LOADING, APOD_VIEW, APOD_ERROR };
@@ -14116,6 +14117,21 @@ String apodLoadIdCache(const String& date){
   return s;
 }
 
+// v117: cek isi file gambar APOD yg ada di SD dr 4 byte awalnya:
+// 1 = JPEG, 2 = PNG, 3 = GIF, 0 = bukan gambar / rusak (mis. halaman error HTML).
+// Decoder di HP ini cuma JPEGDEC, jadi PNG/GIF gak bisa ditampilkan.
+int apodImgKind(const String& path){
+  File f=SD_MMC.open(path,FILE_READ);
+  if(!f) return 0;
+  uint8_t h[4]={0,0,0,0};
+  int n=f.read(h,4);
+  f.close();
+  if(n>=2 && h[0]==0xFF && h[1]==0xD8) return 1;
+  if(n>=4 && h[0]==0x89 && h[1]=='P' && h[2]=='N' && h[3]=='G') return 2;
+  if(n>=3 && h[0]=='G' && h[1]=='I' && h[2]=='F') return 3;
+  return 0;
+}
+
 // ---- Unduh gambar & simpan LANGSUNG ke SD (streaming, bukan ke RAM dulu)
 // -- pola PERSIS sama dgn updInstallFromURL() (unduh firmware OTA lewat
 // WiFi) yg sudah terbukti jalan di project ini, cuma tujuan tulisnya
@@ -14131,14 +14147,25 @@ bool apodDownloadImage(const String& imgUrl,const String& destPath){
   else beginOk=http.begin(plainClient,imgUrl);
   if(!beginOk) return false;
   http.setTimeout(15000); http.setConnectTimeout(15000);
+  http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS); // v117: ikuti redirect (http->https / pindah server), dulu langsung dianggap gagal
 
   int code = http.GET();
   if(code!=HTTP_CODE_OK){ http.end(); return false; }
   int len = http.getSize();
-  if(len<=0){ http.end(); return false; }
+  if(len==0){ http.end(); return false; }
 
   File out = SD_MMC.open(destPath,FILE_WRITE);
   if(!out){ http.end(); return false; }
+
+  if(len<0){
+    // v117: server gak kasih Content-Length (chunked) -- dulu otomatis gagal.
+    // writeToStream() yg nge-handle framing chunked-nya.
+    int r = http.writeToStream(&out);
+    out.close();
+    http.end();
+    if(r<=0){ SD_MMC.remove(destPath); return false; }
+    return true;
+  }
 
   WiFiClient* stream = http.getStreamPtr();
   uint8_t buf[2048];
@@ -14194,6 +14221,14 @@ bool apodDecodeCachedImage(){
   if(sdReady){
     String path = apodImgPath(apodCurDate);
     if(!SD_MMC.exists(path)) return false;
+    apodImgNote="";
+    int kind=apodImgKind(path);
+    if(kind!=1){
+      // v117: bukan JPEG -> jelasin alasannya di layar (dulu kotak kosong tanpa penjelasan)
+      apodImgNote = (kind==2)? "Format PNG belum didukung" : (kind==3)? "Format GIF belum didukung" : "File gambar rusak";
+      apodImgReady=true;
+      return false;
+    }
     f = SD_MMC.open(path,FILE_READ);
     if(!f) return false;
     opened = apodJpeg->open(f, apodJpegDrawCallback);
@@ -14205,7 +14240,8 @@ bool apodDecodeCachedImage(){
   }
   if(!opened){
     if(f) f.close();
-    apodImgReady=true; // tetap "ready" -> tampil kotak kosong drpd nge-block nunggu
+    apodImgNote="Gagal decode (JPG progresif?)"; // v117: alasan tampil di layar
+    apodImgReady=true; // tetap "ready" -> tampil pesan drpd nge-block nunggu
     return false;
   }
   int iw=apodJpeg->getWidth(), ih=apodJpeg->getHeight();
@@ -14315,11 +14351,15 @@ void apodFetchAndProcess(String dateParam){
   // ini cuma bebasin buffer kita sendiri yg emang beneran udah gak dipakai.
   body="";
 
-  apodImgReady=false;
+  apodImgReady=false; apodImgNote="";
   if(apodMediaType=="image" && imgUrl.length()){
     if(sdReady){
       String imgPath=apodImgPath(apodCurDate);
-      if(!SD_MMC.exists(imgPath)) apodDownloadImage(imgUrl,imgPath); // gagal jg gapapa, lihat drawApod (tampil placeholder)
+      // v117: file cache yg isinya bukan gambar (mis. halaman error) dibuang -> unduh ulang
+      if(SD_MMC.exists(imgPath) && apodImgKind(imgPath)==0) SD_MMC.remove(imgPath);
+      if(!SD_MMC.exists(imgPath)){
+        if(!apodDownloadImage(imgUrl,imgPath)) apodImgNote="Unduh gambar gagal"; // lihat drawApod (alasan ditampilkan di kotak gambar)
+      }
     } else {
       // v23: SD gak dipasang -- unduh langsung ke PSRAM spy APOD tetap
       // bisa nampilin gambar walau gak ada kartu SD (lihat catatan
@@ -14401,11 +14441,23 @@ void apodLoadFromCacheOrFetch(String dateParam){
   // v23: tanggal yg diminta PERSIS sama dgn yg udah lagi ditampilkan &
   // datanya udah ada di RAM sesi ini -> jangan fetch ulang, hemat jatah
   // request api_key (penting pas pakai DEMO_KEY yg limitnya kecil).
-  if(dateParam.length() && dateParam==apodCurDate && apodExplanationEn.length()>0){
+  // v117: kalau gambarnya BELUM berhasil dimuat (unduhan sebelumnya gagal) & WiFi ada, jangan
+  // berhenti di sini -- lanjut ke bawah supaya unduh gambar dicoba lagi. Dulu begitu gagal
+  // sekali, gambar tanggal itu gak pernah dicoba lagi (metadata teks sudah ke-cache).
+  bool apodNeedImgRetry = (apodMediaType=="image" && !apodImgReady && WiFi.status()==WL_CONNECTED);
+  if(dateParam.length() && dateParam==apodCurDate && apodExplanationEn.length()>0 && !apodNeedImgRetry){
     apodPage=APOD_VIEW; needRedraw=true; return;
   }
   if(dateParam.length() && apodLoadMeta(dateParam)){
-    apodImgReady=false;
+    apodImgReady=false; apodImgNote="";
+    if(apodMediaType=="image" && sdReady && WiFi.status()==WL_CONNECTED){
+      String ip=apodImgPath(dateParam);
+      if(!SD_MMC.exists(ip) || apodImgKind(ip)==0){
+        if(SD_MMC.exists(ip)) SD_MMC.remove(ip);
+        apodStartFetch(dateParam); // gambar belum ada di SD -> fetch penuh lagi
+        return;
+      }
+    }
     String cachedId = apodLoadIdCache(dateParam);
     apodExplanationId = cachedId.length()? cachedId : apodExplanationEn; // sementara tampilkan EN kalau blm ada cache terjemahan
     if(apodMediaType=="image" && SD_MMC.exists(apodImgPath(dateParam))) apodDecodeCachedImage();
@@ -14508,12 +14560,12 @@ void drawApod(LGFX_Sprite& s){
     s.setTextColor(T().subtext); s.setTextSize(1);
     const char* m="(Konten hari ini video, tdk bisa ditampilkan)";
     s.setCursor(SCR_W/2-(int)strlen(m)*3,imgTop+imgH/2-4); s.print(m);
-  } else if(apodImgReady){
+  } else if(apodImgReady && apodImgNote.length()==0){
     if(apodImgW!=SCR_W || apodImgH!=imgH) apodDecodeCachedImage(); // orientasi berubah -> decode ulang dr cache lokal (gak perlu internet)
     apodImg.pushSprite(&s,0,imgTop);
   } else {
     s.setTextColor(T().subtext); s.setTextSize(1);
-    const char* m="(Gambar belum tersedia)";
+    const char* m = apodImgNote.length()? apodImgNote.c_str() : "(Gambar belum tersedia)";
     s.setCursor(SCR_W/2-(int)strlen(m)*3,imgTop+imgH/2-4); s.print(m);
   }
 
