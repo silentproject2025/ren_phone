@@ -24,6 +24,13 @@
 //  * Thumbnail yang sedang tampil ditahan di PSRAM (20 slot, LRU).
 //  * Pembuatan thumbnail dibatasi 1 gambar per putaran loop dan HANYA saat
 //    jari tidak sedang menyentuh/scroll, jadi scroll tidak tersendat.
+// ANIMASI:
+//  * pindah layar di dalam Galeri (album -> grid -> foto, dan kembali) = geser
+//    ala iOS (easing navEase yg sama dgn transisi antar app), foto baru ->
+//    geser kiri/kanan saat usap, thumbnail fade-in begitu selesai dimuat,
+//    kartu yg ditekan meredup sebagai umpan balik sentuhan.
+//  * transisi memakai 2 sprite PSRAM layar penuh (snapshot lama + frame baru),
+//    dirender SEKALI lalu hanya digeser, jadi ringan.
 // Semua buffer besar ada di PSRAM dan dilepas saat app ditutup.
 //
 // Catatan arduino-cli: file ini sengaja TIDAK punya fungsi yang memakai
@@ -41,6 +48,9 @@
 #define GAL_SLOTS        20
 #define GAL_MAX_WANTS    16
 #define GAL_PATH_MAX     112
+
+#define GAL_ANIM_MS      240
+#define GAL_FADE_MS      220
 
 #define GM_ALBUMS 0
 #define GM_GRID   1
@@ -60,6 +70,7 @@ static uint32_t  galSlotTag[GAL_SLOTS];
 static uint32_t  galSlotUse[GAL_SLOTS];
 static uint8_t   galSlotState[GAL_SLOTS];      // 0 kosong, 1 siap, 2 gagal didecode
 static uint32_t  galUseTick = 0;
+static unsigned long galSlotBorn[GAL_SLOTS];   // kapan thumbnail siap (utk fade-in)
 
 // ---- data album / item ----
 static GalAlbum  galAlbums[GAL_MAX_ALBUMS];
@@ -79,6 +90,14 @@ static bool      galPtrDown = false, galPtrDrag = false;
 static int       galPtrSx = 0, galPtrSy = 0, galPtrLx = 0, galPtrLy = 0;
 static unsigned long galLastTickMs = 0;
 static unsigned long galClearArmUntil = 0, galDelArmUntil = 0;
+
+// ---- animasi ----
+static LGFX_Sprite galSnap(&display);          // snapshot layar LAMA
+static LGFX_Sprite galNew(&display);           // frame BARU (dirender sekali per transisi)
+static bool      galSnapReady = false, galNewValid = false, galFadeActive = false;
+static int       galAnimKind = 0;              // 0 maju (geser dr kanan), 1 mundur, 2 foto berikutnya, 3 foto sebelumnya
+static unsigned long galAnimStart = 0;         // 0 = ditunda (menunggu decode foto selesai)
+static int       galPressIdx = -1;             // kartu yg sedang ditekan (umpan balik sentuhan)
 
 // geometri grid (dihitung ulang tiap gambar/sentuh supaya ikut orientasi)
 static int galCols = 4, galX0 = 8, galTop = 42, galBot = 200, galRowH = GAL_THUMB + GAL_GAP;
@@ -167,6 +186,32 @@ static void galViewFree() {
   galViewReady = false; galViewPending = false; galViewFail = false;
 }
 
+// ---- animasi transisi ----
+static bool galSprEnsure(LGFX_Sprite& sp) {
+  if (sp.width() != SCR_W || sp.height() != SCR_H) {
+    sp.deleteSprite();
+    sp.setPsram(true);
+    if (!sp.createSprite(SCR_W, SCR_H)) return false;
+  }
+  return true;
+}
+
+static bool galAnimating() {
+  return galSnapReady && galAnimStart != 0 && (millis() - galAnimStart) < GAL_ANIM_MS;
+}
+
+// Panggil SETELAH state baru diset tapi SEBELUM frame berikutnya digambar:
+// `canvas` masih berisi frame lama = snapshot. deferred=true -> animasi baru
+// mulai setelah decode foto selesai (galPointerTick), selama itu snapshot
+// tetap tampil dgn tulisan "Memuat...".
+static void galBeginTransition(int kind, bool deferred) {
+  galSnapReady = false; galNewValid = false; galAnimStart = 0;
+  if (!galSprEnsure(galSnap) || !galSprEnsure(galNew)) return;   // PSRAM mepet -> tanpa animasi
+  canvas.pushSprite(&galSnap, 0, 0);
+  galSnapReady = true; galAnimKind = kind;
+  if (!deferred) galAnimStart = millis();
+}
+
 // =====================================================================
 // THUMBNAIL CACHE (SD) + SLOT RAM
 // =====================================================================
@@ -208,7 +253,7 @@ static int galSlotAlloc(uint32_t tag) {
     if (galSlotState[i] == 0) { best = i; break; }
     if (galSlotUse[i] < bu) { bu = galSlotUse[i]; best = i; }
   }
-  galSlotTag[best] = tag; galSlotUse[best] = galUseTick; galSlotState[best] = 0;
+  galSlotTag[best] = tag; galSlotUse[best] = galUseTick; galSlotState[best] = 0; galSlotBorn[best] = 0;
   return best;
 }
 
@@ -374,11 +419,12 @@ static void galLoaderStep(bool allowGen) {
     uint16_t* dst = galSlotPtr(sl);
     if (have) {
       int rc = galCacheRead(cp, dst);
-      if (rc) { galSlotState[sl] = (uint8_t)rc; needRedraw = true; if (++loads >= 3) break; continue; }
+      if (rc) { galSlotState[sl] = (uint8_t)rc; galSlotBorn[sl] = millis(); needRedraw = true; if (++loads >= 3) break; continue; }
     }
     if (!allowGen) { galSlotState[sl] = 0; continue; }
     bool ok = galGenerate(w.path, w.kind, dst);   // satu decode per putaran loop
     galSlotState[sl] = ok ? 1 : 2;
+    galSlotBorn[sl] = millis();
     galCacheWrite(cp, w.key, dst, ok);
     needRedraw = true;
     break;
@@ -562,7 +608,8 @@ static void galOpenAlbum(int ai) {
   strncpy(galCurTitle, galAlbums[ai].title, 23); galCurTitle[23] = 0;
   galLoadItems();
   galMode = GM_GRID;
-  galScrollY = 0; galScrollVel = 0;
+  galScrollY = 0; galScrollVel = 0; galPressIdx = -1;
+  galBeginTransition(0, false);
 }
 
 // =====================================================================
@@ -688,6 +735,7 @@ static void galViewStep(int dir) {
   int ni = galNextPhoto(galViewIdx, dir);
   if (ni < 0) return;
   galViewIdx = ni; galViewPending = true; galDelArmUntil = 0;
+  galBeginTransition(dir > 0 ? 2 : 3, true);
   needRedraw = true;
 }
 
@@ -717,6 +765,7 @@ static void galViewDelete() {
     galMode = GM_GRID;
   } else {
     galViewIdx = ni; galViewPending = true;
+    galSnapReady = false;
   }
   needRedraw = true;
 }
@@ -753,6 +802,11 @@ static int galMaxScroll(int n) {
 static void galDrawThumb(LGFX_Sprite& s, int x, int y, int slot, uint8_t kind) {
   if (slot >= 0 && galSlotState[slot] == 1) {
     s.pushImage(x, y, GAL_THUMB, GAL_THUMB, (lgfx::swap565_t*)galSlotPtr(slot));
+    unsigned long age = millis() - galSlotBorn[slot];
+    if (galSlotBorn[slot] != 0 && age < GAL_FADE_MS) {       // fade-in: selubung warna placeholder memudar
+      s.fillRectAlpha(x, y, GAL_THUMB, GAL_THUMB, (uint8_t)(255 - (255UL * age) / GAL_FADE_MS), T().surface2);
+      galFadeActive = true;
+    }
   } else {
     s.fillRoundRect(x, y, GAL_THUMB, GAL_THUMB, 6, T().surface2);
     int cx = x + GAL_THUMB / 2, cy = y + GAL_THUMB / 2;
@@ -803,6 +857,7 @@ static void galDrawAlbums(LGFX_Sprite& s) {
     galJoin(cp, sizeof(cp), a.path, a.cover);
     int sl = galThumbSlotFor(cp, a.cSize, a.cMtime, a.cKind);
     galDrawThumb(s, x, y, sl, a.cKind);
+    if (i == galPressIdx) s.fillRectAlpha(x, y, GAL_THUMB, GAL_THUMB, 90, 0x0000);
     // strip judul + jumlah di dasar kartu
     s.fillRect(x, y + GAL_THUMB - 14, GAL_THUMB, 14, 0x1082);
     char cnt[8]; snprintf(cnt, sizeof(cnt), "%d", (int)(a.photos + a.videos));
@@ -855,6 +910,7 @@ static void galDrawGrid(LGFX_Sprite& s) {
     galItemPath(p, sizeof(p), i);
     int sl = galThumbSlotFor(p, galItems[i].size, galItems[i].mtime, galItems[i].kind);
     galDrawThumb(s, x, y, sl, galItems[i].kind);
+    if (i == galPressIdx) s.fillRectAlpha(x, y, GAL_THUMB, GAL_THUMB, 90, 0x0000);
   }
   s.clearClipRect();
   if (ms > 0) {
@@ -866,9 +922,13 @@ static void galDrawGrid(LGFX_Sprite& s) {
 }
 
 static void galDrawViewer(LGFX_Sprite& s) {
-  s.fillSprite(0x0000);
+  if (galViewPending && galSnapReady && galAnimStart == 0) {
+    galSnap.pushSprite(&s, 0, 0);                  // layar lama tetap tampil selagi foto didecode
+  } else {
+    s.fillSprite(0x0000);
+    if (galViewReady) galView.pushSprite(&s, 0, 0);
+  }
   s.setTextSize(1);
-  if (galViewReady) galView.pushSprite(&s, 0, 0);
   if (galViewFail) {
     s.setTextColor(T().subtext);
     const char* m = "Gagal memuat gambar";
@@ -917,8 +977,7 @@ static void galDrawViewer(LGFX_Sprite& s) {
   drawToast(s);
 }
 
-void drawGallery(LGFX_Sprite& s) {
-  galUseTick++;
+static void galDrawContent(LGFX_Sprite& s) {
   if (galMode == GM_VIEW) { galDrawViewer(s); return; }
   iosBackdrop(s); drawStatusBar(s);
   s.setTextSize(1);
@@ -940,20 +999,51 @@ void drawGallery(LGFX_Sprite& s) {
   drawBack(s); drawToast(s);
 }
 
+void drawGallery(LGFX_Sprite& s) {
+  galUseTick++;
+  if (galAnimating()) {
+    if (!galNewValid) { galDrawContent(galNew); galNewValid = true; }   // frame baru dirender SEKALI
+    float t = (float)(millis() - galAnimStart) / (float)GAL_ANIM_MS;
+    if (t > 1.0f) t = 1.0f;
+    int off = (int)((float)SCR_W * navEase(t) + 0.5f);
+    if (off > SCR_W) off = SCR_W;
+    if (galAnimKind == 0) {            // maju: layar baru masuk dari kanan, yg lama geser pelan (parallax 1/3)
+      galSnap.pushSprite(&s, -(off / 3), 0);
+      galNew.pushSprite(&s, SCR_W - off, 0);
+    } else if (galAnimKind == 1) {     // mundur: layar yg ditutup geser keluar ke kanan
+      galNew.pushSprite(&s, -((SCR_W - off) / 3), 0);
+      galSnap.pushSprite(&s, off, 0);
+    } else if (galAnimKind == 2) {     // foto berikutnya: geser ke kiri
+      galSnap.pushSprite(&s, -off, 0);
+      galNew.pushSprite(&s, SCR_W - off, 0);
+    } else {                           // foto sebelumnya: geser ke kanan
+      galSnap.pushSprite(&s, off, 0);
+      galNew.pushSprite(&s, -(SCR_W - off), 0);
+    }
+    return;
+  }
+  galFadeActive = false;
+  galDrawContent(s);
+}
+
 // =====================================================================
 // SENTUHAN
 // =====================================================================
 static void galBack() {
   galPtrDown = false;
+  if (galAnimating()) return;
   if (galMode == GM_VIEW) {
     galDelArmUntil = 0;
     if (galDirectOpen) { navBack(); return; }
-    galMode = GM_GRID; needRedraw = true; return;
+    galMode = GM_GRID; galPressIdx = -1;
+    galBeginTransition(1, false);
+    needRedraw = true; return;
   }
   if (galMode == GM_GRID) {
     galMode = GM_ALBUMS;
     if (galAlbumsDirty) galScanAlbums();
-    galScrollY = galAlbumScrollSave; galScrollVel = 0;
+    galScrollY = galAlbumScrollSave; galScrollVel = 0; galPressIdx = -1;
+    galBeginTransition(1, false);
     needRedraw = true; return;
   }
   navBack();
@@ -964,6 +1054,7 @@ static void galBack() {
 void galTouch(int x, int y, bool held, bool isNew) {
   (void)held;
   if (!isNew) return;
+  if (galAnimating()) return;
   if (galMode == GM_VIEW && !galViewOverlay) return;      // tombol tersembunyi: ketuk apa saja = tampilkan
   if (isBack(x, y)) { galBack(); return; }
   if (galMode == GM_ALBUMS && sdReady && galMem && galHit(x, y, SCR_W - 60, 20, 52, 22)) {
@@ -979,18 +1070,24 @@ void galTouch(int x, int y, bool held, bool isNew) {
   }
 }
 
-static void galTapGrid(int x, int y) {
-  if (y < galTop || y > galBot) return;
+// indeks kartu di bawah (x,y), atau -1
+static int galCellAt(int x, int y) {
+  if (y < galTop || y > galBot) return -1;
   int n = (galMode == GM_ALBUMS) ? galAlbumCount : galItemCount;
   int relY = y - galTop + (int)galScrollY;
   int row = relY / galRowH, inY = relY % galRowH;
-  if (inY >= GAL_THUMB) return;
+  if (inY >= GAL_THUMB) return -1;
   int relX = x - galX0;
-  if (relX < 0) return;
+  if (relX < 0) return -1;
   int col = relX / (GAL_THUMB + GAL_GAP), inX = relX % (GAL_THUMB + GAL_GAP);
-  if (col >= galCols || inX >= GAL_THUMB) return;
+  if (col >= galCols || inX >= GAL_THUMB) return -1;
   int idx = row * galCols + col;
-  if (idx < 0 || idx >= n) return;
+  return (idx >= 0 && idx < n) ? idx : -1;
+}
+
+static void galTapGrid(int x, int y) {
+  int idx = galCellAt(x, y);
+  if (idx < 0) return;
   if (galMode == GM_ALBUMS) {
     galOpenAlbum(idx);
   } else if (galItems[idx].kind == 2) {
@@ -1001,6 +1098,7 @@ static void galTapGrid(int x, int y) {
     galViewIdx = idx; galMode = GM_VIEW;
     galViewPending = true; galViewReady = false; galViewFail = false;
     galViewOverlay = true; galDelArmUntil = 0;
+    galBeginTransition(0, true);         // animasi mulai setelah foto selesai didecode
   }
   needRedraw = true;
 }
@@ -1012,8 +1110,13 @@ static void galGridPointer(bool touched, bool wasT, int tx, int ty, float dt) {
     if (!wasT) {
       galPtrDown = (ty >= galTop && ty <= galBot);
       galPtrSx = tx; galPtrSy = ty; galPtrLy = ty; galPtrDrag = false; galScrollVel = 0;
+      galPressIdx = galPtrDown ? galCellAt(tx, ty) : -1;
+      if (galPressIdx >= 0) needRedraw = true;
     } else if (galPtrDown) {
-      if (!galPtrDrag && abs(ty - galPtrSy) > 8) galPtrDrag = true;
+      if (!galPtrDrag && abs(ty - galPtrSy) > 8) {
+        galPtrDrag = true;
+        if (galPressIdx >= 0) { galPressIdx = -1; needRedraw = true; }
+      }
       if (galPtrDrag) {
         float d = (float)(galPtrLy - ty);
         galPtrLy = ty;
@@ -1025,6 +1128,7 @@ static void galGridPointer(bool touched, bool wasT, int tx, int ty, float dt) {
       }
     }
   } else {
+    if (galPressIdx >= 0) { galPressIdx = -1; needRedraw = true; }
     if (wasT && galPtrDown) {
       galPtrDown = false;
       if (!galPtrDrag) galTapGrid(galPtrSx, galPtrSy);
@@ -1071,10 +1175,17 @@ void galPointerTick(bool touched, bool wasT, int tx, int ty) {
   float dt = (dtl <= 0 || dtl > 50) ? 16.0f : (float)dtl;
   galLastTickMs = now;
   if (!galMem) return;
-  if (galViewPending && galMode == GM_VIEW) {            // frame "Memuat..." sudah tampil -> decode sekarang
-    galDecodeCurrent();
+  if (galSnapReady && galAnimStart != 0) {               // animasi transisi sedang jalan / baru selesai
+    if (galAnimating()) { galPtrDown = false; galPressIdx = -1; needRedraw = true; return; }
+    galSnapReady = false; galAnimStart = 0; galNewValid = false;
     needRedraw = true;
   }
+  if (galViewPending && galMode == GM_VIEW) {            // frame "Memuat..." sudah tampil -> decode sekarang
+    galDecodeCurrent();
+    if (galSnapReady && galAnimStart == 0) { galAnimStart = millis(); galNewValid = false; }   // mulai animasi setelah decode
+    needRedraw = true;
+  }
+  if (galFadeActive) { galFadeActive = false; needRedraw = true; }   // fade-in thumbnail: terus gambar ulang
   galGeom();
   if (galMode == GM_VIEW) {
     galViewPointer(touched, wasT, tx, ty);
@@ -1106,6 +1217,7 @@ void galEnter() {
   galPtrDown = false; galPtrDrag = false;
   galViewReady = false; galViewPending = false; galViewFail = false; galViewIdx = -1;
   galDelArmUntil = 0; galClearArmUntil = 0; galWantCnt = 0;
+  galSnapReady = false; galNewValid = false; galAnimStart = 0; galPressIdx = -1; galFadeActive = false;
   galLastTickMs = millis();
   if (!sdReady) { galPendingPath[0] = 0; return; }
   if (!galMemEnsure()) { galPendingPath[0] = 0; showToast("PSRAM tidak cukup"); return; }
@@ -1138,6 +1250,8 @@ void galEnter() {
 
 void galExit() {
   galViewFree();
+  galSnap.deleteSprite(); galNew.deleteSprite();
+  galSnapReady = false; galNewValid = false; galAnimStart = 0;
   galMemFree();
   galPtrDown = false;
   galPendingPath[0] = 0;
