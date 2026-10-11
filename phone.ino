@@ -626,7 +626,9 @@ enum Screen { SCR_HOME, SCR_CLOCK, SCR_CALC, SCR_SENSOR,
               SCR_GALLERY,
               // Profil pemilik (foto + nama) -- lihat owner_renphone.ino
               SCR_OWNER,
-              SCR_ABOUT };
+              SCR_ABOUT,
+              // Atur Home -- lihat homeedit_renphone.ino
+              SCR_HOMEEDIT };
 enum Orientation { ORIENT_LANDSCAPE = 0, ORIENT_PORTRAIT = 1 };
 
 // Dipindah ke atas — alasan sama dengan AiLine & Vec3f: arduino-cli men-generate
@@ -4481,6 +4483,12 @@ void drawAppIcon(LGFX_Sprite& s, char sym, int cx, int cy, int r, uint16_t bgCir
     // sama case 'Y' punya Trivia (jawaban benar/centang) -- ikon NES di
     // Home/Switcher/Dock jadinya salah gambar (nampil centang, bukan
     // gamepad). Dipindah ke 'D' (belum kepake) + ditambah case-nya.
+    case '#': { // Atur Home: grid 2x2 kotak
+      int q=max(3,r/3), g2=max(2,r/6), tot=q*2+g2, x0=cx-tot/2, y0=cy-tot/2;
+      for(int a=0;a<2;a++) for(int b=0;b<2;b++)
+        s.fillRoundRect(x0+a*(q+g2),y0+b*(q+g2),q,q,2,ic);
+      break;
+    }
     case 'H': { // HWmonitor: chip CPU -- badan persegi + pin nongol di 4 sisi
       int w=r-7;
       s.fillRoundRect(cx-w,cy-w,w*2,w*2,2,ic);
@@ -4761,7 +4769,11 @@ void ownerSetAvatarUi(const char*);
 void aboutEnter(); void aboutExit(); void drawAbout(LGFX_Sprite&); void aboutTouch(int,int,bool,bool);
 void aboutLoopPoll();
 
-AppDef apps[37] = {
+// ---- homeedit_renphone.ino: Atur Home ----
+void homeEditEnter(); void homeEditExit(); void drawHomeEdit(LGFX_Sprite&); void homeEditTouch(int,int,bool,bool);
+void homeEditPointerTick(bool,bool,int,int);
+
+AppDef apps[38] = {
   { "Jam",        'J', 0, clockEnter,    clockExit,    drawClock,        clockTouch,    SCR_CLOCK },
   { "Kalkulator", '+', 0, calcEnter,     calcExit,     drawCalc,         calcTouch,     SCR_CALC },
   { "Orientasi3D", '3', 0, sensorEnter,   sensorExit,   drawSensor,       sensorTouch,   SCR_SENSOR },
@@ -4816,8 +4828,10 @@ AppDef apps[37] = {
   // ---- Profil: foto & nama pemilik ----
   { "Profil",     'o', 0, ownerEnter,   ownerExit,    drawOwner,        ownerTouch,    SCR_OWNER },
   { "About Phone", 'i', 0, aboutEnter,   aboutExit,    drawAbout,        aboutTouch,    SCR_ABOUT },
+  // ---- Atur Home: urutan & sembunyikan ikon (disembunyikan dari grid secara default; ada di Pengaturan) ----
+  { "Atur Home", '#', 0xFBE0, homeEditEnter, homeEditExit, drawHomeEdit, homeEditTouch, SCR_HOMEEDIT },
 };
-#define APP_COUNT 37
+#define APP_COUNT 38
 
 // =============================================
 // NOTIFIKASI BADGE (BARU) -- angka kecil merah di pojok ikon app, mirip
@@ -5290,6 +5304,66 @@ const float HOME_SPRING_K      = 0.00055f;// kekakuan pegas tepi (1/ms^2)
 const float HOME_SPRING_C      = 0.036f;  // redaman pegas (1/ms) -- zeta ~0.77 = melenting tipis
 const float HOME_PRESS_IN_MS   = 90.0f;   // durasi ikon mengecil pas ditekan
 const float HOME_PRESS_OUT_MS  = 160.0f;  // durasi ikon balik pas dilepas
+// ---- HOME-LAYOUT: urutan & sembunyikan ikon grid Home (diatur di layar "Atur Home") ----
+// homeOrder[] = urutan SEMUA app (isi: indeks apps[]), homeHide[] per indeks apps[].
+// homeVis[]/homeVisN = yang tampil di grid Home. Disimpan di NVS "homelay" per ID Screen
+// (bukan per indeks) supaya tetap benar kalau nanti ada app baru. Pencarian tetap mencari SEMUA app.
+int  homeOrder[APP_COUNT];
+bool homeHide[APP_COUNT];
+int  homeVis[APP_COUNT];
+int  homeVisN = 0;
+bool homeLayoutLoaded = false;
+
+void homeLayoutRebuildVis(){
+  homeVisN=0;
+  for(int k=0;k<APP_COUNT;k++){ int i=homeOrder[k]; if(!homeHide[i]) homeVis[homeVisN++]=i; }
+}
+void homeLayoutDefault(){
+  for(int i=0;i<APP_COUNT;i++){ homeOrder[i]=i; homeHide[i]=(apps[i].screen==SCR_HOMEEDIT); }
+  homeLayoutRebuildVis();
+}
+void homeLayoutLoad(){
+  homeLayoutLoaded=true;
+  homeLayoutDefault();
+  Preferences pr;
+  if(!pr.begin("homelay",true)) return;
+  size_t n=pr.getBytesLength("ord");
+  if(n>0 && n<=64){
+    uint8_t ids[64];
+    pr.getBytes("ord",ids,n);
+    uint64_t hid=pr.getULong64("hid",0);
+    bool used[APP_COUNT];
+    for(int i=0;i<APP_COUNT;i++) used[i]=false;
+    int w=0;
+    for(size_t k=0;k<n && w<APP_COUNT;k++){
+      for(int i=0;i<APP_COUNT;i++){
+        if(!used[i] && (int)apps[i].screen==(int)ids[k]){
+          homeOrder[w++]=i; used[i]=true;
+          homeHide[i]=(ids[k]<64) ? (((hid>>ids[k])&1ULL)!=0) : false;
+          break;
+        }
+      }
+    }
+    for(int i=0;i<APP_COUNT;i++) if(!used[i]) homeOrder[w++]=i;   // app baru: ke akhir, aturan default
+  }
+  pr.end();
+  homeLayoutRebuildVis();
+}
+void homeLayoutSave(){
+  uint8_t ids[64]; uint64_t hid=0; int n=0;
+  for(int k=0;k<APP_COUNT && n<64;k++){
+    int i=homeOrder[k]; int id=(int)apps[i].screen;
+    ids[n++]=(uint8_t)id;
+    if(homeHide[i] && id<64) hid|=(1ULL<<id);
+  }
+  Preferences pr;
+  if(!pr.begin("homelay",false)) return;
+  pr.putBytes("ord",ids,n);
+  pr.putULong64("hid",hid);
+  pr.end();
+}
+void homeLayoutEnsure(){ if(!homeLayoutLoaded) homeLayoutLoad(); }
+
 int homeCols(){ return currentOrient==ORIENT_LANDSCAPE ? 4 : 3; } // HOME-ICON-BULAT: dulu 3/2 kolom (kartu besar)
 int homeCardW(){ int cols=homeCols(); return (SCR_W - (cols+1)*10)/cols; } // HOME-ICON-BULAT: gap 10 = sama dgn drawHome/touch
 // v71 REDESIGN: kartu app dipertinggi dikit (60->68) krn ikon diperbesar &
@@ -5489,9 +5563,11 @@ void drawHome(LGFX_Sprite& s,float sc){
     s.setTextSize(1);
     uiText(s,14,gridTop-20-scPx,"Semua App",wp?(uint16_t)0xDEFB:T().subtext,wp,false);
 
-    // ---- grid app ----
-    for(int i=0;i<APP_COUNT;i++){
-      int col=i%cols, row=i/cols;
+    // ---- grid app ---- (HOME-LAYOUT: urutan & app tersembunyi dari homeVis[])
+    homeLayoutEnsure();
+    for(int k=0;k<homeVisN;k++){
+      int i=homeVis[k];
+      int col=k%cols, row=k/cols;
       int x=gap+col*(cw+gap), y=gridTop+row*(ch+gap)-scPx;
       if(y+ch<clipTop||y>contentBot)continue;
       float pa = homePressAmt(i);
@@ -5574,17 +5650,19 @@ Screen homeCheck(int x,int y,float sc){
   }
   int cols=homeCols(), cw=homeCardW(), ch=homeCardH();
   int gap=10, gridTop=homeGridTop();
-  for(int i=0;i<APP_COUNT;i++){
-    int col=i%cols,row=i/cols;
+  homeLayoutEnsure();
+  for(int k=0;k<homeVisN;k++){ // HOME-LAYOUT
+    int col=k%cols,row=k/cols;
     int ax=gap+col*(cw+gap), ay=gridTop+row*(ch+gap)-scPx;
-    if(x>=ax&&x<=ax+cw&&y>=ay&&y<=ay+ch) return apps[i].screen;
+    if(x>=ax&&x<=ax+cw&&y>=ay&&y<=ay+ch) return apps[homeVis[k]].screen;
   }
   return SCR_HOME;
 }
 
 int homeMaxScroll(){
+  homeLayoutEnsure();
   int cols=homeCols();
-  int rows=(APP_COUNT+cols-1)/cols;
+  int rows=(homeVisN+cols-1)/cols; // HOME-LAYOUT: hanya app yang tampil
   int ch=homeCardH(), gap=10, gridTop=homeGridTop(); // v-baru: samain persis sama drawHome() -- gap 8->10
   int needed = gridTop + rows*(ch+gap) - homeDockY();
   return max(0, needed);
@@ -5671,10 +5749,11 @@ int homeIndexAt(int x,int y,float sc){
   }
   if(y<homeGridClipTop()) return -1; // v105: tap di area header gak nembus ke ikon yg terpotong (gak kelihatan)
   int scPx=homeScrollPx(sc);
-  for(int i=0;i<APP_COUNT;i++){
-    int col=i%cols,row=i/cols;
+  homeLayoutEnsure();
+  for(int k=0;k<homeVisN;k++){ // HOME-LAYOUT
+    int col=k%cols,row=k/cols;
     int ax=gap+col*(cw+gap), ay=gridTop+row*(ch+gap)-scPx;
-    if(x>=ax&&x<=ax+cw&&y>=ay&&y<=ay+ch) return i;
+    if(x>=ax&&x<=ax+cw&&y>=ay&&y<=ay+ch) return homeVis[k];
   }
   return -1;
 }
@@ -7219,7 +7298,7 @@ int loadSpiOcPref(){
 // PENGATURAN ala iOS -- state layout & sentuhan (daftar scroll, tap-saat-lepas)
 // =====================================================================
 enum { SR_TITLE=0, SR_SECT, SR_BRIGHT, SR_THEME, SR_FONT, SR_ROT, SR_SPI, SR_SPIAPPLY,
-       SR_SCAN, SR_WIFI, SR_NONET, SR_SSID, SR_PASS, SR_CONNECT, SR_MPU, SR_TCAL, SR_OWNER, SR_ABOUT };
+       SR_SCAN, SR_WIFI, SR_NONET, SR_SSID, SR_PASS, SR_CONNECT, SR_MPU, SR_TCAL, SR_OWNER, SR_ABOUT, SR_HOMEEDIT };
 #define SETT_MAXROWS 40
 int settRT[SETT_MAXROWS], settRG[SETT_MAXROWS], settRY[SETT_MAXROWS], settRH[SETT_MAXROWS], settRA[SETT_MAXROWS];
 const char* settRL[SETT_MAXROWS];
@@ -7257,7 +7336,8 @@ void settBuildLayout(){
   settAddRow(SR_BRIGHT,g,34,0,nullptr,y);
   settAddRow(SR_THEME,g,52,0,nullptr,y);
   settAddRow(SR_FONT,g,34,0,nullptr,y);
-  settAddRow(SR_ROT,g,34,0,nullptr,y); g++;
+  settAddRow(SR_ROT,g,34,0,nullptr,y);
+  settAddRow(SR_HOMEEDIT,g,34,0,nullptr,y); g++;
 
   settAddRow(SR_SECT,0,26,0,"KINERJA",y);
   settAddRow(SR_SPI,g,38,0,nullptr,y);
@@ -7373,6 +7453,10 @@ void drawSettings(LGFX_Sprite& s){
         s.setTextColor(T().text); s.setCursor(xl,ty); s.print("Font");
         settChevron(s,xr-3,ty+4,T().subtext);
         settTextR(s,xr-12,ty,uiFontNames[uiFontIdx],T().subtext);
+        break;
+      case SR_HOMEEDIT:
+        s.setTextColor(T().text); s.setCursor(xl,ty); s.print("Atur Layar Home");
+        settChevron(s,xr-4,ry+rh/2,T().subtext);
         break;
       case SR_ROT:
         s.setTextColor(T().text); s.setCursor(xl,ty); s.print("Rotasi Otomatis");
@@ -7506,6 +7590,8 @@ void settTap(int x,int y){
       uiFontIdx=(uiFontIdx+1)%UI_FONT_COUNT; saveFontPref();
       showToast((String("Font: ")+uiFontNames[uiFontIdx]).c_str());
       needRedraw=true; break;
+    case SR_HOMEEDIT:
+      navPush(SCR_HOMEEDIT); break;
     case SR_ROT:
       autoRotateEnabled=!autoRotateEnabled; saveAutoRotatePref();
       showToast(autoRotateEnabled?"Auto-rotate aktif":"Auto-rotate mati");
@@ -17776,6 +17862,7 @@ void loop(){
     if(curScreen()==SCR_SETTINGS && !kbVisible) settingsPointerTick(touched,wasTouched,tx,ty); // Pengaturan ala iOS: scroll + tap-saat-lepas
     if(curScreen()==SCR_FILEEXPLORER) fileExpPointerTick(touched,wasTouched,tx,ty); // File Explorer: drag-scroll + ketuk saat lepas
     if(curScreen()==SCR_GALLERY) galPointerTick(touched,wasTouched,tx,ty);          // Galeri: scroll/ketuk + pemuat thumbnail
+    if(curScreen()==SCR_HOMEEDIT) homeEditPointerTick(touched,wasTouched,tx,ty);    // Atur Home: geser daftar + ketuk saat lepas
     int idx=appIndexForScreen(curScreen());
     if(idx>=0){
       bool held = touched&&wasTouched;
