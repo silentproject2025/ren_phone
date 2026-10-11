@@ -9469,8 +9469,8 @@ void renderHomeBandFrame(){
 bool toastVisibleNow(){ return toastMsg.length() && millis()<=toastUntil; }
 
 // =============================================
-// BOOT SEQUENCE — "Accretion" lalu logo OS "NyxOS" (tema accretion disk /
-// black hole), transisi ke UI
+// BOOT SEQUENCE — "Event Horizon" (v116) lalu logo OS "NyxOS" (tema accretion
+// disk / black hole), transisi ke UI
 // (sekarang main persis di orientasi yang tersimpan/dipilih user, karena
 // rotasi sudah di-set SEBELUM boot sequence dipanggil di setup() -- lihat
 // FIX v9 di bagian setup())
@@ -9528,28 +9528,26 @@ void glitchTextRGB(int cx,int y,const char* text,int size){
 }
 
 // =================================================================
-// v27: BOOT SEQUENCE "ACCRETION"/"NyxOS" DIPERBAIKI -- keluhan user:
-// (1) partikel BERHENTI bergerak setelah menyatu jd cincin (dulu diganti
-//     jd gambar cincin statis/bootDrawAccretionRing) -- SEKARANG partikel
-//     TERUS diupdate posisinya tiap frame (orbit gak pernah berhenti,
-//     lanjut jg selagi bertransformasi jd huruf, & msh sedikit "shimmer"
-//     biarpun udah kebentuk hurufnya) -- gak pernah ada momen "beku".
-// (2) partikel SEKARANG BENERAN membentuk tulisan "ACCRETION" (bukan
-//     cuma teks canvas.print() terpisah) -- posisi target tiap partikel
-//     dihitung dr font blok mini 3x5 custom (bootLetterFont) yg di-sample
-//     jadi titik2 koordinat (bootBuildTextPoints), dipetakan 1:1 ke
-//     tiap partikel.
-// (3) "NyxOS" diperbesar (textSize 1->2, disamakan besarnya dgn
-//     "ACCRETION") + efek "bold" murah (digambar 2x offset 1px, trik yg
-//     sama dgn glow judul).
-// (4) Kesan LEBIH MEWAH (bkn dramatis): ritme diperlambat sedikit &
-//     lebih "tenang" (bkn buru2), ditambah glow radial lembut di
-//     belakang formasi huruf (masih trik cheap-glow layered-circle yg
-//     sama, BUKAN alpha blending baru), warna tetap netral (putih hangat
-//     + oranye redup), gak ada flash/strobe/potongan mendadak.
-// Fungsi bantu (navEase, lerpColor565, bootDrawGradientBg, push(),
-// bootFade, palet BOOT_*/ACCR_*) TETAP dipakai ulang persis spt versi
-// sebelumnya.
+// v116: BOOT SEQUENCE "EVENT HORIZON" -- animasi boot DIROMBAK TOTAL
+// (versi lama: partikel spiral -> huruf "ACCRETION" -> "NyxOS").
+// Sekarang ceritanya satu rangkaian utuh, tetap tema black hole:
+//   1) titik cahaya kecil (singularitas) muncul di tengah layar gelap
+//   2) event horizon (lingkaran hitam) membesar, cincin foton menyala,
+//      piringan akresi (180 partikel, miring ala sudut pandang
+//      "Interstellar") spiral masuk dari pinggir layar, lalu orbit terus
+//   3) fisika ala-ala: partikel dalam berputar lebih cepat (Keplerian),
+//      sisi kiri piringan lebih terang (efek Doppler), bagian piringan
+//      yg di belakang lubang hitam "dibengkokkan" jd busur di ATAS lubang
+//      (gravitational lensing), bagian depan lewat di depan lubang
+//   4) piringan runtuh ke satu titik -> melebar jadi garis cahaya
+//      horizontal -> garis turun jadi garis bawah, huruf "NyxOS" muncul
+//      dgn jarak antar-huruf merapat
+//   5) tagline "Beyond the Event Horizon" fade-in
+// Latar PURE BLACK (selaras tema Full Dark), tanpa flash/strobe, glitch
+// RGB lama dihapus dari alur boot. Gambar tetap pakai trik murah
+// (fillCircle/fillRect berlapis), BUKAN alpha blending sungguhan.
+// Fungsi lama yg masih dipakai di luar blok ini (lerpColor565, navEase,
+// push(), bootFade) TIDAK diubah.
 // =================================================================
 uint16_t lerpColor565(uint16_t c1, uint16_t c2, float t){
   if(t<0)t=0; if(t>1)t=1;
@@ -9565,200 +9563,209 @@ void bootDrawGradientBg(int x,int y,int w,int h,int totalH,uint16_t top,uint16_t
   }
 }
 
-uint16_t BOOT_ACCENT = 0xFFFF;
-uint16_t BOOT_GLOW   = 0x39C7;
-uint16_t BOOT_BG_TOP = 0x0841; // biru-hitam sangat gelap (kedalaman ruang angkasa)
-uint16_t BOOT_BG_BOT = 0x0000; // hitam pekat
-uint16_t ACCR_DISK_IN  = 0xFFDD; // putih hangat -- partikel paling "panas"/dkt pusat
-uint16_t ACCR_DISK_MID = 0xFD40; // oranye terang
-uint16_t ACCR_DISK_OUT = 0x6000; // merah gelap, meredup ke hitam
+// RGB 8-bit -> RGB565 (dipakai spy warna boot bisa ditulis intuitif)
+uint16_t bootRGB(uint8_t r,uint8_t g,uint8_t b){
+  return (uint16_t)(((r&0xF8)<<8)|((g&0xFC)<<3)|(b>>3));
+}
 
-// ---- Font blok mini 3 kolom x 5 baris, custom, cuma utk huruf yg dipakai
-// kata "ACCRETION" -- disample jadi titik koordinat, BUKAN dirender lewat
-// canvas.print() (font sistem gak bisa dijadiin titik partikel). ----
-const char* const BOOT_FONT_A[5] = {".#.","#.#","###","#.#","#.#"};
-const char* const BOOT_FONT_C[5] = {".##","#..","#..","#..",".##"};
-const char* const BOOT_FONT_R[5] = {"##.","#.#","##.","#.#","#.#"};
-const char* const BOOT_FONT_E[5] = {"###","#..","##.","#..","###"};
-const char* const BOOT_FONT_T[5] = {"###",".#.",".#.",".#.",".#."};
-const char* const BOOT_FONT_I[5] = {"###",".#.",".#.",".#.","###"};
-const char* const BOOT_FONT_O[5] = {".#.","#.#","#.#","#.#",".#."};
-const char* const BOOT_FONT_N[5] = {"#.#","###","#.#","#.#","#.#"};
-const char* const* bootLetterFont(char c){
-  switch(c){
-    case 'A': return BOOT_FONT_A;
-    case 'C': return BOOT_FONT_C;
-    case 'R': return BOOT_FONT_R;
-    case 'E': return BOOT_FONT_E;
-    case 'T': return BOOT_FONT_T;
-    case 'I': return BOOT_FONT_I;
-    case 'O': return BOOT_FONT_O;
-    case 'N': return BOOT_FONT_N;
-    default:  return BOOT_FONT_A;
+// Warna piringan akresi: u=0 (dekat lubang, paling panas, putih hangat)
+// -> u=1 (pinggir luar, dingin, merah gelap). Tanpa kuning.
+uint16_t bootDiskColor(float u){
+  const uint16_t HOT  = bootRGB(255,238,214);
+  const uint16_t MID  = bootRGB(255,128,36);
+  const uint16_t COLD = bootRGB(130,26,14);
+  if(u<0.35f) return lerpColor565(HOT,MID,u/0.35f);
+  return lerpColor565(MID,COLD,(u-0.35f)/0.65f);
+}
+
+#define BOOT_DISK_N 180
+struct BootDiskP{
+  float u;       // posisi radial ternormalisasi 0..1 (lebih rapat di dalam)
+  float r;       // radius orbit
+  float phi0;    // sudut awal
+  float omega;   // kecepatan sudut (rad/detik) -- hukum Kepler, dalam lebih cepat
+  int8_t  jy;    // ketebalan vertikal piringan (px, -1..+1)
+  uint8_t sz;    // 1 = titik kecil, 2 = titik terang berglow
+};
+BootDiskP bootDisk[BOOT_DISK_N];
+
+// Sudut & radius disebar merata (urutan golden-ratio + sedikit acak) spy
+// piringan gak menggumpal di satu sisi spt random murni.
+void bootDiskInit(float rIn,float rOut){
+  for(int i=0;i<BOOT_DISK_N;i++){
+    BootDiskP& p=bootDisk[i];
+    float strat=fmodf(i*0.6180339f,1.0f);
+    float rnd=strat*0.75f + (random(0,1000)/1000.0f)*0.25f;
+    p.u     = powf(rnd,1.7f);
+    p.r     = rIn + p.u*(rOut-rIn);
+    p.phi0  = fmodf(i*2.3999632f,6.2831853f) + (random(0,1000)/1000.0f-0.5f)*0.5f;
+    p.omega = 2.6f*powf(rIn/p.r,1.5f);
+    p.jy    = (int8_t)random(-1,2);
+    p.sz    = (p.u<0.18f)?2:1;
   }
 }
 
-struct BootTextPoint{ float x,y; };
-#define BOOT_TEXT_POINTS_MAX 90
-BootTextPoint bootTextPoints[BOOT_TEXT_POINTS_MAX];
-int bootTextPointCount=0;
+// 1 titik partikel: kecil = kotak 2x2 tajam, terang = kotak 2x2 + glow bulat tipis
+void bootDot(int x,int y,int sz,uint16_t col){
+  if(sz>=2) canvas.fillCircle(x,y,2,lerpColor565(0x0000,col,0.30f));
+  canvas.fillRect(x,y,2,2,col);
+}
 
-// Hitung sekali di awal: posisi absolut tiap titik "on" di font blok utk
-// kata "ACCRETION", di-tengahkan horizontal & diposisikan relatif ke
-// pusat cincin (cx,cy dipakai konsisten di semua tahap).
-void bootBuildTextPoints(int cx,int cy){
-  const char* word="ACCRETION";
-  int n=(int)strlen(word);
-  const int cellPx=6, letterW=3*cellPx, letterGap=cellPx;
-  int totalW = n*letterW + (n-1)*letterGap;
-  int startX = cx - totalW/2;
-  int startY = cy - (5*cellPx)/2;
-  bootTextPointCount=0;
-  for(int li=0; li<n; li++){
-    const char* const* glyph = bootLetterFont(word[li]);
-    int lx = startX + li*(letterW+letterGap);
-    for(int row=0; row<5; row++){
-      for(int col=0; col<3; col++){
-        if(glyph[row][col]=='#' && bootTextPointCount<BOOT_TEXT_POINTS_MAX){
-          bootTextPoints[bootTextPointCount].x = lx + col*cellPx + cellPx*0.5f;
-          bootTextPoints[bootTextPointCount].y = startY + row*cellPx + cellPx*0.5f;
-          bootTextPointCount++;
-        }
-      }
+// Glow oranye lembut di belakang lubang hitam (3 lingkaran berlapis)
+void bootDrawAmbientGlow(int cx,int cy,int r,float a){
+  if(a<=0.02f || r<4) return;
+  uint16_t c=bootRGB(255,110,30);
+  canvas.fillCircle(cx,cy,r,              lerpColor565(0x0000,c,0.07f*a));
+  canvas.fillCircle(cx,cy,(int)(r*0.72f), lerpColor565(0x0000,c,0.12f*a));
+  canvas.fillCircle(cx,cy,(int)(r*0.46f), lerpColor565(0x0000,c,0.20f*a));
+}
+
+// Garis cahaya horizontal: terang di tengah, meredup ke ujung (+ glow
+// tipis 1px di atas/bawahnya)
+void bootDrawHorizonLine(int cx,int y,int halfW,float alpha){
+  if(halfW<2 || alpha<=0.01f) return;
+  const uint16_t ORG=bootRGB(255,120,30), WHT=bootRGB(255,240,220);
+  for(int dx=-halfW; dx<halfW; dx+=2){
+    float f=1.0f-fabsf((float)dx)/(float)halfW;
+    f=f*f;
+    uint16_t col=(f>0.5f) ? lerpColor565(ORG,WHT,(f-0.5f)*2.0f)
+                          : lerpColor565(0x0000,ORG,f*2.0f);
+    canvas.fillRect(cx+dx,y,2,1,lerpColor565(0x0000,col,alpha));
+    uint16_t gl=lerpColor565(0x0000,col,alpha*0.22f);
+    canvas.fillRect(cx+dx,y-1,2,1,gl);
+    canvas.fillRect(cx+dx,y+1,2,1,gl);
+  }
+}
+
+// Teks "NyxOS" (textSize 3 = 18px/huruf). gap = jarak ekstra antar huruf
+// (besar saat baru muncul, 0 saat sudah final), tp = 0..1 terang teks.
+void bootDrawNyxText(int cx,int cy,int gap,float tp){
+  const char* osName="NyxOS";
+  const int n=5, cw=18;
+  int totalW=n*cw+(n-1)*gap;
+  int x0=cx-totalW/2, ty=cy-14;
+  uint16_t shadow=lerpColor565(0x0000,bootRGB(255,110,30),0.40f*tp);
+  uint16_t txt=lerpColor565(0x0000,0xFFFF,tp);
+  canvas.setTextSize(3);
+  for(int pass=0;pass<2;pass++){
+    for(int i=0;i<n;i++){
+      char one[2]={osName[i],0};
+      int px=x0+i*(cw+gap);
+      if(pass==0){ canvas.setTextColor(shadow); canvas.setCursor(px+1,ty+1); }
+      else       { canvas.setTextColor(txt);    canvas.setCursor(px,ty);     }
+      canvas.print(one);
     }
   }
-}
-
-// ---- Partikel: 1 struct dipakai di SEMUA tahap (spiral -> orbit terus
-// -> membentuk huruf), gak pernah "diganti" jadi objek statis lain spt
-// versi sebelumnya -- makanya gerakannya gak pernah beneran berhenti. ----
-struct BootParticle{
-  float ang0;         // sudut awal (dr Tahap spiral)
-  float r0;           // radius awal (di pinggir layar)
-  float spinSpeed;     // variasi kecepatan spiral per partikel
-  float orbitR;        // radius orbit final (beda2 tipis per partikel, kesan cincin "berlapis")
-  float orbitOmega;    // kecepatan sudut orbit (rad/detik) -- TERUS jalan, gak pernah 0
-  float jitterPhX, jitterPhY; // fase jitter pribadi (biar gak semua partikel "berdenyut" bareng)
-  int   textIdx;        // indeks target di bootTextPoints (-1 kalau kebagian jatah lebih, jarang terjadi)
-};
-BootParticle bootParticles[BOOT_TEXT_POINTS_MAX];
-int bootParticleCount=0;
-
-void bootInitParticles(int w,int h,int cx,int cy){
-  bootBuildTextPoints(cx,cy);
-  bootParticleCount = bootTextPointCount;
-  float maxR = sqrtf((float)(w*w+h*h))/2.0f;
-  for(int i=0;i<bootParticleCount;i++){
-    BootParticle& p=bootParticles[i];
-    p.ang0 = (random(0,3600)/10.0f)*(PI/180.0f);
-    p.r0 = maxR*(0.72f + (random(0,100)/100.0f)*0.35f);
-    p.spinSpeed = 0.85f + (random(0,100)/100.0f)*0.35f;
-    p.orbitR = 26.0f + (random(0,100)/100.0f)*20.0f; // ~26-46px, cincin terkesan "berlapis" bkn 1 garis tipis kaku
-    p.orbitOmega = (0.5f + (random(0,100)/100.0f)*0.35f); // rad/detik, semua arah SAMA (kesan disk yg koheren, bkn kacau)
-    p.jitterPhX = (random(0,628))/100.0f;
-    p.jitterPhY = (random(0,628))/100.0f;
-    p.textIdx = i;
-  }
-}
-// "Cheap glow" 1 titik partikel -- inti kecil + lingkaran buram lebih
-// besar di belakangnya (di-lerp ke background), trik yg sama persis dgn
-// versi sebelumnya, cuma dipakai ulang.
-void bootDrawGlowDot(int x,int y,int coreR,uint16_t color,uint16_t bg){
-  canvas.fillCircle(x,y,coreR+3,lerpColor565(bg,color,0.30f));
-  canvas.fillCircle(x,y,coreR+1,lerpColor565(bg,color,0.55f));
-  canvas.fillCircle(x,y,coreR,color);
-}
-// Glow radial lembut MURAH di belakang formasi (dipakai pas huruf udah
-// kebentuk, kesan "mewah") -- beberapa fillCircle besar transparan-semu,
-// BUKAN alpha blending sungguhan, sama semangat dgn bootDrawGlowDot cuma
-// skalanya lebih besar & lebih redup.
-void bootDrawAmbientGlow(int cx,int cy,int r,float alpha,uint16_t bg){
-  if(alpha<=0.01f) return;
-  canvas.fillCircle(cx,cy,r,      lerpColor565(bg,ACCR_DISK_MID,0.12f*alpha));
-  canvas.fillCircle(cx,cy,(int)(r*0.7f),lerpColor565(bg,ACCR_DISK_MID,0.20f*alpha));
-  canvas.fillCircle(cx,cy,(int)(r*0.4f),lerpColor565(bg,ACCR_DISK_IN, 0.28f*alpha));
 }
 
 // ---- Tahap 1: jeda hitam total sesaat ----
-void bootStageAccretionPause(int w,int h){
+void bootStageHorizonPause(int w,int h){
+  (void)w; (void)h;
   canvas.fillSprite(0x0000);
   push();
-  delay(320);
+  delay(250);
 }
 
-// ---- Tahap 2+3+4 DIGABUNG jadi SATU loop waktu-kontinu (bkn 3 fungsi
-// terpisah spt sblmnya) -- ini KUNCI perbaikannya: krn 1 loop yg sama
-// terus jalan dr partikel spiral masuk -> orbit -> membentuk huruf,
-// posisi partikel SELALU dihitung ulang tiap frame dr waktu ASLI
-// (bukan "dibekukan" di akhir 1 fungsi lalu diganti gambar lain), jadi
-// gerakannya kerasa menyambung & hidup terus. ----
-void bootStageAccretionLive(int w,int h){
-  int cx=w/2, cy=h/2-14;
-  bootInitParticles(w,h,cx,cy);
+// ---- Tahap 2: singularitas -> lubang hitam + piringan -> runtuh ----
+// SATU loop waktu-kontinu (posisi tiap partikel dihitung dari waktu asli
+// tiap frame, bukan dibekukan), jadi gerakannya gak pernah putus.
+void bootStageEventHorizon(int w,int h){
+  const int   cx=w/2, cy=h/2-16;
+  const float R=20.0f;            // radius event horizon
+  const float rIn=R*1.7f;         // tepi dalam piringan
+  float rOut=(float)(w/2-10); if(rOut>112.0f) rOut=112.0f;
+  const float TILT=0.26f;         // kemiringan piringan (tinggi/lebar)
+  bootDiskInit(rIn,rOut);
 
-  const unsigned long SPIRAL_DUR = 1300; // partikel spiral dr pinggir -> radius orbit
-  const unsigned long ORBIT_DUR  = 650;  // murni berputar dulu sesaat sblm berubah jd huruf (biar "disk"-nya sempet dinikmati)
-  const unsigned long FORM_DUR   = 950;  // transisi orbit -> posisi huruf
-  const unsigned long HOLD_DUR   = 600;  // huruf sudah kebentuk, msh shimmer, sblm lanjut ke tahap OS
-  const unsigned long TOTAL = SPIRAL_DUR+ORBIT_DUR+FORM_DUR+HOLD_DUR;
-
+  const unsigned long SEED=350, IGN=1000, ORB=1100, COL=650;
+  const unsigned long TOTAL=SEED+IGN+ORB+COL;
   unsigned long t0=millis();
   for(;;){
-    unsigned long el = millis()-t0;
-    if(el>TOTAL) el=TOTAL;
-    float tSec = el/1000.0f;
+    unsigned long el=millis()-t0; if(el>TOTAL) el=TOTAL;
+    float tSec=el/1000.0f;
 
-    // formProg: 0 selama spiral+orbit, lalu naik 0->1 selama FORM_DUR, tetap 1 pas HOLD
-    float formProg=0.0f;
-    if(el > SPIRAL_DUR+ORBIT_DUR){
-      float lp=(float)(el-SPIRAL_DUR-ORBIT_DUR)/FORM_DUR; if(lp>1.0f) lp=1.0f;
-      formProg = navEase(lp);
+    float seedP=(el<SEED)? navEase((float)el/SEED) : 1.0f;
+    float ignP=0.0f;
+    if(el>SEED){ ignP=(float)(el-SEED)/IGN; if(ignP>1.0f) ignP=1.0f; }
+    float colP=0.0f;
+    if(el>SEED+IGN+ORB){
+      colP=(float)(el-SEED-IGN-ORB)/COL; if(colP>1.0f) colP=1.0f;
+      colP=navEase(colP);
     }
-    // spiralProg: 0->1 selama SPIRAL_DUR, lalu tetap 1 seterusnya
-    float spiralLp = (float)el/SPIRAL_DUR; if(spiralLp>1.0f) spiralLp=1.0f;
-    float spiralP = navEase(spiralLp);
-    // ringAlpha: cincin/glow disk terlihat penuh pas orbit, memudar selagi formProg naik
-    float ringAlpha = 1.0f - formProg;
-    // ambientAlpha (glow di belakang huruf): naik selagi formProg naik
-    float ambientAlpha = formProg;
+    float holeP=navEase(ignP);
+    float scale=1.0f-colP;
+    float curR=R*holeP*scale;
+    float spin=colP*colP*6.0f;
+    float pulse=0.88f+0.12f*sinf(tSec*5.0f);
 
-    bootDrawGradientBg(0,0,w,h,h,BOOT_BG_TOP,BOOT_BG_BOT);
-    if(ambientAlpha>0.02f) bootDrawAmbientGlow(cx,cy,50,ambientAlpha,BOOT_BG_BOT);
+    canvas.fillSprite(0x0000);
 
-    for(int i=0;i<bootParticleCount;i++){
-      BootParticle& pt=bootParticles[i];
+    // singularitas: titik cahaya yg lenyap begitu lubang hitam tumbuh
+    float pointA=seedP*(1.0f-holeP);
+    if(pointA>0.03f){
+      canvas.fillCircle(cx,cy,(int)(4+10*pointA),lerpColor565(0x0000,bootRGB(255,110,30),0.18f*pointA));
+      canvas.fillCircle(cx,cy,(int)(2+4*pointA), lerpColor565(0x0000,bootRGB(255,238,214),0.50f*pointA));
+      canvas.fillCircle(cx,cy,2,                 lerpColor565(0x0000,0xFFFF,pointA));
+    }
 
-      // posisi ORBIT (selalu dihitung dr waktu asli -- INI yg bikin
-      // gerakannya gak pernah berhenti, beda dr versi lama yg nge-freeze
-      // jd lingkaran statis stlh spiral selesai).
-      float pp = spiralP*pt.spinSpeed; if(pp>1.0f) pp=1.0f;
-      float rSpiral = pt.r0*(1.0f-pp) + pt.orbitR*pp;
-      float angSpiral = pt.ang0 + pp*pp*7.0f;
-      float orbitAngNow = angSpiral + pt.orbitOmega*tSec; // TERUS bertambah seiring waktu, gak pernah statis
-      float orbX = cx + cosf(orbitAngNow)*rSpiral;
-      float orbY = cy + sinf(orbitAngNow)*rSpiral;
+    bootDrawAmbientGlow(cx,cy,(int)(curR*2.7f+6.0f),holeP*scale*pulse);
 
-      // posisi TARGET (titik huruf "ACCRETION")
-      float txX=orbX, txY=orbY;
-      if(pt.textIdx>=0 && pt.textIdx<bootTextPointCount){
-        txX = bootTextPoints[pt.textIdx].x;
-        txY = bootTextPoints[pt.textIdx].y;
+    // gelombang kejut tipis pas piringan "menyala"
+    unsigned long swStart=SEED+(unsigned long)(IGN*0.85f);
+    if(el>swStart && el<swStart+550){
+      float sp=(float)(el-swStart)/550.0f;
+      float rr=curR*1.6f + sp*(rOut-curR*1.6f)*1.05f;
+      uint16_t sc=lerpColor565(0x0000,bootRGB(255,150,70),0.55f*(1.0f-sp));
+      canvas.drawEllipse(cx,cy,(int)rr,(int)(rr*TILT*1.15f),sc);
+    }
+
+    // pass 0 = piringan bagian BELAKANG + busur lensing, lalu lubang hitam,
+    // pass 1 = piringan bagian DEPAN (lewat di depan lubang)
+    for(int pass=0; pass<2; pass++){
+      if(pass==1 && curR>1.0f){
+        int hr=(int)curR;
+        uint16_t ringHot=lerpColor565(0x0000,bootRGB(255,236,210),pulse*holeP);
+        canvas.fillCircle(cx,cy,hr+3,lerpColor565(0x0000,bootRGB(255,120,40),0.30f*holeP));
+        canvas.fillCircle(cx,cy,hr+1,ringHot);
+        canvas.fillCircle(cx,cy,hr,0x0000);
       }
+      for(int i=0;i<BOOT_DISK_N;i++){
+        BootDiskP& p=bootDisk[i];
+        float pp=(ignP-p.u*0.40f)/0.55f;
+        if(pp<=0.0f) continue;
+        if(pp>1.0f) pp=1.0f;
+        pp=navEase(pp);
 
-      // jitter halus PERMANEN (kecil aja) -- spy pas udah kebentuk hurufnya
-      // pun msh "shimmer"/hidup, gak beku jd titik mati.
-      float jitterAmp = 1.3f;
-      float jx = sinf(tSec*2.6f+pt.jitterPhX)*jitterAmp;
-      float jy = cosf(tSec*2.3f+pt.jitterPhY)*jitterAmp;
+        float rr=p.r*(1.0f+(1.0f-pp)*1.2f)*scale;
+        float phi=p.phi0 + p.omega*tSec + (1.0f-pp)*(1.0f-pp)*3.2f + spin*(rIn/p.r);
+        float s=sinf(phi), c=cosf(phi);
+        bool back=(s<0.0f);
+        if(pass==1 && back) continue;
 
-      float px = orbX*(1.0f-formProg) + txX*formProg + jx*formProg; // jitter cuma berasa signifikan pas udah dkt bentuk huruf
-      float py = orbY*(1.0f-formProg) + txY*formProg + jy*formProg;
+        float dop=0.68f-0.32f*c;          // sisi kiri lebih terang (Doppler)
+        float k=pp*dop;
+        uint16_t base=lerpColor565(bootDiskColor(p.u),0xFFFF,colP*0.85f);
 
-      int coreR = 1 + (int)(1.4f*pp);
-      uint16_t col = lerpColor565(ACCR_DISK_MID, ACCR_DISK_IN, 0.4f+0.6f*pp);
-      bootDrawGlowDot((int)px,(int)py,coreR,col,BOOT_BG_BOT);
+        if(pass==0 && p.u<0.55f && curR>3.0f){
+          float rl,kl;
+          if(back){ rl=curR*(1.22f+p.u*0.9f);  kl=k; }        // busur atas (terang)
+          else    { rl=curR*(1.10f+p.u*0.35f); kl=k*0.45f; }  // busur bawah (redup)
+          int lx=cx+(int)(c*rl), ly=cy+(int)(s*rl);
+          bootDot(lx,ly,1,lerpColor565(0x0000,base,kl));
+        }
+        if(pass==0 && !back) continue;
+
+        int fx=cx+(int)(c*rr);
+        int fy=cy+(int)(s*rr*TILT + (float)p.jy*scale);
+        bootDot(fx,fy,p.sz,lerpColor565(0x0000,base,k));
+      }
     }
-    (void)ringAlpha; // (disk/orbit-nya sendiri UDAH terlihat dr posisi partikel yg berputar, gak perlu cincin statis terpisah lg)
+
+    // titik terang di akhir runtuh (jadi sumber garis cahaya tahap berikutnya)
+    if(colP>0.0f){
+      canvas.fillCircle(cx,cy,(int)(3+colP*5),lerpColor565(0x0000,bootRGB(255,238,214),0.40f*colP));
+      canvas.fillCircle(cx,cy,(int)(1+colP*2),lerpColor565(0x0000,0xFFFF,colP));
+    }
 
     push();
     if(el>=TOTAL) break;
@@ -9768,46 +9775,32 @@ void bootStageAccretionLive(int w,int h){
   }
 }
 
-// ---- Tahap 5: formasi huruf "ACCRETION" (msh shimmer) memudar sambil
-// sedikit menyebar keluar (kesan debu accretion disk terurai), "NyxOS"
-// (diperbesar, textSize 2 spt "ACCRETION" + efek bold murah 2x-offset)
-// fade-in di posisi sama. ----
-void bootStageAccretionToOS(int w,int h){
-  int cx=w/2, cy=h/2-14;
-  const char* osName="NyxOS";
-  int twOs=(int)strlen(osName)*12; // textSize 2 -> ~12px/karakter
-  const unsigned long DUR=650;
+// ---- Tahap 3: titik -> garis cahaya horizontal -> garis turun jadi garis
+// bawah, "NyxOS" muncul dgn jarak huruf merapat ----
+void bootStageHorizonReveal(int w,int h){
+  const int cx=w/2, cy=h/2-16;
+  int lineMax=(w-30<200)?(w-30):200;
+  int halfMax=lineMax/2;
+  const unsigned long DUR=900;
   unsigned long t0=millis();
   for(;;){
     float lp=(float)(millis()-t0)/DUR; if(lp>1.0f) lp=1.0f;
-    float p=navEase(lp);
-    float tSec=(millis()-t0)/1000.0f;
+    float lineP=lp/0.35f; if(lineP>1.0f) lineP=1.0f; lineP=navEase(lineP);
+    float tp=(lp-0.25f)/0.75f; if(tp<0.0f) tp=0.0f; tp=navEase(tp);
 
-    bootDrawGradientBg(0,0,w,h,h,BOOT_BG_TOP,BOOT_BG_BOT);
-    bootDrawAmbientGlow(cx,cy,50,1.0f-p,BOOT_BG_BOT); // glow di belakang ikut memudar
+    canvas.fillSprite(0x0000);
 
-    // partikel huruf menyebar tipis keluar dr posisi asalnya sambil pudar
-    for(int i=0;i<bootParticleCount;i++){
-      BootParticle& pt=bootParticles[i];
-      if(pt.textIdx<0 || pt.textIdx>=bootTextPointCount) continue;
-      float bx=bootTextPoints[pt.textIdx].x, by=bootTextPoints[pt.textIdx].y;
-      float dx=bx-cx, dy=by-cy;
-      float dist=sqrtf(dx*dx+dy*dy); if(dist<0.001f) dist=0.001f;
-      float driftPx = 22.0f*p; // menyebar keluar dr pusat formasi
-      float px = bx + (dx/dist)*driftPx;
-      float py = by + (dy/dist)*driftPx;
-      uint16_t col = lerpColor565(ACCR_DISK_IN, BOOT_BG_BOT, p); // ikut jd redup/transparan-semu ke background
-      canvas.fillCircle((int)px,(int)py,1,col);
+    float coreA=1.0f-lineP;
+    if(coreA>0.05f){
+      canvas.fillCircle(cx,cy,(int)(3+5*coreA),lerpColor565(0x0000,bootRGB(255,238,214),0.40f*coreA));
+      canvas.fillCircle(cx,cy,(int)(1+2*coreA),lerpColor565(0x0000,0xFFFF,coreA));
     }
-    (void)tSec;
 
-    // "NyxOS" fade-in, DIPERBESAR (textSize 2, sama dgn "ACCRETION" sblmnya)
-    // + efek bold murah: digambar 2x, sekali offset 1px sbg "berat" visual.
-    uint16_t osCol = lerpColor565(BOOT_BG_BOT,0xFFFF,p);
-    canvas.setTextSize(2);
-    canvas.setTextColor(osCol);
-    canvas.setCursor(cx-twOs/2+1,cy-8); canvas.print(osName);
-    canvas.setCursor(cx-twOs/2,cy-8);   canvas.print(osName);
+    int halfW=(int)(halfMax*lineP*(1.0f-0.4f*tp));
+    int lineY=cy+(int)(17.0f*tp);
+    bootDrawHorizonLine(cx,lineY,halfW,lineP*(1.0f-0.3f*tp));
+
+    if(tp>0.01f) bootDrawNyxText(cx,cy,(int)((1.0f-tp)*18.0f),tp);
 
     push();
     if(lp>=1.0f) break;
@@ -9815,27 +9808,26 @@ void bootStageAccretionToOS(int w,int h){
     if(wifiConnected && webServerRunning) webServer.handleClient();
     yield();
   }
-  delay(200);
+  delay(120);
 }
-// ---- Tahap 6: tagline fade-in halus, terakhir. ----
-void bootStageAccretionTagline(int w,int h){
-  int cx=w/2, cy=h/2-14;
-  const char* osName="NyxOS"; int twOs=(int)strlen(osName)*12;
+
+// ---- Tahap 4: tagline fade-in halus, terakhir. ----
+void bootStageHorizonTagline(int w,int h){
+  const int cx=w/2, cy=h/2-16;
   const char* tag="Beyond the Event Horizon"; int twTag=(int)strlen(tag)*6;
-  const unsigned long DUR=600;
+  const unsigned long DUR=550;
   unsigned long t0=millis();
   for(;;){
     float lp=(float)(millis()-t0)/DUR; if(lp>1.0f) lp=1.0f;
     float p=navEase(lp);
 
-    bootDrawGradientBg(0,0,w,h,h,BOOT_BG_TOP,BOOT_BG_BOT);
-    canvas.setTextSize(2); canvas.setTextColor(0xFFFF);
-    canvas.setCursor(cx-twOs/2+1,cy-8); canvas.print(osName);
-    canvas.setCursor(cx-twOs/2,cy-8);   canvas.print(osName);
+    canvas.fillSprite(0x0000);
+    bootDrawNyxText(cx,cy,0,1.0f);
+    bootDrawHorizonLine(cx,cy+17,60,0.70f);
 
     canvas.setTextSize(1);
-    canvas.setTextColor(lerpColor565(BOOT_BG_BOT,0x8C51,p)); // abu redup -- tone yg sama dgn tagline versi sblmnya
-    canvas.setCursor(cx-twTag/2,cy+22); canvas.print(tag);
+    canvas.setTextColor(lerpColor565(0x0000,bootRGB(150,150,165),p));
+    canvas.setCursor(cx-twTag/2,cy+30); canvas.print(tag);
 
     push();
     if(lp>=1.0f) break;
@@ -9843,7 +9835,7 @@ void bootStageAccretionTagline(int w,int h){
     if(wifiConnected && webServerRunning) webServer.handleClient();
     yield();
   }
-  delay(280);
+  delay(380);
 }
 
 void runBootSequence(){
@@ -9854,10 +9846,10 @@ void runBootSequence(){
 
   bootFade(0,255,8,6); // fade masuk gelap->terang (reuse persis fungsi lama)
 
-  bootStageAccretionPause(w,h);       // 1) jeda hitam
-  bootStageAccretionLive(w,h);        // 2-4) spiral -> orbit terus -> membentuk huruf "ACCRETION" (gak pernah beku)
-  bootStageAccretionToOS(w,h);        // 5) huruf terurai, "NyxOS" muncul besar
-  bootStageAccretionTagline(w,h);     // 6) tagline fade-in
+  bootStageHorizonPause(w,h);         // 1) jeda hitam
+  bootStageEventHorizon(w,h);         // 2) singularitas -> lubang hitam + piringan akresi -> runtuh
+  bootStageHorizonReveal(w,h);        // 3) garis cahaya -> "NyxOS" muncul
+  bootStageHorizonTagline(w,h);       // 4) tagline fade-in
 
   bootFade(255,0,7,5);
   delay(60);
@@ -16777,7 +16769,7 @@ void setup(){
   canvas.setPsram(true);
   canvas.createSprite(display.width(),display.height());
 
-  runBootSequence(); // v26: "Accretion" -> logo OS "NyxOS" -> transisi ke UI (skrg ikut orientasi tersimpan)
+  runBootSequence(); // v116: "Event Horizon" -> logo OS "NyxOS" -> transisi ke UI (skrg ikut orientasi tersimpan)
   // v45: dulu ada `display.setBrightness(brightness);` di sini -- itu yg
   // bikin backlight nyala penuh SEBELUM lock screen digambar (lihat
   // komentar v45 di akhir runBootSequence() utk detail akar masalahnya).
