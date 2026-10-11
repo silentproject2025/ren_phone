@@ -289,7 +289,7 @@ Semua kunci API disimpan sebagai file teks biasa di SD Card (otomatis dibuat saa
 | File | Untuk Fitur | Info |
 |---|---|---|
 | `/gemini_key.txt` | AI Chat (teks + dikte suara) | Gratis di Google AI Studio. Kalau SD tidak terdeteksi, key disimpan di NVS sebagai fallback |
-| `/nasa_key.txt` | Astronomi, NEO Asteroid, Bumi EPIC, Galeri NASA | Boleh `DEMO_KEY` (limit kecil), atau ambil gratis di api.nasa.gov |
+| `/nasa_key.txt` | NEO Asteroid, Bumi EPIC, Galeri NASA | Boleh `DEMO_KEY` (limit kecil), atau ambil gratis di api.nasa.gov. **Astronomi (APOD) tidak butuh key lagi** — sejak v119 pakai endpoint baru science.nasa.gov tanpa key |
 
 WiFi diatur dari app **Setting**, lengkap dengan scan jaringan sekitar.
 
@@ -383,7 +383,7 @@ Repo ini juga menyertakan `Bruce-accretion-phone.bin` — build biner dari fork 
 - **Wake Word bukan neural net.** Ia mengenali suara dan kata *kamu sendiri* (speaker-dependent) dari 4 rekaman. Di ruang bising atau kata yang mirip bisa salah picu atau meleset. Mic dipakai bergantian dengan dikte AI Chat dan Mic Level.
 - **NyxPPU masih fase 1**: baru dipakai di app PPU Demo, belum dipasang ke Inferno atau Home Screen.
 - Estimasi baterai murni dari pembacaan tegangan ADC (bukan fuel-gauge IC), anggap perkiraan kasar.
-- `DEMO_KEY` NASA limitnya kecil — kalau sering dipakai, ambil key pribadi (gratis).
+- `DEMO_KEY` NASA limitnya kecil — kalau sering dipakai, ambil key pribadi (gratis). Tidak berlaku untuk Astronomi (APOD), yang sejak v119 tanpa key.
 - `phone_notif_center.ino` sengaja dinamai begitu supaya urutan compile alfabetis Arduino menaruhnya setelah `phone.ino`, sehingga definisi global `phone.ino` otomatis terlihat tanpa `extern`.
 - Library `lvgl` masuk daftar instalasi CI tapi belum dipakai; mesin render saat ini sepenuhnya LovyanGFX.
 

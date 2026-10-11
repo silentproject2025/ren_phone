@@ -13945,7 +13945,12 @@ String apodImgPath(const String& date){  return apodCacheDir()+"/"+apodSlug(date
 String apodIdPath(const String& date){   return apodCacheDir()+"/"+apodSlug(date)+"_id.txt"; }
 void apodEnsureCacheDir(){
   if(!sdReady) return;
-  if(!SD_MMC.exists(apodCacheDir())) SD_MMC.mkdir(apodCacheDir());
+  if(!SD_MMC.exists(apodCacheDir())){
+    SD_MMC.mkdir(apodCacheDir());
+    // v119: cache baru dibuat -> langsung tandai format API baru (lihat apodMigrateCacheV2)
+    File mf=SD_MMC.open(apodCacheDir()+"/api_v2.flag",FILE_WRITE);
+    if(mf){ mf.print("v2"); mf.close(); }
+  }
 }
 
 // ---- API key NASA: file di SD, pola PERSIS sama dgn loadGeminiKey() ----
@@ -14007,6 +14012,260 @@ String apodJsonUnescape(String s){
   s.replace("\\\\","\\"); // PALING TERAKHIR spy gak nge-double-unescape (sama urutannya dgn parsing Gemini)
   return s;
 }
+
+// =============================================
+// v119 FIX APOD (Astronomi): NASA memindah APOD dari apod.nasa.gov ke
+// science.nasa.gov pada 2026-09-29. Endpoint lama
+// (https://api.nasa.gov/planetary/apod?api_key=...) sekarang error 500/503,
+// atau kalau pun menjawab isinya cuma logo NASA + judul "NASA Science" +
+// penjelasan hari ini utk SEMUA tanggal; akan dimatikan 2026-12-01. Itu
+// biang "gagal ambil data" di app Astronomi.
+// Endpoint baru (tanpa API key, tanpa kuota):
+//   hari ini : https://science.nasa.gov/wp-json/wp/v2/apod-basic?per_page=1
+//   per tgl  : https://science.nasa.gov/wp-json/wp/v2/apod-basic/YYMMDD
+// Beda format yg ditangani di bawah:
+//   - "?date=" DIABAIKAN diam2 -> tanggal harus di path (YYMMDD)
+//   - per_page=1 menjawab ARRAY [ {...} ], per tanggal menjawab 1 objek
+//   - "url" kini halaman artikel; gambarnya di "hdurl" (assets.science.nasa.gov)
+//   - explanation/credit/copyright berupa HTML (tag <a>, <strong>, entitas)
+//     + ada catatan situs ("Tomorrow's picture", dst) di ujung explanation
+//   - teks non-ASCII dikirim sbg \uXXXX (gaya WordPress)
+//   - _fields=... dipakai spy respons ~3KB, bukan ~10KB/entri (basic_html)
+// =============================================
+#define APOD_API_BASE   "https://science.nasa.gov/wp-json/wp/v2/apod-basic"
+#define APOD_API_FIELDS "date,title,media_type,explanation,credit,copyright,hdurl"
+#define APOD_IMG_MAX_PX 800   // sisi terpanjang gambar yg diminta (resizer NASA); asli bisa 4000+ px / puluhan MB
+
+String apodBuildApiUrl(const String& dateYmd){
+  String url = APOD_API_BASE;
+  if(dateYmd.length()==10 && dateYmd.charAt(4)=='-' && dateYmd.charAt(7)=='-'){
+    url += "/";
+    url += dateYmd.substring(2,4);
+    url += dateYmd.substring(5,7);
+    url += dateYmd.substring(8,10);
+    url += "?_fields=" APOD_API_FIELDS;
+  } else {
+    url += "?per_page=1&_fields=" APOD_API_FIELDS;
+  }
+  return url;
+}
+
+// Tambah 1 codepoint Unicode ke String (UTF-8). Tanda baca "keriting" &
+// spasi aneh dipetakan ke ASCII biar tampil rapi di font TFT.
+void apodAppendCp(String& out, uint32_t cp){
+  switch(cp){
+    case 0: return;
+    case 0x2018: case 0x2019: case 0x201A: case 0x2032: out += '\''; return;
+    case 0x201C: case 0x201D: case 0x201E: case 0x2033: out += '"';  return;
+    case 0x2013: out += '-';   return;   // en dash
+    case 0x2014: out += "--";  return;   // em dash
+    case 0x2026: out += "..."; return;
+    case 0x00A0: case 0x2002: case 0x2003: case 0x2009: case 0x200A: case 0x202F: out += ' '; return;
+    case 0x200B: case 0x200C: case 0x200D: case 0xFEFF: return;
+  }
+  if(cp<0x80)         { out += (char)cp; }
+  else if(cp<0x800)   { out += (char)(0xC0|(cp>>6));  out += (char)(0x80|(cp&0x3F)); }
+  else if(cp<0x10000) { out += (char)(0xE0|(cp>>12)); out += (char)(0x80|((cp>>6)&0x3F)); out += (char)(0x80|(cp&0x3F)); }
+  else                { out += (char)(0xF0|(cp>>18)); out += (char)(0x80|((cp>>12)&0x3F)); out += (char)(0x80|((cp>>6)&0x3F)); out += (char)(0x80|(cp&0x3F)); }
+}
+int apodHexVal(char c){
+  if(c>='0'&&c<='9') return c-'0';
+  if(c>='a'&&c<='f') return c-'a'+10;
+  if(c>='A'&&c<='F') return c-'A'+10;
+  return -1;
+}
+// Decoder escape JSON 1-pass (\n \" \/ \\ \uXXXX + pasangan surrogate).
+// apodJsonUnescape() lama sengaja TIDAK disentuh (dipakai fitur lain).
+String apodJsonDecode(const String& s){
+  String out; out.reserve(s.length());
+  int n=s.length();
+  for(int i=0;i<n;i++){
+    char c=s[i];
+    if(c!='\\' || i+1>=n){ out += c; continue; }
+    char d=s[++i];
+    switch(d){
+      case 'n': out += '\n'; break;
+      case 't': out += ' ';  break;
+      case 'r': case 'b': case 'f': break;
+      case 'u': {
+        uint32_t cp=0; bool ok=(i+4<n);
+        for(int k=1;ok && k<=4;k++){ int h=apodHexVal(s[i+k]); if(h<0) ok=false; else cp=(cp<<4)|(uint32_t)h; }
+        if(!ok){ out += 'u'; break; }
+        i+=4;
+        if(cp>=0xD800 && cp<=0xDBFF && i+6<n && s[i+1]=='\\' && s[i+2]=='u'){
+          uint32_t lo=0; bool ok2=true;
+          for(int k=3;k<=6;k++){ int h=apodHexVal(s[i+k]); if(h<0){ ok2=false; break; } lo=(lo<<4)|(uint32_t)h; }
+          if(ok2 && lo>=0xDC00 && lo<=0xDFFF){ cp=0x10000+((cp-0xD800)<<10)+(lo-0xDC00); i+=6; }
+        }
+        apodAppendCp(out,cp);
+        break;
+      }
+      default: out += d; break;   // \"  \/  \\  dst
+    }
+  }
+  return out;
+}
+// HTML -> teks 1 baris: buang tag, decode entitas (&amp; &#039; &#8211; dst),
+// rapikan spasi/baris baru.
+String apodHtmlToText(const String& html){
+  String out; out.reserve(html.length());
+  int n=html.length();
+  for(int i=0;i<n;i++){
+    char c=html[i];
+    if(c=='<'){
+      int j=html.indexOf('>',i);
+      if(j<0) break;                       // tag gak ditutup -> buang sisanya
+      String tag=html.substring(i+1,j); tag.trim(); tag.toLowerCase();
+      if(tag.startsWith("br") || tag.startsWith("/p") || tag=="p") out += ' ';
+      i=j; continue;
+    }
+    if(c=='&'){
+      int j=html.indexOf(';',i);
+      if(j>i && j-i<=10){
+        String ent=html.substring(i+1,j);
+        uint32_t cp=0;
+        if(ent.length()>1 && ent[0]=='#'){
+          bool hex=(ent[1]=='x'||ent[1]=='X');
+          for(int k=hex?2:1;k<(int)ent.length();k++){
+            int h=apodHexVal(ent[k]);
+            if(h<0 || (!hex && h>9)){ cp=0; break; }
+            cp=cp*(hex?16:10)+(uint32_t)h;
+          }
+        }
+        else if(ent=="amp") cp='&';
+        else if(ent=="lt") cp='<';
+        else if(ent=="gt") cp='>';
+        else if(ent=="quot") cp='"';
+        else if(ent=="apos") cp='\'';
+        else if(ent=="nbsp") cp=0xA0;
+        else if(ent=="ndash") cp=0x2013;
+        else if(ent=="mdash") cp=0x2014;
+        else if(ent=="hellip") cp=0x2026;
+        else if(ent=="lsquo"||ent=="rsquo") cp=0x2019;
+        else if(ent=="ldquo"||ent=="rdquo") cp=0x201C;
+        if(cp){ apodAppendCp(out,cp); i=j; continue; }
+      }
+    }
+    out += c;
+  }
+  String res; res.reserve(out.length());
+  bool sp=false;
+  for(int i=0;i<(int)out.length();i++){
+    char c=out[i];
+    if(c==' '||c=='\t'||c=='\n'||c=='\r'){ sp=true; continue; }
+    if(sp && res.length()) res += ' ';
+    sp=false;
+    res += c;
+  }
+  return res;
+}
+// explanation: buang awalan "Explanation:" & catatan situs di ujung
+// ("Your Sky Surprise...", "APOD's email...", "Tomorrow's picture: ..."),
+// yg kalau dibiarkan ikut diterjemahkan & tampil sbg bagian penjelasan.
+String apodCleanExplanation(const String& rawJson){
+  String t = apodHtmlToText(apodJsonDecode(rawJson));
+  const char* marks[] = { "Your Sky Surprise", "APOD's email", "APOD's main NASA site", "Tomorrow's picture" };
+  int cut=-1;
+  for(int k=0;k<4;k++){
+    int p=t.indexOf(marks[k]);
+    if(p>0 && (cut<0 || p<cut)) cut=p;
+  }
+  if(cut>0) t=t.substring(0,cut);
+  t.trim();
+  if(t.startsWith("Explanation:")){ t=t.substring(12); t.trim(); }
+  return t;
+}
+// credit/copyright: teks polos, tanpa awalan "Image Credit:", maks ~200 huruf.
+String apodCleanCredit(const String& rawJson){
+  String t = apodHtmlToText(apodJsonDecode(rawJson));
+  String low=t; low.toLowerCase();
+  const char* pre[] = { "image credit & copyright:", "image credit and copyright:", "image credit:", "credit:" };
+  for(int k=0;k<4;k++){
+    if(low.startsWith(pre[k])){ t=t.substring(strlen(pre[k])); t.trim(); break; }
+  }
+  if(t.length()>200){
+    int cut=200;
+    while(cut>120 && t[cut]!=' ') cut--;
+    t = t.substring(0,cut) + "...";
+  }
+  return t;
+}
+int apodQueryInt(const String& q, const char* key){
+  String pat = String(key) + "=";
+  int i=0, n=q.length();
+  while(i<n){
+    int amp=q.indexOf('&',i); if(amp<0) amp=n;
+    String seg=q.substring(i,amp);
+    if(seg.startsWith(pat)) return seg.substring(pat.length()).toInt();
+    i=amp+1;
+  }
+  return 0;
+}
+// hdurl APOD bisa 4000+ px / puluhan MB (mis. katalog Sharpless 4455x5592
+// PNG) -- kebanyakan buat ESP32 & kotak gambar cuma 320x140. Resizer NASA
+// (assets.science.nasa.gov/dynamicimage/...?w=&h=&fit=clip) dipakai utk
+// mengecilkannya. Entri lama di /content/dam/ mengabaikan parameter resize,
+// jadi path-nya diganti ke /dynamicimage/assets/ (kalau gagal diunduh,
+// pemanggil mencoba URL asli).
+String apodShrinkImgUrl(const String& url){
+  if(url.indexOf("assets.science.nasa.gov")<0) return url;
+  String u=url;
+  u.replace("/content/dam/","/dynamicimage/assets/");
+  int q=u.indexOf('?');
+  String base = (q<0)? u : u.substring(0,q);
+  String query = (q<0)? String("") : u.substring(q+1);
+  int w=apodQueryInt(query,"w"), h=apodQueryInt(query,"h");
+  if(w<=0 || h<=0){ w=APOD_IMG_MAX_PX; h=APOD_IMG_MAX_PX; }
+  else {
+    int mx = (w>h)? w : h;
+    if(mx>APOD_IMG_MAX_PX){
+      w = (int)((long)w*APOD_IMG_MAX_PX/mx); if(w<1) w=1;
+      h = (int)((long)h*APOD_IMG_MAX_PX/mx); if(h<1) h=1;
+    }
+  }
+  return base + "?w=" + String(w) + "&h=" + String(h) + "&fit=clip";
+}
+// Cache APOD di SD yg dibuat SEBELUM v119 bisa berisi logo NASA / teks
+// "NASA Science" (endpoint lama menjawab itu utk semua tanggal sejak
+// 2026-09-29) -- dan karena cache dipakai duluan, logo itu nyangkut
+// selamanya. Sekali saja: kosongkan folder cache lalu tulis penanda.
+void apodMigrateCacheV2(){
+  if(!sdReady) return;
+  String dir=apodCacheDir();
+  String flag=dir+"/api_v2.flag";
+  if(!SD_MMC.exists(dir) || SD_MMC.exists(flag)) return;
+  bool done=false;
+  for(int pass=0; pass<40 && !done; pass++){
+    String names=""; int cnt=0;
+    File d=SD_MMC.open(dir);
+    if(!d) return;
+    if(!d.isDirectory()){ d.close(); return; }
+    File f=d.openNextFile();
+    while(f && cnt<50){
+      String nm=String(f.name());
+      int sl=nm.lastIndexOf('/'); if(sl>=0) nm=nm.substring(sl+1);
+      bool isDir=f.isDirectory();
+      f.close();
+      if(!isDir && nm.length() && nm[0]!='.' && nm!="api_v2.flag"){ names+=nm; names+='\n'; cnt++; }
+      f=d.openNextFile();
+    }
+    if(f) f.close();
+    d.close();
+    if(cnt==0){ done=true; break; }
+    int removed=0, pos=0;
+    while(pos<(int)names.length()){
+      int e=names.indexOf('\n',pos); if(e<0) break;
+      String nm=names.substring(pos,e); pos=e+1;
+      if(SD_MMC.remove(dir+"/"+nm)) removed++;
+      yield();
+    }
+    if(removed==0) return;              // gagal hapus -> jangan muter terus & jangan tulis penanda
+  }
+  if(!done) return;                     // masih ada sisa -> lanjut di pembukaan app berikutnya
+  File mf=SD_MMC.open(flag,FILE_WRITE);
+  if(mf){ mf.print("v2"); mf.close(); }
+}
+
 
 // ---- Terjemahan via MyMemory (endpoint dicek dulu lwt pencarian) ----
 String apodUrlEncode(const String& s){
@@ -14368,7 +14627,7 @@ void apodFetchAndProcess(String dateParam){
   apodEnsureCacheDir();
 
   nasaWaitForHeap(); // v53: kasih kesempatan RAM internal beres2 dulu sblm TLS
-  String body, imgUrl;
+  String body, imgUrl, imgUrlOrig;
   {
     // v69 FIX BUG UTAMA -- laporan user: "translate SELALU gagal, gambar
     // SELALU (Gambar belum tersedia)". AKAR MASALAH: client/http di bawah
@@ -14384,10 +14643,16 @@ void apodFetchAndProcess(String dateParam){
     // ke download gambar / translate di bawah.
     WiFiClientSecure client; client.setInsecure(); client.setTimeout(15000);
     HTTPClient http; http.setTimeout(15000); http.setConnectTimeout(15000);
-    String url = "https://api.nasa.gov/planetary/apod?api_key="+apodLoadNasaKey();
-    if(dateParam.length()) url += "&date="+dateParam;
-
-    if(!http.begin(client,url)){
+    // v119: endpoint baru NASA (tanpa API key) -- lihat catatan "v119 FIX APOD"
+    // di atas apodBuildApiUrl().
+    String url = apodBuildApiUrl(dateParam);
+    bool apodBeginOk = http.begin(client,url);
+    if(apodBeginOk){
+      http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+      http.setUserAgent("Mozilla/5.0 (compatible; RenPhone-ESP32S3)");
+      http.addHeader("Accept","application/json");
+    }
+    if(!apodBeginOk){
       apodErrorMsg="Gagal inisialisasi koneksi ke server NASA.";
       apodPage=APOD_ERROR; needRedrawNow(); return;
     }
@@ -14395,21 +14660,29 @@ void apodFetchAndProcess(String dateParam){
     body = http.getString();
     http.end();
     if(code!=HTTP_CODE_OK){
-      String msg = apodJsonUnescape(apodJsonGetStringRaw(body,"msg"));
+      String msg = apodHtmlToText(apodJsonDecode(apodJsonGetStringRaw(body,"message"))); // v119: error WordPress = {"code","message","data"}
+      if(code==404) msg = "tanggal ini tidak ada di arsip APOD";
+      else if(code>=500) msg = "server NASA lagi bermasalah, coba lagi nanti";
       apodErrorMsg = "Gagal ambil data APOD (HTTP "+String(code)+")"+(msg.length()?(": "+msg):String("."))+nasaHttpErrHint(code);
       apodPage=APOD_ERROR; needRedrawNow();
       diFinishProgress('*',"Gagal muat Astronomi",T().danger,1800,false,"",SCR_APOD,true); // v96: nimpa langsung Live Activity yg lg jalan
       return;
     }
 
-    apodCurDate       = apodJsonUnescape(apodJsonGetStringRaw(body,"date"));
-    apodTitle         = apodJsonUnescape(apodJsonGetStringRaw(body,"title"));
-    apodMediaType     = apodJsonUnescape(apodJsonGetStringRaw(body,"media_type"));
-    apodCopyright     = apodJsonUnescape(apodJsonGetStringRaw(body,"copyright"));
-    apodExplanationEn = apodJsonUnescape(apodJsonGetStringRaw(body,"explanation"));
-    imgUrl            = apodJsonUnescape(apodJsonGetStringRaw(body,"url"));
+    // v119: format baru -- tanggal/judul/jenis media tetap string biasa; explanation,
+    // credit & copyright berupa HTML; gambar ada di "hdurl" ("url" = halaman artikel).
+    apodCurDate       = apodJsonDecode(apodJsonGetStringRaw(body,"date"));
+    apodTitle         = apodHtmlToText(apodJsonDecode(apodJsonGetStringRaw(body,"title")));
+    apodMediaType     = apodJsonDecode(apodJsonGetStringRaw(body,"media_type"));
+    String apodCredRaw = apodJsonGetStringRaw(body,"credit");
+    if(apodCredRaw.length()==0) apodCredRaw = apodJsonGetStringRaw(body,"copyright");
+    apodCopyright     = apodCleanCredit(apodCredRaw);
+    apodExplanationEn = apodCleanExplanation(apodJsonGetStringRaw(body,"explanation"));
+    imgUrlOrig        = apodJsonDecode(apodJsonGetStringRaw(body,"hdurl"));
+    imgUrl            = apodShrinkImgUrl(imgUrlOrig);   // kecilkan lewat resizer NASA (asli bisa puluhan MB)
+    if(apodExplanationEn.length()==0) apodExplanationEn = "(Tidak ada penjelasan untuk tanggal ini.)";
 
-    if(apodCurDate.length()==0 || apodExplanationEn.length()==0){
+    if(apodCurDate.length()==0 || apodTitle.length()==0){
       apodErrorMsg="Gagal membaca data dari server NASA (format respons tidak dikenali).";
       apodPage=APOD_ERROR; needRedrawNow(); return;
     }
@@ -14436,7 +14709,9 @@ void apodFetchAndProcess(String dateParam){
       // v117: file cache yg isinya bukan gambar (mis. halaman error) dibuang -> unduh ulang
       if(SD_MMC.exists(imgPath) && apodImgKind(imgPath)==0) SD_MMC.remove(imgPath);
       if(!SD_MMC.exists(imgPath)){
-        if(!apodDownloadImage(imgUrl,imgPath)) apodImgNote="Unduh gambar gagal"; // lihat drawApod (alasan ditampilkan di kotak gambar)
+        bool apodDlOk = apodDownloadImage(imgUrl,imgPath);
+        if(!apodDlOk && imgUrlOrig.length() && imgUrlOrig!=imgUrl) apodDlOk = apodDownloadImage(imgUrlOrig,imgPath); // v119: resizer gagal -> coba URL asli
+        if(!apodDlOk) apodImgNote="Unduh gambar gagal"; // lihat drawApod (alasan ditampilkan di kotak gambar)
       }
     } else {
       // v23: SD gak dipasang -- unduh langsung ke PSRAM spy APOD tetap
@@ -14516,6 +14791,7 @@ void apodTranslateOnlyTask(void* parameter){
 }
 void apodLoadFromCacheOrFetch(String dateParam){
   if(apodTaskHandle!=NULL) return;
+  apodMigrateCacheV2(); // v119: buang cache APOD lama (logo NASA dari endpoint lama), cuma sekali
   // v23: tanggal yg diminta PERSIS sama dgn yg udah lagi ditampilkan &
   // datanya udah ada di RAM sesi ini -> jangan fetch ulang, hemat jatah
   // request api_key (penting pas pakai DEMO_KEY yg limitnya kecil).
