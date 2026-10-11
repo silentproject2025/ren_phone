@@ -2873,26 +2873,22 @@ const char* kbN[3][10]={
   {"~","!","@","#","$","%","^","&","*","("}};
 const char* (*kbMaps[3])[10]={kbL,kbU,kbN};
 
-int kbKeyW(){ return (SCR_W-8)/10 - 2; }
+// KB-FIX: semua baris 10 tuts, grid rata & di-tengah.
+int kbKeyW(){ return (SCR_W-8-18)/10; }
 int kbKeyH(){ return 22; }
 int kbY(){ return SCR_H - 4*(kbKeyH()+2) - 4; }
-int kbOffCol(int row){
-  int base = 4;
-  if(row==1) base += (kbKeyW()+2)/2;
-  if(row==2) base += (kbKeyW()+2);
-  return base;
-}
+int kbLeft(){ return (SCR_W - (10*kbKeyW()+18))/2; }
+int kbOffCol(int row){ (void)row; return kbLeft(); }
 
 void drawKb(LGFX_Sprite& s){
-  // IOS-KEYBOARD: panel kaca gelap + tuts bertinggi bayangan 1px, huruf besar.
   int y0=kbY();
   s.fillRect(0,y0-3,SCR_W,SCR_H-y0+3,blend565(T().bg,T().surface,175));
   s.drawFastHLine(0,y0-3,SCR_W,T().divider);
   auto* lay=kbMaps[(int)kbMode];
-  int kw=kbKeyW(), kh=kbKeyH();
-  const uint16_t keyC = blend565(T().surface2,0xFFFF,40);   // tuts huruf/angka: abu lebih terang
-  const uint16_t fnC  = T().surface2;                       // tuts fungsi: lebih gelap
-  const uint16_t shC  = blend565(T().bg,0x0000,140);        // bayangan di bawah tuts
+  int kw=kbKeyW(), kh=kbKeyH(), L=kbLeft(), R=SCR_W-L;
+  const uint16_t keyC = blend565(T().surface2,0xFFFF,40);
+  const uint16_t fnC  = T().surface2;
+  const uint16_t shC  = blend565(T().bg,0x0000,140);
   for(int r=0;r<3;r++){
     int ry=y0+r*(kh+2), ox=kbOffCol(r);
     for(int c=0;c<10;c++){
@@ -2909,36 +2905,33 @@ void drawKb(LGFX_Sprite& s){
   }
   s.setTextSize(1);
   int cy=y0+3*(kh+2);
-  int spaceW = SCR_W - 96 - 88 - 8;
-  int spW = max(40,spaceW);
-  // Shift: putih (ikon gelap) saat aktif, abu gelap (ikon putih) saat mati
+  int shX=L, shW=40, nmX=shX+shW+4, nmW=44, spX=nmX+nmW+4;
+  int dlW=84, dlX=R-dlW;
+  int spW=max(40, dlX-4-spX);
   bool up = (kbMode==KB_UPPER);
-  s.fillRoundRect(4,cy+1,40,kh,6,shC);
-  s.fillRoundRect(4,cy,40,kh,6, up?(uint16_t)0xFFFF:fnC);
+  s.fillRoundRect(shX,cy+1,shW,kh,6,shC);
+  s.fillRoundRect(shX,cy,shW,kh,6, up?(uint16_t)0xFFFF:fnC);
   {
     uint16_t ic = up? (uint16_t)0x0000 : (uint16_t)0xFFFF;
-    int acx=4+20, acy=cy+kh/2;
+    int acx=shX+shW/2, acy=cy+kh/2;
     s.fillTriangle(acx,acy-6, acx-6,acy+2, acx+6,acy+2, ic);
     s.fillRect(acx-3,acy+2,6,4,ic);
   }
-  // 123 / ABC
-  s.fillRoundRect(48,cy+1,44,kh,6,shC);
-  s.fillRoundRect(48,cy,44,kh,6,fnC);
+  s.fillRoundRect(nmX,cy+1,nmW,kh,6,shC);
+  s.fillRoundRect(nmX,cy,nmW,kh,6,fnC);
   {
     const char* nl=(kbMode==KB_NUM)?"ABC":"123";
     s.setTextColor(T().text);
-    s.setCursor(48+(44-s.textWidth(nl))/2,cy+kh/2-4); s.print(nl);
+    s.setCursor(nmX+(nmW-s.textWidth(nl))/2,cy+kh/2-4); s.print(nl);
   }
-  // Spasi
-  s.fillRoundRect(96,cy+1,spW,kh,6,shC);
-  s.fillRoundRect(96,cy,spW,kh,6,keyC);
+  s.fillRoundRect(spX,cy+1,spW,kh,6,shC);
+  s.fillRoundRect(spX,cy,spW,kh,6,keyC);
   s.setTextColor(T().text);
-  s.setCursor(96+(spW-s.textWidth("spasi"))/2,cy+kh/2-4); s.print("spasi");
-  // Hapus (backspace) -- abu gelap + ikon putih
-  s.fillRoundRect(SCR_W-88,cy+1,84,kh,6,shC);
-  s.fillRoundRect(SCR_W-88,cy,84,kh,6,fnC);
+  s.setCursor(spX+(spW-s.textWidth("spasi"))/2,cy+kh/2-4); s.print("spasi");
+  s.fillRoundRect(dlX,cy+1,dlW,kh,6,shC);
+  s.fillRoundRect(dlX,cy,dlW,kh,6,fnC);
   {
-    int acx=SCR_W-88+42, acy=cy+kh/2;
+    int acx=dlX+dlW/2-4, acy=cy+kh/2;
     s.fillTriangle(acx-8,acy, acx,acy-6, acx,acy+6, 0xFFFF);
     s.fillRect(acx,acy-3,10,6,0xFFFF);
   }
@@ -2948,34 +2941,28 @@ void kbTouch(int x,int y){
   if(!kbVisible||!kbTarget) return;
   int y0=kbY();
   if(y<y0-2) return;
-  int kw=kbKeyW(), kh=kbKeyH();
-  int cy=y0+3*(kh+2);
-  int spaceW = max(40, SCR_W-96-88-8);
-  if(y>=cy&&y<=cy+kh){
-    if(x>=4&&x<=44)            kbMode=(kbMode==KB_UPPER?KB_LOWER:KB_UPPER);
-    else if(x>=48&&x<=92)      kbMode=(kbMode==KB_NUM?KB_LOWER:KB_NUM);
-    else if(x>=96&&x<=96+spaceW) *kbTarget+=" ";
-    else if(x>=SCR_W-88&&kbTarget->length()>0)
+  int kw=kbKeyW(), kh=kbKeyH(), L=kbLeft(), R=SCR_W-L;
+  int cell=kh+2;
+  int cy=y0+3*cell;
+  if(y>=cy){
+    int shX=L, shW=40, nmX=shX+shW+4, nmW=44, spX=nmX+nmW+4;
+    int dlX=R-84;
+    if(x<nmX-2)                kbMode=(kbMode==KB_UPPER?KB_LOWER:KB_UPPER);
+    else if(x<spX-2)           kbMode=(kbMode==KB_NUM?KB_LOWER:KB_NUM);
+    else if(x<dlX-2)           *kbTarget+=" ";
+    else if(kbTarget->length()>0)
       *kbTarget=kbTarget->substring(0,kbTarget->length()-1);
     needRedraw=true;
     return;
   }
+  int r=(y-y0)/cell;
+  if(r<0||r>2) return;
+  int c=(x-L)/(kw+2);
+  if(x<L||c<0||c>9) return;
   auto* lay=kbMaps[(int)kbMode];
-  for(int r=0;r<3;r++){
-    int ry=y0+r*(kh+2);
-    if(y>=ry&&y<=ry+kh){
-      int ox=kbOffCol(r);
-      for(int c=0;c<10;c++){
-        int kx=ox+c*(kw+2);
-        if(x>=kx&&x<=kx+kw){
-          *kbTarget+=lay[r][c];
-          if(kbMode==KB_UPPER)kbMode=KB_LOWER;
-          needRedraw=true;
-          return;
-        }
-      }
-    }
-  }
+  *kbTarget+=lay[r][c];
+  if(kbMode==KB_UPPER)kbMode=KB_LOWER;
+  needRedraw=true;
 }
 
 // =============================================
