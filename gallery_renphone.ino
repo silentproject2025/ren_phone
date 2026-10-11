@@ -2,7 +2,7 @@
 // gallery_renphone.ino -- app GALERI (SCR_GALLERY) + THUMBNAIL CACHE di SD
 // =====================================================================
 // Cara kerja singkat:
-//  * ALBUM  = folder di SD Card yang isinya ada foto/video (JPG/JPEG, BMP,
+//  * ALBUM  = folder di SD Card yang isinya ada foto/video (JPG/JPEG, PNG, BMP,
 //             MJPEG). Dipindai otomatis sampai kedalaman 2 folder dari root,
 //             jadi /screenshot, /apod_cache, dst muncul sebagai album sendiri
 //             persis seperti galeri HP (folder Screenshot isinya screenshot).
@@ -144,11 +144,12 @@ static int galStrCmpI(const char* a, const char* b) {
   return (unsigned char)*a - (unsigned char)*b;
 }
 
-// 0 = JPG/JPEG, 1 = BMP, 2 = video MJPEG, -1 = bukan media
+// 0 = JPG/JPEG/PNG (v118: formatnya dicek dari ISI file, bukan ekstensi -- cache APOD
+// menyimpan PNG pun dengan nama .jpg), 1 = BMP, 2 = video MJPEG, -1 = bukan media
 static int galKindOf(const char* name) {
   const char* dot = strrchr(name, '.');
   if (!dot) return -1;
-  if (galStrCmpI(dot, ".jpg") == 0 || galStrCmpI(dot, ".jpeg") == 0) return 0;
+  if (galStrCmpI(dot, ".jpg") == 0 || galStrCmpI(dot, ".jpeg") == 0 || galStrCmpI(dot, ".png") == 0) return 0;
   if (galStrCmpI(dot, ".bmp") == 0) return 1;
   if (galStrCmpI(dot, ".mjpeg") == 0) return 2;
   return -1;
@@ -326,7 +327,54 @@ static int galJpgThumbCb(JPEGDRAW* d) {
   return 1;
 }
 
+// ---- v118: dukungan PNG (decoder bawaan LovyanGFX, helper rpPng* ada di phone.ino) ----
+#define GAL_PNG_THUMB_MAX_BYTES (2u * 1024u * 1024u)   // PNG lebih besar dari ini: tanpa thumbnail (decode PNG tidak bisa diskala murah seperti JPEG), tetap bisa dibuka di viewer
+
+static bool galIsPng(const char* path) {
+  File f = SD_MMC.open(path, FILE_READ);
+  if (!f) return false;
+  uint8_t h[4] = { 0, 0, 0, 0 };
+  int n = f.read(h, 4);
+  f.close();
+  return n == 4 && h[0] == 0x89 && h[1] == 'P' && h[2] == 'N' && h[3] == 'G';
+}
+
+// Thumbnail PNG: gambar diskala sehingga sisi terpendek = 72 px ke sprite PSRAM
+// sementara, lalu bagian TENGAHNYA disalin (crop tengah, sama dgn thumbnail JPEG).
+// Format piksel buffer sprite 16-bit LovyanGFX = format slot thumbnail (byte tertukar).
+static bool galGenPng(const char* path, uint16_t* out) {
+  size_t len = 0;
+  uint8_t* b = rpPngLoadFile(path, &len, GAL_PNG_THUMB_MAX_BYTES);
+  if (!b) return false;
+  int iw = 0, ih = 0;
+  if (!rpPngDims(b, len, &iw, &ih) || (long)iw * (long)ih > RP_PNG_MAX_PIXELS) { heap_caps_free(b); return false; }
+  const int TS = GAL_THUMB;
+  int mn = (iw < ih) ? iw : ih;
+  float sc = (float)TS / (float)mn;
+  int sw = (int)((float)iw * sc + 0.5f), sh = (int)((float)ih * sc + 0.5f);
+  if (sw < TS) sw = TS;
+  if (sh < TS) sh = TS;
+  if ((long)sw * (long)sh * 2L > 2L * 1024L * 1024L) { heap_caps_free(b); return false; }   // panorama ekstrem
+  LGFX_Sprite t(&display);
+  t.setPsram(true);
+  if (!t.createSprite(sw, sh)) { heap_caps_free(b); return false; }
+  t.fillSprite(0x0000);
+  bool ok = t.drawPng(b, (uint32_t)len, 0, 0, 0, 0, 0, 0, sc, sc);
+  heap_caps_free(b);
+  if (ok) {
+    const uint16_t* src = (const uint16_t*)t.getBuffer();
+    if (!src) ok = false;
+    else {
+      int ox = (sw - TS) / 2, oy = (sh - TS) / 2;
+      for (int y = 0; y < TS; y++) memcpy(out + y * TS, src + (size_t)(oy + y) * (size_t)sw + ox, TS * 2);
+    }
+  }
+  t.deleteSprite();
+  return ok;
+}
+
 static bool galGenJpeg(const char* path, uint16_t* out) {
+  if (galIsPng(path)) return galGenPng(path, out);   // v118
   File f = SD_MMC.open(path, FILE_READ);
   if (!f) return false;
   if (!galJpeg->open(f, galJpgThumbCb)) { f.close(); return false; }
@@ -692,7 +740,32 @@ static int galJpgViewCb(JPEGDRAW* d) {
   return 1;
 }
 
+// ---- v118: viewer PNG (gaya "contain", tanpa memperbesar -- sama dgn JPEG/BMP) ----
+static const char* galFailWhy = nullptr;   // alasan gagal (diisi decoder PNG) utk toast; nullptr = pakai pesan umum
+
+static bool galDecodePngView(const char* path) {
+  size_t len = 0;
+  uint8_t* b = rpPngLoadFile(path, &len, RP_PNG_MAX_BYTES);
+  if (!b) { galFailWhy = (len > RP_PNG_MAX_BYTES) ? "PNG terlalu besar (maks 4 MB)" : "PNG gagal dibaca"; return false; }
+  int iw = 0, ih = 0;
+  if (!rpPngDims(b, len, &iw, &ih)) { heap_caps_free(b); galFailWhy = "File PNG rusak"; return false; }
+  if ((long)iw * (long)ih > RP_PNG_MAX_PIXELS) { heap_caps_free(b); galFailWhy = "PNG terlalu besar (resolusi)"; return false; }
+  float sc = rpPngFitScale(iw, ih, SCR_W, SCR_H);
+  int tw = (int)((float)iw * sc + 0.5f), th = (int)((float)ih * sc + 0.5f);
+  if (tw < 1) tw = 1;
+  if (th < 1) th = 1;
+  if (tw > SCR_W) tw = SCR_W;
+  if (th > SCR_H) th = SCR_H;
+  int ox = (SCR_W - tw) / 2, oy = (SCR_H - th) / 2;
+  bool ok = galView.drawPng(b, (uint32_t)len, ox, oy, 0, 0, 0, 0, sc, sc);
+  heap_caps_free(b);
+  if (!ok) { galFailWhy = "PNG gagal didecode"; return false; }
+  galViewW = iw; galViewH = ih;
+  return true;
+}
+
 static bool galDecodeJpegView(const char* path) {
+  if (galIsPng(path)) return galDecodePngView(path);   // v118
   File f = SD_MMC.open(path, FILE_READ);
   if (!f) return false;
   if (!galJpeg->open(f, galJpgViewCb)) { f.close(); return false; }
@@ -779,9 +852,10 @@ static void galDecodeCurrent() {
   galView.fillSprite(0x0000);
   char p[GAL_PATH_MAX];
   galItemPath(p, sizeof(p), galViewIdx);
+  galFailWhy = nullptr;
   bool ok = (galItems[galViewIdx].kind == 1) ? galDecodeBmpView(p) : galDecodeJpegView(p);
   if (ok) galViewReady = true;
-  else { galViewFail = true; showToast("Gambar tidak bisa dibuka (JPEG progresif/BMP non-24bit?)", 2200); vibError(); }
+  else { galViewFail = true; showToast(galFailWhy ? galFailWhy : "Gambar tidak bisa dibuka (JPEG progresif/BMP non-24bit?)", 2200); vibError(); }
 }
 
 // ---- navigasi viewer ----
@@ -908,7 +982,7 @@ static void galDrawAlbums(LGFX_Sprite& s) {
       s.setCursor(16, galTop + 30); s.print("Memindai SD Card...");
     } else {
       s.setCursor(16, galTop + 30); s.print("Belum ada foto/video di SD Card.");
-      s.setCursor(16, galTop + 44); s.print("Format: JPG, BMP, MJPEG.");
+      s.setCursor(16, galTop + 44); s.print("Format: JPG, PNG, BMP, MJPEG.");
     }
     return;
   }

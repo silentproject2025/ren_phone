@@ -8242,7 +8242,7 @@ void expOpenEntry(int ei){
   String path = expJoin(expCwd, expEntries[ei].name);
   String low = String(expEntries[ei].name); low.toLowerCase();
 
-  if(low.endsWith(".jpg") || low.endsWith(".jpeg") || low.endsWith(".bmp")){
+  if(low.endsWith(".jpg") || low.endsWith(".jpeg") || low.endsWith(".png") || low.endsWith(".bmp")){
     expKeepCwdOnce = true;                      // balik dari Galeri tetap di folder ini
     galOpenFile(path.c_str());
     return;
@@ -14117,6 +14117,53 @@ String apodLoadIdCache(const String& date){
   return s;
 }
 
+// =============================================
+// v118: dukungan PNG (APOD + Galeri). Decoder = bawaan LovyanGFX
+// (LGFXBase::drawPng, menskala langsung saat menggambar), jadi TIDAK
+// butuh library tambahan & tidak menambah .bss. File PNG dibaca utuh ke
+// PSRAM dulu (maks 4 MB), lalu didecode dari buffer itu.
+//  - rpPngDims()    : baca lebar/tinggi dari header IHDR (tanpa decode)
+//  - rpPngLoadFile(): baca file SD ke buffer PSRAM (caller wajib heap_caps_free)
+//  - rpPngFitScale(): skala "contain", tidak pernah memperbesar
+// =============================================
+#define RP_PNG_MAX_BYTES  (4u*1024u*1024u)
+#define RP_PNG_MAX_PIXELS 8000000L
+
+bool rpPngDims(const uint8_t* d, size_t len, int* w, int* h){
+  static const uint8_t sig[8]={0x89,'P','N','G',0x0D,0x0A,0x1A,0x0A};
+  if(!d || len<33 || memcmp(d,sig,8)!=0 || memcmp(d+12,"IHDR",4)!=0) return false;
+  uint32_t pw=((uint32_t)d[16]<<24)|((uint32_t)d[17]<<16)|((uint32_t)d[18]<<8)|(uint32_t)d[19];
+  uint32_t ph=((uint32_t)d[20]<<24)|((uint32_t)d[21]<<16)|((uint32_t)d[22]<<8)|(uint32_t)d[23];
+  if(pw==0 || ph==0 || pw>16384 || ph>16384) return false;
+  *w=(int)pw; *h=(int)ph;
+  return true;
+}
+uint8_t* rpPngLoadFile(const char* path, size_t* outSize, size_t maxBytes){
+  *outSize=0;
+  File f=SD_MMC.open(path,FILE_READ);
+  if(!f) return nullptr;
+  size_t sz=(size_t)f.size();
+  *outSize=sz; // diisi walau gagal -> caller bisa bedakan "kebesaran" vs "gagal baca"
+  if(sz<33 || sz>maxBytes){ f.close(); return nullptr; }
+  uint8_t* b=(uint8_t*)heap_caps_malloc(sz,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT);
+  if(!b){ f.close(); return nullptr; }
+  size_t got=0;
+  while(got<sz){
+    size_t want=sz-got; if(want>16384) want=16384;
+    int n=f.read(b+got,want);
+    if(n<=0) break;
+    got+=(size_t)n;
+  }
+  f.close();
+  if(got!=sz){ heap_caps_free(b); return nullptr; }
+  return b;
+}
+float rpPngFitScale(int iw,int ih,int boxW,int boxH){
+  if(iw<=boxW && ih<=boxH) return 1.0f;
+  float a=(float)boxW/(float)iw, b=(float)boxH/(float)ih;
+  return (a<b)?a:b;
+}
+
 // v117: cek isi file gambar APOD yg ada di SD dr 4 byte awalnya:
 // 1 = JPEG, 2 = PNG, 3 = GIF, 0 = bukan gambar / rusak (mis. halaman error HTML).
 // Decoder di HP ini cuma JPEGDEC, jadi PNG/GIF gak bisa ditampilkan.
@@ -14208,6 +14255,20 @@ int apodJpegDrawCallback(JPEGDRAW* pDraw){
   apodImg.pushImage(pDraw->x,pDraw->y,pDraw->iWidth,pDraw->iHeight,(lgfx::swap565_t*)pDraw->pPixels);
   return 1;
 }
+// v118: gambar PNG (dr buffer di RAM) ke sprite apodImg, gaya "contain"
+// & di tengah kotak, sama kayak jalur JPEG. Kalau gagal, apodImgNote diisi.
+bool apodDrawPng(const uint8_t* buf,size_t len,int boxW,int boxH){
+  int iw=0, ih=0;
+  if(!rpPngDims(buf,len,&iw,&ih)){ apodImgNote="File PNG rusak"; return false; }
+  if((long)iw*(long)ih>RP_PNG_MAX_PIXELS){ apodImgNote="PNG terlalu besar (resolusi)"; return false; }
+  float sc=rpPngFitScale(iw,ih,boxW,boxH);
+  int dw=(int)((float)iw*sc+0.5f), dh=(int)((float)ih*sc+0.5f);
+  if(dw<1) dw=1; if(dh<1) dh=1;
+  if(dw>boxW) dw=boxW; if(dh>boxH) dh=boxH;
+  int dx=(boxW-dw)/2, dy=(boxH-dh)/2;
+  if(!apodImg.drawPng(buf,(uint32_t)len,dx,dy,0,0,0,0,sc,sc)){ apodImgNote="Gagal decode PNG"; return false; }
+  return true;
+}
 bool apodDecodeCachedImage(){
   int boxW=SCR_W, boxH=apodImgAreaH();
   apodImg.deleteSprite();
@@ -14223,9 +14284,19 @@ bool apodDecodeCachedImage(){
     if(!SD_MMC.exists(path)) return false;
     apodImgNote="";
     int kind=apodImgKind(path);
+    if(kind==2){
+      // v118: PNG -> baca ke PSRAM lalu decode pakai LovyanGFX (lihat apodDrawPng)
+      size_t plen=0;
+      uint8_t* pb=rpPngLoadFile(path.c_str(),&plen,RP_PNG_MAX_BYTES);
+      bool pok=false;
+      if(!pb) apodImgNote=(plen>RP_PNG_MAX_BYTES)? "PNG terlalu besar (maks 4 MB)" : "Gagal baca file PNG";
+      else { pok=apodDrawPng(pb,plen,boxW,boxH); heap_caps_free(pb); }
+      apodImgReady=true; // tetap "ready": sukses -> gambar tampil, gagal -> pesan alasan tampil
+      return pok;
+    }
     if(kind!=1){
-      // v117: bukan JPEG -> jelasin alasannya di layar (dulu kotak kosong tanpa penjelasan)
-      apodImgNote = (kind==2)? "Format PNG belum didukung" : (kind==3)? "Format GIF belum didukung" : "File gambar rusak";
+      // v117: bukan JPEG/PNG -> jelasin alasannya di layar (dulu kotak kosong tanpa penjelasan)
+      apodImgNote = (kind==3)? "Format GIF belum didukung" : "File gambar rusak";
       apodImgReady=true;
       return false;
     }
@@ -14236,6 +14307,13 @@ bool apodDecodeCachedImage(){
     // v23: SD gak dipasang -- decode LANGSUNG dr buffer PSRAM hasil unduhan
     // (lihat nasaDownloadImageToPsram di atas), bukan dr file SD.
     if(!nasaRamImgBuf || nasaRamImgLen==0) return false;
+    if(nasaRamImgLen>=4 && nasaRamImgBuf[0]==0x89 && nasaRamImgBuf[1]=='P' && nasaRamImgBuf[2]=='N' && nasaRamImgBuf[3]=='G'){
+      // v118: PNG di buffer RAM (SD gak dipasang)
+      apodImgNote="";
+      bool pok=apodDrawPng(nasaRamImgBuf,nasaRamImgLen,boxW,boxH);
+      apodImgReady=true;
+      return pok;
+    }
     opened = apodJpeg->openRAM(nasaRamImgBuf, nasaRamImgLen, apodJpegDrawCallback);
   }
   if(!opened){
