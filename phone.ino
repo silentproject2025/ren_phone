@@ -625,7 +625,8 @@ enum Screen { SCR_HOME, SCR_CLOCK, SCR_CALC, SCR_SENSOR,
               // Galeri foto/video + thumbnail cache -- lihat gallery_renphone.ino
               SCR_GALLERY,
               // Profil pemilik (foto + nama) -- lihat owner_renphone.ino
-              SCR_OWNER };
+              SCR_OWNER,
+              SCR_ABOUT };
 enum Orientation { ORIENT_LANDSCAPE = 0, ORIENT_PORTRAIT = 1 };
 
 // Dipindah ke atas — alasan sama dengan AiLine & Vec3f: arduino-cli men-generate
@@ -4588,6 +4589,13 @@ void drawAppIcon(LGFX_Sprite& s, char sym, int cx, int cy, int r, uint16_t bgCir
       s.fillTriangle(cx-2,cy+w-5,cx+w/3+1,cy+1,cx+w-2,cy+w-5,ic);
       break;
     }
+    case 'i': { // About Phone
+      int rr=max(8,r-6);
+      s.drawCircle(cx,cy,rr,ic); s.drawCircle(cx,cy,rr-1,ic);
+      s.fillCircle(cx,cy-rr/2,max(1,rr/7),ic);
+      s.fillRect(cx-max(1,rr/9),cy-rr/6,max(2,rr/4),rr*2/3,ic);
+      break;
+    }
     case 'o': { // Profil: kepala + bahu
       int rr=max(8,r-6);
       s.fillCircle(cx,cy-rr/3,max(3,rr/3),ic);
@@ -4748,7 +4756,10 @@ void ownerDrawAvatar(LGFX_Sprite&,int,int,int);
 bool ownerPickActive(); void ownerPickReset(); void ownerPickChosen(const char*);
 void ownerSetAvatarUi(const char*);
 
-AppDef apps[36] = {
+void aboutEnter(); void aboutExit(); void drawAbout(LGFX_Sprite&); void aboutTouch(int,int,bool,bool);
+void aboutLoopPoll();
+
+AppDef apps[37] = {
   { "Jam",        'J', 0, clockEnter,    clockExit,    drawClock,        clockTouch,    SCR_CLOCK },
   { "Kalkulator", '+', 0, calcEnter,     calcExit,     drawCalc,         calcTouch,     SCR_CALC },
   { "Orientasi3D", '3', 0, sensorEnter,   sensorExit,   drawSensor,       sensorTouch,   SCR_SENSOR },
@@ -4802,8 +4813,9 @@ AppDef apps[36] = {
   { "Galeri",     'g', 0, galEnter,     galExit,      drawGallery,      galTouch,      SCR_GALLERY },
   // ---- Profil: foto & nama pemilik ----
   { "Profil",     'o', 0, ownerEnter,   ownerExit,    drawOwner,        ownerTouch,    SCR_OWNER },
+  { "About Phone", 'i', 0, aboutEnter,   aboutExit,    drawAbout,        aboutTouch,    SCR_ABOUT },
 };
-#define APP_COUNT 36
+#define APP_COUNT 37
 
 // =============================================
 // NOTIFIKASI BADGE (BARU) -- angka kecil merah di pojok ikon app, mirip
@@ -4912,6 +4924,7 @@ void initAppColors(){
   apps[33].color=0xF9A6; // Voice Memo - merah rekam
   apps[34].color=0x565F; // Galeri - biru langit
   apps[35].color=0x5EBF; // Profil - biru muda
+  apps[36].color=0x8C71; // About Phone
 }
 
 int appIndexForScreen(Screen s){
@@ -7204,7 +7217,7 @@ int loadSpiOcPref(){
 // PENGATURAN ala iOS -- state layout & sentuhan (daftar scroll, tap-saat-lepas)
 // =====================================================================
 enum { SR_TITLE=0, SR_SECT, SR_BRIGHT, SR_THEME, SR_FONT, SR_ROT, SR_SPI, SR_SPIAPPLY,
-       SR_SCAN, SR_WIFI, SR_NONET, SR_SSID, SR_PASS, SR_CONNECT, SR_MPU, SR_TCAL, SR_OWNER };
+       SR_SCAN, SR_WIFI, SR_NONET, SR_SSID, SR_PASS, SR_CONNECT, SR_MPU, SR_TCAL, SR_OWNER, SR_ABOUT };
 #define SETT_MAXROWS 40
 int settRT[SETT_MAXROWS], settRG[SETT_MAXROWS], settRY[SETT_MAXROWS], settRH[SETT_MAXROWS], settRA[SETT_MAXROWS];
 const char* settRL[SETT_MAXROWS];
@@ -7260,6 +7273,9 @@ void settBuildLayout(){
   settAddRow(SR_SECT,0,26,0,"SENSOR & LAYAR",y);
   settAddRow(SR_MPU,g,34,0,nullptr,y);
   settAddRow(SR_TCAL,g,34,0,nullptr,y); g++;
+
+  settAddRow(SR_SECT,0,26,0,"TENTANG",y);
+  settAddRow(SR_ABOUT,g,34,0,nullptr,y); g++;
 
   y+=14; settTotalH=y;
 }
@@ -7432,6 +7448,10 @@ void drawSettings(LGFX_Sprite& s){
         s.setTextColor(T().subtext); s.setCursor(tx0,acy+6); s.print("Ketuk untuk atur profil");
         settChevron(s,xr-4,acy,T().subtext);
         } break;
+      case SR_ABOUT:
+        s.setTextColor(T().text); s.setCursor(xl,ty); s.print("About Phone");
+        settChevron(s,xr-4,ty+4,T().subtext);
+        break;
       case SR_TCAL:
         s.setTextColor(T().danger); s.setCursor(xl,ty); s.print("Kalibrasi Layar Sentuh");
         if(millis()<settTcalArmUntil){ settTextR(s,xr,ty,"Ketuk lagi",T().danger); needRedraw=true; }
@@ -7523,6 +7543,8 @@ void settTap(int x,int y){
       needRedraw=true; break;
     case SR_OWNER:
       navPush(SCR_OWNER); break;
+    case SR_ABOUT:
+      navPush(SCR_ABOUT); break;
     case SR_MPU:
       if(mpuReady){ calibrateMPU(); needRedraw=true; }
       else showToast("Sensor MPU6050 tidak terdeteksi");
@@ -17782,6 +17804,7 @@ void loop(){
     // hwmonPoll() buat hitung persen sibuk per core, lihat komentarnya)
     if(curScreen()==SCR_HWMON && millis()-hwmonLastPoll>500){ hwmonPoll(); needRedraw=true; hwmonLastPoll=millis(); }
     ownerLoopPoll(); // Profil: tutup Galeri setelah foto profil dipilih
+    if(curScreen()==SCR_ABOUT) aboutLoopPoll();
     // v58 FIX bug "Labirin gak bisa digerakin sama sekali": SCR_MAZE lupa
     // didaftarin di sini pas game-nya dibikin (v56/v57). Tanpa ini,
     // drawMaze() -- tempat mazePlayerTick()/mazeGhostTick() dipanggil --
