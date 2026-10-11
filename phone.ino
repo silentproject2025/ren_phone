@@ -2823,12 +2823,14 @@ void playNavTransition(NavAnim anim){
   push(); // pastikan frame akhir persis sama dgn 'canvas'
 }
 
+void ownerStatsOpen(int); // Profil v2: hitung berapa kali app dibuka
 void navPush(Screen s){
   appOnExit(curScreen());
   if(navDepth<NAV_MAX) navStack[navDepth++]=s;
   appOnEnter(s);
   appMarkUsed(s); // v92: catat "kapan terakhir dipakai" utk App Memory Guard (LRU), lihat appMemGuardTick()
   notifClear(s); // v-baru: badge notifikasi app ini ilang begitu beneran dibuka
+  ownerStatsOpen((int)s); // Profil v2: statistik app paling sering dibuka
   kbVisible=false; kbTarget=nullptr;
   // v24: vibNav() DIHAPUS dr sini -- vibTap() global di loop() SUDAH getar
   // duluan pas jari nyentuh tombol yg memicu navPush ini, jd manggil vibNav()
