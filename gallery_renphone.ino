@@ -30,7 +30,16 @@
 //    geser kiri/kanan saat usap, thumbnail fade-in begitu selesai dimuat,
 //    kartu yg ditekan meredup sebagai umpan balik sentuhan.
 //  * transisi memakai 2 sprite PSRAM layar penuh (snapshot lama + frame baru),
-//    dirender SEKALI lalu hanya digeser, jadi ringan.
+//    dirender SEKALI lalu dikirim LANGSUNG ke layar per frame (pola yg sama
+//    dgn playNavTransition di phone.ino: berbasis waktu, CPU di-boost, tanpa
+//    penggabungan ke canvas), jadi jauh lebih mulus.
+// PEMBUKAAN CEPAT: daftar folder dibaca dgn opendir/readdir POSIX (cuma nama +
+// tipe, TANPA stat per file -- stat di FAT itu cari entri linear, jadi
+// O(n^2) di folder besar) dan dipindai bertahap di latar (maks ~12 ms per
+// putaran loop). Daftar album terakhir ditampilkan seketika, dipindai ulang
+// pelan-pelan di belakang. Ukuran/waktu-ubah baru di-stat utk file yg tampil.
+// Konsekuensi: urutan foto = nama menurun (screenshot berstempel waktu jadi
+// terbaru dulu), bukan waktu ubah.
 // Semua buffer besar ada di PSRAM dan dilepas saat app ditutup.
 //
 // Catatan arduino-cli: file ini sengaja TIDAK punya fungsi yang memakai
@@ -38,12 +47,17 @@
 // otomatis di README) -- semua parameter fungsi bertipe primitif/pointer.
 // =====================================================================
 
+#include <dirent.h>
+#include <sys/stat.h>
+
+#define GAL_MP           "/sdcard"       // mount point SD_MMC (SD_MMC.begin("/sdcard"...))
+#define GAL_SCAN_QCAP    40
 #define GAL_THUMB        72
 #define GAL_THUMB_PX     (GAL_THUMB * GAL_THUMB)
 #define GAL_THUMB_BYTES  (GAL_THUMB_PX * 2)
 #define GAL_GAP          4
 #define GAL_CACHE_DIR    "/.thumbs"
-#define GAL_MAX_ITEMS    400
+#define GAL_MAX_ITEMS    1000
 #define GAL_MAX_ALBUMS   24
 #define GAL_SLOTS        20
 #define GAL_MAX_WANTS    16
@@ -56,8 +70,8 @@
 #define GM_GRID   1
 #define GM_VIEW   2
 
-struct GalItem  { char name[44]; uint32_t size; uint32_t mtime; uint8_t kind; };   // kind: 0=JPG 1=BMP 2=video MJPEG
-struct GalAlbum { char path[64]; char title[24]; char cover[44]; uint32_t cSize; uint32_t cMtime; uint8_t cKind; uint16_t photos; uint16_t videos; };
+struct GalItem  { char name[44]; uint32_t size; uint32_t mtime; uint8_t kind; uint8_t st; };   // st=1: size/mtime sudah di-stat (malas, hanya utk yg tampil)   // kind: 0=JPG 1=BMP 2=video MJPEG
+struct GalAlbum { char path[64]; char title[24]; char cover[44]; uint32_t cSize; uint32_t cMtime; uint8_t cKind; uint8_t cSt; uint16_t photos; uint16_t videos; };
 struct GalWant  { char path[GAL_PATH_MAX]; uint32_t size; uint32_t mtime; uint8_t kind; uint32_t tag; uint64_t key; };
 
 // ---- memori PSRAM (satu blok: slot thumbnail + daftar item + antrean) ----
@@ -96,7 +110,6 @@ static LGFX_Sprite galSnap(&display);          // snapshot layar LAMA
 static LGFX_Sprite galNew(&display);           // frame BARU (dirender sekali per transisi)
 static bool      galSnapReady = false, galNewValid = false, galFadeActive = false;
 static int       galAnimKind = 0;              // 0 maju (geser dr kanan), 1 mundur, 2 foto berikutnya, 3 foto sebelumnya
-static unsigned long galAnimStart = 0;         // 0 = ditunda (menunggu decode foto selesai)
 static int       galPressIdx = -1;             // kartu yg sedang ditekan (umpan balik sentuhan)
 
 // geometri grid (dihitung ulang tiap gambar/sentuh supaya ikut orientasi)
@@ -163,7 +176,7 @@ static bool galMemEnsure() {
   size_t slotsB = (size_t)GAL_SLOTS * GAL_THUMB_BYTES;
   size_t itemsB = (size_t)GAL_MAX_ITEMS * sizeof(GalItem);
   size_t wantsB = (size_t)GAL_MAX_WANTS * sizeof(GalWant);
-  galMem = (uint8_t*)heap_caps_calloc(1, slotsB + itemsB + wantsB, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  galMem = (uint8_t*)heap_caps_malloc(slotsB + itemsB + wantsB, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
   if (!galMem) return false;
   galSlots = (uint16_t*)galMem;
   galItems = (GalItem*)(galMem + slotsB);
@@ -196,20 +209,18 @@ static bool galSprEnsure(LGFX_Sprite& sp) {
   return true;
 }
 
-static bool galAnimating() {
-  return galSnapReady && galAnimStart != 0 && (millis() - galAnimStart) < GAL_ANIM_MS;
-}
+static void galRunTransition(int kind);       // definisi di bawah (butuh galDrawContent)
 
 // Panggil SETELAH state baru diset tapi SEBELUM frame berikutnya digambar:
 // `canvas` masih berisi frame lama = snapshot. deferred=true -> animasi baru
-// mulai setelah decode foto selesai (galPointerTick), selama itu snapshot
+// jalan setelah decode foto selesai (galPointerTick), selama itu snapshot
 // tetap tampil dgn tulisan "Memuat...".
 static void galBeginTransition(int kind, bool deferred) {
-  galSnapReady = false; galNewValid = false; galAnimStart = 0;
+  galSnapReady = false; galNewValid = false;
   if (!galSprEnsure(galSnap) || !galSprEnsure(galNew)) return;   // PSRAM mepet -> tanpa animasi
   canvas.pushSprite(&galSnap, 0, 0);
   galSnapReady = true; galAnimKind = kind;
-  if (!deferred) galAnimStart = millis();
+  if (!deferred) galRunTransition(kind);
 }
 
 // =====================================================================
@@ -482,123 +493,172 @@ static void galClearCache() {
 // =====================================================================
 // PEMINDAIAN ALBUM & ISI ALBUM
 // =====================================================================
-static void galScanAlbums() {
-  galAlbumCount = 0; galAlbumsDirty = false;
+// ---- pemindaian album bertahap (state machine, dijalankan dari galPointerTick) ----
+static char*      galScanBuf = nullptr;        // [antrean folder GAL_SCAN_QCAP*65][album baru]
+static GalAlbum*  galScanOut = nullptr;
+static int        galScanOutN = 0, galScanQn = 0, galScanQi = 0, galScanDepth = 0;
+static int        galScanPhotos = 0, galScanVideos = 0;
+static uint8_t    galScanCKind = 0;
+static char       galScanCur[64], galScanCover[44];
+static DIR*       galScanDirH = nullptr;
+static bool       galScanActive = false;
+
+static bool galSkipDir(const char* nm) {       // folder bawaan OS yg bukan galeri
+  return galStrCmpI(nm, "memo") == 0 || galStrCmpI(nm, "music") == 0 || galStrCmpI(nm, "update") == 0 ||
+         galStrCmpI(nm, "roms") == 0 || galStrCmpI(nm, "System Volume Information") == 0;
+}
+
+static void galScanAbort() {
+  if (galScanDirH) { closedir(galScanDirH); galScanDirH = nullptr; }
+  if (galScanBuf) { heap_caps_free(galScanBuf); galScanBuf = nullptr; galScanOut = nullptr; }
+  galScanActive = false;
+}
+
+static void galScanStart() {
   if (!sdReady) return;
-  const int QCAP = 40;
-  char* q = (char*)heap_caps_malloc((size_t)QCAP * 65, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-  if (!q) return;
-  int qn = 0, qi = 0;
-  strcpy(q, "/"); q[64] = 0; qn = 1;
-  while (qi < qn && galAlbumCount < GAL_MAX_ALBUMS) {
-    char cur[64];
-    strncpy(cur, q + qi * 65, 63); cur[63] = 0;
-    int depth = (uint8_t)q[qi * 65 + 64];
-    qi++;
-    File dir = SD_MMC.open(cur);
-    if (!dir || !dir.isDirectory()) { if (dir) dir.close(); continue; }
-    int photos = 0, videos = 0;
-    char cover[44]; cover[0] = 0;
-    uint32_t cSize = 0, cMt = 0; uint8_t cKind = 0;
-    File f = dir.openNextFile();
-    while (f) {
-      String nm = String(f.name());
-      int sl = nm.lastIndexOf('/');
-      if (sl >= 0) nm = nm.substring(sl + 1);
-      bool isDir = f.isDirectory();
-      uint32_t sz = isDir ? 0 : (uint32_t)f.size();
-      uint32_t mt = isDir ? 0 : (uint32_t)f.getLastWrite();
-      f.close();
-      if (nm.length() > 0 && nm[0] != '.') {
-        if (isDir) {
-          if (depth < 2 && qn < QCAP && nm != "System Volume Information" && strlen(cur) + 1 + nm.length() < 63) {
-            char child[64];
-            galJoin(child, sizeof(child), cur, nm.c_str());
-            strncpy(q + qn * 65, child, 63); q[qn * 65 + 63] = 0;
-            q[qn * 65 + 64] = (char)(depth + 1);
-            qn++;
-          }
-        } else if (nm.length() < 44) {
-          int k = galKindOf(nm.c_str());
-          if (k >= 0) {
-            if (k == 2) videos++; else photos++;
-            if (cover[0] == 0 || mt > cMt || (mt == cMt && strcmp(nm.c_str(), cover) > 0)) {
-              strncpy(cover, nm.c_str(), 43); cover[43] = 0;
-              cSize = sz; cMt = mt; cKind = (uint8_t)k;
-            }
-          }
-        }
-      }
-      f = dir.openNextFile();
-    }
-    dir.close();
-    if (photos + videos > 0 && galAlbumCount < GAL_MAX_ALBUMS) {
-      GalAlbum& a = galAlbums[galAlbumCount++];
-      strncpy(a.path, cur, 63); a.path[63] = 0;
-      galTitleFromPath(a.title, sizeof(a.title), cur);
-      strncpy(a.cover, cover, 43); a.cover[43] = 0;
-      a.cSize = cSize; a.cMtime = cMt; a.cKind = cKind;
-      a.photos = (uint16_t)photos; a.videos = (uint16_t)videos;
-    }
-  }
-  heap_caps_free(q);
+  galScanAbort();
+  size_t qB = ((size_t)GAL_SCAN_QCAP * 65 + 7) & ~(size_t)7;
+  galScanBuf = (char*)heap_caps_malloc(qB + (size_t)GAL_MAX_ALBUMS * sizeof(GalAlbum), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  if (!galScanBuf) return;
+  galScanOut = (GalAlbum*)(galScanBuf + qB);
+  galScanOutN = 0; galScanQn = 1; galScanQi = 0;
+  strcpy(galScanBuf, "/"); galScanBuf[64] = 0;
+  galScanActive = true;
+}
+
+static void galScanFinish() {
   // urut: Screenshot dulu, lalu abjad, "SD Card" (root) terakhir
-  for (int i = 1; i < galAlbumCount; i++) {
-    GalAlbum tmp = galAlbums[i];
+  for (int i = 1; i < galScanOutN; i++) {
+    GalAlbum tmp = galScanOut[i];
     int pi = (galStrCmpI(tmp.title, "Screenshot") == 0) ? 0 : (strcmp(tmp.path, "/") == 0 ? 2 : 1);
     int j = i - 1;
     while (j >= 0) {
-      int pj = (galStrCmpI(galAlbums[j].title, "Screenshot") == 0) ? 0 : (strcmp(galAlbums[j].path, "/") == 0 ? 2 : 1);
-      bool after = (pj > pi) || (pj == pi && galStrCmpI(galAlbums[j].title, tmp.title) > 0);
+      int pj = (galStrCmpI(galScanOut[j].title, "Screenshot") == 0) ? 0 : (strcmp(galScanOut[j].path, "/") == 0 ? 2 : 1);
+      bool after = (pj > pi) || (pj == pi && galStrCmpI(galScanOut[j].title, tmp.title) > 0);
       if (!after) break;
-      galAlbums[j + 1] = galAlbums[j];
+      galScanOut[j + 1] = galScanOut[j];
       j--;
     }
-    galAlbums[j + 1] = tmp;
+    galScanOut[j + 1] = tmp;
   }
+  for (int i = 0; i < galScanOutN; i++) galAlbums[i] = galScanOut[i];
+  galAlbumCount = galScanOutN;
+  galAlbumsDirty = false;
+  galScanAbort();
+  needRedraw = true;
+}
+
+// Jalan maksimal budgetMs per panggilan; sisanya dilanjut putaran loop berikutnya.
+static void galScanStep(int budgetMs) {
+  if (!galScanActive || !galScanBuf) return;
+  unsigned long t0 = millis();
+  while ((int)(millis() - t0) < budgetMs) {
+    if (!galScanDirH) {
+      if (galScanQi >= galScanQn || galScanOutN >= GAL_MAX_ALBUMS) { galScanFinish(); return; }
+      char* qe = galScanBuf + galScanQi * 65;
+      strncpy(galScanCur, qe, 63); galScanCur[63] = 0;
+      galScanDepth = (uint8_t)qe[64];
+      galScanQi++;
+      char full[80];
+      snprintf(full, sizeof(full), "%s%s", GAL_MP, galScanCur);
+      galScanDirH = opendir(full);
+      galScanPhotos = 0; galScanVideos = 0; galScanCover[0] = 0; galScanCKind = 0;
+      if (!galScanDirH) continue;
+    }
+    struct dirent* e = readdir(galScanDirH);
+    if (!e) {                                          // folder ini selesai
+      closedir(galScanDirH); galScanDirH = nullptr;
+      if (galScanPhotos + galScanVideos > 0 && galScanOutN < GAL_MAX_ALBUMS) {
+        GalAlbum& a = galScanOut[galScanOutN++];
+        strncpy(a.path, galScanCur, 63); a.path[63] = 0;
+        galTitleFromPath(a.title, sizeof(a.title), galScanCur);
+        strncpy(a.cover, galScanCover, 43); a.cover[43] = 0;
+        a.cSize = 0; a.cMtime = 0; a.cKind = galScanCKind; a.cSt = 0;
+        a.photos = (uint16_t)galScanPhotos; a.videos = (uint16_t)galScanVideos;
+      }
+      continue;
+    }
+    const char* nm = e->d_name;
+    size_t l = strlen(nm);
+    if (l == 0 || nm[0] == '.') continue;
+    if (e->d_type == DT_DIR) {
+      if (galScanDepth < 2 && galScanQn < GAL_SCAN_QCAP && !galSkipDir(nm) && strlen(galScanCur) + 1 + l < 63) {
+        char child[64];
+        galJoin(child, sizeof(child), galScanCur, nm);
+        char* qe = galScanBuf + galScanQn * 65;
+        strncpy(qe, child, 63); qe[63] = 0; qe[64] = (char)(galScanDepth + 1);
+        galScanQn++;
+      }
+    } else if (l < 44) {
+      int k = galKindOf(nm);
+      if (k >= 0) {
+        if (k == 2) galScanVideos++; else galScanPhotos++;
+        // sampul = nama terbesar (screenshot berstempel waktu -> yg terbaru); tanpa stat
+        if (galScanCover[0] == 0 || strcmp(nm, galScanCover) > 0) {
+          strncpy(galScanCover, nm, 43); galScanCover[43] = 0;
+          galScanCKind = (uint8_t)k;
+        }
+      }
+    }
+  }
+}
+
+static int galCmpItemDesc(const void* x, const void* y) {
+  const GalItem* a = (const GalItem*)x;
+  const GalItem* b = (const GalItem*)y;
+  return strcmp(b->name, a->name);                     // nama menurun
 }
 
 static void galLoadItems() {
   galItemCount = 0; galItemsTrunc = false; galWantCnt = 0;
   if (!galItems || !sdReady) return;
-  File dir = SD_MMC.open(galCurDir);
-  if (!dir || !dir.isDirectory()) { if (dir) dir.close(); return; }
-  File f = dir.openNextFile();
-  while (f) {
-    String nm = String(f.name());
-    int sl = nm.lastIndexOf('/');
-    if (sl >= 0) nm = nm.substring(sl + 1);
-    bool isDir = f.isDirectory();
-    uint32_t sz = isDir ? 0 : (uint32_t)f.size();
-    uint32_t mt = isDir ? 0 : (uint32_t)f.getLastWrite();
-    f.close();
-    if (!isDir && nm.length() > 0 && nm.length() < 44 && nm[0] != '.') {
-      int k = galKindOf(nm.c_str());
-      if (k >= 0) {
-        if (galItemCount >= GAL_MAX_ITEMS) { galItemsTrunc = true; break; }
-        GalItem& it = galItems[galItemCount++];
-        strncpy(it.name, nm.c_str(), 43); it.name[43] = 0;
-        it.size = sz; it.mtime = mt; it.kind = (uint8_t)k;
-      }
-    }
-    f = dir.openNextFile();
+  char full[96];
+  snprintf(full, sizeof(full), "%s%s", GAL_MP, galCurDir);
+  DIR* d = opendir(full);
+  if (!d) return;
+  struct dirent* e;
+  while ((e = readdir(d)) != nullptr) {
+    if (e->d_type == DT_DIR) continue;
+    const char* nm = e->d_name;
+    size_t l = strlen(nm);
+    if (l == 0 || l >= 44 || nm[0] == '.') continue;
+    int k = galKindOf(nm);
+    if (k < 0) continue;
+    if (galItemCount >= GAL_MAX_ITEMS) { galItemsTrunc = true; break; }
+    GalItem& it = galItems[galItemCount++];
+    strncpy(it.name, nm, 43); it.name[43] = 0;
+    it.size = 0; it.mtime = 0; it.kind = (uint8_t)k; it.st = 0;
   }
-  dir.close();
-  // terbaru dulu: waktu ubah menurun, lalu nama menurun (screenshot berstempel waktu)
-  for (int i = 1; i < galItemCount; i++) {
-    GalItem tmp = galItems[i];
-    int j = i - 1;
-    while (j >= 0 && (galItems[j].mtime < tmp.mtime ||
-                      (galItems[j].mtime == tmp.mtime && strcmp(galItems[j].name, tmp.name) < 0))) {
-      galItems[j + 1] = galItems[j];
-      j--;
-    }
-    galItems[j + 1] = tmp;
-  }
+  closedir(d);
+  qsort(galItems, galItemCount, sizeof(GalItem), galCmpItemDesc);
 }
 
 static void galItemPath(char* out, int cap, int idx) {
   galJoin(out, cap, galCurDir, galItems[idx].name);
+}
+
+// ukuran + waktu-ubah dibaca MALAS (stat) hanya utk item yg benar2 tampil
+static void galStatPath(const char* path, uint32_t* size, uint32_t* mtime) {
+  char full[GAL_PATH_MAX + 8];
+  snprintf(full, sizeof(full), "%s%s", GAL_MP, path);
+  struct stat sb;
+  if (stat(full, &sb) == 0) { *size = (uint32_t)sb.st_size; *mtime = (uint32_t)sb.st_mtime; }
+}
+
+static void galItemStat(int idx) {
+  if (idx < 0 || idx >= galItemCount || galItems[idx].st) return;
+  char p[GAL_PATH_MAX];
+  galItemPath(p, sizeof(p), idx);
+  galStatPath(p, &galItems[idx].size, &galItems[idx].mtime);
+  galItems[idx].st = 1;
+}
+
+static void galAlbumStat(int ai) {
+  if (ai < 0 || ai >= galAlbumCount || galAlbums[ai].cSt) return;
+  char p[GAL_PATH_MAX];
+  galJoin(p, sizeof(p), galAlbums[ai].path, galAlbums[ai].cover);
+  galStatPath(p, &galAlbums[ai].cSize, &galAlbums[ai].cMtime);
+  galAlbums[ai].cSt = 1;
 }
 
 static void galOpenAlbum(int ai) {
@@ -837,10 +897,19 @@ static void galDrawAlbums(LGFX_Sprite& s) {
   const char* lb = armed ? "Yakin?" : "Cache";
   s.setCursor(SCR_W - 60 + 26 - s.textWidth(lb) / 2, 27); s.print(lb);
 
+  if (galScanActive) {                                      // indikator pemindaian di samping judul
+    static const char* dd[4] = { "Memindai", "Memindai.", "Memindai..", "Memindai..." };
+    s.setTextColor(T().subtext); s.setTextSize(1);
+    s.setCursor(66, 27); s.print(dd[(millis() / 300) % 4]);
+  }
   if (galAlbumCount == 0) {
     s.setTextColor(T().subtext);
-    s.setCursor(16, galTop + 30); s.print("Belum ada foto/video di SD Card.");
-    s.setCursor(16, galTop + 44); s.print("Format: JPG, BMP, MJPEG.");
+    if (galScanActive) {
+      s.setCursor(16, galTop + 30); s.print("Memindai SD Card...");
+    } else {
+      s.setCursor(16, galTop + 30); s.print("Belum ada foto/video di SD Card.");
+      s.setCursor(16, galTop + 44); s.print("Format: JPG, BMP, MJPEG.");
+    }
     return;
   }
   int ms = galMaxScroll(galAlbumCount);
@@ -852,6 +921,7 @@ static void galDrawAlbums(LGFX_Sprite& s) {
     int x = galX0 + col * (GAL_THUMB + GAL_GAP);
     int y = galTop + row * galRowH - (int)galScrollY;
     if (y + GAL_THUMB < galTop || y > galBot) continue;
+    galAlbumStat(i);
     const GalAlbum& a = galAlbums[i];
     char cp[GAL_PATH_MAX];
     galJoin(cp, sizeof(cp), a.path, a.cover);
@@ -906,6 +976,7 @@ static void galDrawGrid(LGFX_Sprite& s) {
     int y = galTop + row * galRowH - (int)galScrollY;
     if (y + GAL_THUMB < galTop) continue;
     if (y > galBot) break;
+    galItemStat(i);
     char p[GAL_PATH_MAX];
     galItemPath(p, sizeof(p), i);
     int sl = galThumbSlotFor(p, galItems[i].size, galItems[i].mtime, galItems[i].kind);
@@ -922,7 +993,7 @@ static void galDrawGrid(LGFX_Sprite& s) {
 }
 
 static void galDrawViewer(LGFX_Sprite& s) {
-  if (galViewPending && galSnapReady && galAnimStart == 0) {
+  if (galViewPending && galSnapReady) {
     galSnap.pushSprite(&s, 0, 0);                  // layar lama tetap tampil selagi foto didecode
   } else {
     s.fillSprite(0x0000);
@@ -999,29 +1070,53 @@ static void galDrawContent(LGFX_Sprite& s) {
   drawBack(s); drawToast(s);
 }
 
-void drawGallery(LGFX_Sprite& s) {
-  galUseTick++;
-  if (galAnimating()) {
-    if (!galNewValid) { galDrawContent(galNew); galNewValid = true; }   // frame baru dirender SEKALI
-    float t = (float)(millis() - galAnimStart) / (float)GAL_ANIM_MS;
-    if (t > 1.0f) t = 1.0f;
+// Transisi blocking, pola playNavTransition: frame baru dirender SEKALI ke
+// galNew, lalu tiap langkah (berbasis waktu) sprite dikirim langsung ke layar.
+// Area yg tertutup tidak digambar (clip) supaya SPI cuma kirim ~1 layar/frame.
+static void galRunTransition(int kind) {
+  if (!galSnapReady) return;
+  galDrawContent(galNew);
+  const unsigned long t0 = millis();
+  int lastOff = -1;
+  display.startWrite();
+  for (;;) {
+    uiBoostKick();                                   // CPU 240 MHz selama transisi
+    unsigned long el = millis() - t0;
+    bool last = el >= GAL_ANIM_MS;
+    float t = last ? 1.0f : (float)el / (float)GAL_ANIM_MS;
     int off = (int)((float)SCR_W * navEase(t) + 0.5f);
     if (off > SCR_W) off = SCR_W;
-    if (galAnimKind == 0) {            // maju: layar baru masuk dari kanan, yg lama geser pelan (parallax 1/3)
-      galSnap.pushSprite(&s, -(off / 3), 0);
-      galNew.pushSprite(&s, SCR_W - off, 0);
-    } else if (galAnimKind == 1) {     // mundur: layar yg ditutup geser keluar ke kanan
-      galNew.pushSprite(&s, -((SCR_W - off) / 3), 0);
-      galSnap.pushSprite(&s, off, 0);
-    } else if (galAnimKind == 2) {     // foto berikutnya: geser ke kiri
-      galSnap.pushSprite(&s, -off, 0);
-      galNew.pushSprite(&s, SCR_W - off, 0);
-    } else {                           // foto sebelumnya: geser ke kanan
-      galSnap.pushSprite(&s, off, 0);
-      galNew.pushSprite(&s, -(SCR_W - off), 0);
+    if (off != lastOff) {
+      lastOff = off;
+      if (kind == 0) {             // maju: layar baru masuk dari kanan, yg lama geser pelan (parallax 1/3)
+        display.setClipRect(0, 0, SCR_W - off, SCR_H);
+        galSnap.pushSprite(-(off / 3), 0);
+        display.clearClipRect();
+        galNew.pushSprite(SCR_W - off, 0);
+      } else if (kind == 1) {      // mundur: layar yg ditutup geser keluar ke kanan
+        display.setClipRect(0, 0, off, SCR_H);
+        galNew.pushSprite(-((SCR_W - off) / 3), 0);
+        display.clearClipRect();
+        galSnap.pushSprite(off, 0);
+      } else if (kind == 2) {      // foto berikutnya: geser ke kiri
+        galSnap.pushSprite(-off, 0);
+        galNew.pushSprite(SCR_W - off, 0);
+      } else {                     // foto sebelumnya: geser ke kanan
+        galSnap.pushSprite(off, 0);
+        galNew.pushSprite(-(SCR_W - off), 0);
+      }
     }
-    return;
+    if (last) break;
+    yield();
   }
+  display.endWrite();
+  galSnapReady = false; galNewValid = false;
+  galPtrDown = false; galPressIdx = -1;
+  needRedraw = true;                                 // frame akhir sama persis; digambar ulang lewat canvas
+}
+
+void drawGallery(LGFX_Sprite& s) {
+  galUseTick++;
   galFadeActive = false;
   galDrawContent(s);
 }
@@ -1031,7 +1126,6 @@ void drawGallery(LGFX_Sprite& s) {
 // =====================================================================
 static void galBack() {
   galPtrDown = false;
-  if (galAnimating()) return;
   if (galMode == GM_VIEW) {
     galDelArmUntil = 0;
     if (galDirectOpen) { navBack(); return; }
@@ -1041,7 +1135,7 @@ static void galBack() {
   }
   if (galMode == GM_GRID) {
     galMode = GM_ALBUMS;
-    if (galAlbumsDirty) galScanAlbums();
+    if (galAlbumsDirty && !galScanActive) galScanStart();
     galScrollY = galAlbumScrollSave; galScrollVel = 0; galPressIdx = -1;
     galBeginTransition(1, false);
     needRedraw = true; return;
@@ -1054,7 +1148,6 @@ static void galBack() {
 void galTouch(int x, int y, bool held, bool isNew) {
   (void)held;
   if (!isNew) return;
-  if (galAnimating()) return;
   if (galMode == GM_VIEW && !galViewOverlay) return;      // tombol tersembunyi: ketuk apa saja = tampilkan
   if (isBack(x, y)) { galBack(); return; }
   if (galMode == GM_ALBUMS && sdReady && galMem && galHit(x, y, SCR_W - 60, 20, 52, 22)) {
@@ -1175,14 +1268,9 @@ void galPointerTick(bool touched, bool wasT, int tx, int ty) {
   float dt = (dtl <= 0 || dtl > 50) ? 16.0f : (float)dtl;
   galLastTickMs = now;
   if (!galMem) return;
-  if (galSnapReady && galAnimStart != 0) {               // animasi transisi sedang jalan / baru selesai
-    if (galAnimating()) { galPtrDown = false; galPressIdx = -1; needRedraw = true; return; }
-    galSnapReady = false; galAnimStart = 0; galNewValid = false;
-    needRedraw = true;
-  }
   if (galViewPending && galMode == GM_VIEW) {            // frame "Memuat..." sudah tampil -> decode sekarang
     galDecodeCurrent();
-    if (galSnapReady && galAnimStart == 0) { galAnimStart = millis(); galNewValid = false; }   // mulai animasi setelah decode
+    if (galSnapReady) galRunTransition(galAnimKind);   // animasi jalan setelah decode selesai
     needRedraw = true;
   }
   if (galFadeActive) { galFadeActive = false; needRedraw = true; }   // fade-in thumbnail: terus gambar ulang
@@ -1191,6 +1279,11 @@ void galPointerTick(bool touched, bool wasT, int tx, int ty) {
     galViewPointer(touched, wasT, tx, ty);
   } else {
     galGridPointer(touched, wasT, tx, ty, dt);
+    if (galMode == GM_ALBUMS && galScanActive) {
+      galScanStep(touched ? 6 : 14);                    // lebih hemat saat jari menyentuh
+      static unsigned long lastScanRedraw = 0;
+      if (galScanActive && millis() - lastScanRedraw > 300) { lastScanRedraw = millis(); needRedraw = true; }
+    }
     galLoaderStep(!galPtrDown && fabsf(galScrollVel) < 0.5f);
   }
   if (galDelArmUntil && millis() >= galDelArmUntil) { galDelArmUntil = 0; needRedraw = true; }
@@ -1217,7 +1310,7 @@ void galEnter() {
   galPtrDown = false; galPtrDrag = false;
   galViewReady = false; galViewPending = false; galViewFail = false; galViewIdx = -1;
   galDelArmUntil = 0; galClearArmUntil = 0; galWantCnt = 0;
-  galSnapReady = false; galNewValid = false; galAnimStart = 0; galPressIdx = -1; galFadeActive = false;
+  galSnapReady = false; galNewValid = false; galPressIdx = -1; galFadeActive = false;
   galLastTickMs = millis();
   if (!sdReady) { galPendingPath[0] = 0; return; }
   if (!galMemEnsure()) { galPendingPath[0] = 0; showToast("PSRAM tidak cukup"); return; }
@@ -1245,13 +1338,14 @@ void galEnter() {
       }
     }
   }
-  galScanAlbums();
+  galScanStart();                                       // tampilkan daftar lama dulu, pindai ulang di latar
 }
 
 void galExit() {
+  galScanAbort();
   galViewFree();
   galSnap.deleteSprite(); galNew.deleteSprite();
-  galSnapReady = false; galNewValid = false; galAnimStart = 0;
+  galSnapReady = false; galNewValid = false;
   galMemFree();
   galPtrDown = false;
   galPendingPath[0] = 0;
