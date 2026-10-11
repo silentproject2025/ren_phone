@@ -384,7 +384,7 @@ void swTouch(int x, int y, bool held, bool isNew) {
 // =====================================================================
 // 3. VOICE MEMO  (SCR_MEMO)
 // =====================================================================
-// Rekam : micI2S (16 kHz, 16-bit, mono) -> file WAV di /memo/m_YYYYMMDD_HHMMSS.wav,
+// Rekam : micI2S (16 kHz, 16-bit, mono, diolah filter penghalus v117) -> file WAV di /memo/m_YYYYMMDD_HHMMSS.wav,
 //         ditulis ke SD per 16 KB dari task rekam (stack di PSRAM). Header WAV
 //         ditulis dulu (panjang 0) lalu ditambal saat selesai.
 // Putar : WAV dikirim UTUH lewat jalur Musik (musPlayWav di musicbt_renphone.ino);
@@ -395,9 +395,15 @@ void swTouch(int x, int y, bool held, bool isNew) {
 #define MEMO_MAX_FILES    60
 #define MEMO_RATE         16000
 #define MEMO_MAX_SEC      900          // 15 menit per rekaman
-// geser bit mic: 16 = level dictation (pelan), 14 = ~4x lebih keras (di-clip).
-// Kalau rekaman terdengar pecah turunkan jadi 15/16, kalau pelan naikkan ke 13.
-#define MEMO_SAMPLE_SHIFT 14
+// v117: PENGHALUS SUARA rekaman (lihat memoRecTask). Sebelumnya sampel mic cuma
+// digeser bit (x4) lalu di-clip keras -> terdengar kasar/pecah/berdesis.
+// Sekarang: high-pass (buang DC + gemuruh) -> low-pass lembut -> noise gate
+// halus -> penguat -> soft-limiter tanh (puncak membulat, bukan terpotong).
+#define MEMO_GAIN        4.0f     // penguat (setara shift 14 versi lama); pelan -> naikkan, pecah -> turunkan
+#define MEMO_HPF_R       0.97f    // high-pass ~75 Hz (makin dekat 1.0 = makin rendah cutoff-nya)
+#define MEMO_LPF_HZ      6000.0f  // low-pass lembut; turunkan (mis. 5000) kalau masih terlalu "berdesis"
+#define MEMO_GATE_FLOOR  0.5f     // redaman saat senyap (1.0 = gate mati, 0.3 = lebih kuat)
+#define MEMO_GATE_THR    0.0006f  // ambang "senyap" (skala 0..1 dr full-scale mic)
 
 static char     memoNames[MEMO_MAX_FILES][32];
 static uint32_t memoSizes[MEMO_MAX_FILES];
@@ -518,14 +524,30 @@ static void memoRecTask(void* arg) {
   int n = 0;
   int32_t raw[256 * 2];
   const uint32_t maxBytes = (uint32_t)MEMO_RATE * 2UL * MEMO_MAX_SEC;
+  // ---- state pengolah suara (v117) ----
+  const float lpA = 1.0f - expf(-6.2831853f * MEMO_LPF_HZ / (float)MEMO_RATE);
+  float hpX1 = 0.0f, hpY1 = 0.0f, lpY = 0.0f, env = 0.0f, gate = 1.0f;
+  int32_t warm = (int32_t)(MEMO_RATE * 15 / 100);   // buang 150 ms awal (klik/transien mic baru nyala)
+  const int32_t fadeLen = MEMO_RATE / 20;           // fade-in 50 ms spy awal rekaman gak "pop"
+  int32_t fadePos = 0;
   while (ok && !memoStopReq && total < maxBytes) {
     size_t got = micI2S.readBytes((char*)raw, sizeof(raw));
     int frames = (int)(got / (2 * sizeof(int32_t)));
     if (frames <= 0) { vTaskDelay(2); continue; }
     int32_t pk = 0;
     for (int i = 0; i < frames; i++) {
-      int32_t v = raw[i * 2] >> MEMO_SAMPLE_SHIFT;
-      if (v > 32767) v = 32767; else if (v < -32768) v = -32768;
+      float x  = (float)raw[i * 2] * (1.0f / 2147483648.0f);   // -1..1
+      float hp = x - hpX1 + MEMO_HPF_R * hpY1; hpX1 = x; hpY1 = hp;   // high-pass (DC blocker)
+      lpY += lpA * (hp - lpY);                                  // low-pass 1-kutub
+      float ab = fabsf(lpY);
+      env = ab > env ? ab : env * 0.9995f;                      // envelope (turun ~125 ms)
+      float tgt = (env < MEMO_GATE_THR) ? MEMO_GATE_FLOOR : 1.0f;
+      gate += (tgt - gate) * (tgt < gate ? 0.0008f : 0.01f);    // redam pelan, buka cepat (gak "memotong" kata)
+      if (warm > 0) { warm--; continue; }
+      float fade = 1.0f;
+      if (fadePos < fadeLen) { fade = (float)fadePos / (float)fadeLen; fadePos++; }
+      float o = tanhf(lpY * MEMO_GAIN * gate) * fade;           // soft-limiter: puncak membulat
+      int32_t v = (int32_t)(o * 32767.0f);
       int32_t a = v < 0 ? -v : v;
       if (a > pk) pk = a;
       chunk[n++] = (int16_t)v;
