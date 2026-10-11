@@ -904,6 +904,15 @@ static void galViewDelete() {
   needRedraw = true;
 }
 
+// Jadikan foto yang sedang dibuka sebagai foto profil (tombol "Profil" di bar bawah viewer)
+static void galViewSetOwner() {
+  if (galViewIdx < 0 || galViewIdx >= galItemCount) return;
+  if (galItems[galViewIdx].kind == 2) { showToast("Video tidak bisa jadi foto profil"); return; }
+  char op[GAL_PATH_MAX];
+  galItemPath(op, sizeof(op), galViewIdx);
+  ownerSetAvatarUi(op);
+}
+
 static void galViewTap(int x, int y) {
   if (!galViewOverlay) { galViewOverlay = true; needRedraw = true; return; }
   int cy = SCR_H / 2;
@@ -911,6 +920,7 @@ static void galViewTap(int x, int y) {
     if (galHit(x, y, 0, cy - 24, 36, 48))          { galViewStep(-1); return; }
     if (galHit(x, y, SCR_W - 36, cy - 24, 36, 48)) { galViewStep(+1); return; }
   }
+  if (x >= SCR_W - 128 && x < SCR_W - 66 && y >= backY() - 2) { galViewSetOwner(); return; }
   if (x >= SCR_W - 64 && y >= backY() - 2) { galViewDelete(); return; }
   galViewOverlay = false; needRedraw = true;
 }
@@ -1117,6 +1127,9 @@ static void galDrawViewer(LGFX_Sprite& s) {
     const char* l = armed ? "Yakin?" : "Hapus";
     s.setTextColor(armed ? 0xFFFF : T().danger);
     s.setCursor(SCR_W - 64 + 30 - s.textWidth(l) / 2, backY() + 8); s.print(l);
+    iosRR(s, SCR_W - 128, backY(), 60, BACK_H, 8, 0x4208);
+    s.setTextColor(T().accent);
+    s.setCursor(SCR_W - 128 + 30 - s.textWidth("Profil") / 2, backY() + 8); s.print("Profil");
     drawBack(s);
   }
   drawToast(s);
@@ -1257,6 +1270,9 @@ static void galTapGrid(int x, int y) {
   if (idx < 0) return;
   if (galMode == GM_ALBUMS) {
     galOpenAlbum(idx);
+  } else if (ownerPickActive()) {                 // mode pilih foto profil (dari layar Profil)
+    if (galItems[idx].kind == 2) { showToast("Pilih foto, bukan video"); }
+    else { char op[GAL_PATH_MAX]; galItemPath(op, sizeof(op), idx); ownerPickChosen(op); return; }
   } else if (galItems[idx].kind == 2) {
     char p[GAL_PATH_MAX];
     galItemPath(p, sizeof(p), idx);
@@ -1416,6 +1432,7 @@ void galEnter() {
 }
 
 void galExit() {
+  ownerPickReset();
   galScanAbort();
   galViewFree();
   galSnap.deleteSprite(); galNew.deleteSprite();

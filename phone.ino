@@ -623,7 +623,9 @@ enum Screen { SCR_HOME, SCR_CLOCK, SCR_CALC, SCR_SENSOR,
               // Stopwatch & Timer + Voice Memo -- lihat features_renphone.ino
               SCR_STOPWATCH, SCR_MEMO,
               // Galeri foto/video + thumbnail cache -- lihat gallery_renphone.ino
-              SCR_GALLERY };
+              SCR_GALLERY,
+              // Profil pemilik (foto + nama) -- lihat owner_renphone.ino
+              SCR_OWNER };
 enum Orientation { ORIENT_LANDSCAPE = 0, ORIENT_PORTRAIT = 1 };
 
 // Dipindah ke atas — alasan sama dengan AiLine & Vec3f: arduino-cli men-generate
@@ -4599,6 +4601,12 @@ void drawAppIcon(LGFX_Sprite& s, char sym, int cx, int cy, int r, uint16_t bgCir
       s.fillTriangle(cx-2,cy+w-5,cx+w/3+1,cy+1,cx+w-2,cy+w-5,ic);
       break;
     }
+    case 'o': { // Profil: kepala + bahu
+      int rr=max(8,r-6);
+      s.fillCircle(cx,cy-rr/3,max(3,rr/3),ic);
+      s.fillRoundRect(cx-rr*2/3,cy+rr/8,rr*4/3,rr*2/3,rr/3,ic);
+      break;
+    }
     default: {
       s.setTextColor(ic); s.setTextSize(2);
       char b[2]={sym,0};
@@ -4746,7 +4754,14 @@ void galPointerTick(bool,bool,int,int); void galOpenFile(const char*); void galF
 void fileExpPointerTick(bool,bool,int,int);
 void mjpegPlayFile(const String& filename);
 
-AppDef apps[35] = {
+// ---- owner_renphone.ino: Profil pemilik (foto + nama) ----
+void ownerEnter(); void ownerExit(); void drawOwner(LGFX_Sprite&); void ownerTouch(int,int,bool,bool);
+void ownerLoopPoll(); bool ownerHasAvatar(); const char* ownerName();
+void ownerDrawAvatar(LGFX_Sprite&,int,int,int);
+bool ownerPickActive(); void ownerPickReset(); void ownerPickChosen(const char*);
+void ownerSetAvatarUi(const char*);
+
+AppDef apps[36] = {
   { "Jam",        'J', 0, clockEnter,    clockExit,    drawClock,        clockTouch,    SCR_CLOCK },
   { "Kalkulator", '+', 0, calcEnter,     calcExit,     drawCalc,         calcTouch,     SCR_CALC },
   { "Orientasi3D", '3', 0, sensorEnter,   sensorExit,   drawSensor,       sensorTouch,   SCR_SENSOR },
@@ -4798,8 +4813,10 @@ AppDef apps[35] = {
   { "Voice Memo", 'v', 0, memoEnter,    memoExit,     drawMemo,         memoTouch,     SCR_MEMO },
   // ---- Galeri: album per folder, thumbnail cache di SD ----
   { "Galeri",     'g', 0, galEnter,     galExit,      drawGallery,      galTouch,      SCR_GALLERY },
+  // ---- Profil: foto & nama pemilik ----
+  { "Profil",     'o', 0, ownerEnter,   ownerExit,    drawOwner,        ownerTouch,    SCR_OWNER },
 };
-#define APP_COUNT 35
+#define APP_COUNT 36
 
 // =============================================
 // NOTIFIKASI BADGE (BARU) -- angka kecil merah di pojok ikon app, mirip
@@ -4907,6 +4924,7 @@ void initAppColors(){
   apps[32].color=0xFD20; // Stopwatch - oranye
   apps[33].color=0xF9A6; // Voice Memo - merah rekam
   apps[34].color=0x565F; // Galeri - biru langit
+  apps[35].color=0x5EBF; // Profil - biru muda
 }
 
 int appIndexForScreen(Screen s){
@@ -7199,7 +7217,7 @@ int loadSpiOcPref(){
 // PENGATURAN ala iOS -- state layout & sentuhan (daftar scroll, tap-saat-lepas)
 // =====================================================================
 enum { SR_TITLE=0, SR_SECT, SR_BRIGHT, SR_THEME, SR_FONT, SR_ROT, SR_SPI, SR_SPIAPPLY,
-       SR_SCAN, SR_WIFI, SR_NONET, SR_SSID, SR_PASS, SR_CONNECT, SR_MPU, SR_TCAL };
+       SR_SCAN, SR_WIFI, SR_NONET, SR_SSID, SR_PASS, SR_CONNECT, SR_MPU, SR_TCAL, SR_OWNER };
 #define SETT_MAXROWS 40
 int settRT[SETT_MAXROWS], settRG[SETT_MAXROWS], settRY[SETT_MAXROWS], settRH[SETT_MAXROWS], settRA[SETT_MAXROWS];
 const char* settRL[SETT_MAXROWS];
@@ -7231,6 +7249,7 @@ void settAddRow(int type,int grp,int h,int arg,const char* lbl,int& y){
 void settBuildLayout(){
   settRowN=0; int y=4; int g=1;
   settAddRow(SR_TITLE,0,36,0,"Pengaturan",y);
+  settAddRow(SR_OWNER,g,60,0,nullptr,y); g++;   // kartu pemilik (foto + nama)
 
   settAddRow(SR_SECT,0,22,0,"TAMPILAN",y);
   settAddRow(SR_BRIGHT,g,34,0,nullptr,y);
@@ -7415,6 +7434,17 @@ void drawSettings(LGFX_Sprite& s){
         s.setTextColor(mpuReady?T().accent:T().subtext); s.setCursor(xl,ty); s.print("Kalibrasi Sensor Gerak");
         if(!mpuReady) settTextR(s,xr,ty,"Tidak terdeteksi",T().subtext);
         break;
+      case SR_OWNER: {
+        int ar=22, acy=ry+rh/2, acx=xl+ar-4;
+        ownerDrawAvatar(s,acx,acy,ar);
+        int tx0=acx+ar+10;
+        s.setTextSize(2);
+        String onm=settFit(s,String(ownerName()),xr-18-tx0);
+        uiText(s,tx0,acy-14,onm.c_str(),T().text,false,true);
+        s.setTextSize(1);
+        s.setTextColor(T().subtext); s.setCursor(tx0,acy+6); s.print("Ketuk untuk atur profil");
+        settChevron(s,xr-4,acy,T().subtext);
+        } break;
       case SR_TCAL:
         s.setTextColor(T().danger); s.setCursor(xl,ty); s.print("Kalibrasi Layar Sentuh");
         if(millis()<settTcalArmUntil){ settTextR(s,xr,ty,"Ketuk lagi",T().danger); needRedraw=true; }
@@ -7504,6 +7534,8 @@ void settTap(int x,int y){
       saveWifiCreds(); connectWifi(true);
       showToast("Menghubungkan WiFi...");
       needRedraw=true; break;
+    case SR_OWNER:
+      navPush(SCR_OWNER); break;
     case SR_MPU:
       if(mpuReady){ calibrateMPU(); needRedraw=true; }
       else showToast("Sensor MPU6050 tidak terdeteksi");
@@ -17762,6 +17794,7 @@ void loop(){
     // v31: HWmonitor -- sampling tiap 500ms (jendela sampel yg dipakai
     // hwmonPoll() buat hitung persen sibuk per core, lihat komentarnya)
     if(curScreen()==SCR_HWMON && millis()-hwmonLastPoll>500){ hwmonPoll(); needRedraw=true; hwmonLastPoll=millis(); }
+    ownerLoopPoll(); // Profil: tutup Galeri setelah foto profil dipilih
     // v58 FIX bug "Labirin gak bisa digerakin sama sekali": SCR_MAZE lupa
     // didaftarin di sini pas game-nya dibikin (v56/v57). Tanpa ini,
     // drawMaze() -- tempat mazePlayerTick()/mazeGhostTick() dipanggil --
