@@ -264,6 +264,43 @@ void ownerSetAvatarUi(const char* path) {
   needRedraw = true;
 }
 
+// AVATAR-SMOOTH: sampling halus (data foto = RGB565 big-endian).
+static inline uint16_t ownerSwp(uint16_t v) { return (uint16_t)((v >> 8) | (v << 8)); }
+
+static uint16_t ownerSample(int D, int dx, int dy) {
+  uint32_t r, g, b;
+  if (D >= OWNER_AV) {
+    int fx = ((2 * dx + 1) * OWNER_AV * 128) / D - 128; if (fx < 0) fx = 0;
+    int fy = ((2 * dy + 1) * OWNER_AV * 128) / D - 128; if (fy < 0) fy = 0;
+    int x0 = fx >> 8, y0 = fy >> 8, wx = fx & 255, wy = fy & 255;
+    int x1 = (x0 + 1 < OWNER_AV) ? x0 + 1 : OWNER_AV - 1;
+    int y1 = (y0 + 1 < OWNER_AV) ? y0 + 1 : OWNER_AV - 1;
+    if (x0 >= OWNER_AV) x0 = OWNER_AV - 1;
+    if (y0 >= OWNER_AV) y0 = OWNER_AV - 1;
+    uint16_t p00 = ownerSwp(ownerAv[y0 * OWNER_AV + x0]), p10 = ownerSwp(ownerAv[y0 * OWNER_AV + x1]);
+    uint16_t p01 = ownerSwp(ownerAv[y1 * OWNER_AV + x0]), p11 = ownerSwp(ownerAv[y1 * OWNER_AV + x1]);
+    uint32_t w00 = (256 - wx) * (256 - wy), w10 = wx * (256 - wy), w01 = (256 - wx) * wy, w11 = wx * wy;
+    r = (((p00 >> 11) & 31) * w00 + ((p10 >> 11) & 31) * w10 + ((p01 >> 11) & 31) * w01 + ((p11 >> 11) & 31) * w11) >> 16;
+    g = (((p00 >> 5) & 63) * w00 + ((p10 >> 5) & 63) * w10 + ((p01 >> 5) & 63) * w01 + ((p11 >> 5) & 63) * w11) >> 16;
+    b = ((p00 & 31) * w00 + (p10 & 31) * w10 + (p01 & 31) * w01 + (p11 & 31) * w11) >> 16;
+  } else {
+    int sx0 = dx * OWNER_AV / D, sx1 = ((dx + 1) * OWNER_AV + D - 1) / D;
+    int sy0 = dy * OWNER_AV / D, sy1 = ((dy + 1) * OWNER_AV + D - 1) / D;
+    if (sx1 > OWNER_AV) sx1 = OWNER_AV;
+    if (sx1 <= sx0) sx1 = sx0 + 1;
+    if (sy1 > OWNER_AV) sy1 = OWNER_AV;
+    if (sy1 <= sy0) sy1 = sy0 + 1;
+    uint32_t sr = 0, sg = 0, sb = 0, n = 0;
+    for (int yy = sy0; yy < sy1; yy++)
+      for (int xx = sx0; xx < sx1; xx++) {
+        uint16_t p = ownerSwp(ownerAv[yy * OWNER_AV + xx]);
+        sr += (p >> 11) & 31; sg += (p >> 5) & 63; sb += p & 31; n++;
+      }
+    r = sr / n; g = sg / n; b = sb / n;
+  }
+  return ownerSwp((uint16_t)((r << 11) | (g << 5) | b));
+}
+
 // Lingkaran foto (atau inisial kalau belum ada foto) berpusat di (cx,cy), jari-jari r.
 void ownerDrawAvatar(LGFX_Sprite& s, int cx, int cy, int r) {
   ownerEnsureLoaded();
@@ -281,8 +318,7 @@ void ownerDrawAvatar(LGFX_Sprite& s, int cx, int cy, int r) {
       if (x1 > D) x1 = D;
       int w = x1 - x0;
       if (w <= 0) continue;
-      const uint16_t* srow = ownerAv + (dy * OWNER_AV / D) * OWNER_AV;
-      for (int i = 0; i < w; i++) line[i] = srow[(x0 + i) * OWNER_AV / D];
+      for (int i = 0; i < w; i++) line[i] = ownerSample(D, x0 + i, dy);
       s.pushImage(cx - r + x0, cy - r + dy, w, 1, (lgfx::swap565_t*)line);
     }
     ownerDrawFrame(s, cx, cy, r);                                 // bingkai pilihan (gaya Tipis = cincin tipis lama)
