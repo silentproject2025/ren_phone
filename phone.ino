@@ -621,7 +621,9 @@ enum Screen { SCR_HOME, SCR_CLOCK, SCR_CALC, SCR_SENSOR,
               // lihat file musicbt_renphone.ino + rplink.h.
               SCR_MUSIC,
               // Stopwatch & Timer + Voice Memo -- lihat features_renphone.ino
-              SCR_STOPWATCH, SCR_MEMO };
+              SCR_STOPWATCH, SCR_MEMO,
+              // Galeri foto/video + thumbnail cache -- lihat gallery_renphone.ino
+              SCR_GALLERY };
 enum Orientation { ORIENT_LANDSCAPE = 0, ORIENT_PORTRAIT = 1 };
 
 // Dipindah ke atas — alasan sama dengan AiLine & Vec3f: arduino-cli men-generate
@@ -4589,6 +4591,14 @@ void drawAppIcon(LGFX_Sprite& s, char sym, int cx, int cy, int r, uint16_t bgCir
       for(int i=0;i<5;i++) s.fillRoundRect(x0+i*(bw+gp),cy-hs[i]/2,bw,max(hs[i],3),1,ic);
       break;
     }
+    case 'g': { // Galeri: bingkai foto + matahari + dua gunung
+      int w=r-5;
+      s.drawRoundRect(cx-w,cy-w+3,w*2,w*2-6,3,ic);
+      s.fillCircle(cx+w/2,cy-w/2+3,2,ic);
+      s.fillTriangle(cx-w+2,cy+w-5,cx-w/3,cy-2,cx+1,cy+w-5,ic);
+      s.fillTriangle(cx-2,cy+w-5,cx+w/3+1,cy+1,cx+w-2,cy+w-5,ic);
+      break;
+    }
     default: {
       s.setTextColor(ic); s.setTextSize(2);
       char b[2]={sym,0};
@@ -4730,7 +4740,13 @@ void memoEnter(); void memoExit(); void drawMemo(LGFX_Sprite&); void memoTouch(i
 void featuresLoopPoll(); void ccActScreenshot();
 void drawWeatherWidget(LGFX_Sprite&,int,int,int,int); void weatherRefreshNow();
 
-AppDef apps[34] = {
+// ---- gallery_renphone.ino: Galeri + thumbnail cache; hook File Explorer berfolder ----
+void galEnter(); void galExit(); void drawGallery(LGFX_Sprite&); void galTouch(int,int,bool,bool);
+void galPointerTick(bool,bool,int,int); void galOpenFile(const char*); void galForgetFile(const char*);
+void fileExpPointerTick(bool,bool,int,int);
+void mjpegPlayFile(const String& filename);
+
+AppDef apps[35] = {
   { "Jam",        'J', 0, clockEnter,    clockExit,    drawClock,        clockTouch,    SCR_CLOCK },
   { "Kalkulator", '+', 0, calcEnter,     calcExit,     drawCalc,         calcTouch,     SCR_CALC },
   { "Orientasi3D", '3', 0, sensorEnter,   sensorExit,   drawSensor,       sensorTouch,   SCR_SENSOR },
@@ -4780,8 +4796,10 @@ AppDef apps[34] = {
   { "Stopwatch",  't', 0, swEnter,      swExit,       drawSw,           swTouch,       SCR_STOPWATCH },
   // ---- Voice Memo: rekam mic ke SD, putar lewat Musik BT ----
   { "Voice Memo", 'v', 0, memoEnter,    memoExit,     drawMemo,         memoTouch,     SCR_MEMO },
+  // ---- Galeri: album per folder, thumbnail cache di SD ----
+  { "Galeri",     'g', 0, galEnter,     galExit,      drawGallery,      galTouch,      SCR_GALLERY },
 };
-#define APP_COUNT 34
+#define APP_COUNT 35
 
 // =============================================
 // NOTIFIKASI BADGE (BARU) -- angka kecil merah di pojok ikon app, mirip
@@ -4888,6 +4906,7 @@ void initAppColors(){
   apps[31].color=0xFA12; // Musik - pink terang
   apps[32].color=0xFD20; // Stopwatch - oranye
   apps[33].color=0xF9A6; // Voice Memo - merah rekam
+  apps[34].color=0x565F; // Galeri - biru langit
 }
 
 int appIndexForScreen(Screen s){
@@ -8049,11 +8068,32 @@ void aiTouch(int x,int y,bool held,bool isNew){
 // =============================================
 // APP: FILE EXPLORER (DENGAN WEB UPLOADER)
 // =============================================
-#define MAX_EXP_FILES 20
-String expFileNames[MAX_EXP_FILES];
-uint32_t expFileSizes[MAX_EXP_FILES];
-int expFileCount = 0;
-int expScrollPage = 0;
+// BARU: SUPPORT FOLDER. Dulu cuma menampilkan file di root SD (maks 20).
+// Sekarang:
+//  * ketuk folder = masuk; baris ".." = naik; tombol Kembali = naik satu
+//    folder dulu (baru keluar app kalau sudah di root) -- gaya file manager HP.
+//  * folder & file diurut (folder dulu), sampai 256 entri per folder, bisa
+//    digeser (drag) selain tombol < Prev / Next >. Entri berawalan "." (mis.
+//    /.thumbs = cache thumbnail Galeri) disembunyikan.
+//  * file gambar (JPG/BMP) dibuka di Galeri, .mjpeg diputar di pemutar MJPEG,
+//    file teks dibaca (maks 8 KB), file biner lain TIDAK dibuka sbg teks lagi
+//    (dulu muncul karakter acak).
+//  * Hapus = ketuk 2x. Folder hanya bisa dihapus kalau kosong.
+// Ketuk baris diproses saat jari LEPAS (lihat fileExpPointerTick) supaya
+// menggeser daftar tidak salah dianggap membuka folder/file.
+// Variabel isi-file (expView*) & scroll isi file TETAP sama spt v12.
+#define EXP_MAX_ENTRIES 256
+#define EXP_NAME_LEN    64
+#define EXP_TEXT_MAX    8192
+struct ExpEntry { char name[EXP_NAME_LEN]; uint32_t size; bool dir; };
+ExpEntry* expEntries = nullptr;      // dialokasikan lazy di PSRAM (~18 KB)
+int  expEntryCount = 0;
+bool expTruncated = false;
+String expCwd = "/";
+int  expScrollItem = 0;              // indeks baris pertama yg tampil (baris 0 = ".." kalau bukan di root)
+bool expKeepCwdOnce = false;         // true sesaat sebelum pindah ke Galeri, supaya folder tidak reset pas kembali
+int  expDelArmIdx = -1;
+unsigned long expDelArmUntil = 0;
 String expViewContent = "";
 String expViewFileName = "";
 
@@ -8067,44 +8107,308 @@ float  expViewScrollY = 0;
 int    expViewMaxScroll = 0;
 float  expViewScrollVel = 0;
 
+bool expEnsureBuf(){
+  if(expEntries) return true;
+  expEntries = (ExpEntry*)heap_caps_calloc(EXP_MAX_ENTRIES, sizeof(ExpEntry), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  return expEntries != nullptr;
+}
+
+String expJoin(const String& dir, const char* name){
+  if(dir == "/") return String("/") + name;
+  return dir + "/" + name;
+}
+
+String expParentOf(const String& p){
+  int i = p.lastIndexOf('/');
+  if(i <= 0) return String("/");
+  return p.substring(0, i);
+}
+
+// folder dulu, lalu nama (tanpa peduli huruf besar/kecil)
+int expCmpKey(bool da, const char* na, bool db, const char* nb){
+  if(da != db) return da ? -1 : 1;
+  while(*na && *nb){
+    char ca = *na, cb = *nb;
+    if(ca >= 'A' && ca <= 'Z') ca += 32;
+    if(cb >= 'A' && cb <= 'Z') cb += 32;
+    if(ca != cb) return (unsigned char)ca - (unsigned char)cb;
+    na++; nb++;
+  }
+  return (unsigned char)*na - (unsigned char)*nb;
+}
+
 void scanSdFiles() {
-  expFileCount = 0;
+  expEntryCount = 0; expTruncated = false;
   if (!sdReady) return;
-  File root = SD_MMC.open("/");
-  File f = root.openNextFile();
-  while (f && expFileCount < MAX_EXP_FILES) {
-    if (!f.isDirectory()) {
-      String fname = String(f.name());
-      if (!fname.startsWith("/")) fname = "/" + fname;
-      expFileNames[expFileCount] = fname;
-      expFileSizes[expFileCount] = f.size();
-      expFileCount++;
+  if (!expEnsureBuf()) return;
+  File dir = SD_MMC.open(expCwd.c_str());
+  if (!dir || !dir.isDirectory()) {
+    if (dir) dir.close();
+    expCwd = "/";
+    dir = SD_MMC.open("/");
+    if (!dir) return;
+  }
+  File f = dir.openNextFile();
+  while (f) {
+    String nm = String(f.name());
+    int sl = nm.lastIndexOf('/');
+    if (sl >= 0) nm = nm.substring(sl + 1);
+    bool isDir = f.isDirectory();
+    uint32_t sz = isDir ? 0 : (uint32_t)f.size();
+    f.close();
+    if (nm.length() > 0 && nm.length() < EXP_NAME_LEN && nm[0] != '.' && nm != "System Volume Information") {
+      if (expEntryCount >= EXP_MAX_ENTRIES) { expTruncated = true; break; }
+      ExpEntry& e = expEntries[expEntryCount++];
+      strncpy(e.name, nm.c_str(), EXP_NAME_LEN - 1); e.name[EXP_NAME_LEN - 1] = 0;
+      e.size = sz; e.dir = isDir;
     }
-    f = root.openNextFile();
+    f = dir.openNextFile();
+  }
+  dir.close();
+  for (int i = 1; i < expEntryCount; i++) {       // insertion sort
+    ExpEntry tmp = expEntries[i];
+    int j = i - 1;
+    while (j >= 0 && expCmpKey(expEntries[j].dir, expEntries[j].name, tmp.dir, tmp.name) > 0) {
+      expEntries[j + 1] = expEntries[j];
+      j--;
+    }
+    expEntries[j + 1] = tmp;
+  }
+}
+
+int expTotalRows(){ return expEntryCount + ((expCwd != "/") ? 1 : 0); }
+
+int expItemsPerPage(){
+  int listY = 44, itemH = 26, gap = 4;
+  int pageY = backY() - 2;
+  int n = (pageY - 4 - listY) / (itemH + gap);
+  return n < 1 ? 1 : n;
+}
+
+void expClampScroll(){
+  int maxStart = expTotalRows() - expItemsPerPage();
+  if(maxStart < 0) maxStart = 0;
+  if(expScrollItem > maxStart) expScrollItem = maxStart;
+  if(expScrollItem < 0) expScrollItem = 0;
+}
+
+void expEnterDir(const String& path){
+  expCwd = path;
+  expScrollItem = 0;
+  expDelArmIdx = -1;
+  scanSdFiles();
+  needRedraw = true;
+}
+
+void expGoUp(){
+  if(expCwd == "/") return;
+  String child = expCwd.substring(expCwd.lastIndexOf('/') + 1);
+  expCwd = expParentOf(expCwd);
+  expDelArmIdx = -1;
+  scanSdFiles();
+  expScrollItem = 0;
+  for(int i = 0; i < expEntryCount; i++){   // posisikan daftar di folder yg barusan ditinggalkan
+    if(expEntries[i].dir && child == expEntries[i].name){
+      expScrollItem = (i + ((expCwd != "/") ? 1 : 0)) - expItemsPerPage() / 2;
+      break;
+    }
+  }
+  expClampScroll();
+  needRedraw = true;
+}
+
+// Kembali: tutup isi file -> naik folder -> baru keluar app
+void expGoBack(){
+  if(expViewFileName.length() > 0){
+    expViewFileName = ""; expViewContent = "";
+    expViewScrollY = 0; expViewScrollVel = 0;
+    needRedraw = true;
+    return;
+  }
+  if(expCwd != "/"){ expGoUp(); return; }
+  navBack();
+}
+
+bool expIsTextName(const String& lower){
+  if(lower.indexOf('.') < 0) return true;      // tanpa ekstensi (README, LICENSE, dst)
+  static const char* exts[] = { ".txt", ".json", ".md", ".log", ".csv", ".tsv", ".ini", ".cfg", ".conf",
+                                ".h", ".c", ".cpp", ".ino", ".py", ".js", ".html", ".htm", ".css",
+                                ".xml", ".yml", ".yaml", ".sh", ".bat", ".nfo" };
+  for(unsigned i = 0; i < sizeof(exts) / sizeof(exts[0]); i++) if(lower.endsWith(exts[i])) return true;
+  return false;
+}
+
+void expOpenEntry(int ei){
+  String path = expJoin(expCwd, expEntries[ei].name);
+  String low = String(expEntries[ei].name); low.toLowerCase();
+
+  if(low.endsWith(".jpg") || low.endsWith(".jpeg") || low.endsWith(".bmp")){
+    expKeepCwdOnce = true;                      // balik dari Galeri tetap di folder ini
+    galOpenFile(path.c_str());
+    return;
+  }
+  if(low.endsWith(".mjpeg")){
+    mjpegPlayFile(path.substring(1));           // pemutar MJPEG pakai path relatif dari root
+    needRedraw = true;
+    return;
+  }
+  if(!expIsTextName(low)){
+    showToast("Format ini tidak bisa dibuka di sini");
+    vibWarn();
+    return;
+  }
+  File f = SD_MMC.open(path.c_str(), FILE_READ);
+  if(!f){
+    expViewFileName = path; expViewContent = "Gagal membaca isi file.";
+  } else {
+    size_t sz = (size_t)f.size();
+    size_t n = sz > EXP_TEXT_MAX ? EXP_TEXT_MAX : sz;
+    String content; content.reserve(n + 48);
+    char buf[129];
+    size_t left = n;
+    while(left > 0){
+      size_t want = left > 128 ? 128 : left;
+      size_t r = f.read((uint8_t*)buf, want);
+      if(r == 0) break;
+      int m = 0;
+      for(size_t k = 0; k < r; k++){
+        unsigned char c = (unsigned char)buf[k];
+        if(c == '\r') continue;
+        if(c == '\t') c = ' ';
+        else if(c < 32 && c != '\n') c = '.';
+        buf[m++] = (char)c;
+      }
+      buf[m] = 0;
+      content += buf;
+      left -= r;
+    }
+    f.close();
+    if(sz > n) content += String("\n\n... (dipotong, ukuran file ") + String((unsigned)(sz / 1024)) + " KB)";
+    expViewFileName = path;
+    expViewContent = content;
+  }
+  expViewScrollY = 0; expViewScrollVel = 0;
+  needRedraw = true;
+}
+
+void expDeleteEntry(int vi, int ei){
+  if(!(expDelArmIdx == vi && millis() < expDelArmUntil)){
+    expDelArmIdx = vi; expDelArmUntil = millis() + 2500;
+    showToast("Ketuk lagi untuk menghapus");
+    needRedraw = true;
+    return;
+  }
+  expDelArmIdx = -1;
+  String path = expJoin(expCwd, expEntries[ei].name);
+  bool wasDir = expEntries[ei].dir;
+  bool ok;
+  if(wasDir){
+    ok = SD_MMC.rmdir(path.c_str());
+    if(!ok){ showToast("Folder tidak kosong"); vibWarn(); needRedraw = true; return; }
+  } else {
+    galForgetFile(path.c_str());               // buang thumbnail cache-nya juga (sebelum file hilang)
+    ok = SD_MMC.remove(path.c_str());
+    if(!ok){ showToast("Gagal menghapus file"); vibError(); needRedraw = true; return; }
+  }
+  showToast(wasDir ? "Folder Dihapus" : "File Dihapus");
+  scanSdFiles();
+  expClampScroll();
+  needRedraw = true;
+}
+
+// Ketuk baris daftar (dipanggil saat jari lepas tanpa menggeser)
+void fileExpTap(int x, int y){
+  int listY = 44, itemH = 26, gap = 4;
+  int rel = y - listY;
+  if(rel < 0) return;
+  int row = rel / (itemH + gap);
+  if(rel % (itemH + gap) > itemH) return;
+  int per = expItemsPerPage();
+  if(row >= per) return;
+  int vi = expScrollItem + row;
+  int upRow = (expCwd != "/") ? 1 : 0;
+  if(vi < 0 || vi >= expEntryCount + upRow) return;
+  if(upRow && vi == 0){ expGoUp(); return; }
+  int ei = vi - upRow;
+  if(x >= SCR_W - 44){                         // tombol Hps
+    expDeleteEntry(vi, ei);
+    return;
+  }
+  if(expEntries[ei].dir){
+    expEnterDir(expJoin(expCwd, expEntries[ei].name));
+    return;
+  }
+  expOpenEntry(ei);
+}
+
+bool expPtrDown = false, expPtrDrag = false;
+int  expPtrSx = 0, expPtrSy = 0, expPtrLy = 0, expPtrAcc = 0;
+
+// Dipanggil tiap loop() selagi layar = File Explorer (hook di loop(), pola sama
+// dgn settingsPointerTick): geser daftar + ketuk-saat-lepas.
+void fileExpPointerTick(bool touched, bool wasT, int tx, int ty){
+  if(expViewFileName.length() > 0 || !sdReady){ expPtrDown = false; return; }
+  int listY = 44, itemH = 26, gap = 4;
+  int pageY = backY() - 2;
+  if(touched){
+    if(!wasT){
+      expPtrDown = (ty >= listY && ty < pageY - 4);
+      expPtrSx = tx; expPtrSy = ty; expPtrLy = ty; expPtrDrag = false; expPtrAcc = 0;
+    } else if(expPtrDown){
+      if(!expPtrDrag && abs(ty - expPtrSy) > 8) expPtrDrag = true;
+      if(expPtrDrag){
+        expPtrAcc += expPtrLy - ty; expPtrLy = ty;
+        int step = itemH + gap, before = expScrollItem;
+        while(expPtrAcc >= step){ expScrollItem++; expPtrAcc -= step; }
+        while(expPtrAcc <= -step){ expScrollItem--; expPtrAcc += step; }
+        expClampScroll();
+        if(expScrollItem != before) needRedraw = true;
+      }
+    }
+  } else {
+    if(wasT && expPtrDown){
+      expPtrDown = false;
+      if(!expPtrDrag) fileExpTap(expPtrSx, expPtrSy);
+    } else {
+      expPtrDown = false;
+    }
   }
 }
 
 void fileExpEnter(){
   expViewContent = "";
   expViewFileName = "";
-  expScrollPage = 0;
+  if(!expKeepCwdOnce){ expCwd = "/"; expScrollItem = 0; }
+  expKeepCwdOnce = false;
   expViewScrollY = 0;    // v12
   expViewScrollVel = 0;  // v12
+  expDelArmIdx = -1;
+  expPtrDown = false;
   scanSdFiles();
+  expClampScroll();
 }
 void fileExpExit(){}
 
 void drawFileExplorer(LGFX_Sprite& s){
   iosBackdrop(s); drawStatusBar(s);
-  s.setTextColor(0x3ADF);s.setTextSize(1);s.setCursor(8,26);s.print("File Explorer");
+  s.setTextSize(1);
+  bool atRoot = (expCwd == "/");
 
-  if(wifiConnected && webServerRunning){
-    s.setTextColor(T().good);s.setCursor(110,26);
-    String ipStr = "Web: " + WiFi.localIP().toString();
-    s.print(ipStr.c_str());
+  if(atRoot){
+    s.setTextColor(0x3ADF);s.setCursor(8,26);s.print("File Explorer");
+    if(wifiConnected && webServerRunning){
+      s.setTextColor(T().good);s.setCursor(110,26);
+      String ipStr = "Web: " + WiFi.localIP().toString();
+      s.print(ipStr.c_str());
+    } else {
+      s.setTextColor(T().subtext);s.setCursor(120,26);
+      s.print("Web: Off (No WiFi)");
+    }
   } else {
-    s.setTextColor(T().subtext);s.setCursor(120,26);
-    s.print("Web: Off (No WiFi)");
+    String hdr = expCwd;                       // path penuh; kalau kepanjangan, potong dari kiri
+    int maxC = (SCR_W - 16) / 6;
+    if((int)hdr.length() > maxC) hdr = String("..") + hdr.substring(hdr.length() - (maxC - 2));
+    s.setTextColor(0x3ADF);s.setCursor(8,26);s.print(hdr.c_str());
   }
 
   if(expViewFileName.length() > 0){
@@ -8114,7 +8418,10 @@ void drawFileExplorer(LGFX_Sprite& s){
     int viewTop=44, viewBot=backY()-6, viewH=viewBot-viewTop;
     iosRR(s,4,viewTop,SCR_W-8,viewH,6,T().surface);
     s.setTextColor(T().accent2);s.setCursor(10,viewTop+6);s.print("File: ");
-    s.setTextColor(T().text);s.print(expViewFileName.c_str());
+    String vn = expViewFileName;
+    int maxV = (SCR_W - 60) / 6;
+    if((int)vn.length() > maxV) vn = String("..") + vn.substring(vn.length() - (maxV - 2));
+    s.setTextColor(T().text);s.print(vn.c_str());
     s.drawFastHLine(10,viewTop+20,SCR_W-20,T().divider);
 
     // v12: isi file di-wrap ke expLinesBuf (persis pola AI Chat) supaya
@@ -8156,11 +8463,6 @@ void drawFileExplorer(LGFX_Sprite& s){
     return;
   }
 
-  int listY = 44;
-  int itemH = 26;
-  int itemsPerPage = 5;
-  int startIdx = expScrollPage * itemsPerPage;
-
   if(!sdReady){
     s.setTextColor(T().danger);s.setTextSize(2);s.setCursor(20,80);
     s.print("SD Card Tdk Siap");
@@ -8168,37 +8470,85 @@ void drawFileExplorer(LGFX_Sprite& s){
     return;
   }
 
-  if(expFileCount == 0){
+  expClampScroll();
+  int listY = 44, itemH = 26, gap = 4;
+  int per = expItemsPerPage();
+  int upRow = atRoot ? 0 : 1;
+  int total = expEntryCount + upRow;
+
+  if(total == 0){
     s.setTextColor(T().subtext);s.setTextSize(1);s.setCursor(20,80);
     s.print("SD Card Kosong / Belum ada file.");
-  } else {
-    for(int i = 0; i < itemsPerPage && (startIdx + i) < expFileCount; i++){
-      int idx = startIdx + i;
-      int itemY = listY + i * (itemH + 4);
-      iosRR(s,4,itemY,SCR_W-8,itemH,6,T().surface);
-      
-      s.setTextColor(T().accent2);s.setCursor(10,itemY+8);s.print("[F]");
-      s.setTextColor(T().text);s.setCursor(32,itemY+8);
-      String fn = expFileNames[idx];
-      if(fn.length() > 16) fn = fn.substring(0,14) + "..";
-      s.print(fn.c_str());
+  }
+  for(int r = 0; r < per; r++){
+    int vi = expScrollItem + r;
+    if(vi >= total) break;
+    int itemY = listY + r * (itemH + gap);
+    iosRR(s,4,itemY,SCR_W-8,itemH,6,T().surface);
 
+    if(upRow && vi == 0){                      // baris ".." (naik satu folder)
+      s.setTextColor(T().accent2);s.setCursor(12,itemY+8);s.print("..");
+      s.setTextColor(T().subtext);s.setCursor(34,itemY+8);s.print("Naik satu folder");
+      continue;
+    }
+    int ei = vi - upRow;
+    bool isDir = expEntries[ei].dir;
+    bool armed = (expDelArmIdx == vi && millis() < expDelArmUntil);
+
+    if(isDir){                                 // ikon folder
+      uint16_t fc = T().accent;
+      s.fillRoundRect(10,itemY+7,9,4,1,fc);
+      s.fillRoundRect(10,itemY+9,17,12,2,fc);
+    } else {                                   // ikon file
+      uint16_t fc = T().accent2;
+      s.drawRoundRect(12,itemY+6,12,15,2,fc);
+      s.drawFastHLine(15,itemY+11,6,fc);
+      s.drawFastHLine(15,itemY+14,6,fc);
+      s.drawFastHLine(15,itemY+17,6,fc);
+    }
+
+    int nameX = 34;
+    int availPx = (SCR_W - 8) - nameX - (isDir ? 62 : 92);
+    int maxChars = availPx / 6; if(maxChars < 4) maxChars = 4;
+    String fn = String(expEntries[ei].name);
+    if((int)fn.length() > maxChars) fn = fn.substring(0, maxChars - 2) + "..";
+    s.setTextColor(T().text);s.setCursor(nameX,itemY+8);s.print(fn.c_str());
+
+    if(isDir){                                 // chevron ">"
+      int cx = SCR_W - 58, cy = itemY + itemH / 2;
+      s.drawLine(cx-3,cy-5,cx+2,cy,T().subtext); s.drawLine(cx+2,cy,cx-3,cy+5,T().subtext);
+    } else {
       iosRR(s,SCR_W-84,itemY+3,36,20,4,T().surface2);
       s.setTextColor(T().good);s.setCursor(SCR_W-76,itemY+8);s.print("Buka");
-
-      iosRR(s,SCR_W-44,itemY+3,36,20,4,T().danger);
-      s.setTextColor(0xFFFF);s.setCursor(SCR_W-38,itemY+8);s.print("Hps");
     }
+    iosRR(s,SCR_W-44,itemY+3,36,20,4,armed ? T().danger : T().surface2);
+    s.setTextColor(armed ? 0xFFFF : T().danger);
+    s.setCursor(armed ? SCR_W-41 : SCR_W-38, itemY+8);
+    s.print(armed ? "Yakin?" : "Hps");
+  }
+
+  if(upRow && expEntryCount == 0 && per >= 2){
+    s.setTextColor(T().subtext);s.setCursor(12,listY + (itemH+gap) + 10);s.print("Folder kosong");
   }
 
   int pageY = backY() - 2;
-  if(expScrollPage > 0){
+  if(expScrollItem > 0){
     iosRR(s,SCR_W-120,pageY,54,22,4,T().surface2);
     s.setTextColor(T().text);s.setCursor(SCR_W-110,pageY+6);s.print("< Prev");
   }
-  if((expScrollPage + 1) * itemsPerPage < expFileCount){
+  if(expScrollItem + per < total){
     iosRR(s,SCR_W-60,pageY,54,22,4,T().surface2);
     s.setTextColor(T().text);s.setCursor(SCR_W-52,pageY+6);s.print("Next >");
+  }
+  if(total > per){                             // indikator posisi "baris terakhir tampil / total"
+    int last = expScrollItem + per; if(last > total) last = total;
+    char pg[20];
+    snprintf(pg,sizeof(pg),"%d/%d%s",last,total,expTruncated?"+":"");
+    int availW = (SCR_W - 124) - (backX() + BACK_W + 8);
+    if(s.textWidth(pg) > availW) snprintf(pg,sizeof(pg),"%d",total);
+    if(s.textWidth(pg) <= availW){
+      s.setTextColor(T().subtext);s.setCursor(backX()+BACK_W+8,pageY+7);s.print(pg);
+    }
   }
 
   drawBack(s);drawToast(s);
@@ -8209,7 +8559,7 @@ void fileExpTouch(int x,int y,bool held,bool isNew){
   int viewTop=44, viewBot=backY()-6; // v12: sama dgn area kotak isi file di drawFileExplorer
 
   if(isNew){
-    if(isBack(x,y)){ navBack(); return; }
+    if(isBack(x,y)){ expGoBack(); return; }
 
     if(expViewFileName.length() > 0){
       if(x>=SCR_W-64 && x<=SCR_W-4 && y>=24 && y<=42){
@@ -8229,40 +8579,14 @@ void fileExpTouch(int x,int y,bool held,bool isNew){
 
     if(!sdReady) return;
 
-    int listY = 44;
-    int itemH = 26;
-    int itemsPerPage = 5;
-    int startIdx = expScrollPage * itemsPerPage;
-
-    for(int i = 0; i < itemsPerPage && (startIdx + i) < expFileCount; i++){
-      int idx = startIdx + i;
-      int itemY = listY + i * (itemH + 4);
-      if(y >= itemY && y <= itemY + itemH){
-        if(x >= SCR_W-84 && x <= SCR_W-48){
-          expViewFileName = expFileNames[idx];
-          File f = SD_MMC.open(expViewFileName, FILE_READ);
-          if(f){ expViewContent = f.readString(); f.close(); }
-          else expViewContent = "Gagal membaca isi file.";
-          expViewScrollY = 0; expViewScrollVel = 0; // v12: mulai dari atas tiap buka file baru
-          needRedraw = true;
-          return;
-        }
-        if(x >= SCR_W-44 && x <= SCR_W-8){
-          SD_MMC.remove(expFileNames[idx]);
-          showToast("File Dihapus");
-          scanSdFiles();
-          needRedraw = true;
-          return;
-        }
-      }
-    }
-
+    // Prev/Next (tombol langsung). Ketuk baris & geser daftar: lihat fileExpPointerTick().
+    int per = expItemsPerPage(), total = expTotalRows();
     int pageY = backY() - 2;
-    if(expScrollPage > 0 && x>=SCR_W-120 && x<=SCR_W-66 && y>=pageY){
-      expScrollPage--; needRedraw = true; return;
+    if(expScrollItem > 0 && x>=SCR_W-120 && x<=SCR_W-66 && y>=pageY){
+      expScrollItem -= per; expClampScroll(); needRedraw = true; return;
     }
-    if((expScrollPage + 1) * itemsPerPage < expFileCount && x>=SCR_W-60 && x<=SCR_W-6 && y>=pageY){
-      expScrollPage++; needRedraw = true; return;
+    if(expScrollItem + per < total && x>=SCR_W-60 && x<=SCR_W-6 && y>=pageY){
+      expScrollItem += per; expClampScroll(); needRedraw = true; return;
     }
     return;
   }
@@ -17009,6 +17333,8 @@ void loop(){
 
   } else {
     if(curScreen()==SCR_SETTINGS && !kbVisible) settingsPointerTick(touched,wasTouched,tx,ty); // Pengaturan ala iOS: scroll + tap-saat-lepas
+    if(curScreen()==SCR_FILEEXPLORER) fileExpPointerTick(touched,wasTouched,tx,ty); // File Explorer: drag-scroll + ketuk saat lepas
+    if(curScreen()==SCR_GALLERY) galPointerTick(touched,wasTouched,tx,ty);          // Galeri: scroll/ketuk + pemuat thumbnail
     int idx=appIndexForScreen(curScreen());
     if(idx>=0){
       bool held = touched&&wasTouched;
