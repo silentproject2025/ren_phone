@@ -13,7 +13,7 @@
 # ACCRETION PHONE
 ### NyxOS — sistem operasi ponsel yang ditulis dari nol untuk ESP32-S3
 
-`C++ / Arduino-ESP32 3.x` · `ESP32-S3 + PSRAM OPI` · `ILI9341 320×240` · `±17.800 baris firmware` · `AGPL-3.0`
+`C++ / Arduino-ESP32 3.x` · `ESP32-S3 + PSRAM OPI` · `ILI9341 320×240` · `±26.500 baris firmware` · `AGPL-3.0`
 
 </div>
 
@@ -44,7 +44,7 @@ Nama diambil dari fisika lubang hitam: *accretion* adalah piringan materi yang b
 | Audio keluar | Bluetooth A2DP lewat **ko-prosesor ESP32-CAM** |
 | Lain-lain | Motor getar, LED Neopixel, ADC baterai (voltage divider) |
 | Partisi | `app3M_fat9M_16MB` |
-| Jumlah aplikasi | 35 |
+| Jumlah aplikasi | 38 |
 | Tema | 7 (Aurora, Dark, AMOLED, Light, Pastel, iOS, Full Dark) |
 
 ---
@@ -132,11 +132,11 @@ Lock Screen, Home (grid + pencarian), Control Center, Notification Shade, Dynami
 
 Control Center berisi tombol bulat (WiFi, Airplane, DND, Tema, Orientasi, Shake, Kunci, Neopixel, Senyap, Bluetooth, Tangkap layar) dan slider kecerahan.
 
-### Aplikasi (35)
+### Aplikasi (38)
 
 | Kategori | Isi |
 |---|---|
-| Sistem | Jam, Setting, Update (OTA), Baterai, HWmonitor, Orientasi3D, Mic Level, Neopixel |
+| Sistem | Jam, Setting, Update (OTA), Baterai, HWmonitor, Orientasi3D, Mic Level, Neopixel, Profil, About Phone, Atur Home |
 | Produktivitas | Kalkulator, Notepad, Canvas, Files, Pomodoro, Stopwatch, Voice Memo |
 | Media | Musik (BT), MJPEG, Galeri |
 | AI & online | AI Chat (Gemini), Trivia, Astronomi (APOD), NEO Asteroid, Bumi EPIC, Galeri NASA |
@@ -145,7 +145,7 @@ Control Center berisi tombol bulat (WiFi, Airplane, DND, Tema, Orientasi, Shake,
 
 ### Yang layak dijelaskan lebih dalam
 
-- **Galeri** — album = folder di SD (kedalaman maksimal 2). Thumbnail 72×72 dibuat sekali, disimpan sebagai `/.thumbs/<xx>/<hash>.th` (RGB565, ±10 KB), dan berikutnya cukup dibaca tanpa decode. Nama cache adalah hash dari path + ukuran + waktu ubah, jadi gambar yang diganti otomatis dibuat ulang. Pembuatan thumbnail dibatasi satu gambar per putaran loop dan hanya saat jari tidak menyentuh layar.
+- **Galeri** — album = folder di SD (kedalaman maksimal 2). Thumbnail 72×72 dibuat sekali, disimpan sebagai `/.thumbs/<xx>/<hash>.th` (RGB565, ±10 KB), dan berikutnya cukup dibaca tanpa decode. Nama cache adalah hash dari path + ukuran + waktu ubah, jadi gambar yang diganti otomatis dibuat ulang. Pembuatan thumbnail dibatasi satu gambar per putaran loop dan hanya saat jari tidak menyentuh layar. **Format gambar: JPG dan PNG.** PNG di-decode dengan decoder bawaan LovyanGFX (helper `rpPng*` di `phone.ino`), dengan batas 4 MB per file dan 8 juta piksel; PNG di atas 2 MB tetap bisa dibuka tetapi tanpa thumbnail. Astronomi (APOD) memakai helper PNG yang sama.
 - **Pemutar AVI** (`avi_renphone.ino`) — video MJPEG + audio MP3 dalam satu file `.avi`, suaranya keluar lewat TWS. Video di-decode JPEGDEC ke layar; byte MP3 hasil demux masuk ring PSRAM lalu dikirim `musTask` ke ESP32-CAM lewat jalur RPLink yang sama dengan app Musik. **Jam utama = posisi putar audio di CAM** (dikurangi `AVI_BT_LATENCY_MS`), jadi frame yang telat dilewati dan suara tidak pernah tertinggal. Antrean frame di PSRAM menjaga audio tetap punya cadangan saat decode sesekali melambat. TWS belum tersambung / audio bukan MP3 → video tetap main tanpa suara. Taruh `.avi` di root SD (muncul di app MJPEG atau Files); ketuk = pause, tahan = berhenti, usap tepi bawah = Home. Cara bikin file:
 
   ```
@@ -199,6 +199,8 @@ Folder `cam_bt_coprocessor/`, board *AI Thinker ESP32-CAM*, partisi *Huge APP*, 
 
 **Catatan penamaan file**: `phone_notif_center.ino` sengaja dinamai demikian agar urutan alfabetis Arduino memasukkannya setelah `phone.ino`, sehingga definisi global `phone.ino` terlihat tanpa `extern`. Selain itu, fungsi yang menerima struct custom berisiko memicu bug prototype otomatis `arduino-cli`; beberapa struct di kode sengaja diletakkan paling atas file karena alasan ini.
 
+**Langkah CI tambahan**: `ci_hoist_types.py` memindahkan blok `#include`, struct, dan enum di bagian atas `phone.ino` (±baris 459–716) ke header `rp_types.h` yang di-`#include` di baris pertama. Ini hanya terjadi pada salinan di `build_sketch/` saat CI; `phone.ino` di repo tidak diubah. Tujuannya supaya prototipe otomatis `arduino-cli` selalu disisipkan setelah semua tipe dikenal. Jika compile gagal, workflow meng-upload artifact `diagnostik-prototipe` (hasil preprocess dan versi tool) untuk membantu melacak penyebabnya. Versi `arduino-cli`, core ESP32, dan library di CI belum dikunci, jadi update dari upstream bisa memengaruhi build.
+
 ---
 
 ## 06 — Konfigurasi Runtime
@@ -244,6 +246,8 @@ ffmpeg -i input.mp4 -vf "fps=15,scale=240:320" output.mjpeg
 - File MP3 dengan bitrate tinggi (contoh 192 kbps) pernah memicu restart CAM; file bitrate rendah stabil. Masih dalam pengerjaan.
 - Estimasi baterai berasal dari tegangan ADC, bukan fuel-gauge, jadi hanya perkiraan kasar.
 - NyxPPU belum terpasang di Inferno maupun Home/Lock Screen.
+- PNG dibatasi 4 MB per file dan 8 juta piksel; decode memakai buffer penuh di PSRAM, jadi PNG di atas 2 MB tidak punya thumbnail di Galeri.
+- Versi `arduino-cli`, core ESP32, dan library tidak dikunci di CI; update upstream bisa mematahkan build tanpa perubahan apa pun di repo.
 - Library `lvgl` terdaftar di CI tetapi tidak dipakai; mesin render sepenuhnya LovyanGFX.
 
 ---
@@ -260,7 +264,9 @@ ffmpeg -i input.mp4 -vf "fps=15,scale=240:320" output.mjpeg
 phone.ino                    inti NyxOS (UI, boot, jaringan, app dasar, game)
 phone_notif_center.ino       notifikasi / Dynamic Island
 features_renphone.ino        screenshot, stopwatch, voice memo, widget cuaca
-gallery_renphone.ino         Galeri + thumbnail cache
+gallery_renphone.ino         Galeri + thumbnail cache (JPG/PNG)
+avi_renphone.ino             pemutar AVI (MJPEG + MP3)
+about_renphone.ino  owner_renphone.ino  homeedit_renphone.ino   About Phone, Profil, Atur Home
 musicbt_renphone.ino         Musik, UART RPLink, AVRCP
 wakeword_renphone.ino        Wake Word (MFCC + DTW)
 ppu_engine_renphone.ino      NyxPPU
@@ -271,6 +277,7 @@ rplink.h  MjpegClass.h       protokol link CAM, parser MJPEG
 cam_bt_coprocessor/          firmware ESP32-CAM
 nofrendo_core/  esp_doom_core/   core pihak ketiga (di-vendor)
 apply_*.py  patch_*.py       skrip patch untuk perubahan bertahap
+ci_hoist_types.py            langkah CI: pindahkan tipe ke rp_types.h (dijalankan workflow)
 .github/workflows/           build firmware S3 dan CAM
 ```
 
