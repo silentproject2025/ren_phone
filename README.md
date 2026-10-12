@@ -146,6 +146,13 @@ Control Center berisi tombol bulat (WiFi, Airplane, DND, Tema, Orientasi, Shake,
 ### Yang layak dijelaskan lebih dalam
 
 - **Galeri** — album = folder di SD (kedalaman maksimal 2). Thumbnail 72×72 dibuat sekali, disimpan sebagai `/.thumbs/<xx>/<hash>.th` (RGB565, ±10 KB), dan berikutnya cukup dibaca tanpa decode. Nama cache adalah hash dari path + ukuran + waktu ubah, jadi gambar yang diganti otomatis dibuat ulang. Pembuatan thumbnail dibatasi satu gambar per putaran loop dan hanya saat jari tidak menyentuh layar.
+- **Pemutar AVI** (`avi_renphone.ino`) — video MJPEG + audio MP3 dalam satu file `.avi`, suaranya keluar lewat TWS. Video di-decode JPEGDEC ke layar; byte MP3 hasil demux masuk ring PSRAM lalu dikirim `musTask` ke ESP32-CAM lewat jalur RPLink yang sama dengan app Musik. **Jam utama = posisi putar audio di CAM** (dikurangi `AVI_BT_LATENCY_MS`), jadi frame yang telat dilewati dan suara tidak pernah tertinggal. Antrean frame di PSRAM menjaga audio tetap punya cadangan saat decode sesekali melambat. TWS belum tersambung / audio bukan MP3 → video tetap main tanpa suara. Taruh `.avi` di root SD (muncul di app MJPEG atau Files); ketuk = pause, tahan = berhenti, usap tepi bawah = Home. Cara bikin file:
+
+  ```
+  ffmpeg -i input.mp4 -vf "scale=320:240:force_original_aspect_ratio=decrease,fps=15" \
+         -c:v mjpeg -q:v 7 -c:a libmp3lame -ar 44100 -ac 2 -b:a 128k output.avi
+  ```
+  Audio **wajib MP3 44,1 kHz** (sampling lain bikin nada bergeser). Video portrait (mis. `scale=240:320`) diputar portrait, landscape diputar landscape.
 - **Wake Word** — pengenalan suara speaker-dependent berbasis MFCC + DTW, sepenuhnya on-device dan tanpa internet. Perekaman 4 sampel kata sendiri. Ini bukan neural network, jadi sensitif terhadap ruangan bising.
 - **RYNE v2** (`ryne_engine.h`, header-only, tanpa library Arduino) — rekomendasi lagu on-device. Menebak "vibe" (8 kelas) dari 13 fitur perilaku dan audio dengan softmax + filter HMM, lalu memilih lagu memakai contextual Thompson Sampling. Data belajar di `/ryne2.bin`.
 - **Musik** — cover diambil dari ID3 tag (hanya JPEG baseline; selain itu kembali ke piringan hitam), mode acak biasa atau AI, kontrol AVRCP dari earbuds, dan alasan restart CAM ditampilkan di layar.

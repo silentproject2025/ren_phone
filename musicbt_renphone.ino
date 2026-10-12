@@ -65,6 +65,19 @@ static volatile uint32_t musCamHeapKb = 0, musCamBlkKb = 0;   // RAM internal CA
 static char              musRstMsg[40] = {0};            // alasan restart CAM terakhir (crash/brownout/watchdog)
 static volatile uint32_t musRstAt = 0;
 static volatile bool     musCamDecErr = false;           // CAM melapor decoder mati (memori)
+static volatile uint8_t  musCamSeq = 0;                  // seq track yg sedang ditangani CAM (status byte 12)
+
+// ---- jalur audio EKSTERNAL (pemutar AVI di avi_renphone.ino) ----
+// Pemutar AVI mengisi ring ini dgn byte MP3 hasil demux; musTask yg mengirim ke CAM
+// (hanya SATU pengirim ke UART -> frame tidak saling menyela). Ring 128KB = pangkat 2.
+#define MUS_EXT_RING    (128*1024)
+static uint8_t*          musExtRing = nullptr;           // PSRAM
+static volatile uint32_t musExtHead = 0, musExtTail = 0; // counter monoton; head = tulis (player), tail = baca (musTask)
+static volatile bool     musExt = false;                 // true = yg diputar bukan playlist, tapi stream dari AVI
+static volatile bool     musExtReady = false;            // musTask sudah RP_BEGIN utk sesi ini
+static volatile bool     musExtFinish = false;           // player sudah selesai nulis -> kirim RP_FINISH setelah ring kosong
+static volatile bool     musExtFinSent = false;
+static volatile bool     musExtEndedFlag = false;        // CAM melapor audio habis diputar
 
 // ---- milik S3 ----
 static std::vector<String> musList;
@@ -608,6 +621,30 @@ static void musHandleReq(uint8_t t, int32_t a, const char* s) {
       break;
     }
     case 'r': musScanPlaylist(); break;
+    case 'E': {                                   // mulai stream audio dari AVI (lihat musExtBegin)
+      if (musFile) musFile.close();
+      musEndCurrent(3);
+      musWavMode = false;
+      musSeq++;
+      uint8_t sq = musSeq;
+      musCredit = 0; musSentSince = 0;
+      rpSend(Serial1, RP_BEGIN, &sq, 1);
+      musExt = true; musExtFinSent = false; musExtEndedFlag = false;
+      musLoaded = true; musPaused = false; musEnded = false;
+      musPlayedMs = 0; musStreaming = false; musFileDone = false;
+      musDurMs = 0; musKbps = 0; musSr = 44100;
+      musCoverReady = false; musCoverWant = false;
+      musExtReady = true;
+      break;
+    }
+    case 'e':                                     // akhiri stream AVI
+      musExt = false; musExtFinish = false; musExtReady = false;
+      musLoaded = false; musStreaming = false; musPaused = false;
+      rpSend(Serial1, RP_STOP, nullptr, 0);
+      break;
+    case 'q':                                     // pause/lanjut stream AVI (a: 1 = jeda)
+      if (musExt && musLoaded) { musPaused = (a != 0); musSendPause(musPaused); }
+      break;
     case 'k':                                     // tombol suka (toggle) untuk lagu terpilih
       if (ryne && musCur >= 0) {
         bool on = !ryne->liked(musCur);
@@ -663,6 +700,7 @@ static void musTask(void* arg) {
             musPlayedMs = (uint32_t)P.payload[8] | ((uint32_t)P.payload[9] << 8) |
                           ((uint32_t)P.payload[10] << 16) | ((uint32_t)P.payload[11] << 24);
             musLastStatusMs = millis();
+            musCamSeq = P.payload[12];
             musCamAlive = true;
             if (P.len >= 21) {                         // status v3: ukuran ring + RAM CAM
               musRingKb    = (uint32_t)P.payload[17] | ((uint32_t)P.payload[18] << 8);
@@ -734,7 +772,7 @@ static void musTask(void* arg) {
     // ---- 2. CAM baru nyala / baru terdeteksi -> kirim ulang volume ----
     if (musHello) {
       musHello = false;
-      if (musLoaded) { musLoaded = false; musStreaming = false; if (musFile) musFile.close(); musToast("Modul BT restart"); }
+      if (musLoaded) { musLoaded = false; musStreaming = false; musExt = false; if (musFile) musFile.close(); musToast("Modul BT restart"); }
       uint8_t v = (uint8_t)musVol; rpSend(Serial1, RP_VOLUME, &v, 1);
       if (!musBtOn) { uint8_t m = 0; rpSend(Serial1, RP_BTMODE, &m, 1); }
     } else if (musCamAlive && !prevAlive) {
@@ -760,6 +798,10 @@ static void musTask(void* arg) {
     if (musEnded && musWavMode) {                 // memo selesai: berhenti, JANGAN lanjut ke playlist
       musEnded = false; musWavMode = false; musLoaded = false; musStreaming = false;
       if (musFile) musFile.close();
+    }
+    if (musEnded && musExt) {                     // audio AVI habis: berhenti, JANGAN lanjut ke playlist
+      musEnded = false; musExt = false; musExtEndedFlag = true;
+      musLoaded = false; musStreaming = false;
     }
     // ---- 5. lagu habis -> berikutnya ----
     if (musEnded) {
@@ -792,6 +834,33 @@ static void musTask(void* arg) {
     if (musCoverWant && millis() - musCoverReqMs > 600) {
       musCoverWant = false;
       musLoadCover(musCoverPath);
+    }
+
+    // ---- 6a. stream AVI: ring PSRAM -> CAM (kredit sama spt streaming file) ----
+    if (musExt && !musExtFinSent && musExtRing) {
+      uint32_t avail = musExtHead - musExtTail;
+      int32_t freeEst = (int32_t)musCredit - (int32_t)musSentSince;
+      int32_t need = MUS_CREDIT_MIN;
+      if (musRingKb) { int32_t lim = (int32_t)(musRingKb * 1024 / 3); if (lim < need) need = lim; }
+      if (avail > 0 && freeEst > need) {
+        uint32_t n = avail > 4096 ? 4096 : avail;
+        uint32_t t = musExtTail & (MUS_EXT_RING - 1);
+        uint32_t first = MUS_EXT_RING - t; if (first > n) first = n;
+        memcpy(musBlk, musExtRing + t, first);
+        if (n > first) memcpy(musBlk + first, musExtRing, n - first);
+        for (uint32_t off = 0; off < n; off += 1024) {
+          uint32_t c = n - off; if (c > 1024) c = 1024;
+          rpSend(Serial1, RP_DATA, musBlk + off, (uint16_t)c);
+        }
+        musSentSince += n;
+        __sync_synchronize();
+        musExtTail += n;
+        vTaskDelay(1);
+        continue;
+      } else if (avail == 0 && musExtFinish) {
+        rpSend(Serial1, RP_FINISH, nullptr, 0);
+        musExtFinSent = true;
+      }
     }
 
     // ---- 6. streaming file -> CAM (kredit dari status CAM) ----
@@ -851,6 +920,63 @@ static void musBegin() {
     xTaskCreatePinnedToCore(musTask, "musTask", stackBytes, NULL, 1, &musTaskHandle, 0);
   }
 }
+
+// =====================================================================
+//  API AUDIO EKSTERNAL -- dipakai pemutar AVI (avi_renphone.ino)
+//  Dipanggil dari loop utama (bukan dari musTask). Tipe sederhana saja
+//  (aturan auto-prototype arduino-cli, lihat catatan di atas).
+// =====================================================================
+bool btCcEnabled();   // definisi di bawah (API tombol BT Control Center)
+// 0 = siap | 1 = BT dimatikan | 2 = modul CAM tdk terdeteksi | 3 = TWS belum terhubung | 4 = RAM kurang
+int musExtBegin() {
+  btCcEnabled();                                   // muat saklar BT dari NVS (kalau belum)
+  musBegin();                                      // nyalakan link ke CAM kalau belum (no-op kalau sudah)
+  if (!musBtOn) return 1;
+  uint32_t t0 = millis();
+  while (millis() - t0 < 2500 && !(musCamAlive && musBtConn)) delay(10);
+  if (!musCamAlive) return 2;
+  if (!musBtConn)   return 3;
+  if (!musExtRing) {
+    musExtRing = (uint8_t*)heap_caps_malloc(MUS_EXT_RING, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!musExtRing) return 4;
+  }
+  musExtHead = 0; musExtTail = 0;
+  musExtFinish = false; musExtFinSent = false; musExtEndedFlag = false; musExtReady = false;
+  musPost('E', 0, nullptr);
+  t0 = millis();
+  while (!musExtReady && millis() - t0 < 1500) delay(5);
+  return musExtReady ? 0 : 2;
+}
+uint32_t musExtFree() {
+  return MUS_EXT_RING - (musExtHead - musExtTail);
+}
+// tulis byte MP3 ke ring; return jumlah byte yg DITERIMA (bisa < n kalau ring penuh)
+uint32_t musExtWrite(const uint8_t* d, uint32_t n) {
+  if (!musExtRing) return 0;
+  uint32_t fr = MUS_EXT_RING - (musExtHead - musExtTail);
+  if (n > fr) n = fr;
+  uint32_t t = musExtHead & (MUS_EXT_RING - 1);
+  uint32_t first = MUS_EXT_RING - t; if (first > n) first = n;
+  memcpy(musExtRing + t, d, first);
+  if (n > first) memcpy(musExtRing, d + first, n - first);
+  __sync_synchronize();
+  musExtHead += n;
+  return n;
+}
+void musExtFinishStream() { musExtFinish = true; }    // semua byte audio sudah ditulis
+bool musExtActive()       { return musExt; }
+bool musExtEnded()        { return musExtEndedFlag; }
+// posisi putar audio di sisi CAM (ms), diinterpolasi antar status 40ms. 0 = belum mulai / bukan sesi ini.
+uint32_t musExtClockMs() {
+  if (!musExt || musCamSeq != musSeq) return 0;
+  uint32_t base = musPlayedMs;
+  if (musPaused) return base;
+  uint32_t age = millis() - musLastStatusMs;
+  if (age > 120) age = 120;
+  return base + age;
+}
+void musExtPause(bool p) { musPost('q', p ? 1 : 0, nullptr); }
+void musExtEnd()         { musPost('e', 0, nullptr); }
 
 // =====================================================================
 //  HOOK DARI phone.ino

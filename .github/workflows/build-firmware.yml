@@ -41,6 +41,7 @@ jobs:
           cp ppu_engine_renphone.ino build_sketch/
           cp wakeword_renphone.ino build_sketch/
           cp musicbt_renphone.ino build_sketch/
+          cp avi_renphone.ino build_sketch/
           cp features_renphone.ino build_sketch/
           cp gallery_renphone.ino build_sketch/
           cp owner_renphone.ino build_sketch/

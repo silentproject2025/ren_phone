@@ -4807,6 +4807,7 @@ void galEnter(); void galExit(); void drawGallery(LGFX_Sprite&); void galTouch(i
 void galPointerTick(bool,bool,int,int); void galOpenFile(const char*); void galForgetFile(const char*);
 void fileExpPointerTick(bool,bool,int,int);
 void mjpegPlayFile(const String& filename);
+void aviPlayFile(const String& filename);   // avi_renphone.ino: video MJPEG + audio MP3 -> TWS
 
 // ---- owner_renphone.ino: Profil pemilik (foto + nama) ----
 void ownerEnter(); void ownerExit(); void drawOwner(LGFX_Sprite&); void ownerTouch(int,int,bool,bool);
@@ -8437,6 +8438,11 @@ void expOpenEntry(int ei){
     needRedraw = true;
     return;
   }
+  if(low.endsWith(".avi")){
+    aviPlayFile(path.substring(1));             // pemutar AVI (MJPEG + MP3 -> TWS), path relatif dari root
+    needRedraw = true;
+    return;
+  }
   if(!expIsTextName(low)){
     showToast("Format ini tidak bisa dibuka di sini");
     vibWarn();
@@ -8823,7 +8829,7 @@ void mjpegScanFiles(){
       int slashIdx = name.lastIndexOf('/');
       if(slashIdx >= 0) name = name.substring(slashIdx+1);
       String lower = name; lower.toLowerCase();
-      if(lower.endsWith(".mjpeg")){
+      if(lower.endsWith(".mjpeg") || lower.endsWith(".avi")){
         mjpegFileList[mjpegFileCount]  = name;
         mjpegFileSizes[mjpegFileCount] = f.size();
         mjpegFileCount++;
@@ -9079,7 +9085,7 @@ void mjpegExit(){}
 
 void drawMjpegPlayer(LGFX_Sprite& s){
   iosBackdrop(s); drawStatusBar(s);
-  s.setTextColor(0xFBE0);s.setTextSize(1);s.setCursor(8,26);s.print("MJPEG Player");
+  s.setTextColor(0xFBE0);s.setTextSize(1);s.setCursor(8,26);s.print("MJPEG / AVI Player");
 
   iosRR(s,SCR_W-70,24,64,18,4,T().surface2);
   s.setTextColor(T().accent);s.setCursor(SCR_W-62,29);s.print("Scan");
@@ -9094,9 +9100,9 @@ void drawMjpegPlayer(LGFX_Sprite& s){
     s.print("SD Card Tdk Siap");
   } else if(mjpegFileCount == 0){
     s.setTextColor(T().subtext);s.setTextSize(1);s.setCursor(14,80);
-    s.print("Tidak ada file .mjpeg di /mjpeg");
+    s.print("Tidak ada file .mjpeg / .avi");
     s.setCursor(14,96);
-    s.print("Taruh file *.mjpeg di folder itu,");
+    s.print("Taruh file di root SD Card,");
     s.setCursor(14,108);
     s.print("lalu ketuk [Scan].");
   } else {
@@ -9154,7 +9160,11 @@ void mjpegTouch(int x,int y,bool held,bool isNew){
     if(y>=itemY && y<=itemY+itemH){
       if(x>=SCR_W-64 && x<=SCR_W-8){
         mjpegSelectedIdx = idx;
-        mjpegPlayFile(mjpegFileList[idx]);   // blocking, berhenti saat disentuh
+        {
+          String lowName = mjpegFileList[idx]; lowName.toLowerCase();
+          if(lowName.endsWith(".avi")) aviPlayFile(mjpegFileList[idx]);   // video + suara via TWS
+          else                         mjpegPlayFile(mjpegFileList[idx]); // blocking, berhenti saat disentuh
+        }
         return;
       }
     }
