@@ -3976,6 +3976,12 @@ int   ccPressIdx=-1;
 unsigned long ccPressMs=0;
 const unsigned long CC_PRESS_MS=140;
 bool  ccSliderDrag=false;
+// CC-LONGPRESS: tahan tile >= CC_LONG_MS = buka pengaturan fitur itu; ketuk biasa = aksi (diproses saat jari lepas)
+const unsigned long CC_LONG_MS=450;
+int  ccHoldIdx=-1;            // tile yg sedang ditekan (-1 = tidak ada)
+unsigned long ccHoldStart=0;
+int  ccHoldX0=0, ccHoldY0=0;
+int  settJumpCode=0;          // saat Pengaturan digambar: lompat ke 1 Wi-Fi, 2 Tema, 3 Rotasi, 4 Sensor & layar
 unsigned long ccTickLastMs=0;
 
 bool ccActiveState(int i){
@@ -4164,6 +4170,7 @@ void drawControlCenter(LGFX_Sprite& s){
       float pt=(float)(nowMs-ccPressMs)/(float)CC_PRESS_MS; if(pt>1.0f) pt=1.0f;
       rs *= 1.0f-0.12f*sinf(pt*PI);
     }
+    if(ccHoldIdx==i) rs *= 0.94f; // CC-LONGPRESS: tetap sedikit mengecil selagi ditahan
     // v109: tile persegi membulat (bukan lingkaran): ikon di atas, label kecil di bawah
     int tw2=(int)(cw*rs+0.5f), th2=(int)(ch*rs+0.5f); if(tw2<6) tw2=6; if(th2<6) th2=6;
     int tx=ccx-tw2/2, ty=ccy-th2/2, trad=min(14,th2/2);
@@ -4217,21 +4224,63 @@ void drawControlCenter(LGFX_Sprite& s){
   drawToast(s);
 }
 
+// CC-LONGPRESS ---------------------------------------------------------------
+void ccRunTap(int i){
+  void(*actions[CC_ITEMS])() = { ccActWifi, ccActAirplane, ccActDnd, ccActTheme, ccActOrient, ccActShake, nullptr, ccActNeopixel, ccActSilent, ccActBluetooth, ccActScreenshot };
+  if(i==6){ locked=true; lockScreenReset(); closeControlCenter(); return; }
+  if(actions[i]) actions[i]();
+  needRedraw=true;
+}
+
+// Tahan-lama: buka pengaturan fitur tile tsb. Panel ditutup INSTAN (bukan animasi) supaya transisi layar bersih.
+void ccLongPress(int i){
+  Screen dest=SCR_HOME; int jump=0;
+  switch(i){
+    case 0: case 1: dest=SCR_SETTINGS; jump=1; break;   // Wi-Fi, Pesawat -> bagian WI-FI
+    case 3:  dest=SCR_SETTINGS; jump=2; break;           // Tema
+    case 4:  dest=SCR_SETTINGS; jump=3; break;           // Rotasi -> Rotasi Otomatis
+    case 5:  dest=SCR_SETTINGS; jump=4; break;           // Goyang -> Sensor & layar
+    case 7:  dest=SCR_NEOPIXEL; break;
+    case 9:  dest=SCR_MUSIC;    break;                   // BT: pindai & sambung perangkat ada di Musik
+    case 10: dest=SCR_GALLERY;  break;                   // Tangkap -> album Screenshot
+    default: showToast("Tidak ada pengaturan lanjutan"); needRedraw=true; return;
+  }
+  Screen cur=curScreen();
+  if(cur==SCR_NES||cur==SCR_DOOM){ showToast("Keluar dari game dulu"); needRedraw=true; return; }
+  vibExit();                                              // getar beda dari ketukan biasa = sinyal "tahan-lama"
+  ccOffset=0; ccAnimating=false; controlCenterOpen=false;
+  if(jump) settJumpCode=jump;
+  if(cur==dest){ needRedraw=true; return; }               // sudah di layar itu (mis. Pengaturan): cukup lompat
+  navPush(dest);
+}
+
+// Dipanggil tiap putaran loop() selagi Control Center terbuka.
+void ccHoldTick(bool touched,int tx,int ty){
+  if(ccHoldIdx<0) return;
+  if(!controlCenterOpen){ ccHoldIdx=-1; return; }
+  if(touched){
+    if(abs(tx-ccHoldX0)>14 || abs(ty-ccHoldY0)>14){ ccHoldIdx=-1; needRedraw=true; return; } // jari bergeser -> batal
+    if(millis()-ccHoldStart>=CC_LONG_MS){ int i=ccHoldIdx; ccHoldIdx=-1; ccLongPress(i); needRedraw=true; }
+  } else {                                                // jari lepas sebelum ambang tahan-lama = ketukan biasa
+    int i=ccHoldIdx; ccHoldIdx=-1;
+    ccRunTap(i);
+  }
+}
+
 void ccTouch(int x,int y){
   int ph=(int)ccOffset;
   if(y> ph-9 && y<=ph+4){ closeControlCenter(); return; }
   if(y>ph) { closeControlCenter(); return; }
 
   int cw=ccCardW(), ch=ccCardH(), gap=ccGap(), top=ccGridTop(), gx=ccGridX();
-  void(*actions[CC_ITEMS])() = { ccActWifi, ccActAirplane, ccActDnd, ccActTheme, ccActOrient, ccActShake, nullptr, ccActNeopixel, ccActSilent, ccActBluetooth, ccActScreenshot };
   for(int i=0;i<CC_ITEMS;i++){
     int col=i%CC_COLS, row=i/CC_COLS;
     int bx=gx+col*(cw+gap);
     int by=top+row*(ch+gap);
     if(x>=bx&&x<=bx+cw&&y>=by&&y<=by+ch){
       ccPressIdx=i; ccPressMs=millis(); // v108: feedback tekan
-      if(i==6){ locked=true; lockScreenReset(); closeControlCenter(); return; }
-      if(actions[i]) actions[i]();
+      // CC-LONGPRESS: aksi ketuk dijalankan saat jari LEPAS (ccHoldTick); tahan >= CC_LONG_MS = buka pengaturannya
+      ccHoldIdx=i; ccHoldStart=millis(); ccHoldX0=x; ccHoldY0=y;
       needRedraw=true;
       return;
     }
@@ -7377,6 +7426,13 @@ void settChevron(LGFX_Sprite& s,int cx,int cy,uint16_t col){ // ">" tipis
 void drawSettings(LGFX_Sprite& s){
   checkWifiScanComplete();
   settBuildLayout();
+  // CC-LONGPRESS: dibuka dari tahan-lama tile Control Center -> gulir ke bagian terkait (sekali pakai)
+  if(settJumpCode){
+    int want = settJumpCode==1 ? SR_SCAN : settJumpCode==2 ? SR_THEME : settJumpCode==3 ? SR_ROT : SR_MPU;
+    int back = (settJumpCode==1 || settJumpCode==4) ? 30 : 60;   // sisakan judul bagian di atas baris tujuan
+    for(int i=0;i<settRowN;i++) if(settRT[i]==want){ settScroll=(float)(settRY[i]-back); break; }
+    settJumpCode=0;
+  }
 
   // keyboard terbuka: geser daftar supaya kolom yg lagi diisi tetap kelihatan di atas keyboard
   if(kbVisible){
@@ -17504,6 +17560,7 @@ void loop(){
     ccTick(); // v108: animasi warna tombol + feedback tekan
     if(newT) ccTouch(tx,ty);
     else if(touched && ccSliderDrag) ccSliderSet(tx); // v108: drag slider Brightness
+    ccHoldTick(touched,tx,ty); // CC-LONGPRESS: tahan tile = buka pengaturannya; ketuk = aksi saat jari lepas
     if(!touched) ccSliderDrag=false;
     if(needRedraw){ renderCurrentFrame(); push(); needRedraw=false; }
     wasTouched=touched; delay(1); return;
