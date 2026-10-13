@@ -966,7 +966,7 @@ static uint32_t aviMakeKey(const String& name, uint32_t size) {
   return h ? h : 1;
 }
 
-static uint32_t aviResumeGet() {
+static uint32_t aviResumeLookup(uint32_t key) {
   uint32_t t[AVI_RESUME_SLOTS * 2];
   memset(t, 0, sizeof(t));
   Preferences p;
@@ -974,8 +974,14 @@ static uint32_t aviResumeGet() {
   p.getBytes("t", t, sizeof(t));
   p.end();
   for (int i = 0; i < AVI_RESUME_SLOTS; i++)
-    if (t[2 * i] == aviKey) return t[2 * i + 1];
+    if (t[2 * i] == key) return t[2 * i + 1];
   return 0;
+}
+static uint32_t aviResumeGet() { return aviResumeLookup(aviKey); }
+
+// dipakai daftar video (phone.ino): posisi tersimpan (ms) utk file ini, 0 = belum pernah / sudah tamat
+uint32_t aviResumeFor(const String& filename, uint32_t size) {
+  return aviResumeLookup(aviMakeKey(filename, size));
 }
 
 // ms = 0 -> hapus entri video ini. Posisi < MIN atau hampir tamat otomatis dihapus.
@@ -1038,6 +1044,206 @@ static bool aviAskResume(uint32_t ms) {
     if (wifiConnected && webServerRunning) webServer.handleClient();
     delay(10);
   }
+}
+
+// =====================================================================
+//  THUMBNAIL utk daftar video (dipanggil phone.ino)
+//   - Frame diambil ~10% dari video (lewat idx1), .mjpeg mentah = frame pertama.
+//   - Di-decode skala kecil lalu diperkecil ke 64x48 (fit, dgn bingkai hitam).
+//   - Cache di SD: /.thumbs/<hash>.th (12 byte header + 64*48*2 piksel), jadi
+//     pembukaan daftar berikutnya instan, juga setelah reboot.
+// =====================================================================
+#define AVI_TH_W      64
+#define AVI_TH_H      48
+#define AVI_TH_BYTES  (AVI_TH_W * AVI_TH_H * 2)
+static uint16_t* aviThTmp = nullptr;      // hasil decode skala kecil (sebelum diperkecil)
+static int       aviThTW = 0, aviThTH = 0;
+
+static int aviThDraw(JPEGDRAW* d) {
+  if (!aviThTmp) return 0;
+  const uint16_t* src = (const uint16_t*)d->pPixels;
+  for (int yy = 0; yy < d->iHeight; yy++) {
+    int dy = d->y + yy;
+    if (dy < 0 || dy >= aviThTH) continue;
+    for (int xx = 0; xx < d->iWidth; xx++) {
+      int dx = d->x + xx;
+      if (dx >= 0 && dx < aviThTW) aviThTmp[dy * aviThTW + dx] = src[yy * d->iWidth + xx];
+    }
+  }
+  return 1;
+}
+
+// stream-number dari ckid ('00dc' -> 0), -1 kalau bukan chunk data
+static int aviCkSn(const uint8_t* q) {
+  if (q[0] < '0' || q[0] > '9' || q[1] < '0' || q[1] > '9') return -1;
+  return (q[0] - '0') * 10 + (q[1] - '0');
+}
+
+// cari chunk video utk thumbnail: ~10% ke dalam idx1, cadangan = chunk video pertama di movi
+static bool aviThFindChunk(uint32_t* off, uint32_t* sz) {
+  uint8_t h8[8];
+  aviSeekTo(aviMoviEnd);
+  if (aviRead(h8, 8) == 8 && aviIs(h8, "idx1")) {
+    uint32_t ebase = aviMoviEnd + 8;
+    if (ebase < aviFileSize) {
+      uint32_t n = aviLE32(h8 + 4) / 16;
+      uint32_t avail = (aviFileSize - ebase) / 16;
+      if (n > avail) n = avail;
+      uint8_t e[16], c[4];
+      uint32_t base = 0; bool ok = false;
+      for (uint32_t i = 0; i < n && i < 8 && !ok; i++) {          // offset relatif 'movi' atau absolut?
+        aviSeekTo(ebase + i * 16);
+        if (aviRead(e, 16) != 16) break;
+        if (aviCkSn(e) < 0) continue;
+        uint32_t o = aviLE32(e + 8);
+        uint32_t cand[2] = { aviMoviTag + o, o };
+        for (int k = 0; k < 2 && !ok; k++) {
+          if (cand[k] + 4 > aviFileSize) continue;
+          aviSeekTo(cand[k]);
+          if (aviRead(c, 4) == 4 && memcmp(c, e, 4) == 0) { base = (k == 0) ? aviMoviTag : 0; ok = true; }
+        }
+      }
+      if (ok) {
+        uint8_t eb[16 * 32];
+        uint32_t i = n / 10, scanned = 0;
+        while (i < n && scanned < 640) {
+          uint32_t cnt = n - i; if (cnt > 32) cnt = 32;
+          aviSeekTo(ebase + i * 16);
+          if (aviRead(eb, cnt * 16) != (int)(cnt * 16)) break;
+          for (uint32_t j = 0; j < cnt; j++) {
+            const uint8_t* q = eb + j * 16;
+            if (aviCkSn(q) == aviVidStream && q[2] == 'd' && aviLE32(q + 12) > 0) {
+              *off = base + aviLE32(q + 8); *sz = aviLE32(q + 12);
+              return true;
+            }
+          }
+          i += cnt; scanned += cnt;
+        }
+      }
+    }
+  }
+  uint32_t p = aviMoviFirst;                                      // cadangan: chunk video pertama
+  for (int i = 0; i < 64 && p + 8 <= aviMoviEnd; i++) {
+    aviSeekTo(p);
+    if (aviRead(h8, 8) != 8) break;
+    uint32_t cs = aviLE32(h8 + 4);
+    if (aviCkSn(h8) == aviVidStream && h8[2] == 'd' && cs > 0) { *off = p; *sz = cs; return true; }
+    p += 8 + cs + (cs & 1);
+  }
+  return false;
+}
+
+// return 1 = out (64x48 RGB565) terisi, 0 = gagal. durMs = durasi video (0 = tdk diketahui)
+int aviThumbGet(const String& filename, uint32_t size, uint16_t* out, uint32_t* durMs) {
+  if (!sdReady || !out) return 0;
+  if (durMs) *durMs = 0;
+  char cp[40];
+  snprintf(cp, sizeof(cp), "/.thumbs/%08lx.th", (unsigned long)aviMakeKey(filename, size));
+
+  // 1. cache di SD
+  {
+    File cf = SD_MMC.open(cp, FILE_READ);
+    if (cf && !cf.isDirectory() && cf.size() == 12 + AVI_TH_BYTES) {
+      uint8_t hd[12];
+      if (cf.read(hd, 12) == 12 && memcmp(hd, "NTH1", 4) == 0 &&
+          cf.read((uint8_t*)out, AVI_TH_BYTES) == AVI_TH_BYTES) {
+        if (durMs) *durMs = aviLE32(hd + 4);
+        cf.close();
+        return 1;
+      }
+    }
+    if (cf) cf.close();
+  }
+
+  // 2. ambil 1 frame JPEG dari file video
+  String lower = filename; lower.toLowerCase();
+  bool isAvi = lower.endsWith(".avi");
+  File vf = SD_MMC.open(String("/") + filename, FILE_READ);
+  if (!vf || vf.isDirectory()) { if (vf) vf.close(); return 0; }
+  uint8_t* jbuf = nullptr; uint32_t jlen = 0, dur = 0;
+  if (isAvi) {
+    aviFile = vf;                                  // state global dipakai bergantian dgn pemutar (tdk pernah bersamaan)
+    aviFileSize = (uint32_t)vf.size();
+    if (aviParseFile() == nullptr) {
+      dur = (uint32_t)(((uint64_t)aviTotalFrames * aviUsPerFrame) / 1000ULL);
+      uint32_t off = 0, csz = 0;
+      if (aviThFindChunk(&off, &csz) && csz <= 262144) {
+        jbuf = (uint8_t*)heap_caps_malloc(csz, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (jbuf) {
+          aviSeekTo(off + 8);
+          if (aviRead(jbuf, csz) == (int)csz) jlen = csz;
+          else { heap_caps_free(jbuf); jbuf = nullptr; }
+        }
+      }
+    }
+    aviFile.close();
+  } else {                                         // .mjpeg mentah: frame pertama = awal file
+    uint32_t fsz = (uint32_t)vf.size();
+    uint32_t n = fsz < 131072 ? fsz : 131072;
+    jbuf = (uint8_t*)heap_caps_malloc(n ? n : 1, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (jbuf && n > 0 && vf.read(jbuf, n) == (int)n) jlen = n;
+    else if (jbuf) { heap_caps_free(jbuf); jbuf = nullptr; }
+    vf.close();
+  }
+  if (!jbuf || jlen == 0) { if (jbuf) heap_caps_free(jbuf); return 0; }
+
+  // 3. decode skala kecil -> perkecil ke 64x48
+  void* jm = heap_caps_malloc(sizeof(JPEGDEC), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  if (!jm) { heap_caps_free(jbuf); return 0; }
+  JPEGDEC* jd = new (jm) JPEGDEC();
+  int ok = 0;
+  if (jd->openRAM(jbuf, (int)jlen, aviThDraw)) {
+    int iw = jd->getWidth(), ih = jd->getHeight();
+    int opt = 0, sh = 0;
+    if (iw > 80 || ih > 60) {
+      if      ((iw >> 1) <= 80 && (ih >> 1) <= 60) { opt = JPEG_SCALE_HALF;    sh = 1; }
+      else if ((iw >> 2) <= 80 && (ih >> 2) <= 60) { opt = JPEG_SCALE_QUARTER; sh = 2; }
+      else                                         { opt = JPEG_SCALE_EIGHTH;  sh = 3; }
+    }
+    aviThTW = iw >> sh; aviThTH = ih >> sh;
+    if (aviThTW >= 1 && aviThTH >= 1 && aviThTW <= 160 && aviThTH <= 160) {
+      aviThTmp = (uint16_t*)heap_caps_malloc((size_t)aviThTW * aviThTH * 2, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+      if (aviThTmp) {
+        memset(aviThTmp, 0, (size_t)aviThTW * aviThTH * 2);
+        if (jd->decode(0, 0, opt)) {
+          // perkecil (nearest) dgn menjaga rasio, sisanya hitam
+          memset(out, 0, AVI_TH_BYTES);
+          int dw = AVI_TH_W, dh = (int)((int64_t)AVI_TH_W * aviThTH / aviThTW);
+          if (dh > AVI_TH_H) { dh = AVI_TH_H; dw = (int)((int64_t)AVI_TH_H * aviThTW / aviThTH); }
+          if (dw < 1) dw = 1;
+          if (dh < 1) dh = 1;
+          int ox = (AVI_TH_W - dw) / 2, oy = (AVI_TH_H - dh) / 2;
+          for (int y = 0; y < dh; y++) {
+            int sy = y * aviThTH / dh;
+            for (int x = 0; x < dw; x++) {
+              int sx = x * aviThTW / dw;
+              out[(oy + y) * AVI_TH_W + ox + x] = aviThTmp[sy * aviThTW + sx];
+            }
+          }
+          ok = 1;
+        }
+        heap_caps_free(aviThTmp); aviThTmp = nullptr;
+      }
+    }
+    jd->close();
+  }
+  jd->~JPEGDEC();
+  heap_caps_free(jm);
+  heap_caps_free(jbuf);
+  if (!ok) return 0;
+
+  // 4. simpan cache (gagal nulis tdk masalah)
+  SD_MMC.mkdir("/.thumbs");
+  File wf = SD_MMC.open(cp, FILE_WRITE);
+  if (wf) {
+    uint8_t hd[12] = { 'N', 'T', 'H', '1', (uint8_t)dur, (uint8_t)(dur >> 8), (uint8_t)(dur >> 16), (uint8_t)(dur >> 24),
+                       AVI_TH_W, 0, AVI_TH_H, 0 };
+    wf.write(hd, 12);
+    wf.write((const uint8_t*)out, AVI_TH_BYTES);
+    wf.close();
+  }
+  if (durMs) *durMs = dur;
+  return 1;
 }
 
 // =====================================================================

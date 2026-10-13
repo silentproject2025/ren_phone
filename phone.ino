@@ -4808,6 +4808,8 @@ void galPointerTick(bool,bool,int,int); void galOpenFile(const char*); void galF
 void fileExpPointerTick(bool,bool,int,int);
 void mjpegPlayFile(const String& filename);
 void aviPlayFile(const String& filename);   // avi_renphone.ino: video MJPEG + audio MP3 -> TWS
+int  aviThumbGet(const String& filename, uint32_t size, uint16_t* out, uint32_t* durMs);   // avi_renphone.ino: thumbnail 64x48 (cache SD)
+uint32_t aviResumeFor(const String& filename, uint32_t size);                               // avi_renphone.ino: posisi tersimpan (ms)
 
 // ---- owner_renphone.ino: Profil pemilik (foto + nama) ----
 void ownerEnter(); void ownerExit(); void drawOwner(LGFX_Sprite&); void ownerTouch(int,int,bool,bool);
@@ -8808,6 +8810,46 @@ int mjpegSelectedIdx = -1;
 volatile bool mjpegPlaying       = false;
 volatile bool mjpegStopRequested = false;
 
+// ---- daftar video bergaya kartu: thumbnail + durasi + progres ditonton ----
+#define MJ_CARD_H    50                               // tinggi kartu
+#define MJ_CARD_P    54                               // jarak antar kartu
+#define MJ_TH_W      64
+#define MJ_TH_H      48
+uint16_t* mjpegThumbBuf = nullptr;                    // MJPEG_MAX_FILES x 64x48 RGB565 (PSRAM)
+uint8_t   mjpegThumbSt[MJPEG_MAX_FILES];              // 0 = belum dibuat, 1 = siap, 2 = gagal
+uint32_t  mjpegThumbDur[MJPEG_MAX_FILES];             // durasi (ms), 0 = tdk diketahui
+uint32_t  mjpegResumeMs[MJPEG_MAX_FILES];             // posisi terakhir ditonton (ms), 0 = belum
+bool      mjpegThumbWant = false;                     // ada thumbnail kosong di halaman yg terlihat
+
+int mjpegItemsPerPage(){
+  int n = (backY() - 4 - 44) / MJ_CARD_P;
+  return n < 2 ? 2 : n;
+}
+void mjpegRefreshResume(){
+  for(int i=0;i<mjpegFileCount;i++){
+    String low = mjpegFileList[i]; low.toLowerCase();
+    mjpegResumeMs[i] = low.endsWith(".avi") ? aviResumeFor(mjpegFileList[i], mjpegFileSizes[i]) : 0;
+  }
+}
+// dipanggil tiap loop(): bikin 1 thumbnail yg belum ada di halaman yg terlihat, lalu minta redraw
+void mjpegThumbPoll(){
+  if(!mjpegThumbWant || !mjpegThumbBuf || !sdReady) return;
+  if(curScreen() != SCR_MJPEG) return;
+  mjpegThumbWant = false;
+  int per = mjpegItemsPerPage();
+  int startIdx = mjpegScrollPage * per;
+  for(int i=0;i<per && (startIdx+i)<mjpegFileCount;i++){
+    int idx = startIdx+i;
+    if(mjpegThumbSt[idx] == 0){
+      int ok = aviThumbGet(mjpegFileList[idx], mjpegFileSizes[idx],
+                           mjpegThumbBuf + (size_t)idx * (MJ_TH_W*MJ_TH_H), &mjpegThumbDur[idx]);
+      mjpegThumbSt[idx] = ok ? 1 : 2;
+      needRedraw = true;                               // draw berikutnya menandai lagi kalau masih ada yg kosong
+      return;
+    }
+  }
+}
+
 MjpegClass mjpeg;
 uint8_t* mjpegBuf = nullptr;
 size_t   mjpegBufSize = 0;
@@ -8838,6 +8880,9 @@ void mjpegScanFiles(){
     f = dir.openNextFile();
   }
   dir.close();
+  memset(mjpegThumbSt, 0, sizeof(mjpegThumbSt));
+  memset(mjpegThumbDur, 0, sizeof(mjpegThumbDur));
+  mjpegRefreshResume();
   Serial.printf("[MJPEG] %d file ditemukan di %s\n", mjpegFileCount, MJPEG_FOLDER);
 }
 
@@ -9078,10 +9123,15 @@ void mjpegPlayFile(const String& filename){
 }
 
 void mjpegEnter(){
+  if(!mjpegThumbBuf)
+    mjpegThumbBuf = (uint16_t*)heap_caps_malloc((size_t)MJPEG_MAX_FILES * MJ_TH_W * MJ_TH_H * 2, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
   mjpegScanFiles();
   mjpegScrollPage = 0;
 }
-void mjpegExit(){}
+void mjpegExit(){
+  if(mjpegThumbBuf){ heap_caps_free(mjpegThumbBuf); mjpegThumbBuf = nullptr; }
+  mjpegThumbWant = false;
+}
 
 void drawMjpegPlayer(LGFX_Sprite& s){
   iosBackdrop(s); drawStatusBar(s);
@@ -9091,8 +9141,7 @@ void drawMjpegPlayer(LGFX_Sprite& s){
   s.setTextColor(T().accent);s.setCursor(SCR_W-62,29);s.print("Scan");
 
   int listY = 44;
-  int itemH = 26;
-  int itemsPerPage = 5;
+  int itemsPerPage = mjpegItemsPerPage();
   int startIdx = mjpegScrollPage * itemsPerPage;
 
   if(!sdReady){
@@ -9106,20 +9155,74 @@ void drawMjpegPlayer(LGFX_Sprite& s){
     s.setCursor(14,108);
     s.print("lalu ketuk [Scan].");
   } else {
+    bool anyMissing = false;
     for(int i=0; i<itemsPerPage && (startIdx+i)<mjpegFileCount; i++){
       int idx = startIdx+i;
-      int itemY = listY + i*(itemH+4);
-      iosRR(s,4,itemY,SCR_W-8,itemH,6,T().surface);
+      int itemY = listY + i*MJ_CARD_P;
+      iosRR(s,4,itemY,SCR_W-8,MJ_CARD_H,8,T().surface);
 
-      s.setTextColor(0xFBE0);s.setCursor(10,itemY+8);s.print("[V]");
-      s.setTextColor(T().text);s.setCursor(32,itemY+8);
+      // thumbnail 64x48 (placeholder gelap sambil menunggu dibuat)
+      int tx = 7, ty = itemY + 1;
+      if(mjpegThumbBuf && mjpegThumbSt[idx] == 1){
+        s.pushImage(tx, ty, MJ_TH_W, MJ_TH_H, mjpegThumbBuf + (size_t)idx * (MJ_TH_W*MJ_TH_H));
+      } else {
+        s.fillRect(tx, ty, MJ_TH_W, MJ_TH_H, 0x2104);
+        s.setTextColor(T().subtext); s.setTextSize(1);
+        s.setCursor(tx + 22, ty + 20);
+        s.print(mjpegThumbSt[idx] == 2 ? "[V]" : "...");
+        if(mjpegThumbBuf && mjpegThumbSt[idx] == 0) anyMissing = true;
+      }
+      uint32_t dur = mjpegThumbDur[idx];
+      uint32_t res = mjpegResumeMs[idx];
+
+      // pil durasi di pojok kanan bawah thumbnail
+      if(dur > 0){
+        char db[12]; uint32_t ds = dur/1000;
+        if(ds >= 3600) snprintf(db,sizeof(db),"%u:%02u:%02u",(unsigned)(ds/3600),(unsigned)((ds/60)%60),(unsigned)(ds%60));
+        else           snprintf(db,sizeof(db),"%u:%02u",(unsigned)(ds/60),(unsigned)(ds%60));
+        int bw = (int)strlen(db)*6 + 6;
+        s.fillRoundRect(tx + MJ_TH_W - bw - 2, ty + MJ_TH_H - 13, bw, 11, 3, 0x0000);
+        s.setTextColor(0xFFFF); s.setTextSize(1);
+        s.setCursor(tx + MJ_TH_W - bw + 1, ty + MJ_TH_H - 11);
+        s.print(db);
+      }
+      // garis progres ditonton di dasar thumbnail
+      if(dur > 0 && res > 0){
+        int fw = (int)(((uint64_t)(res > dur ? dur : res) * MJ_TH_W) / dur);
+        s.fillRect(tx, ty + MJ_TH_H - 3, MJ_TH_W, 3, 0x4208);
+        if(fw > 0) s.fillRect(tx, ty + MJ_TH_H - 3, fw, 3, T().accent);
+      }
+
+      // teks kanan: nama, info, status
+      int x0 = 78;
+      int maxc = (SCR_W - x0 - 34) / 6;
       String fn = mjpegFileList[idx];
-      if(fn.length() > 15) fn = fn.substring(0,13) + "..";
-      s.print(fn.c_str());
+      if((int)fn.length() > maxc) fn = fn.substring(0, maxc-2) + "..";
+      s.setTextSize(1);
+      s.setTextColor(T().text); s.setCursor(x0, itemY + 6); s.print(fn.c_str());
 
-      iosRR(s,SCR_W-64,itemY+3,56,20,4,T().good);
-      s.setTextColor(T().bg);s.setCursor(SCR_W-56,itemY+8);s.print("Play");
+      char info[40];
+      uint32_t kb = mjpegFileSizes[idx] / 1024;
+      if(kb >= 1024) snprintf(info,sizeof(info),"%u.%u MB",(unsigned)(kb/1024),(unsigned)((kb%1024)*10/1024));
+      else           snprintf(info,sizeof(info),"%u KB",(unsigned)kb);
+      s.setTextColor(T().subtext); s.setCursor(x0, itemY + 20); s.print(info);
+
+      if(res > 0){
+        uint32_t rs = res/1000;
+        char rb[28]; snprintf(rb,sizeof(rb),"Lanjut %02u:%02u",(unsigned)(rs/60),(unsigned)(rs%60));
+        s.setTextColor(T().accent); s.setCursor(x0, itemY + 34); s.print(rb);
+      } else {
+        String low = mjpegFileList[idx]; low.toLowerCase();
+        s.setTextColor(T().subtext); s.setCursor(x0, itemY + 34);
+        s.print(low.endsWith(".avi") ? "Belum ditonton" : "MJPEG tanpa suara");
+      }
+
+      // tombol play bundar di kanan
+      int cx = SCR_W - 22, cy = itemY + MJ_CARD_H/2;
+      s.fillCircle(cx, cy, 11, T().good);
+      s.fillTriangle(cx-3, cy-6, cx-3, cy+6, cx+6, cy, T().bg);
     }
+    mjpegThumbWant = anyMissing;                      // loop() akan membuat thumbnail berikutnya
   }
 
   int pageY = backY() - 2;
@@ -9150,23 +9253,22 @@ void mjpegTouch(int x,int y,bool held,bool isNew){
   if(!sdReady) return;
 
   int listY = 44;
-  int itemH = 26;
-  int itemsPerPage = 5;
+  int itemsPerPage = mjpegItemsPerPage();
   int startIdx = mjpegScrollPage * itemsPerPage;
 
   for(int i=0;i<itemsPerPage && (startIdx+i)<mjpegFileCount;i++){
     int idx = startIdx+i;
-    int itemY = listY + i*(itemH+4);
-    if(y>=itemY && y<=itemY+itemH){
-      if(x>=SCR_W-64 && x<=SCR_W-8){
-        mjpegSelectedIdx = idx;
-        {
-          String lowName = mjpegFileList[idx]; lowName.toLowerCase();
-          if(lowName.endsWith(".avi")) aviPlayFile(mjpegFileList[idx]);   // video + suara via TWS
-          else                         mjpegPlayFile(mjpegFileList[idx]); // blocking, berhenti saat disentuh
-        }
-        return;
+    int itemY = listY + i*MJ_CARD_P;
+    if(y>=itemY && y<=itemY+MJ_CARD_H){                // ketuk di mana saja pada kartu = putar
+      mjpegSelectedIdx = idx;
+      {
+        String lowName = mjpegFileList[idx]; lowName.toLowerCase();
+        if(lowName.endsWith(".avi")) aviPlayFile(mjpegFileList[idx]);   // video + suara via TWS
+        else                         mjpegPlayFile(mjpegFileList[idx]); // blocking, berhenti saat disentuh
       }
+      mjpegRefreshResume();                            // posisi terakhir berubah setelah menonton
+      needRedraw = true;
+      return;
     }
   }
 
@@ -17491,6 +17593,7 @@ void loop(){
   checkAiWatchdog();
   wakeLoopPoll(); // v115: urus hasil task wake word (simpan template, aksi pas terdeteksi) -- murah kalau gak ada kerjaan
   musicLoopPoll(); // Musik: toast/redraw/simpan prefs -- no-op kalau app belum pernah dibuka
+  mjpegThumbPoll(); // Daftar video: bikin thumbnail yg belum ada, 1 per putaran -- no-op di luar app MJPEG
   featuresLoopPoll(); // Stopwatch/Timer tick, screenshot, Voice Memo, cuaca (features_renphone.ino)
   appMemGuardTick(); // v92: "batas aman RAM" -- kill cache RAM app astronomi paling lama nganggur kalau RAM internal mepet, lihat definisinya dekat appOnEnter/appOnExit
   diUpdate();              // v14: urus animasi/auto-collapse Dynamic Island
