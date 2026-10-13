@@ -62,6 +62,7 @@ extern int brightness;          // phone.ino (10..255)
 #define AVI_RESUME_TAIL_MS  5000        // sisa < ini dianggap sudah tamat: tdk disimpan
 #define AVI_RESUME_SAVE_MS  30000       // simpan posisi berkala saat memutar
 #define AVI_RESUME_SLOTS    8           // jumlah video yg diingat posisinya
+#define AVI_BAR_HIDE_MS     3000        // garis progres tipis hilang setelah ini (muncul lagi saat disentuh / loncat)
 
 // ---- metadata file ----
 static File     aviFile;
@@ -125,6 +126,8 @@ static unsigned long aviVolMs = 0;
 static LGFX_Sprite aviOsdSpr(&display);                      // OSD kecil (di-push 1x per frame)
 static bool aviOsdSprOk = false, aviOsdDirty = false, aviBarDirty = true;
 static int  aviBarFw = -1;
+static bool aviBarShow = true;                      // garis progres tipis tampil / sembunyi otomatis
+static unsigned long aviBarUntil = 0;
 // geometri panel kontrol
 static int pnW = 0, pnH = 0, pnBy0 = 0, pnBarX = 0, pnBarW = 0, pnBarY = 0, pnCy = 0;
 static int pnPlayX = 0, pnBackX = 0, pnFwdX = 0, pnSlY = 0, pnSlH = 0, pnSlBX = 0, pnSlVX = 0;
@@ -409,6 +412,8 @@ static int aviTouchGesture(int startX, int startY) {
 #define AVI_DARK   0x4208
 #define AVI_TRACK  0x2104
 
+static void aviBarWake();
+
 // ---- OSD kecil di pojok kiri atas (teks + bar opsional), mis. ">> 01:23" / "Cerah 72%" ----
 // Digambar ke sprite kecil lalu di-push SEKALI per frame (1 jendela SPI) -> tdk berkedip.
 static void aviOsdRender(LGFX_Sprite& g) {
@@ -434,6 +439,7 @@ static void aviOsdSetTxt(const char* txt, int pct) {
   aviOsdBar = pct > 100 ? 100 : pct;
   aviOsdOn = true;
   aviOsdDirty = true;
+  aviBarWake();
   aviOsdUntil = millis() + 1200;
   aviOsdPush();
 }
@@ -456,8 +462,16 @@ static void aviDrawMiniBar(bool force) {
   if (fw > 0) display.fillRect(0, H - 3, fw, 3, TFT_WHITE);
   aviBarFw = fw; aviBarDirty = false;
 }
+static void aviBarWake() {            // munculkan garis progres, sembunyi lagi setelah AVI_BAR_HIDE_MS
+  aviBarUntil = millis() + AVI_BAR_HIDE_MS;
+  if (!aviBarShow) { aviBarShow = true; aviBarDirty = true; }
+}
 static void aviOsdTick() {           // dipanggil setelah tiap frame tampil
-  aviDrawMiniBar(false);
+  if (aviBarShow && (long)(millis() - aviBarUntil) > 0) {
+    aviBarShow = false;              // video tdk di-clip lagi -> frame berikut menimpa garisnya
+    if (aviOffX > 0 || aviOffY > 0) display.fillRect(0, display.height() - 3, display.width(), 3, TFT_BLACK);
+  }
+  if (aviBarShow) aviDrawMiniBar(false);
   if (!aviOsdOn) return;
   if (millis() < aviOsdUntil) aviOsdPush();
   else {
@@ -746,7 +760,7 @@ static void aviRunPanel(uint32_t vt) {
   if (!aviReqStop) {
     if (aviAudioClk) musExtPause(false);
     if (aviOffX > 0 || aviOffY > 0) display.fillScreen(TFT_BLACK);   // video full-layar: frame berikut menimpa panel, tanpa kedip hitam
-    aviBarDirty = true;
+    aviBarShow = true; aviBarDirty = true; aviBarUntil = millis() + AVI_BAR_HIDE_MS;
     aviPausedAccum += millis() - pauseStart;
   }
 }
@@ -1072,7 +1086,7 @@ void aviPlayFile(const String& filename) {
   aviFrameNo = 0; aviVqHead = 0; aviVqCount = 0;
   aviPausedAccum = 0;
   aviOsdOn = false; aviOsdBar = -1; aviOsdDirty = false;
-  aviBarDirty = true; aviBarFw = -1;
+  aviBarDirty = true; aviBarFw = -1; aviBarShow = true; aviBarUntil = millis() + AVI_BAR_HIDE_MS + 2000;
   aviOsdSprOk = false;
   aviOsdSpr.setColorDepth(16);
   aviOsdSpr.setPsram(false);
@@ -1159,10 +1173,10 @@ void aviPlayFile(const String& filename) {
     if (aviVqCount >= 1 && aviVqIdx[aviVqHead] <= target) {
       int sl = aviVqHead;
       if (aviVqSize[sl] > 0) {
-        display.setClipRect(0, 0, W, H - 3);           // video tdk menimpa garis progres
+        if (aviBarShow) display.setClipRect(0, 0, W, H - 3);   // video tdk menimpa garis progres
         if (aviShowFrame(aviVq + (size_t)sl * aviSlotSize, aviVqSize[sl])) aviShown++;
         else aviDropped++;
-        display.clearClipRect();
+        if (aviBarShow) display.clearClipRect();
         aviOsdTick();
       }
       aviVqHead = (aviVqHead + 1) % aviSlotN; aviVqCount--;
@@ -1179,6 +1193,7 @@ void aviPlayFile(const String& filename) {
       if (getInputPoint(tp)) {
         if (!tsAct) {
           tsAct = true; tsMode = 0; tsX0 = (int)tp.x; tsY0 = (int)tp.y; tsT0 = millis(); tsDx = 0;
+          aviBarWake();
         } else {
           int dx = (int)tp.x - tsX0, dy = (int)tp.y - tsY0;
           int adx = dx < 0 ? -dx : dx, ady = dy < 0 ? -dy : dy;
