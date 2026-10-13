@@ -355,8 +355,121 @@ static void aviComputeScale(int dispW, int dispH) {
   aviScaleReady = true;
 }
 
+// =====================================================================
+//  ZOOM OTOMATIS: video yg lebih kecil dari layar diperbesar (rasio tetap).
+//  Decode skala penuh ke buffer PSRAM -> bilinear -> 1x pushImage ke layar.
+//  Video 135x240 di layar portrait 240x320 -> 180x320. Bisa dimatikan dari panel.
+// =====================================================================
+static bool      aviZoomPref = true;     // pilihan user (disimpan di NVS)
+static bool      aviZoomCan = false;     // video lebih kecil dari layar -> zoom mungkin
+static bool      aviZoomActive = false;  // zoom benar2 dipakai (buffer siap)
+static int       aviZoomDW = 0, aviZoomDH = 0;
+static uint16_t* aviZoomSrc = nullptr;   // frame hasil decode (aviW x aviH)
+static uint16_t* aviZoomOut = nullptr;   // frame hasil perbesar (DW x DH)
+static int16_t*  aviZoomX0 = nullptr;    // peta kolom sumber
+static uint8_t*  aviZoomWx = nullptr;    // bobot horizontal 0..31
+
+static void aviZoomFree() {
+  if (aviZoomSrc) { heap_caps_free(aviZoomSrc); aviZoomSrc = nullptr; }
+  if (aviZoomOut) { heap_caps_free(aviZoomOut); aviZoomOut = nullptr; }
+  if (aviZoomX0)  { heap_caps_free(aviZoomX0);  aviZoomX0 = nullptr; }
+  if (aviZoomWx)  { heap_caps_free(aviZoomWx);  aviZoomWx = nullptr; }
+  aviZoomActive = false;
+}
+static void aviZoomPrefLoad() {
+  Preferences p;
+  if (p.begin("avires", true)) { aviZoomPref = p.getInt("zoom", 1) != 0; p.end(); }
+  else aviZoomPref = true;
+}
+static void aviZoomPrefSave() {
+  Preferences p;
+  if (p.begin("avires", false)) { p.putInt("zoom", aviZoomPref ? 1 : 0); p.end(); }
+}
+// hitung ulang zoom utk orientasi layar saat ini (panggil setelah setRotation / saat tombol Zoom ditekan)
+static void aviZoomSetup() {
+  aviZoomFree();
+  aviZoomCan = false;
+  int sw = display.width(), sh = display.height();
+  if (aviW == 0 || aviH == 0) return;
+  float f = (float)sw / (float)aviW;
+  float fh = (float)sh / (float)aviH;
+  if (fh < f) f = fh;
+  if (f < 1.08f) return;                         // sudah (hampir) memenuhi layar: tdk ada yg diperbesar
+  aviZoomCan = true;
+  if (!aviZoomPref) return;
+  int dw = (int)((float)aviW * f), dh = (int)((float)aviH * f);
+  if (dw > sw) dw = sw;
+  if (dh > sh) dh = sh;
+  if (dw < 2 || dh < 2) return;
+  aviZoomSrc = (uint16_t*)heap_caps_malloc((size_t)aviW * aviH * 2, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  aviZoomOut = (uint16_t*)heap_caps_malloc((size_t)dw * dh * 2, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  aviZoomX0  = (int16_t*) heap_caps_malloc((size_t)dw * sizeof(int16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  aviZoomWx  = (uint8_t*) heap_caps_malloc((size_t)dw, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  if (!aviZoomSrc || !aviZoomOut || !aviZoomX0 || !aviZoomWx) { aviZoomFree(); return; }
+  for (int x = 0; x < dw; x++) {
+    uint32_t fx = (uint32_t)(((uint64_t)x * (aviW - 1) * 256ULL) / (uint64_t)(dw - 1));
+    aviZoomX0[x] = (int16_t)(fx >> 8);
+    aviZoomWx[x] = (uint8_t)(((fx & 255) * 32) >> 8);
+  }
+  aviZoomDW = dw; aviZoomDH = dh;
+  aviOffX = (sw - dw) / 2; aviOffY = (sh - dh) / 2;
+  aviZoomActive = true;
+}
+
+static int aviZoomDraw(JPEGDRAW* d) {
+  if (!aviZoomSrc) return 0;
+  const uint16_t* src = (const uint16_t*)d->pPixels;
+  for (int yy = 0; yy < d->iHeight; yy++) {
+    int dy = d->y + yy;
+    if (dy < 0 || dy >= (int)aviH) continue;
+    for (int xx = 0; xx < d->iWidth; xx++) {
+      int dx = d->x + xx;
+      if (dx >= 0 && dx < (int)aviW) aviZoomSrc[(size_t)dy * aviW + dx] = src[yy * d->iWidth + xx];
+    }
+  }
+  return 1;
+}
+// campur 2 piksel RGB565, bobot w = 0..32 (trik mask 0x07E0F81F)
+static inline uint16_t aviBlend(uint16_t a, uint16_t b, uint32_t w) {
+  uint32_t ma = ((uint32_t)a | ((uint32_t)a << 16)) & 0x07E0F81FUL;
+  uint32_t mb = ((uint32_t)b | ((uint32_t)b << 16)) & 0x07E0F81FUL;
+  uint32_t r = ((ma * (32 - w)) + (mb * w)) >> 5;
+  r &= 0x07E0F81FUL;
+  return (uint16_t)(r | (r >> 16));
+}
+static bool aviZoomShow(const uint8_t* data, uint32_t size) {
+  if (!aviJpeg->openRAM((uint8_t*)data, (int)size, aviZoomDraw)) return false;
+  aviJpeg->setPixelType(RGB565_LITTLE_ENDIAN);
+  aviJpeg->setMaxOutputSize(20);
+  int rc = aviJpeg->decode(0, 0, 0);
+  aviJpeg->close();
+  if (!rc) return false;
+  const int dw = aviZoomDW, dh = aviZoomDH;
+  const int sw = (int)aviW, sh = (int)aviH;
+  for (int y = 0; y < dh; y++) {
+    uint32_t fy = (uint32_t)(((uint64_t)y * (sh - 1) * 256ULL) / (uint64_t)(dh - 1));
+    int y0 = (int)(fy >> 8);
+    int y1 = (y0 + 1 < sh) ? y0 + 1 : y0;
+    uint32_t wy = ((fy & 255) * 32) >> 8;
+    const uint16_t* r0 = aviZoomSrc + (size_t)y0 * sw;
+    const uint16_t* r1 = aviZoomSrc + (size_t)y1 * sw;
+    uint16_t* o = aviZoomOut + (size_t)y * dw;
+    for (int x = 0; x < dw; x++) {
+      int x0 = aviZoomX0[x];
+      int x1 = (x0 + 1 < sw) ? x0 + 1 : x0;
+      uint32_t wx = aviZoomWx[x];
+      uint16_t t = aviBlend(r0[x0], r0[x1], wx);
+      uint16_t b = aviBlend(r1[x0], r1[x1], wx);
+      o[x] = aviBlend(t, b, wy);
+    }
+  }
+  display.pushImage(aviOffX, aviOffY, dw, dh, aviZoomOut);
+  return true;
+}
+
 static bool aviShowFrame(const uint8_t* data, uint32_t size) {
   if (!aviJpeg) return false;
+  if (aviZoomActive) return aviZoomShow(data, size);
   if (!aviJpeg->openRAM((uint8_t*)data, (int)size, mjpegDrawCallback)) return false;
   if (!aviScaleReady) aviComputeScale(display.width(), display.height());
   aviJpeg->setPixelType(RGB565_BIG_ENDIAN);
@@ -645,7 +758,7 @@ static void aviDrawPanel(uint32_t ms) {
   display.setTextSize(1);
   display.setTextColor(TFT_WHITE);
   char tt[40];
-  int maxc = (W - 84) / 6;
+  int maxc = (W - (aviZoomCan ? 120 : 84)) / 6;
   if (maxc > (int)sizeof(tt) - 1) maxc = sizeof(tt) - 1;
   snprintf(tt, sizeof(tt), "%.*s", maxc, aviTitle);
   display.setCursor(10, 10);
@@ -655,6 +768,16 @@ static void aviDrawPanel(uint32_t ms) {
   display.drawRoundRect(hx, 3, 30, 22, 6, AVI_DARK);
   display.drawLine(hx + 15, 8, hx + 8, 14, TFT_WHITE);  display.drawLine(hx + 15, 8, hx + 22, 14, TFT_WHITE);
   display.drawRect(hx + 10, 14, 10, 7, TFT_WHITE);
+  // Zoom (hanya bila video lebih kecil dari layar)
+  if (aviZoomCan) {
+    int zx = W - 108;
+    if (aviZoomActive) display.fillRoundRect(zx, 3, 30, 22, 6, TFT_WHITE);
+    else               display.drawRoundRect(zx, 3, 30, 22, 6, AVI_DARK);
+    display.setTextColor(aviZoomActive ? TFT_BLACK : TFT_WHITE);
+    display.setCursor(zx + 12, 10);
+    display.print("Z");
+    display.setTextColor(TFT_WHITE);
+  }
   // Tutup (X)
   int cx = W - 36;
   display.drawRoundRect(cx, 3, 30, 22, 6, AVI_DARK);
@@ -714,6 +837,15 @@ static void aviRunPanel(uint32_t vt) {
       int x = (int)tp.x, y = (int)tp.y;
       if (y < 28 && x >= pnW - 36)       { aviReqStop = true; }
       else if (y < 28 && x >= pnW - 72)  { aviReqStop = true; aviReqHome = true; }
+      else if (aviZoomCan && y < 28 && x >= pnW - 108 && x < pnW - 72) {
+        aviZoomPref = !aviZoomPref;                // zoom nyala/mati; frame tampil ulang sesuai mode baru
+        aviZoomPrefSave();
+        aviZoomSetup();
+        aviScaleReady = false;
+        display.fillScreen(TFT_BLACK);
+        if (aviVqCount >= 1 && aviVqSize[aviVqHead] > 0) aviShowFrame(aviVq + (size_t)aviVqHead * aviSlotSize, aviVqSize[aviVqHead]);
+        aviDrawPanel(shown);
+      }
       else if (aviNear(x, y, pnPlayX, pnCy, 26)) { resume = true; }
       else if (aviCkN > 0 && aviNear(x, y, pnBackX, pnCy, 24)) {
         shown = aviPanelSeek(shown > AVI_SEEK_STEP_MS ? shown - AVI_SEEK_STEP_MS : 0, &pauseStart);
@@ -781,6 +913,7 @@ static void aviFreeAll() {
   if (aviTmp) { heap_caps_free(aviTmp); aviTmp = nullptr; }
   if (aviCkOff) { heap_caps_free(aviCkOff); aviCkOff = nullptr; }
   if (aviCkAud) { heap_caps_free(aviCkAud); aviCkAud = nullptr; }
+  aviZoomFree();
   aviSlotN = 0; aviVqCount = 0; aviVqHead = 0; aviCkN = 0;
 }
 
@@ -1300,6 +1433,8 @@ void aviPlayFile(const String& filename) {
   int prevRotation = display.getRotation();
   display.setRotation(aviW >= aviH ? 1 : 0);
   aviScaleReady = false;
+  aviZoomPrefLoad();
+  aviZoomSetup();                                 // video lebih kecil dari layar -> diperbesar (rasio tetap)
   aviShown = aviDropped = aviBigSkipped = 0;
   aviFrameNo = 0; aviVqHead = 0; aviVqCount = 0;
   aviPausedAccum = 0;
