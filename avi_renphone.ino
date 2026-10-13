@@ -442,7 +442,7 @@ static inline uint16_t aviBlend(uint16_t a, uint16_t b, uint32_t w) {
 }
 static bool aviZoomShow(const uint8_t* data, uint32_t size) {
   if (!aviJpeg->openRAM((uint8_t*)data, (int)size, aviZoomDraw)) return false;
-  aviJpeg->setPixelType(RGB565_LITTLE_ENDIAN);
+  aviJpeg->setPixelType(RGB565_BIG_ENDIAN);
   aviJpeg->setMaxOutputSize(20);
   int rc = aviJpeg->decode(0, 0, 0);
   aviJpeg->close();
