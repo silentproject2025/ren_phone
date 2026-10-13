@@ -152,9 +152,12 @@ Control Center berisi tombol bulat (WiFi, Airplane, DND, Tema, Orientasi, Shake,
   ffmpeg -i input.mp4 -vf "scale=320:240:force_original_aspect_ratio=decrease,fps=15" \
          -c:v mjpeg -q:v 7 -c:a libmp3lame -ar 44100 -ac 2 -b:a 128k output.avi
   ```
+  Video portrait (mis. 9:16) supaya penuh 240×320 tanpa melebar: ganti filter dengan `scale=240:320:force_original_aspect_ratio=increase,crop=240:320,fps=15` (terpotong sedikit di kiri-kanan) atau `scale=240:320:force_original_aspect_ratio=decrease,pad=240:320:(ow-iw)/2:(oh-ih)/2,fps=15` (utuh, ada bar hitam).
   Audio **wajib MP3 44,1 kHz** (sampling lain bikin nada bergeser). Video portrait (mis. `scale=240:320`) diputar portrait, landscape diputar landscape.
 
   **Daftar video.** App MJPEG menampilkan tiap file sebagai kartu: thumbnail 64×48 (frame di ±10% video, atau frame pertama untuk `.mjpeg`), durasi di pojok thumbnail, ukuran file, dan status **Lanjut mm:ss** beserta garis progres ditonton di dasar thumbnail. Ketuk di mana saja pada kartu untuk memutar. Thumbnail dibuat satu per satu di latar saat daftar dibuka lalu di-cache di SD (`/.thumbs/<hash>.th`, ±6 KB per video), jadi pembukaan berikutnya langsung muncul, juga setelah reboot. Ketuk **Scan** untuk memuat ulang daftar; hapus folder `.thumbs` bila ingin membuat ulang semua thumbnail.
+
+  **Zoom otomatis.** Video yang lebih kecil dari layar di kedua sisi (mis. 135×240 di layar portrait 240×320) diperbesar sampai sebesar mungkin dengan rasio tetap (jadi 180×320), memakai interpolasi bilinear: frame di-decode penuh ke buffer PSRAM, diperbesar CPU, lalu dikirim ke layar sekali jalan. Video yang sudah pas atau lebih besar tidak berubah (240×240 di layar landscape tetap dengan bar hitam di sisi). Tombol **Z** di bar atas panel kontrol mematikan / menyalakan zoom (muncul hanya bila video memenuhi syarat, pilihan disimpan di NVS) kalau fps terasa turun. Layar pembuka dan log Serial menampilkan resolusi video yang terbaca.
 
   **Kontrol**
 
