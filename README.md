@@ -13,7 +13,7 @@
 # ACCRETION PHONE
 ### NyxOS — sistem operasi ponsel yang ditulis dari nol untuk ESP32-S3
 
-`C++ / Arduino-ESP32 3.x` · `ESP32-S3 + PSRAM OPI` · `ILI9341 320×240` · `±26.500 baris firmware` · `AGPL-3.0`
+`C++ / Arduino-ESP32 3.x` · `ESP32-S3 + PSRAM OPI` · `ILI9341 320×240` · `±28.500 baris firmware` · `AGPL-3.0`
 
 </div>
 
@@ -155,9 +155,11 @@ Control Center berisi tombol bulat (WiFi, Airplane, DND, Tema, Orientasi, Shake,
   Video portrait (mis. 9:16) supaya penuh 240×320 tanpa melebar: ganti filter dengan `scale=240:320:force_original_aspect_ratio=increase,crop=240:320,fps=15` (terpotong sedikit di kiri-kanan) atau `scale=240:320:force_original_aspect_ratio=decrease,pad=240:320:(ow-iw)/2:(oh-ih)/2,fps=15` (utuh, ada bar hitam).
   Audio **wajib MP3 44,1 kHz** (sampling lain bikin nada bergeser). Video portrait (mis. `scale=240:320`) diputar portrait, landscape diputar landscape.
 
-  **Daftar video.** App MJPEG menampilkan tiap file sebagai kartu: thumbnail 64×48 (frame di ±10% video, atau frame pertama untuk `.mjpeg`), durasi di pojok thumbnail, ukuran file, dan status **Lanjut mm:ss** beserta garis progres ditonton di dasar thumbnail. Ketuk di mana saja pada kartu untuk memutar. Thumbnail dibuat satu per satu di latar saat daftar dibuka lalu di-cache di SD (`/.thumbs/<hash>.th`, ±6 KB per video), jadi pembukaan berikutnya langsung muncul, juga setelah reboot. Ketuk **Scan** untuk memuat ulang daftar; hapus folder `.thumbs` bila ingin membuat ulang semua thumbnail.
+  **Daftar video.** App MJPEG menampilkan tiap file sebagai kartu: thumbnail 64×48 (frame di ±10% video, atau frame pertama untuk `.mjpeg`), durasi di pojok thumbnail, ukuran file, dan status **Lanjut mm:ss** beserta garis progres ditonton di dasar thumbnail. Ketuk di mana saja pada kartu untuk memutar. Thumbnail dibuat satu per satu di latar saat daftar dibuka lalu di-cache di SD (`/.thumbs/<hash>.th`, ±6 KB per video), jadi pembukaan berikutnya langsung muncul, juga setelah reboot. Ketuk **Scan** untuk memuat ulang daftar; hapus folder `.thumbs` bila ingin membuat ulang semua thumbnail. Cache versi lama (header `NTH1`, warna salah) dikenali dan dibuat ulang otomatis sebagai `NTH2`.
 
   **Zoom otomatis.** Video yang lebih kecil dari layar di kedua sisi (mis. 135×240 di layar portrait 240×320) diperbesar sampai sebesar mungkin dengan rasio tetap (jadi 180×320), memakai interpolasi bilinear: frame di-decode penuh ke buffer PSRAM, diperbesar CPU, lalu dikirim ke layar sekali jalan. Video yang sudah pas atau lebih besar tidak berubah (240×240 di layar landscape tetap dengan bar hitam di sisi). Tombol **Z** di bar atas panel kontrol mematikan / menyalakan zoom (muncul hanya bila video memenuhi syarat, pilihan disimpan di NVS) kalau fps terasa turun. Layar pembuka dan log Serial menampilkan resolusi video yang terbaca.
+
+  **Format piksel zoom.** Jalur zoom memakai pasangan format yang sama dengan pemutar normal, galeri, APOD, dan EPIC: JPEGDEC di-set `RGB565_BIG_ENDIAN`, tiap piksel di-bswap ke format native untuk blend bilinear, di-bswap balik, lalu di-push sebagai `lgfx::swap565_t*`. Setelan decode harus sejalan dengan asumsi callback `aviZoomDraw()`; kalau tidak, byte warna tertukar dan gambar tampil warna-warni acak hanya saat zoom aktif (diperbaiki lewat `apply_zoom_color_fix2.py`).
 
   **Kontrol**
 
@@ -309,6 +311,8 @@ ci_hoist_types.py            langkah CI: pindahkan tipe ke rp_types.h (dijalanka
 ```
 
 Riwayat perubahan (v7 hingga v119+) ditulis sebagai komentar langsung di kode: gejala, akar masalah, dan alasan perbaikannya. Untuk memahami kenapa sebuah bagian ditulis seperti itu, mulai dari komentar di atasnya.
+
+Perbaikan terbaru: warna video. `apply_video_color_fix.py` membetulkan thumbnail daftar video dan sebagian jalur zoom; `apply_zoom_color_fix2.py` menutup sisa bug zoom (decode masih `LITTLE_ENDIAN` sehingga warna acak saat zoom aktif). Keduanya idempotent, jalankan dari root repo.
 
 ---
 
