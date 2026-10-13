@@ -158,11 +158,16 @@ Control Center berisi tombol bulat (WiFi, Airplane, DND, Tema, Orientasi, Shake,
 
   | Gestur | Fungsi |
   |---|---|
-  | Ketuk | Pause / lanjut (muncul waktu dan bar progres) |
+  | Ketuk | Buka panel kontrol dan pause (lihat di bawah) |
   | Usap kanan / kiri | Maju / mundur 10 detik (`AVI_SEEK_STEP_MS`) |
-  | Pause + geser bar progres | Loncat ke menit:detik mana pun, lepas jari = langsung main |
+  | Usap atas / bawah di separuh kiri layar | Kecerahan (video tetap jalan) |
+  | Usap atas / bawah di separuh kanan layar | Volume TWS (video tetap jalan) |
   | Tahan 0,6 dtk | Berhenti |
   | Usap tepi bawah ke atas | Home |
+
+  Saat memutar, garis progres tipis selalu terlihat di tepi bawah layar, dan perubahan posisi / kecerahan / volume muncul sebagai OSD kecil di pojok kiri atas.
+
+  **Panel kontrol** (muncul saat ketuk, video pause): bar judul dengan tombol Home dan Tutup; slider kecerahan di kiri dan slider volume di kanan; di bawah ada waktu, bar progres yang bisa digeser, serta tombol −10 / Play / +10. Loncat dari panel (tombol atau bar) tetap dalam keadaan pause di frame tujuan, tekan Play atau ketuk area video untuk lanjut. Slider kecerahan mengubah kecerahan layar sistem (nilai yang sama dengan Control Center); slider volume memakai volume yang sama dengan app Musik.
 
   **Seek.** Indeks `idx1` di akhir file dibaca sekali saat video dibuka (sekitar satu detik), lalu dibuat tabel titik lompat tiap ±1 detik video di PSRAM (maks 8192 titik, 64 KB): offset chunk video dan waktu audio di titik itu. Karena MJPEG berisi keyframe di setiap frame, lompat bisa ke mana saja tanpa artefak. Tiap lompat, stream audio di CAM di-restart (`musExtEnd` + `musExtBegin`) dan jam audio diberi offset awal supaya sinkron gambar-suara tetap benar. Akurasi lompat ±1 detik.
 
