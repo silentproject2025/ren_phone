@@ -1,393 +1,313 @@
-# 📱 Accretion — HP DIY dari Nol, Ditenagai ESP32-S3
-
-> **"Kenapa beli HP, kalau bisa dibikin sendiri?"**
-
-**Accretion** adalah sistem operasi HP custom yang ditulis dari nol — bukan modif Android, bukan port sistem lain — sebuah firmware C++ raksasa (`phone.ino`, ±16.700 baris) yang berjalan di atas chip **ESP32-S3**. Nama kode folder/repo-nya adalah `ren_phone`, tapi HP-nya sendiri bernama **Accretion**. Ia punya lock screen, launcher grid, status bar, Control Center, notifikasi mengambang ala Dynamic Island, emulator NES, port DOOM, sampai pemutar musik Bluetooth dengan rekomendasi lagu berbasis AI on-device — semua nyala di layar TFT kecil bergaya iOS.
-
-Proyek ini juga unik karena **seluruh riwayat perubahannya** (v7 sampai v115+) didokumentasikan langsung di dalam komentar kode: apa bug-nya, apa akar masalahnya, kenapa fix-nya begitu. Firmware ini sekaligus jadi studi kasus panjang soal ngoprek ESP32 sampai ke akar-akarnya (fragmentasi RAM internal, timing SPI dua-bus, manajemen PSRAM, dan sejenisnya).
-
-> ⚠️ Dokumen ini ditulis dari isi kode sumber di repo. Fitur lama yang **sudah dicabut** (MP3 Player lokal via speaker, AVI Player, Mars Rover, AI Live/suara, speaker MAX98357A) tidak dijelaskan sebagai fitur aktif.
-
----
-
-## ✨ Kenapa Ini Menarik
-
-- 🧠 **AI Chat berbasis teks** (Google Gemini API) dengan input teks maupun dikte suara (mic INMP441), lengkap dengan memori percakapan yang tersimpan permanen di SD Card.
-- 🎧 **Musik via Bluetooth (A2DP)** — S3 membaca MP3 dari SD Card, mengirimnya lewat kabel UART ke **ESP32-CAM** yang bertugas sebagai co-prosesor Bluetooth, lalu diputar ke TWS/earbuds. Ada mode acak **AI (RYNE v2)** yang belajar kebiasaan dengarmu.
-- 🎙️ **Wake Word "Hei Nyx"** — kata kunci suara buatan sendiri (MFCC + DTW), on-device, tanpa internet dan tanpa training di laptop.
-- 🕹️ **Emulator NES** (core Nofrendo) — scan otomatis semua file `.nes` di root SD Card.
-- 😈 **Port DOOM** (ESP-DOOM/doomgeneric) — virtual joystick + drag-look di layar sentuh, jalan di task FreeRTOS terpisah.
-- 🚀 **Terhubung ke NASA** — foto astronomi harian (APOD, auto-translate ke Indonesia), radar asteroid (NeoWs), citra satelit Bumi (EPIC), dan pencarian arsip foto NASA.
-- 🎮 **8 game orisinal**, termasuk **Inferno** (FPS raycaster gothic dengan 10 achievement, pintu terkunci, tong meledak) dan **Labirin** (klon Pac-Man dengan rekor skor permanen).
-- 🎞️ **Pemutar video MJPEG** — pause & lanjut dari posisi mm:ss terakhir.
-- 🌐 **Web File Manager built-in** — upload/edit/hapus file, ganti wallpaper, atur API key dari browser.
-- 🔧 **Update firmware OTA** — dari SD Card (`/update`) atau URL.
-- 💡 **Kontrol hardware nyata**: LED RGB (Neopixel), motor getar untuk haptic, sensor gerak MPU6050 untuk auto-rotate & shake-to-home, kalibrasi touch otomatis saat boot pertama.
-- 🩺 **Task Manager sendiri** (HWmonitor) — beban tiap core CPU, sisa RAM internal/PSRAM, dan indikator "blok terbesar" untuk mendiagnosis fragmentasi RAM.
-- 🎨 **UI bergaya iOS** — Lock Screen, Control Center, dock, Status Bar, Dynamic Island, Notification Shade, keyboard on-screen, dan Search Bar dengan ikon bulat & panel kaca gelap. Ada 5 tema: Aurora (default), Dark, AMOLED, Light, Pastel.
-
----
-
-## 📚 Daftar Isi
-
-- [Galeri Aplikasi](#️-galeri-aplikasi)
-- [Control Center](#️-control-center)
-- [Musik & Bluetooth](#-musik--bluetooth)
-- [Yang Perlu Disiapkan](#️-yang-perlu-disiapkan)
-- [Peta Kabel (Wiring)](#-peta-kabel-wiring)
-- [Software & Library](#-software--library)
-- [Cara Bangun Sendiri](#-cara-bangun-sendiri)
-- [Setel API Key](#-setel-api-key)
-- [Struktur Kartu SD](#️-struktur-kartu-sd)
-- [Web File Manager](#-web-file-manager)
-- [Gesture & Kontrol](#-gesture--kontrol)
-- [Emulator NES & DOOM](#-emulator-nes--doom)
-- [Format Video MJPEG](#-format-video-mjpeg)
-- [Firmware Alternatif: Fork Bruce](#-firmware-alternatif-fork-bruce)
-- [Hal-Hal yang Perlu Diketahui](#️-hal-hal-yang-perlu-diketahui)
-- [Lisensi](#-lisensi)
-
----
-
-## 🖼️ Galeri Aplikasi
-
-**32 aplikasi** berjalan di satu launcher grid dengan ikon vektor kustom, bisa dicari lewat search bar di Home. Warna lingkaran tiap ikon berbeda, dan warna gambar ikon dipilih otomatis (gelap atau putih) sesuai terang lingkarannya, jadi tetap terbaca di semua tema.
-
-| # | Aplikasi | Yang bisa dilakukan |
-|---|---|---|
-| 1 | **Jam** | Jam digital real-time via NTP |
-| 2 | **Kalkulator** | Hitung-hitungan dasar |
-| 3 | **Orientasi3D** | Kubus 3D yang berputar sesuai kemiringan HP asli (data MPU6050) |
-| 4 | **Setting** | WiFi (dengan scan jaringan), tema, kecerahan, kalibrasi sensor & touch |
-| 5 | **Notepad** | Catatan tersimpan permanen di SD Card |
-| 6 | **Canvas** | Corat-coret pakai jari, kanvas landscape & portrait terpisah |
-| 7 | **AI Chat** | Ngobrol teks dengan Gemini, bisa dikte pakai suara, ada memori riwayat percakapan |
-| 8 | **Files** | File explorer buat kartu SD |
-| 9 | **MJPEG** | Pemutar video motion-JPEG dari root SD Card |
-| 10 | **Update** | Flash firmware baru — dari SD Card (`/update`) atau URL WiFi |
-| 11 | **Baterai** | Tegangan, persentase, estimasi sisa daya |
-| 12 | **Snake** | Klasik, dengan tembus tepi layar |
-| 13 | **Flappy** | Terbang lewati pipa |
-| 14 | **2048** | Swipe 4 arah, gabung angka |
-| 15 | **TicTacToe** | Lawan CPU atau 2 pemain, papan sampai 5×5 |
-| 16 | **Breakout** | Kendali drag jari **atau** miringkan HP |
-| 17 | **Trivia** | Kuis online, 12 kategori × 4 level |
-| 18 | **Astronomi** | Foto NASA APOD harian + auto-translate ke Indonesia |
-| 19 | **NEO Asteroid** | Radar asteroid dekat Bumi hari ini |
-| 20 | **Bumi EPIC** | Foto Bumi dari satelit DSCOVR |
-| 21 | **Galeri NASA** | Pencarian bebas ke arsip foto NASA |
-| 22 | **Neopixel** | Kontrol LED RGB — solid color atau rainbow otomatis |
-| 23 | **Mic Level** | VU meter untuk ngecek mic INMP441 beneran nangkep suara |
-| 24 | **HWmonitor** | Beban CPU per-core, RAM internal/PSRAM, blok memori terbesar |
-| 25 | **Labirin** | Klon Pac-Man, kejar-kejaran hantu dengan pathfinding, rekor tersimpan |
-| 26 | **Inferno** | FPS raycaster gothic — 3 varian peta, 10 achievement, pintu terkunci, tong meledak, knockback musuh |
-| 27 | **NES** | Emulator NES (core Nofrendo) — scan & pilih ROM `.nes` dari SD Card |
-| 28 | **DOOM** | Port doomgeneric, non-audio, WAD disediakan sendiri oleh user |
-| 29 | **PPU Demo** | Demo engine **NyxPPU** ala konsol game lama: tile bank 8×8, 2 layer background dengan scroll parallax, dan sprite OAM dengan prioritas depan/belakang |
-| 30 | **Pomodoro** | Timer fokus/istirahat dengan ring progres melingkar; tiap 4 sesi fokus dapat istirahat panjang 15 menit, durasi fokus & istirahat pendek bisa diatur |
-| 31 | **Wake Word** | Rekam kata kunci "Hei Nyx" sendiri 4×, atur sensitivitas, tes skor live. Saat terdeteksi, HP getar lalu membuka AI Chat dan mulai merekam. Default mati (hemat baterai) |
-| 32 | **Musik** | Pemutar MP3 dari SD Card ke TWS lewat Bluetooth (lihat bagian [Musik & Bluetooth](#-musik--bluetooth)) |
-
----
-
-## 🎛️ Control Center
-
-Swipe ke bawah dari status bar. Isinya **10 tombol bulat** (tanpa label, animasi pop-in bergantian, warna ON/OFF berpindah halus) plus slider **Brightness** yang bisa di-drag. Di landscape tombol disusun **5×2**, di portrait **3×4**.
-
-| # | Tombol | Fungsi |
-|---|---|---|
-| 1 | **WiFi** | Sambung/putus WiFi |
-| 2 | **Airplane** | Mode pesawat |
-| 3 | **DND** | Jangan ganggu |
-| 4 | **Tema** | Ganti tema (Aurora → Dark → AMOLED → Light → Pastel) |
-| 5 | **Orientasi** | Ganti landscape/portrait (otomatis mematikan auto-rotate) |
-| 6 | **Shake** | Aktif/nonaktif shake-to-home |
-| 7 | **Kunci** | Kunci layar |
-| 8 | **Neopixel** | Nyalakan LED RGB mode Rainbow |
-| 9 | **Senyap** | Matikan/nyalakan getar (tersimpan permanen di NVS) |
-| 10 | **Bluetooth** | Nyalakan/matikan Bluetooth modul CAM. Terisi saat BT nyala, ada titik hijau kecil saat TWS terhubung |
-
-> Tombol Bluetooth mengirim perintah `RP_BTMODE` ke ESP32-CAM, jadi **firmware CAM harus versi terbaru** supaya BT-nya benar-benar ikut mati/nyala. Statusnya tersimpan di NVS dan dikirim ulang ke CAM setiap kali CAM restart.
-
----
-
-## 🎧 Musik & Bluetooth
-
-ESP32-S3 sendiri tidak memakai Bluetooth untuk audio. Tugas itu diserahkan ke board **ESP32-CAM** sebagai **co-prosesor Bluetooth A2DP**:
+<div align="center">
 
 ```
-SD Card ──▶ ESP32-S3 (master) ──UART 921600──▶ ESP32-CAM ──A2DP──▶ TWS / earbuds
-            baca MP3, UI,                      buffer MP3, decode (Helix),
-            playlist, RYNE                     buffer PCM, kirim A2DP
+        .  *  .        .      *       .
+    .       ___---===[ ◉ ]===---___       .
+        .--'   accretion disk   '--.
+   *   (   ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~   )     .
+        '--.___               ___.--'
+   .          '''---=======---'''       *
+        .      *        .       .
 ```
 
-- **Letakkan lagu di `/music`** pada SD Card (maks 200 lagu, format **MP3 Layer III 44,1 kHz stereo**).
-- Pemutar punya cover warna unik per judul dengan piringan hitam berputar, equalizer, slider volume, progress bar, dan tombol acak/ulang/suka. Judul panjang akan bergeser (satu salinan, dengan jeda di awal dan di ujung).
-- Halaman **TWS** untuk scan dan sambung ke perangkat Bluetooth; nama perangkat terakhir diingat oleh CAM dan disambung ulang otomatis.
-- Musik tetap jalan walau pindah app (task terpisah), dan otomatis jeda saat TWS putus lalu lanjut saat tersambung lagi.
-- **Mode acak 3 pilihan**: mati, biasa, atau **AI (RYNE v2)**.
+# ACCRETION PHONE
+### NyxOS — sistem operasi ponsel yang ditulis dari nol untuk ESP32-S3
 
-### RYNE v2 — rekomendasi lagu on-device
+`C++ / Arduino-ESP32 3.x` · `ESP32-S3 + PSRAM OPI` · `ILI9341 320×240` · `±26.500 baris firmware` · `AGPL-3.0`
 
-Header-only (`ryne_engine.h`), C++ murni tanpa library Arduino:
-
-- **Vibe** (8 kelas: Semangat, Sendu, Bosen, Nostalgik, Fokus, Gelisah, Santai, Excited) ditebak dari 13 fitur perilaku dan audio (skip rate, listen-through, volume terhadap kebiasaanmu sendiri, energi dan kecerahan audio, jam malam, dan seterusnya), memakai softmax + filter HMM.
-- **Pemilihan lagu** memakai *contextual Thompson Sampling* (regresi Bayesian online) dengan bonus lagu baru, penalti kejenuhan, dan preferensi kontinuitas sesuai vibe.
-- Data belajar disimpan di SD Card sebagai `/ryne2.bin`.
+</div>
 
 ---
 
-## 🛠️ Yang Perlu Disiapkan
+## 00 — Premis
 
-| Komponen | Kenapa Perlu |
-|---|---|
-| **ESP32-S3** (Flash 16MB, PSRAM 8MB OPI) | Otak dari semuanya — PSRAM wajib untuk decode gambar, buffer video, dan task berat (NES/DOOM) |
-| **TFT ILI9341** (320×240) | Layarnya |
-| **Touch XPT2046** | Biar bisa disentuh, bukan cuma dilihat |
-| **MicroSD Card + modul SDIO** | Simpan file, ROM game, WAD DOOM, musik, cache foto, video, memori AI |
-| **MPU6050** | Deteksi kemiringan & goyangan (auto-rotate, shake-to-home, kontrol tilt di game) |
-| **INMP441** | Mic — dikte suara AI Chat, VU meter, dan Wake Word |
-| **Motor getar kecil** | Feedback haptic |
-| **ESP32-CAM (AI Thinker)** | Co-prosesor Bluetooth untuk app Musik *(opsional kalau tidak butuh musik BT)* |
-| **TWS / earbuds Bluetooth** | Tujuan audio musik |
-| **LED Neopixel (opsional)** | Lampu RGB kustom |
-| **Voltage divider 10k+10k** | Biar tahu baterai sekarat atau belum |
+Ponsel ini tidak menjalankan Android, Linux, atau RTOS siap pakai dengan lapisan UI di atasnya. **NyxOS** adalah satu firmware monolitik: launcher, window transition, notifikasi, jaringan, emulator, dan mesin grafisnya ditulis sendiri di atas FreeRTOS bawaan ESP32.
+
+Targetnya bukan "demo yang bisa jalan", tetapi perangkat yang dipakai harian dengan batasan keras: **162 KB RAM internal**, satu layar SPI, satu titik sentuh. Hampir seluruh keputusan desain di repo ini adalah jawaban atas batasan itu.
+
+Nama diambil dari fisika lubang hitam: *accretion* adalah piringan materi yang berputar ke dalam, dan *Nyx* adalah dewi malam. Boot sequence-nya mengikuti tema itu (partikel spiral, *Event Horizon*, lalu logo NyxOS muncul dari garis cahaya).
+
+> Folder/repo bernama `ren_phone` karena itu nama awal proyek. Beberapa komentar dan variabel lama masih memakai nama tersebut.
 
 ---
 
-## 🔌 Peta Kabel (Wiring)
+## 01 — Spesifikasi
 
-**Layar ILI9341 (SPI2_HOST)**
-
-| Fungsi | GPIO |
+| Bagian | Detail |
 |---|---|
-| SCLK | 12 |
-| MOSI | 11 |
-| MISO | 13 |
-| DC | 2 |
-| CS | 10 |
-| RST | 14 |
-| Backlight | 21 |
-
-**Touch XPT2046 (bus SPI terpisah, SPI3_HOST — `bus_shared=false`)**
-
-| Fungsi | GPIO |
-|---|---|
-| SCLK | 6 |
-| MOSI | 5 |
-| MISO | 4 |
-| CS | 9 |
-
-**SD Card (SDIO 1-bit)**
-
-| Fungsi | GPIO |
-|---|---|
-| CLK | 39 |
-| CMD | 38 |
-| D0 | 40 |
-
-**Mic — INMP441 (I2S)**
-
-| Fungsi | GPIO |
-|---|---|
-| SCK | 47 |
-| WS | 46 |
-| SD | 45 |
-
-**Link ke ESP32-CAM (UART, 921600 baud 8N1)**
-
-| ESP32-S3 | ESP32-CAM |
-|---|---|
-| GPIO41 (TX) | GPIO13 (RX) |
-| GPIO42 (RX) | GPIO14 (TX) |
-| GND | GND |
-
-> CAM diberi daya lewat pin **5V** (bukan 3V3). **Cabut kartu SD dari slot CAM** karena GPIO13/14 tersambung ke slot SD. Komentar di bagian atas `cam_bt_coprocessor.ino` masih menyebut GPIO17/16 di sisi S3, itu sudah usang — yang dipakai kode saat ini adalah **GPIO41/42** (`MUS_UART_TX`/`MUS_UART_RX` di `musicbt_renphone.ino`).
-
-**Sensor & Lainnya**
-
-| Komponen | GPIO |
-|---|---|
-| MPU6050 SDA | 15 |
-| MPU6050 SCL | 7 (alamat I2C `0x68`) |
-| Motor getar | 18 |
-| LED Neopixel | 48 |
-| Baterai (ADC via divider) | 8 |
+| SoC | ESP32-S3, flash 16 MB, PSRAM 8 MB (OPI) |
+| Layar | ILI9341 320×240, SPI2, portrait & landscape |
+| Sentuh | XPT2046 pada bus SPI3 terpisah |
+| Penyimpanan | MicroSD via SDIO 1-bit, plus FFat internal sebagai cadangan |
+| Sensor | MPU6050 (tilt, shake, auto-rotate) |
+| Audio masuk | Mikrofon INMP441 (I2S) |
+| Audio keluar | Bluetooth A2DP lewat **ko-prosesor ESP32-CAM** |
+| Lain-lain | Motor getar, LED Neopixel, ADC baterai (voltage divider) |
+| Partisi | `app3M_fat9M_16MB` |
+| Jumlah aplikasi | 38 |
+| Tema | 7 (Aurora, Dark, AMOLED, Light, Pastel, iOS, Full Dark) |
 
 ---
 
-## 💻 Software & Library
+## 02 — Arsitektur
 
-**Wajib**: Arduino-ESP32 core **3.x**.
+### 2.1 Peta memori
 
-### Firmware utama (ESP32-S3)
+Ini inti dari seluruh proyek. RAM internal hanya ±162 KB, dan sebuah koneksi HTTPS (TLS) membutuhkan satu blok **kontigu** sekitar 20–30 KB. Tanpa disiplin memori, error `HTTP -1` dan reboot acak adalah hasil yang pasti.
 
-Diinstal via `arduino-cli` di CI (`.github/workflows/build-firmware.yml`):
-- 🎨 `LovyanGFX` — mesin grafis + driver layar/touch (mesin render utama)
-- 🖼️ `JPEGDEC` — decode gambar JPG (foto NASA, wallpaper, MJPEG)
-- 🎨 `lvgl` — masuk daftar instalasi sebagai persiapan, belum ada pemanggilan LVGL di kode aktif
-- 🔊 `ESP32-audioI2S` — terdaftar di CI tapi jalur audio speaker sudah dicabut dari kode
+| Aturan | Penerapan |
+|---|---|
+| Buffer besar tidak boleh di RAM internal | Sprite layar, tile bank, buffer decode, dan cache dialokasikan lewat `heap_caps_malloc(MALLOC_CAP_SPIRAM)` |
+| Stack task berat dipindah ke PSRAM | Dibuat lewat `createTaskPsramStack()` (`xTaskCreateStaticPinnedToCore`): task Gemini, NES, Musik, Wake Word |
+| Tunggu sebelum menyerah | `nasaWaitForHeap` / `nasaHeapReadyForTask()` memberi waktu lwIP melepas buffer TLS sebelumnya |
+| Aplikasi berbasis jaringan bisa "dikorbankan" | **App Memory Guard** melepas cache aplikasi latar (Astronomi, NEO, EPIC, Galeri NASA) ketika sisa RAM menipis |
+| Flag mbedTLS diperkecil saat compile | `CONFIG_MBEDTLS_DYNAMIC_BUFFER`, `ASYMMETRIC_CONTENT_LEN`, buffer in/out 4096/2048 |
 
-**Di-vendor langsung di repo**:
-- `nofrendo_core/` — core emulator NES, dipatch di CI
-- `esp_doom_core/` — glue code ESP-DOOM untuk port DOOM
+Diagnosis dilakukan langsung di perangkat lewat **HWmonitor**: beban per-core, RAM internal, PSRAM, dan *largest free block*.
 
-### Firmware CAM (ESP32-CAM)
+### 2.2 Pembagian task
 
-Folder `cam_bt_coprocessor/`, dibuild oleh `.github/workflows/build-cam-coprocessor.yml`:
-- `audio-tools` (pschatzmann) — pipeline audio
-- `arduino-libhelix` — decoder MP3
-- `ESP32-A2DP` (pschatzmann) — sumber A2DP
+```
+Core 0                              Core 1
+──────────────────────              ──────────────────────
+loop()  → UI, input, redraw         doomTask      (DOOM, memegang SPI layar)
+musTask → UART ke ESP32-CAM         nofrendo task (NES, stack 48 KB di PSRAM)
+Gemini task (stack PSRAM)
+Wake word / mic task
+```
 
-**Sudah bawaan** Arduino-ESP32 core: `WiFi`, `WebServer`, `HTTPClient`, `WiFiClientSecure`, `FS`, `SD_MMC`, `FFat`, `Update`, `Preferences`, `Wire`, `ESP_I2S.h`, `mbedtls/base64.h`, `esp_bt.h`, `esp_heap_caps.h`.
+UI tetap di `loop()` supaya urutan gambar deterministik. Pekerjaan blocking (HTTP, decode, emulator) dipindah ke task terpisah dan UI hanya membaca statusnya.
+
+### 2.3 Pipeline render
+
+- **LovyanGFX** sebagai mesin grafis; frame digambar ke sprite di PSRAM lalu didorong ke panel.
+- **Transisi berbasis waktu** (`millis()`), bukan jumlah frame, sehingga durasi konsisten (±170 ms) walau CPU sedang sibuk. Animasi Control Center dan Notification Shade memakai easing yang sama.
+- **Band render**: saat Home hanya di-scroll, header, status bar, dan dock tidak digambar ulang.
+- **Kaca buram palsu** (`glassSampleAvg`, `drawGlassPanel`, `drawGlassCircle`): tidak ada blur sungguhan. Firmware mengambil sampel warna dari piksel yang sudah tergambar, mencampurnya dengan tint tema, lalu menambah highlight dan bayangan. Jauh lebih murah daripada blur gaussian dan cukup meyakinkan di layar 2,x inci.
+- **Kalibrasi sentuh dan rotasi selalu sinkron**: rotasi tersimpan dipasang *sebelum* boot sequence dan kalibrasi, karena XPT2046 memetakan sumbu mengikuti rotasi aktif saat kalibrasi (akar bug swipe-to-unlock di v9).
+
+### 2.4 NyxPPU — mesin piksel ala konsol retro
+
+`ppu_engine_renphone.ino` meniru konsep PPU konsol lama, disesuaikan untuk ESP32-S3:
+
+| Komponen | Spesifikasi |
+|---|---|
+| Tile bank | 40 tile 8×8 RGB565 di PSRAM |
+| Background | 2 layer nametable 48×36 tile (384×288 piksel virtual), masing-masing punya scroll sendiri → parallax |
+| Sprite (OAM) | hingga 32 objek: skala, flip, tint, dan bit prioritas (di depan atau di belakang BG1) |
+| Transparansi | magenta `0xF81F` sebagai color key sprite; tile id 0 di BG1 berarti lubang |
+
+Status: **fase 1**. Mesin sudah nyata dan bisa dicoba lewat app *PPU Demo*; integrasi ke Inferno dan Home/Lock Screen masih rencana.
+
+### 2.5 Ko-prosesor Bluetooth (RPLink)
+
+ESP32-S3 tidak memakai Bluetooth untuk audio. MP3 dibaca dari SD, dikirim lewat UART ke **ESP32-CAM**, yang melakukan decode (libhelix) dan mengirim A2DP ke TWS.
+
+```
+SD ─▶ S3 (master) ──UART 921600 8N1──▶ ESP32-CAM ──A2DP──▶ TWS
+      UI, playlist, RYNE                decode MP3 + buffer PCM
+```
+
+Format frame (`rplink.h`, **harus identik di kedua sisi**):
+
+```
+[0xA5][type][lenLo][lenHi][payload ≤1024][xor]
+xor = type ^ lenLo ^ lenHi ^ semua byte payload
+```
+
+| Arah | Perintah |
+|---|---|
+| S3 → CAM | `P` begin · `D` data · `F` finish · `U` pause · `V` volume · `X` stop · `A` scan · `C` connect · `T` tx-gain · `B` mode BT · `G` ping |
+| CAM → S3 | `S` status (40 ms) · `E` lagu habis · `L` hasil scan · `W` scan selesai · `R` hello (CAM boot) · `K` tombol earbuds (AVRCP) |
+
+Catatan penting: **volume absolut AVRCP sengaja tidak diiklankan.** Saat diiklankan, sebagian earbuds mendaftarkan notifikasi yang tidak dijawab callback, dan CAM mati oleh *task watchdog* beberapa detik setelah lagu mulai. Saklar `RP_AVRCP_ENABLE` tersedia untuk mengisolasi masalah memori/link.
 
 ---
 
-## 🚀 Cara Bangun Sendiri
+## 03 — Subsistem
 
-Build resmi memakai **GitHub Actions** (`arduino-cli`, board `esp32:esp32:esp32s3`, `FlashSize=16M`, `PSRAM=opi`, `PartitionScheme=app3M_fat9M_16MB`).
+### Antarmuka
 
-### A. Firmware ESP32-S3
+Lock Screen, Home (grid + pencarian), Control Center, Notification Shade, Dynamic Island, App Switcher, Always-On Display, badge notifikasi, keyboard layar, dan wallpaper kustom (`wallpaper.jpg`, berlaku di Home dan Lock Screen). Getaran dibuat minimal dan hanya untuk kejadian yang perlu, bukan tiap ketukan.
 
-1. Install **Arduino IDE** + board package **esp32 by Espressif** (versi 3.x).
-2. Pilih board **ESP32-S3**, **PSRAM = OPI**, Flash **16MB**, partisi `app3M_fat9M_16MB`.
-3. Install library `LovyanGFX` dan `JPEGDEC` lewat Library Manager.
-4. Satukan file sketch ke satu folder build, dengan `phone.ino` sebagai file utama:
-   - `phone.ino`, `phone_notif_center.ino`, `MjpegClass.h`
-   - `ppu_engine_renphone.ino`, `wakeword_renphone.ino`
-   - `musicbt_renphone.ino`, **`rplink.h`**, `ryne_engine.h`
-   - 5 file `nes_*_renphone.ino`, `doom_renphone.ino`, `hw_conf.h`
-5. Salin isi `nofrendo_core/` (kecuali `main.c`, `display.c`, `keyboard.c`, `osd.c`, `timing.c`, `sound.c`, `stubs.c`) dan `esp_doom_core/` ke folder `src/` di dalam folder build, lalu terapkan 3 patch kecil dari CI:
-   - rename `log_printf` → `nof_log_printf`
-   - hapus fungsi `vid_setpalette` di `vid_drv.c`
-   - tambah flag `nesExitRequested` ke loop utama `nofrendo.c`
-6. Tambahkan flag compiler MbedTLS (penting untuk HTTPS ke Gemini/NASA):
+Control Center berisi tombol bulat (WiFi, Airplane, DND, Tema, Orientasi, Shake, Kunci, Neopixel, Senyap, Bluetooth, Tangkap layar) dan slider kecerahan.
+
+### Aplikasi (38)
+
+| Kategori | Isi |
+|---|---|
+| Sistem | Jam, Setting, Update (OTA), Baterai, HWmonitor, Orientasi3D, Mic Level, Neopixel, Profil, About Phone, Atur Home |
+| Produktivitas | Kalkulator, Notepad, Canvas, Files, Pomodoro, Stopwatch, Voice Memo |
+| Media | Musik (BT), MJPEG, Galeri |
+| AI & online | AI Chat (Gemini), Trivia, Astronomi (APOD), NEO Asteroid, Bumi EPIC, Galeri NASA |
+| Suara | Wake Word "Hei Nyx" |
+| Permainan | Snake, Flappy, 2048, TicTacToe, Breakout, Labirin, Inferno, NES, DOOM, PPU Demo |
+
+### Yang layak dijelaskan lebih dalam
+
+- **Galeri** — album = folder di SD (kedalaman maksimal 2). Thumbnail 72×72 dibuat sekali, disimpan sebagai `/.thumbs/<xx>/<hash>.th` (RGB565, ±10 KB), dan berikutnya cukup dibaca tanpa decode. Nama cache adalah hash dari path + ukuran + waktu ubah, jadi gambar yang diganti otomatis dibuat ulang. Pembuatan thumbnail dibatasi satu gambar per putaran loop dan hanya saat jari tidak menyentuh layar. **Format gambar: JPG dan PNG.** PNG di-decode dengan decoder bawaan LovyanGFX (helper `rpPng*` di `phone.ino`), dengan batas 4 MB per file dan 8 juta piksel; PNG di atas 2 MB tetap bisa dibuka tetapi tanpa thumbnail. Astronomi (APOD) memakai helper PNG yang sama.
+- **Pemutar AVI** (`avi_renphone.ino`) — video MJPEG + audio MP3 dalam satu file `.avi`, suaranya keluar lewat TWS. Video di-decode JPEGDEC ke layar; byte MP3 hasil demux masuk ring PSRAM lalu dikirim `musTask` ke ESP32-CAM lewat jalur RPLink yang sama dengan app Musik. **Jam utama = posisi putar audio di CAM** (dikurangi `AVI_BT_LATENCY_MS`), jadi frame yang telat dilewati dan suara tidak pernah tertinggal. Antrean frame di PSRAM menjaga audio tetap punya cadangan saat decode sesekali melambat. TWS belum tersambung / audio bukan MP3 → video tetap main tanpa suara. Taruh `.avi` di root SD (muncul di app MJPEG atau Files). Cara bikin file:
+
+  ```
+  ffmpeg -i input.mp4 -vf "scale=320:240:force_original_aspect_ratio=decrease,fps=15" \
+         -c:v mjpeg -q:v 7 -c:a libmp3lame -ar 44100 -ac 2 -b:a 128k output.avi
+  ```
+  Audio **wajib MP3 44,1 kHz** (sampling lain bikin nada bergeser). Video portrait (mis. `scale=240:320`) diputar portrait, landscape diputar landscape.
+
+  **Kontrol**
+
+  | Gestur | Fungsi |
+  |---|---|
+  | Ketuk | Pause / lanjut (muncul waktu dan bar progres) |
+  | Usap kanan / kiri | Maju / mundur 10 detik (`AVI_SEEK_STEP_MS`) |
+  | Pause + geser bar progres | Loncat ke menit:detik mana pun, lepas jari = langsung main |
+  | Tahan 0,6 dtk | Berhenti |
+  | Usap tepi bawah ke atas | Home |
+
+  **Seek.** Indeks `idx1` di akhir file dibaca sekali saat video dibuka (sekitar satu detik), lalu dibuat tabel titik lompat tiap ±1 detik video di PSRAM (maks 8192 titik, 64 KB): offset chunk video dan waktu audio di titik itu. Karena MJPEG berisi keyframe di setiap frame, lompat bisa ke mana saja tanpa artefak. Tiap lompat, stream audio di CAM di-restart (`musExtEnd` + `musExtBegin`) dan jam audio diberi offset awal supaya sinkron gambar-suara tetap benar. Akurasi lompat ±1 detik.
+
+  **Resume.** Posisi terakhir disimpan di NVS (namespace `avires`, 8 video terakhir, urutan terbaru dulu) saat pause, saat keluar, dan tiap 30 detik. Kunci video = hash nama file + ukuran file. Buka video yang sama lagi → muncul pilihan **Awal** / **Lanjut**. Posisi di bawah 5 detik dari awal atau di 5 detik terakhir tidak disimpan, dan video yang tamat menghapus catatannya. Ganti nama atau isi file = dianggap video baru.
+
+  File tanpa `idx1` tetap diputar normal; hanya seek dan resume yang mati (muncul toast "Tanpa indeks").
+- **Wake Word** — pengenalan suara speaker-dependent berbasis MFCC + DTW, sepenuhnya on-device dan tanpa internet. Perekaman 4 sampel kata sendiri. Ini bukan neural network, jadi sensitif terhadap ruangan bising.
+- **RYNE v2** (`ryne_engine.h`, header-only, tanpa library Arduino) — rekomendasi lagu on-device. Menebak "vibe" (8 kelas) dari 13 fitur perilaku dan audio dengan softmax + filter HMM, lalu memilih lagu memakai contextual Thompson Sampling. Data belajar di `/ryne2.bin`.
+- **Musik** — cover diambil dari ID3 tag (hanya JPEG baseline; selain itu kembali ke piringan hitam), mode acak biasa atau AI, kontrol AVRCP dari earbuds, dan alasan restart CAM ditampilkan di layar.
+- **AI Chat** — Gemini lewat HTTPS dengan input teks atau dikte suara, memori percakapan tersimpan di SD.
+- **Inferno** — FPS raycaster bertema gothic dengan musuh teranimasi, tiga tingkat senjata, joystick + look sentuh, dan kontrol miring.
+- **NES** — core Nofrendo di task terpisah; **DOOM** — doomgeneric, non-audio, WAD disediakan pengguna.
+- **Voice Memo** — rekam INMP441 ke WAV di `/memo`, diputar lewat jalur Musik BT.
+- **Widget cuaca** — Open-Meteo, tanpa API key.
+
+---
+
+## 04 — Peta Pin
+
+| Blok | Sinyal → GPIO |
+|---|---|
+| Layar (SPI2) | SCLK 12 · MOSI 11 · MISO 13 · DC 2 · CS 10 · RST 14 · BL 21 |
+| Sentuh (SPI3) | SCLK 6 · MOSI 5 · MISO 4 · CS 9 |
+| SD (SDIO 1-bit) | CLK 39 · CMD 38 · D0 40 |
+| Mikrofon (I2S) | SCK 47 · WS 46 · SD 45 |
+| Link CAM (UART) | S3 TX 41 → CAM RX 13 · S3 RX 42 ← CAM TX 14 · GND bersama |
+| MPU6050 (I2C 0x68) | SDA 15 · SCL 7 |
+| Lainnya | Motor getar 18 · Neopixel 48 · ADC baterai 8 |
+
+Untuk ESP32-CAM: beri daya ke pin **5V**, dan **cabut kartu SD dari slotnya** karena GPIO13/14 dipakai bersama slot tersebut.
+
+---
+
+## 05 — Build
+
+CI memakai `arduino-cli` dengan `esp32:esp32:esp32s3`, `FlashSize=16M`, `PSRAM=opi`, `PartitionScheme=app3M_fat9M_16MB`. Cara paling cepat: fork repo dan ambil `.bin` dari artifact GitHub Actions.
+
+**Build manual (S3)**
+
+1. Pasang board package *esp32 by Espressif* 3.x, lalu library `LovyanGFX` dan `JPEGDEC`.
+2. Satukan seluruh `*.ino` dan header di root repo ke satu folder sketch, dengan `phone.ino` sebagai file utama.
+3. Salin `nofrendo_core/` (tanpa `main.c`, `display.c`, `keyboard.c`, `osd.c`, `timing.c`, `sound.c`, `stubs.c`) dan `esp_doom_core/` ke `src/`, lalu terapkan tiga patch kecil yang ada di workflow CI (rename `log_printf`, hapus `vid_setpalette`, tambah flag `nesExitRequested`).
+4. Tambahkan flag mbedTLS:
    `-DCONFIG_MBEDTLS_DYNAMIC_BUFFER=1 -DCONFIG_MBEDTLS_ASYMMETRIC_CONTENT_LEN=1 -DCONFIG_MBEDTLS_SSL_IN_CONTENT_LEN=4096 -DCONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN=2048`
-7. Cocokkan wiring dengan tabel pin, lalu compile & upload.
-8. Nyalakan pertama kali → ikuti layar kalibrasi touch.
+5. Compile, unggah, dan ikuti kalibrasi sentuh pada boot pertama.
 
-### B. Firmware ESP32-CAM (khusus fitur Musik/Bluetooth)
+**Build ko-prosesor (CAM)**
 
-1. Install library `audio-tools`, `arduino-libhelix`, dan `ESP32-A2DP`.
-2. Board **AI Thinker ESP32-CAM**, **Partition Scheme: Huge APP**, PSRAM aktif.
-3. Buka folder `cam_bt_coprocessor/`, compile & upload (`rplink.h` di folder ini harus **identik** dengan `rplink.h` di root repo).
-4. Sambungkan kabel UART sesuai tabel wiring.
+Folder `cam_bt_coprocessor/`, board *AI Thinker ESP32-CAM*, partisi *Huge APP*, PSRAM aktif. Library: `audio-tools`, `arduino-libhelix`, `ESP32-A2DP`. Pastikan `rplink.h` identik dengan versi di root.
 
-> Paling gampang: **fork repo ini di GitHub dan biarkan Actions yang build** — hasil `.bin` S3 dan CAM muncul sebagai artifact di tab Actions.
+**Catatan penamaan file**: `phone_notif_center.ino` sengaja dinamai demikian agar urutan alfabetis Arduino memasukkannya setelah `phone.ino`, sehingga definisi global `phone.ino` terlihat tanpa `extern`. Selain itu, fungsi yang menerima struct custom berisiko memicu bug prototype otomatis `arduino-cli`; beberapa struct di kode sengaja diletakkan paling atas file karena alasan ini.
+
+**Langkah CI tambahan**: `ci_hoist_types.py` memindahkan blok `#include`, struct, dan enum di bagian atas `phone.ino` (±baris 459–716) ke header `rp_types.h` yang di-`#include` di baris pertama. Ini hanya terjadi pada salinan di `build_sketch/` saat CI; `phone.ino` di repo tidak diubah. Tujuannya supaya prototipe otomatis `arduino-cli` selalu disisipkan setelah semua tipe dikenal. Jika compile gagal, workflow meng-upload artifact `diagnostik-prototipe` (hasil preprocess dan versi tool) untuk membantu melacak penyebabnya. Versi `arduino-cli`, core ESP32, dan library di CI belum dikunci, jadi update dari upstream bisa memengaruhi build.
 
 ---
 
-## 🔑 Setel API Key
+## 06 — Konfigurasi Runtime
 
-Semua kunci API disimpan sebagai file teks biasa di SD Card (otomatis dibuat saat pertama nyala), atau diisi lewat **Web File Manager**:
+**API key** (file teks di SD, atau lewat Web File Manager)
 
-| File | Untuk Fitur | Info |
-|---|---|---|
-| `/gemini_key.txt` | AI Chat (teks + dikte suara) | Gratis di Google AI Studio. Kalau SD tidak terdeteksi, key disimpan di NVS sebagai fallback |
-| `/nasa_key.txt` | Astronomi, NEO Asteroid, Bumi EPIC, Galeri NASA | Boleh `DEMO_KEY` (limit kecil), atau ambil gratis di api.nasa.gov |
+| File | Dipakai oleh |
+|---|---|
+| `/gemini_key.txt` | AI Chat dan dikte. Jika SD tidak terdeteksi, disimpan di NVS |
+| `/nasa_key.txt` | NEO, EPIC, Galeri NASA. `DEMO_KEY` diperbolehkan tetapi limitnya kecil |
 
-WiFi diatur dari app **Setting**, lengkap dengan scan jaringan sekitar.
+Astronomi (APOD) tidak lagi membutuhkan key sejak NASA memindahkan endpoint-nya ke `science.nasa.gov`.
 
----
-
-## 🗂️ Struktur Kartu SD
+**Tata letak SD**
 
 ```
 /
-├── notepad.txt              → isi Notepad
-├── gemini_key.txt           → kunci API Gemini
-├── nasa_key.txt             → kunci API NASA (boleh "DEMO_KEY")
-├── ai_memory.txt            → memori percakapan AI Chat (maks 12 entri / 2000 karakter)
-├── wallpaper.jpg            → wallpaper Home & Lock Screen
-├── canvas_land.bin          → kanvas gambar (landscape)
-├── canvas_port.bin          → kanvas gambar (portrait)
-├── ryne2.bin                → data belajar RYNE v2 (rekomendasi musik)
-├── music/                   → file MP3 untuk app Musik (maks 200 lagu)
-├── *.mjpeg                  → video MJPEG, langsung di ROOT
-├── *.nes                    → ROM NES, langsung di ROOT
-├── doom1.wad                → WAD DOOM milik sendiri (tidak disertakan repo)
-├── update/                  → firmware .bin untuk OTA lokal
-├── apod_cache/              → cache foto+terjemahan APOD
-├── neo_cache/               → cache data NASA NeoWs
-├── epic_cache/              → cache citra Bumi EPIC
-└── imglib_cache/            → cache hasil pencarian Galeri NASA
+├── gemini_key.txt  nasa_key.txt  wallpaper.jpg  ai_memory.txt  ryne2.bin
+├── notepad.txt  canvas_land.bin  canvas_port.bin
+├── music/            MP3, maks 200 lagu
+├── memo/             hasil Voice Memo (WAV)
+├── screenshot/       tangkapan layar (BMP)
+├── update/           firmware .bin untuk OTA lokal
+├── .thumbs/          cache thumbnail Galeri
+├── *_cache/          apod / neo / epic / imglib
+├── *.mjpeg  *.nes    di root
+└── doom1.wad         disediakan sendiri
 ```
 
-> 💡 **Tanpa SD Card?** Tetap jalan sebagian: wallpaper pindah ke flash internal (FFat), API key Gemini ke NVS. Tapi NES/DOOM/MJPEG/notepad/musik/memori AI butuh SD Card.
+**Web File Manager** — saat WiFi aktif, buka `http://<IP-perangkat>/` untuk upload, edit, unduh, hapus, mengatur key Gemini, dan mengganti wallpaper (nama berkas harus persis `wallpaper.jpg`; langsung aktif tanpa restart).
 
----
-
-## 🌐 Web File Manager
-
-WiFi nyala → buka `http://<IP-HP>/` dari browser di jaringan yang sama:
-
-- 📤 Upload file apa pun ke SD Card
-- ✏️ Edit langsung file teks lewat browser
-- 📥 Download / 🗑️ hapus file
-- 🔑 Atur kunci API Gemini (`/apikey`)
-- 🖼️ Ganti wallpaper — upload JPG dengan nama **persis** `wallpaper.jpg`, langsung aktif tanpa restart dan ikut diterapkan ke Lock Screen
-
----
-
-## 🤙 Gesture & Kontrol
-
-| Gerakan | Aksi |
-|---|---|
-| Swipe ke atas di lock screen | Buka kunci |
-| Swipe ke bawah dari status bar | Buka Control Center |
-| Swipe ke atas dari tepi bawah | Kembali ke Home (juga jalan di dalam app MJPEG) |
-| Goyangkan HP | Balik ke Home (bisa dimatikan lewat Control Center/Setting) |
-| Miringkan HP | Auto-rotate layar / kontrol tilt di Breakout & Inferno |
-| Ketuk Dynamic Island | Buka app terkait / lihat detail notifikasi |
-| Swipe turun dari pil Dynamic Island | Buka Notification Shade |
-| Tekan-tahan pada notifikasi | Buka context menu |
-| Ucapkan "Hei Nyx" *(kalau Wake Word diaktifkan)* | Buka AI Chat & mulai merekam |
-
----
-
-## 🕹️ Emulator NES & DOOM
-
-- **NES**: berjalan di task FreeRTOS terpisah (stack 48KB di PSRAM) supaya tidak membekukan UI. Buka app NES → firmware scan semua file `.nes` di root SD Card → pilih dari daftar.
-- **DOOM**: port `doomgeneric` lewat ESP-DOOM, juga di task terpisah yang memegang SPI display langsung. Non-audio secara sengaja (`DOOM_NO_AUDIO`). Render 320×200 di tengah layar 320×240. WAD **tidak disertakan** karena isu hak cipta — taruh file WAD milikmu (mis. `doom1.wad` shareware) di root SD Card. Selama DOOM/NES berjalan, orientasi layar dipaksa sesuai kebutuhan lalu dikembalikan setelah keluar.
-
----
-
-## 🎞️ Format Video MJPEG
-
-Pemutar video memakai parser MJPEG murni (`MjpegClass.h` + `JPEGDEC`). Konversi video biasa dengan ffmpeg:
-
+**Video** — format MJPEG portrait native:
 ```bash
 ffmpeg -i input.mp4 -vf "fps=15,scale=240:320" output.mjpeg
 ```
 
-> ⚠️ Video di-encode untuk resolusi native panel **240×320 portrait** — pemutar memaksa rotasi portrait selama playback lalu mengembalikannya setelah selesai. Tap = pause/lanjut dari posisi mm:ss terakhir, tahan ≥600ms = berhenti total.
+---
+
+## 07 — Batasan yang Diketahui
+
+- RAM internal sempit. `HTTP -1` bisa berarti fragmentasi, bukan masalah jaringan; sudah ada mekanisme tunggu dan coba-ulang, tetapi belum bisa dihilangkan sepenuhnya dari level sketch.
+- Audio hanya lewat Bluetooth. Tanpa ESP32-CAM dan TWS, app Musik tidak menghasilkan suara.
+- File MP3 dengan bitrate tinggi (contoh 192 kbps) pernah memicu restart CAM; file bitrate rendah stabil. Masih dalam pengerjaan.
+- Estimasi baterai berasal dari tegangan ADC, bukan fuel-gauge, jadi hanya perkiraan kasar.
+- NyxPPU belum terpasang di Inferno maupun Home/Lock Screen.
+- Seek/resume AVI butuh `idx1` dan hanya mencakup bagian pertama file (AVI OpenDML > 1 GB tidak didukung). Audio dihitung dari bitrate header, jadi MP3 VBR bisa bergeser sedikit setelah lompat jauh; pakai CBR (`-b:a 128k`) seperti di atas.
+- PNG dibatasi 4 MB per file dan 8 juta piksel; decode memakai buffer penuh di PSRAM, jadi PNG di atas 2 MB tidak punya thumbnail di Galeri.
+- Versi `arduino-cli`, core ESP32, dan library tidak dikunci di CI; update upstream bisa mematahkan build tanpa perubahan apa pun di repo.
+- Library `lvgl` terdaftar di CI tetapi tidak dipakai; mesin render sepenuhnya LovyanGFX.
 
 ---
 
-## 🔀 Firmware Alternatif: Fork Bruce
+## 08 — Firmware Alternatif
 
-Repo ini juga menyertakan `Bruce-accretion-phone.bin` — build biner dari fork [Bruce](https://github.com/pr3y/Bruce) dengan board port khusus untuk hardware **Accretion yang sama** (XPT2046 di GPIO 6/5/4/9, ILI9341). Ini firmware terpisah/alternatif, bukan bagian dari OS Accretion/`phone.ino`. Flash lewat app **Update** atau esptool. Catatan: board port ini memakai konstanta kalibrasi touch generik dan **tidak** punya sistem kalibrasi sendiri seperti `phone.ino`.
-
----
-
-## ⚠️ Hal-Hal yang Perlu Diketahui
-
-- **RAM internal ESP32-S3 itu kecil (~162KB)**, dan koneksi HTTPS (Gemini/NASA) butuh blok memori kontigu yang cukup besar. Error `HTTP -1` kadang bukan soal jaringan, tapi RAM internal lagi terpecah-pecah. Firmware punya mekanisme tunggu & coba-ulang otomatis, dan **HWmonitor** menampilkan "blok terbesar" real-time untuk diagnosis. Ada juga *App Memory Guard* yang melepas cache RAM app astronomi saat RAM mepet.
-- **PSRAM itu wajib**, bukan opsional — dipakai buffer decode MJPEG, stack task NES/DOOM/Musik/Wake Word, dan objek JPEGDEC.
-- **Audio hanya lewat Bluetooth.** Tidak ada speaker/output audio langsung di S3 (jalur MAX98357A sudah dicabut). Musik berjalan lewat ESP32-CAM ke TWS, jadi tanpa CAM dan TWS app Musik tidak menghasilkan suara.
-- **Wake Word bukan neural net.** Ia mengenali suara dan kata *kamu sendiri* (speaker-dependent) dari 4 rekaman. Di ruang bising atau kata yang mirip bisa salah picu atau meleset. Mic dipakai bergantian dengan dikte AI Chat dan Mic Level.
-- **NyxPPU masih fase 1**: baru dipakai di app PPU Demo, belum dipasang ke Inferno atau Home Screen.
-- Estimasi baterai murni dari pembacaan tegangan ADC (bukan fuel-gauge IC), anggap perkiraan kasar.
-- `DEMO_KEY` NASA limitnya kecil — kalau sering dipakai, ambil key pribadi (gratis).
-- `phone_notif_center.ino` sengaja dinamai begitu supaya urutan compile alfabetis Arduino menaruhnya setelah `phone.ino`, sehingga definisi global `phone.ino` otomatis terlihat tanpa `extern`.
-- Library `lvgl` masuk daftar instalasi CI tapi belum dipakai; mesin render saat ini sepenuhnya LovyanGFX.
+`Bruce-accretion-phone.bin` adalah build fork [Bruce](https://github.com/pr3y/Bruce) dengan board port untuk hardware yang sama. Ini firmware terpisah dari NyxOS. Port ini memakai konstanta kalibrasi sentuh generik dan tidak membawa sistem kalibrasi `phone.ino`.
 
 ---
 
-## 📄 Lisensi
+## 09 — Struktur Repo
 
-**GNU Affero General Public License v3.0 (AGPL-3.0)** — lihat berkas [`LICENSE`](./LICENSE) untuk teks lengkap.
+```
+phone.ino                    inti NyxOS (UI, boot, jaringan, app dasar, game)
+phone_notif_center.ino       notifikasi / Dynamic Island
+features_renphone.ino        screenshot, stopwatch, voice memo, widget cuaca
+gallery_renphone.ino         Galeri + thumbnail cache (JPG/PNG)
+avi_renphone.ino             pemutar AVI (MJPEG + MP3)
+about_renphone.ino  owner_renphone.ino  homeedit_renphone.ino   About Phone, Profil, Atur Home
+musicbt_renphone.ino         Musik, UART RPLink, AVRCP
+wakeword_renphone.ino        Wake Word (MFCC + DTW)
+ppu_engine_renphone.ino      NyxPPU
+ryne_engine.h                RYNE v2
+nes_*_renphone.ino           integrasi emulator NES
+doom_renphone.ino  hw_conf.h integrasi DOOM
+rplink.h  MjpegClass.h       protokol link CAM, parser MJPEG
+cam_bt_coprocessor/          firmware ESP32-CAM
+nofrendo_core/  esp_doom_core/   core pihak ketiga (di-vendor)
+apply_*.py  patch_*.py       skrip patch untuk perubahan bertahap
+ci_hoist_types.py            langkah CI: pindahkan tipe ke rp_types.h (dijalankan workflow)
+.github/workflows/           build firmware S3 dan CAM
+```
+
+Riwayat perubahan (v7 hingga v119+) ditulis sebagai komentar langsung di kode: gejala, akar masalah, dan alasan perbaikannya. Untuk memahami kenapa sebuah bagian ditulis seperti itu, mulai dari komentar di atasnya.
 
 ---
 
-<p align="center"><i>Dibangun sepotong demi sepotong, satu bug demi satu bug, sampai jadi "HP" yang beneran bisa dipakai. 🔋📲</i></p>
+## 10 — Lisensi
+
+**AGPL-3.0**. Teks lengkap ada di [`LICENSE`](./LICENSE). Kode pihak ketiga (Nofrendo, ESP-DOOM/doomgeneric) mengikuti lisensinya masing-masing.
+
+<div align="center">
+
+<sub>Tidak ada yang runtuh melewati event horizon tanpa meninggalkan catatan di commit.</sub>
+
+</div>
