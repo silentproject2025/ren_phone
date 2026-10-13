@@ -122,6 +122,9 @@ static int       aviSplashY = 0;
 static bool      aviReqStop = false, aviReqHome = false;       // diset panel kontrol
 static int       aviVolCur = 80, aviVolPend = -1;              // volume 0..127 (nilai terbaru / belum terkirim)
 static unsigned long aviVolMs = 0;
+static LGFX_Sprite aviOsdSpr(&display);                      // OSD kecil (di-push 1x per frame)
+static bool aviOsdSprOk = false, aviOsdDirty = false, aviBarDirty = true;
+static int  aviBarFw = -1;
 // geometri panel kontrol
 static int pnW = 0, pnH = 0, pnBy0 = 0, pnBarX = 0, pnBarW = 0, pnBarY = 0, pnCy = 0;
 static int pnPlayX = 0, pnBackX = 0, pnFwdX = 0, pnSlY = 0, pnSlH = 0, pnSlBX = 0, pnSlVX = 0;
@@ -407,25 +410,32 @@ static int aviTouchGesture(int startX, int startY) {
 #define AVI_TRACK  0x2104
 
 // ---- OSD kecil di pojok kiri atas (teks + bar opsional), mis. ">> 01:23" / "Cerah 72%" ----
-static void aviOsdDraw() {
-  display.fillRect(4, 4, 150, 34, TFT_BLACK);
-  display.setTextColor(TFT_WHITE);
-  display.setTextSize(2);
-  display.setCursor(8, 8);
-  display.print(aviOsdTxt);
-  display.setTextSize(1);
+// Digambar ke sprite kecil lalu di-push SEKALI per frame (1 jendela SPI) -> tdk berkedip.
+static void aviOsdRender(LGFX_Sprite& g) {
+  g.fillRect(0, 0, 150, 34, TFT_BLACK);
+  g.setTextColor(TFT_WHITE);
+  g.setTextSize(2);
+  g.setCursor(4, 4);
+  g.print(aviOsdTxt);
+  g.setTextSize(1);
   if (aviOsdBar >= 0) {
-    display.fillRoundRect(8, 30, 142, 4, 2, AVI_DARK);
+    g.fillRoundRect(4, 26, 142, 4, 2, AVI_DARK);
     int fw = aviOsdBar * 142 / 100;
-    if (fw > 0) display.fillRoundRect(8, 30, fw, 4, 2, TFT_WHITE);
+    if (fw > 0) g.fillRoundRect(4, 26, fw, 4, 2, TFT_WHITE);
   }
+}
+static void aviOsdPush() {
+  if (!aviOsdSprOk) return;                          // sprite gagal dibuat -> tanpa OSD (video tetap normal)
+  if (aviOsdDirty) { aviOsdRender(aviOsdSpr); aviOsdDirty = false; }
+  aviOsdSpr.pushSprite(4, 4);
 }
 static void aviOsdSetTxt(const char* txt, int pct) {
   snprintf(aviOsdTxt, sizeof(aviOsdTxt), "%s", txt);
   aviOsdBar = pct > 100 ? 100 : pct;
   aviOsdOn = true;
+  aviOsdDirty = true;
   aviOsdUntil = millis() + 1200;
-  aviOsdDraw();
+  aviOsdPush();
 }
 static void aviOsdSet(const char* prefix, uint32_t ms) {
   uint32_t s = ms / 1000, dur = aviDurMs();
@@ -433,21 +443,27 @@ static void aviOsdSet(const char* prefix, uint32_t ms) {
   snprintf(b, sizeof(b), "%s %02u:%02u", prefix, (unsigned)(s / 60), (unsigned)(s % 60));
   aviOsdSetTxt(b, dur ? (int)(((uint64_t)ms * 100ULL) / dur) : -1);
 }
-// garis progres tipis di tepi bawah (selalu terlihat saat memutar)
-static void aviDrawMiniBar() {
+// garis progres tipis di tepi bawah. Video di-clip supaya tdk menimpanya, jadi
+// cukup digambar saat berubah (bukan tiap frame) -> tdk berkedip.
+static void aviDrawMiniBar(bool force) {
   uint32_t dur = aviDurMs();
   if (!dur) return;
   int W = display.width(), H = display.height();
   uint32_t cur = aviCurMs > dur ? dur : aviCurMs;
   int fw = (int)(((uint64_t)cur * (uint32_t)W) / dur);
-  display.fillRect(0, H - 3, W, 3, AVI_TRACK);
+  if (!force && !aviBarDirty && fw == aviBarFw) return;
+  display.fillRect(fw, H - 3, W - fw, 3, AVI_TRACK);
   if (fw > 0) display.fillRect(0, H - 3, fw, 3, TFT_WHITE);
+  aviBarFw = fw; aviBarDirty = false;
 }
 static void aviOsdTick() {           // dipanggil setelah tiap frame tampil
-  aviDrawMiniBar();
+  aviDrawMiniBar(false);
   if (!aviOsdOn) return;
-  if (millis() < aviOsdUntil) aviOsdDraw();
-  else { aviOsdOn = false; display.fillRect(4, 4, 150, 34, TFT_BLACK); }
+  if (millis() < aviOsdUntil) aviOsdPush();
+  else {
+    aviOsdOn = false;                // frame yg baru tampil sudah menimpa area OSD
+    if (aviOffX > 0 || aviOffY > 0) display.fillRect(4, 4, 150, 34, TFT_BLACK);   // video tdk full-layar: bersihkan manual
+  }
 }
 
 // ---- cerah & volume ----
@@ -729,7 +745,8 @@ static void aviRunPanel(uint32_t vt) {
   while (getInputPoint(tp)) delay(10);
   if (!aviReqStop) {
     if (aviAudioClk) musExtPause(false);
-    display.fillScreen(TFT_BLACK);
+    if (aviOffX > 0 || aviOffY > 0) display.fillScreen(TFT_BLACK);   // video full-layar: frame berikut menimpa panel, tanpa kedip hitam
+    aviBarDirty = true;
     aviPausedAccum += millis() - pauseStart;
   }
 }
@@ -1054,7 +1071,13 @@ void aviPlayFile(const String& filename) {
   aviShown = aviDropped = aviBigSkipped = 0;
   aviFrameNo = 0; aviVqHead = 0; aviVqCount = 0;
   aviPausedAccum = 0;
-  aviOsdOn = false; aviOsdBar = -1;
+  aviOsdOn = false; aviOsdBar = -1; aviOsdDirty = false;
+  aviBarDirty = true; aviBarFw = -1;
+  aviOsdSprOk = false;
+  aviOsdSpr.setColorDepth(16);
+  aviOsdSpr.setPsram(false);
+  if (aviOsdSpr.createSprite(150, 34)) aviOsdSprOk = true;
+  else { aviOsdSpr.setPsram(true); if (aviOsdSpr.createSprite(150, 34)) aviOsdSprOk = true; }
   aviVolCur = musExtGetVol(); aviVolPend = -1; aviVolMs = 0;
 
   // ---- indeks seek + tanya resume ----
@@ -1136,8 +1159,10 @@ void aviPlayFile(const String& filename) {
     if (aviVqCount >= 1 && aviVqIdx[aviVqHead] <= target) {
       int sl = aviVqHead;
       if (aviVqSize[sl] > 0) {
+        display.setClipRect(0, 0, W, H - 3);           // video tdk menimpa garis progres
         if (aviShowFrame(aviVq + (size_t)sl * aviSlotSize, aviVqSize[sl])) aviShown++;
         else aviDropped++;
+        display.clearClipRect();
         aviOsdTick();
       }
       aviVqHead = (aviVqHead + 1) % aviSlotN; aviVqCount--;
@@ -1247,6 +1272,7 @@ void aviPlayFile(const String& filename) {
   aviAudioOn = false; aviAudioClk = false;
   aviFile.close();
   aviFreeAll();
+  if (aviOsdSprOk) { aviOsdSpr.deleteSprite(); aviOsdSprOk = false; }
   display.setRotation(prevRotation);
 
   unsigned long used = millis() - playT0 - aviPausedAccum;
