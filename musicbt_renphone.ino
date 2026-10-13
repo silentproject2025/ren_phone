@@ -977,6 +977,9 @@ uint32_t musExtClockMs() {
 }
 void musExtPause(bool p) { musPost('q', p ? 1 : 0, nullptr); }
 void musExtEnd()         { musPost('e', 0, nullptr); }
+// volume (0..127) utk pemutar AVI: sama dgn slider app Musik (musVol), langsung dikirim ke CAM lewat musTask
+int  musExtGetVol()      { return musVol; }
+void musExtSetVol(int v) { musSetVol(v); musPost('v', musVol, nullptr); }
 
 // =====================================================================
 //  HOOK DARI phone.ino

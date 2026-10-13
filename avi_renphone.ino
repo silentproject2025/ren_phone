@@ -18,7 +18,8 @@
 //    - Indeks idx1 di akhir file AVI dibaca sekali saat dibuka -> tabel titik
 //      lompat tiap ~1 dtk (offset file + posisi audio). MJPEG = tiap frame
 //      keyframe, jadi lompat bisa ke titik mana saja tanpa artefak.
-//    - Usap kanan/kiri = +/-10 dtk | saat PAUSE: geser bar progres utk loncat.
+//    - Usap kanan/kiri = +/-10 dtk | ketuk = panel kontrol (bar progres, -10/+10, cerah, volume).
+//    - Usap atas/bawah: separuh kiri = kecerahan, separuh kanan = volume (video tetap jalan).
 //    - Posisi terakhir (menit:detik) disimpan di NVS (namespace "avires", 8 video
 //      terakhir). Buka video yg sama lagi -> ditanya Lanjut / Awal.
 //    - Audio di-restart di CAM tiap seek (musExtEnd + musExtBegin) dan jam audio
@@ -45,6 +46,9 @@ bool     musExtEnded();
 uint32_t musExtClockMs();
 void     musExtPause(bool p);
 void     musExtEnd();
+int      musExtGetVol();
+void     musExtSetVol(int v);   // 0..127
+extern int brightness;          // phone.ino (10..255)
 
 // Jeda CAM -> TWS (buffer A2DP + decode earbuds). Video terlihat DULUAN dari suara -> naikkan;
 // suara duluan dari video -> turunkan. Satuan ms.
@@ -112,7 +116,15 @@ static uint32_t  aviKey = 0;            // kunci resume (hash nama+ukuran file)
 static unsigned long aviOsdUntil = 0;
 static bool      aviOsdOn = false;
 static char      aviOsdTxt[24];
-static int       aviOvX = 0, aviOvY = 0, aviOvW = 0, aviOvH = 0;   // kotak overlay pause
+static int       aviOsdBar = -1;                               // persen bar OSD (-1 = tanpa bar)
+static char      aviTitle[40];                                 // judul tampilan (nama file)
+static int       aviSplashY = 0;
+static bool      aviReqStop = false, aviReqHome = false;       // diset panel kontrol
+static int       aviVolCur = 80, aviVolPend = -1;              // volume 0..127 (nilai terbaru / belum terkirim)
+static unsigned long aviVolMs = 0;
+// geometri panel kontrol
+static int pnW = 0, pnH = 0, pnBy0 = 0, pnBarX = 0, pnBarW = 0, pnBarY = 0, pnCy = 0;
+static int pnPlayX = 0, pnBackX = 0, pnFwdX = 0, pnSlY = 0, pnSlH = 0, pnSlBX = 0, pnSlVX = 0;
 
 // =====================================================================
 //  Util baca little-endian
@@ -389,68 +401,337 @@ static int aviTouchGesture(int startX, int startY) {
   return 0;
 }
 
-// ---- OSD kecil di pojok kiri atas (mis. ">> 01:23") ----
+// ---- warna ----
+#define AVI_GRAY   0x8410
+#define AVI_DARK   0x4208
+#define AVI_TRACK  0x2104
+
+// ---- OSD kecil di pojok kiri atas (teks + bar opsional), mis. ">> 01:23" / "Cerah 72%" ----
 static void aviOsdDraw() {
-  display.fillRect(4, 4, 132, 24, TFT_BLACK);
+  display.fillRect(4, 4, 150, 34, TFT_BLACK);
   display.setTextColor(TFT_WHITE);
   display.setTextSize(2);
   display.setCursor(8, 8);
   display.print(aviOsdTxt);
   display.setTextSize(1);
+  if (aviOsdBar >= 0) {
+    display.fillRoundRect(8, 30, 142, 4, 2, AVI_DARK);
+    int fw = aviOsdBar * 142 / 100;
+    if (fw > 0) display.fillRoundRect(8, 30, fw, 4, 2, TFT_WHITE);
+  }
 }
-static void aviOsdSet(const char* prefix, uint32_t ms) {
-  uint32_t s = ms / 1000;
-  snprintf(aviOsdTxt, sizeof(aviOsdTxt), "%s %02u:%02u", prefix, (unsigned)(s / 60), (unsigned)(s % 60));
+static void aviOsdSetTxt(const char* txt, int pct) {
+  snprintf(aviOsdTxt, sizeof(aviOsdTxt), "%s", txt);
+  aviOsdBar = pct > 100 ? 100 : pct;
   aviOsdOn = true;
   aviOsdUntil = millis() + 1200;
   aviOsdDraw();
 }
+static void aviOsdSet(const char* prefix, uint32_t ms) {
+  uint32_t s = ms / 1000, dur = aviDurMs();
+  char b[24];
+  snprintf(b, sizeof(b), "%s %02u:%02u", prefix, (unsigned)(s / 60), (unsigned)(s % 60));
+  aviOsdSetTxt(b, dur ? (int)(((uint64_t)ms * 100ULL) / dur) : -1);
+}
+// garis progres tipis di tepi bawah (selalu terlihat saat memutar)
+static void aviDrawMiniBar() {
+  uint32_t dur = aviDurMs();
+  if (!dur) return;
+  int W = display.width(), H = display.height();
+  uint32_t cur = aviCurMs > dur ? dur : aviCurMs;
+  int fw = (int)(((uint64_t)cur * (uint32_t)W) / dur);
+  display.fillRect(0, H - 3, W, 3, AVI_TRACK);
+  if (fw > 0) display.fillRect(0, H - 3, fw, 3, TFT_WHITE);
+}
 static void aviOsdTick() {           // dipanggil setelah tiap frame tampil
+  aviDrawMiniBar();
   if (!aviOsdOn) return;
   if (millis() < aviOsdUntil) aviOsdDraw();
-  else { aviOsdOn = false; display.fillRect(4, 4, 132, 24, TFT_BLACK); }
+  else { aviOsdOn = false; display.fillRect(4, 4, 150, 34, TFT_BLACK); }
 }
 
-// ---- overlay PAUSE: waktu + bar progres yg bisa digeser ----
-static void aviOvLayout() {
+// ---- cerah & volume ----
+static void aviSetBri(int b) {
+  if (b < 10) b = 10;
+  if (b > 255) b = 255;
+  if (b == brightness) return;
+  brightness = b;
+  display.setBrightness((uint8_t)b);
+}
+static void aviVolApply(int v, bool force) {      // kirim ke CAM maks tiap 60 ms, nilai akhir selalu terkirim
+  if (v < 0) v = 0;
+  if (v > 127) v = 127;
+  aviVolCur = v; aviVolPend = v;
+  if (force || millis() - aviVolMs >= 60) { musExtSetVol(v); aviVolMs = millis(); aviVolPend = -1; }
+}
+static void aviVolFlush() {
+  if (aviVolPend >= 0) { musExtSetVol(aviVolPend); aviVolPend = -1; aviVolMs = millis(); }
+}
+
+// ---- helper teks ----
+static void aviTextC(const char* t, int cx, int y, int size, uint16_t col) {
+  display.setTextSize(size);
+  if (display.textWidth(t) > display.width() - 8) display.setTextSize(1);
+  display.setTextColor(col);
+  display.setCursor(cx - display.textWidth(t) / 2, y);
+  display.print(t);
+  display.setTextSize(1);
+}
+static void aviFmtTime(char* out, size_t n, uint32_t ms) {
+  uint32_t s = ms / 1000;
+  if (s >= 3600) snprintf(out, n, "%u:%02u:%02u", (unsigned)(s / 3600), (unsigned)((s / 60) % 60), (unsigned)(s % 60));
+  else           snprintf(out, n, "%02u:%02u", (unsigned)(s / 60), (unsigned)(s % 60));
+}
+
+// ---- layar pembuka ----
+static void aviSplashStatus(const char* msg) {
+  int W = display.width();
+  display.fillRect(0, aviSplashY - 2, W, 14, TFT_BLACK);
+  aviTextC(msg, W / 2, aviSplashY, 1, AVI_GRAY);
+}
+static void aviSplash(const char* status, bool hints) {
   int W = display.width(), H = display.height();
-  aviOvW = (W - 20 > 260) ? 260 : (W - 20);
-  aviOvH = 92;
-  aviOvX = (W - aviOvW) / 2;
-  aviOvY = (H - aviOvH) / 2;
+  display.fillScreen(TFT_BLACK);
+  int cx = W / 2, cy = H / 2 - 40;
+  display.drawCircle(cx, cy, 28, TFT_WHITE);
+  display.drawCircle(cx, cy, 27, TFT_WHITE);
+  display.fillTriangle(cx - 8, cy - 13, cx - 8, cy + 13, cx + 15, cy, TFT_WHITE);
+  aviTextC(aviTitle, cx, cy + 42, 2, TFT_WHITE);
+  aviSplashY = cy + 68;
+  aviSplashStatus(status);
+  if (hints) {
+    aviTextC("Ketuk: kontrol | Tahan: stop", cx, H - 44, 1, AVI_DARK);
+    aviTextC("Usap kiri/kanan: -/+10 dtk", cx, H - 32, 1, AVI_DARK);
+    aviTextC("Usap atas/bawah: cerah | volume", cx, H - 20, 1, AVI_DARK);
+  }
 }
-static bool aviInBar(int x, int y) {
-  return x >= aviOvX && x <= aviOvX + aviOvW && y >= aviOvY + 30 && y <= aviOvY + 62;
+
+// ---- ikon ----
+static void aviIconSun(int cx, int cy, uint16_t col) {
+  display.fillCircle(cx, cy, 4, col);
+  static const int8_t d[8][2] = { {1,0},{1,1},{0,1},{-1,1},{-1,0},{-1,-1},{0,-1},{1,-1} };
+  for (int k = 0; k < 8; k++)
+    display.drawLine(cx + d[k][0] * 7, cy + d[k][1] * 7, cx + d[k][0] * 9, cy + d[k][1] * 9, col);
 }
-static void aviDrawOvDynamic(uint32_t ms) {
+static void aviIconSpeaker(int cx, int cy, bool muted, uint16_t col) {
+  display.fillRect(cx - 8, cy - 3, 4, 7, col);
+  display.fillTriangle(cx - 4, cy - 3, cx + 2, cy - 7, cx + 2, cy + 7, col);
+  display.fillTriangle(cx - 4, cy - 3, cx - 4, cy + 3, cx + 2, cy + 7, col);
+  if (muted) {
+    display.drawLine(cx + 5, cy - 4, cx + 10, cy + 4, col);
+    display.drawLine(cx + 10, cy - 4, cx + 5, cy + 4, col);
+  } else {
+    display.drawLine(cx + 5, cy - 3, cx + 7, cy, col);
+    display.drawLine(cx + 7, cy, cx + 5, cy + 3, col);
+    display.drawLine(cx + 8, cy - 6, cx + 11, cy, col);
+    display.drawLine(cx + 11, cy, cx + 8, cy + 6, col);
+  }
+}
+
+// =====================================================================
+//  PANEL KONTROL (muncul saat ketuk = pause)
+//   atas   : judul + tombol Home / Tutup
+//   kiri   : slider kecerahan | kanan: slider volume
+//   bawah  : waktu, bar progres (geser), tombol -10 / play / +10
+// =====================================================================
+static void aviPanelLayout() {
+  pnW = display.width(); pnH = display.height();
+  pnBy0   = pnH - 80;
+  pnBarX  = 14;
+  pnBarW  = pnW - 28;
+  pnBarY  = pnBy0 + 28;
+  pnCy    = pnBy0 + 57;
+  pnPlayX = pnW / 2;
+  pnBackX = pnW / 2 - 64;
+  pnFwdX  = pnW / 2 + 64;
+  pnSlY   = 38;
+  pnSlH   = pnBy0 - 8 - pnSlY;
+  pnSlBX  = 8;
+  pnSlVX  = pnW - 38;
+}
+static bool aviNear(int x, int y, int cx, int cy, int r) {
+  int dx = x - cx, dy = y - cy;
+  return dx * dx + dy * dy <= r * r;
+}
+static void aviDrawSlider(int which, int pct) {          // which 0 = cerah, 1 = volume
+  int x = which ? pnSlVX : pnSlBX, y = pnSlY, w = 30, h = pnSlH;
+  if (pct < 0) pct = 0;
+  if (pct > 100) pct = 100;
+  display.fillRoundRect(x, y, w, h, 15, TFT_BLACK);
+  display.drawRoundRect(x, y, w, h, 15, AVI_DARK);
+  if (which) aviIconSpeaker(x + 15, y + 15, pct == 0, TFT_WHITE);
+  else       aviIconSun(x + 15, y + 15, TFT_WHITE);
+  int t0 = y + 30, t1 = y + h - 22, th = t1 - t0;
+  display.fillRoundRect(x + 11, t0, 8, th, 4, AVI_DARK);
+  int fh = th * pct / 100;
+  if (fh > 0) display.fillRoundRect(x + 11, t1 - fh, 8, fh, 4, TFT_WHITE);
+  display.fillCircle(x + 15, t1 - fh, 6, TFT_WHITE);
+  char b[8];
+  snprintf(b, sizeof(b), "%d", pct);
+  display.setTextSize(1);
+  display.setTextColor(AVI_GRAY);
+  display.setCursor(x + 15 - display.textWidth(b) / 2, y + h - 14);
+  display.print(b);
+}
+static int aviSliderPct(int y) {                          // posisi sentuh -> persen
+  int t0 = pnSlY + 30, t1 = pnSlY + pnSlH - 22;
+  int p = (t1 - y) * 100 / (t1 - t0);
+  return p < 0 ? 0 : (p > 100 ? 100 : p);
+}
+static int aviBriPct() { return brightness * 100 / 255; }
+static int aviVolPct() { return aviVolCur * 100 / 127; }
+
+static void aviDrawPanelBar(uint32_t ms) {                // waktu + bar progres
   uint32_t dur = aviDurMs();
-  uint32_t sec = ms / 1000, tot = dur / 1000;
-  int bx = aviOvX + 10, bw = aviOvW - 20;
-  display.fillRect(aviOvX + 2, aviOvY + 4, aviOvW - 4, 24, TFT_BLACK);
-  display.setTextColor(TFT_WHITE);
-  display.setTextSize(2);
-  display.setCursor(aviOvX + 10, aviOvY + 8);
-  if (tot > 0) display.printf("%02u:%02u/%02u:%02u", (unsigned)(sec / 60), (unsigned)(sec % 60), (unsigned)(tot / 60), (unsigned)(tot % 60));
-  else         display.printf("%02u:%02u", (unsigned)(sec / 60), (unsigned)(sec % 60));
+  char a[12], b[12];
+  aviFmtTime(a, sizeof(a), ms);
+  aviFmtTime(b, sizeof(b), dur);
+  display.fillRect(0, pnBy0 + 6, pnW, 36, TFT_BLACK);
   display.setTextSize(1);
-  int by = aviOvY + 42;
-  display.fillRect(bx, by - 4, bw, 16, TFT_BLACK);
-  display.fillRect(bx, by, bw, 8, 0x4208);
-  int fw = (dur > 0) ? (int)(((uint64_t)(ms > dur ? dur : ms) * bw) / dur) : 0;
-  if (fw > 0) display.fillRect(bx, by, fw, 8, TFT_WHITE);
-  display.fillCircle(bx + fw, by + 4, 5, TFT_WHITE);
+  display.setTextColor(TFT_WHITE);
+  display.setCursor(pnBarX, pnBy0 + 8);
+  display.print(a);
+  display.setTextColor(AVI_GRAY);
+  display.setCursor(pnBarX + pnBarW - display.textWidth(b), pnBy0 + 8);
+  display.print(b);
+  display.fillRoundRect(pnBarX, pnBarY, pnBarW, 6, 3, AVI_DARK);
+  int fw = dur ? (int)(((uint64_t)(ms > dur ? dur : ms) * (uint32_t)pnBarW) / dur) : 0;
+  if (fw > 0) display.fillRoundRect(pnBarX, pnBarY, fw, 6, 3, TFT_WHITE);
+  display.fillCircle(pnBarX + fw, pnBarY + 3, 7, TFT_WHITE);
 }
-static void aviDrawPauseOverlay(uint32_t ms) {
-  aviOvLayout();
-  display.fillRect(aviOvX, aviOvY, aviOvW, aviOvH, TFT_BLACK);
-  display.drawRect(aviOvX, aviOvY, aviOvW, aviOvH, TFT_WHITE);
-  aviDrawOvDynamic(ms);
-  display.setTextColor(TFT_WHITE);
+static void aviDrawPanel(uint32_t ms) {
+  int W = pnW;
+  // bar atas
+  display.fillRect(0, 0, W, 28, TFT_BLACK);
   display.setTextSize(1);
-  display.setCursor(aviOvX + 10, aviOvY + 66);
-  display.print("PAUSED - ketuk lanjut");
-  display.setCursor(aviOvX + 10, aviOvY + 78);
-  display.print(aviCkN > 0 ? "Geser bar / usap: loncat" : "(tanpa indeks: seek mati)");
+  display.setTextColor(TFT_WHITE);
+  char tt[40];
+  int maxc = (W - 84) / 6;
+  if (maxc > (int)sizeof(tt) - 1) maxc = sizeof(tt) - 1;
+  snprintf(tt, sizeof(tt), "%.*s", maxc, aviTitle);
+  display.setCursor(10, 10);
+  display.print(tt);
+  // Home
+  int hx = W - 72;
+  display.drawRoundRect(hx, 3, 30, 22, 6, AVI_DARK);
+  display.drawLine(hx + 15, 8, hx + 8, 14, TFT_WHITE);  display.drawLine(hx + 15, 8, hx + 22, 14, TFT_WHITE);
+  display.drawRect(hx + 10, 14, 10, 7, TFT_WHITE);
+  // Tutup (X)
+  int cx = W - 36;
+  display.drawRoundRect(cx, 3, 30, 22, 6, AVI_DARK);
+  display.drawLine(cx + 10, 9, cx + 20, 19, TFT_WHITE);  display.drawLine(cx + 20, 9, cx + 10, 19, TFT_WHITE);
+  // slider samping
+  aviDrawSlider(0, aviBriPct());
+  aviDrawSlider(1, aviVolPct());
+  // kartu bawah
+  display.fillRoundRect(0, pnBy0, W, 90, 14, TFT_BLACK);
+  display.drawFastHLine(20, pnBy0, W - 40, AVI_DARK);
+  aviDrawPanelBar(ms);
+  // tombol -10 / play / +10
+  display.setTextSize(1);
+  display.drawCircle(pnBackX, pnCy, 18, AVI_DARK);
+  display.setTextColor(aviCkN > 0 ? TFT_WHITE : AVI_DARK);
+  display.setCursor(pnBackX - display.textWidth("-10") / 2, pnCy - 3);
+  display.print("-10");
+  display.drawCircle(pnFwdX, pnCy, 18, AVI_DARK);
+  display.setCursor(pnFwdX - display.textWidth("+10") / 2, pnCy - 3);
+  display.print("+10");
+  display.fillCircle(pnPlayX, pnCy, 21, TFT_WHITE);
+  display.fillTriangle(pnPlayX - 6, pnCy - 10, pnPlayX - 6, pnCy + 10, pnPlayX + 10, pnCy, TFT_BLACK);
+}
+
+static void aviDoSeek(uint32_t ms, bool osd);
+static void aviResumeStore(uint32_t ms);
+
+// loncat saat panel terbuka: tetap PAUSE di frame tujuan
+static uint32_t aviPanelSeek(uint32_t ms, unsigned long* pauseStart) {
+  uint32_t dur = aviDurMs();
+  if (dur > 2000 && ms > dur - 2000) ms = dur - 2000;
+  aviDoSeek(ms, false);
+  if (aviVqCount >= 1) {
+    int sl = aviVqHead;
+    if (aviVqSize[sl] > 0) aviShowFrame(aviVq + (size_t)sl * aviSlotSize, aviVqSize[sl]);
+  }
+  if (aviAudioClk) musExtPause(true);
+  *pauseStart = millis();
+  return ms;
+}
+
+// sesi pause: kembali kalau lanjut main atau aviReqStop (Tutup / Home) diset
+static void aviRunPanel(uint32_t vt) {
+  unsigned long pauseStart = millis();
+  if (aviAudioClk) musExtPause(true);
+  aviReqStop = false; aviReqHome = false;
+  aviPanelLayout();
+  uint32_t shown = vt;
+  aviDrawPanel(shown);
+  aviResumeStore(vt);                              // simpan posisi saat pause
+
+  lgfx::touch_point_t tp;
+  while (getInputPoint(tp)) delay(10);             // tunggu jari ketukan pertama lepas
+  bool resume = false;
+  while (!resume && !aviReqStop) {
+    if (getInputPoint(tp)) {
+      int x = (int)tp.x, y = (int)tp.y;
+      if (y < 28 && x >= pnW - 36)       { aviReqStop = true; }
+      else if (y < 28 && x >= pnW - 72)  { aviReqStop = true; aviReqHome = true; }
+      else if (aviNear(x, y, pnPlayX, pnCy, 26)) { resume = true; }
+      else if (aviCkN > 0 && aviNear(x, y, pnBackX, pnCy, 24)) {
+        shown = aviPanelSeek(shown > AVI_SEEK_STEP_MS ? shown - AVI_SEEK_STEP_MS : 0, &pauseStart);
+        aviDrawPanel(shown);
+      }
+      else if (aviCkN > 0 && aviNear(x, y, pnFwdX, pnCy, 24)) {
+        shown = aviPanelSeek(shown + AVI_SEEK_STEP_MS, &pauseStart);
+        aviDrawPanel(shown);
+      }
+      else if (aviCkN > 0 && y >= pnBarY - 14 && y <= pnBarY + 18 && x >= pnBarX - 10 && x <= pnBarX + pnBarW + 10) {
+        // geser bar progres, lepas jari = loncat (tetap pause)
+        uint32_t dur = aviDurMs(), sel = shown;
+        int lastPx = -1;
+        while (getInputPoint(tp)) {
+          int px = (int)tp.x - pnBarX;
+          if (px < 0) px = 0;
+          if (px > pnBarW) px = pnBarW;
+          if (px != lastPx) {
+            lastPx = px;
+            sel = (uint32_t)(((uint64_t)dur * (uint32_t)px) / (uint32_t)pnBarW);
+            aviDrawPanelBar(sel);
+          }
+          delay(8);
+        }
+        shown = aviPanelSeek(sel, &pauseStart);
+        aviDrawPanel(shown);
+      }
+      else if (y >= pnSlY && y <= pnSlY + pnSlH && x >= pnSlBX - 4 && x <= pnSlBX + 34) {
+        while (getInputPoint(tp)) {                 // slider kecerahan
+          int p = aviSliderPct((int)tp.y);
+          aviSetBri(p * 255 / 100);
+          aviDrawSlider(0, aviBriPct());
+          delay(8);
+        }
+      }
+      else if (y >= pnSlY && y <= pnSlY + pnSlH && x >= pnSlVX - 4 && x <= pnSlVX + 34) {
+        while (getInputPoint(tp)) {                 // slider volume
+          int p = aviSliderPct((int)tp.y);
+          aviVolApply(p * 127 / 100, false);
+          aviDrawSlider(1, aviVolPct());
+          delay(8);
+        }
+        aviVolFlush();
+      }
+      else if (y < pnBy0 && y > 28) { resume = true; }           // ketuk area video = lanjut
+      else { while (getInputPoint(tp)) delay(10); }              // sentuh area kosong kartu bawah
+      if (!resume) while (getInputPoint(tp)) delay(10);
+    }
+    if (wifiConnected && webServerRunning) webServer.handleClient();
+    delay(5);
+  }
+  while (getInputPoint(tp)) delay(10);
+  if (!aviReqStop) {
+    if (aviAudioClk) musExtPause(false);
+    display.fillScreen(TFT_BLACK);
+    aviPausedAccum += millis() - pauseStart;
+  }
 }
 
 static void aviFreeAll() {
@@ -615,11 +896,11 @@ static const char* aviPrefillSync() {
 }
 
 // loncat ke 'ms' saat memutar: restart audio di CAM + isi ulang antrean
-static void aviDoSeek(uint32_t ms) {
+static void aviDoSeek(uint32_t ms, bool osd) {
   if (aviCkN <= 0) return;
   uint32_t dur = aviDurMs();
   if (dur > 2000 && ms > dur - 2000) ms = dur - 2000;
-  aviOsdSet("Cari", ms);
+  if (osd) aviOsdSet("Cari", ms);
 
   bool hadAudio = aviAudioOn;
   if (aviAudioOn) {
@@ -639,7 +920,7 @@ static void aviDoSeek(uint32_t ms) {
   aviT0 = millis() - aviWallOriginMs;
   aviPausedAccum = 0;
   aviCurMs = aviWallOriginMs;
-  aviOsdSet("Cari", ms);                      // perpanjang tampilnya OSD setelah selesai
+  if (osd) aviOsdSet("Cari", ms);            // perpanjang tampilnya OSD setelah selesai
   Serial.printf("[AVI] seek -> %lu ms (frame %lu)\n", (unsigned long)ms, (unsigned long)aviFrameNo);
 }
 
@@ -692,30 +973,25 @@ static void aviResumeStore(uint32_t ms) {
   p.end();
 }
 
-// layar tanya "Lanjutkan?" -> true = lanjut dari posisi tersimpan, false = dari awal
+// layar tanya "Lanjutkan menonton?" -> true = lanjut dari posisi tersimpan, false = dari awal
 static bool aviAskResume(uint32_t ms) {
   int W = display.width(), H = display.height();
-  uint32_t s = ms / 1000, tot = aviDurMs() / 1000;
+  uint32_t dur = aviDurMs();
+  char a[12], b[12], tt[28];
+  aviFmtTime(a, sizeof(a), ms);
+  aviFmtTime(b, sizeof(b), dur);
+  snprintf(tt, sizeof(tt), "%s / %s", a, b);
   display.fillScreen(TFT_BLACK);
-  display.setTextColor(TFT_WHITE);
-  display.setTextSize(1);
-  display.setCursor(10, H / 2 - 56);
-  display.print("Video ini pernah ditonton");
-  display.setTextSize(2);
-  display.setCursor(10, H / 2 - 38);
-  display.printf("%02u:%02u / %02u:%02u", (unsigned)(s / 60), (unsigned)(s % 60), (unsigned)(tot / 60), (unsigned)(tot % 60));
-  int bw = (W - 30) / 2, bh = 48, by = H / 2 + 4;
-  display.drawRect(10, by, bw, bh, TFT_WHITE);
-  display.fillRect(20 + bw, by, bw, bh, TFT_WHITE);
-  display.setTextSize(2);
-  display.setTextColor(TFT_WHITE);
-  display.setCursor(10 + (bw - display.textWidth("Awal")) / 2, by + 16);
-  display.print("Awal");
-  display.setTextColor(TFT_BLACK);
-  display.setCursor(20 + bw + (bw - display.textWidth("Lanjut")) / 2, by + 16);
-  display.print("Lanjut");
-  display.setTextColor(TFT_WHITE);
-  display.setTextSize(1);
+  aviTextC("Lanjutkan menonton?", W / 2, H / 2 - 70, 2, TFT_WHITE);
+  aviTextC(tt, W / 2, H / 2 - 44, 2, AVI_GRAY);
+  display.fillRoundRect(20, H / 2 - 18, W - 40, 5, 2, AVI_DARK);
+  int fw = dur ? (int)(((uint64_t)ms * (uint32_t)(W - 40)) / dur) : 0;
+  if (fw > 0) display.fillRoundRect(20, H / 2 - 18, fw, 5, 2, TFT_WHITE);
+  int bw = (W - 50) / 2, bh = 50, by = H / 2 + 6;
+  display.drawRoundRect(20, by, bw, bh, 12, TFT_WHITE);
+  display.fillRoundRect(30 + bw, by, bw, bh, 12, TFT_WHITE);
+  aviTextC("Dari awal", 20 + bw / 2, by + 18, 2, TFT_WHITE);
+  aviTextC("Lanjutkan", 30 + bw + bw / 2, by + 18, 2, TFT_BLACK);
 
   lgfx::touch_point_t tp;
   while (getInputPoint(tp)) delay(10);              // tunggu jari dari menu terangkat
@@ -723,7 +999,7 @@ static bool aviAskResume(uint32_t ms) {
     if (getInputPoint(tp)) {
       int x = (int)tp.x, y = (int)tp.y;
       if (y >= by - 8 && y <= by + bh + 8) {
-        bool lanjut = (x >= 15 + bw);
+        bool lanjut = (x >= 25 + bw);
         while (getInputPoint(tp)) delay(10);
         return lanjut;
       }
@@ -735,8 +1011,10 @@ static bool aviAskResume(uint32_t ms) {
 
 // =====================================================================
 //  PEMUTAR (blocking, pola sama dgn mjpegPlayFile)
-//  Ketuk = pause/lanjut | Tahan = berhenti | Usap tepi bawah ke atas = Home
-//  Usap kanan/kiri = +/-10 dtk | PAUSE + geser bar = loncat ke posisi
+//   Ketuk            = panel kontrol (pause, bar progres, -10/+10, cerah, volume)
+//   Usap kiri/kanan  = -/+10 dtk
+//   Usap atas/bawah  = cerah (separuh kiri) / volume (separuh kanan)
+//   Tahan            = berhenti | Usap tepi bawah ke atas = Home
 // =====================================================================
 void aviPlayFile(const String& filename) {
   if (!sdReady) { showToast("SD Card tdk siap"); return; }
@@ -758,6 +1036,17 @@ void aviPlayFile(const String& filename) {
   }
   aviKey = aviMakeKey(filename, aviFileSize);
 
+  // judul tampilan = nama file tanpa folder & ekstensi
+  {
+    String base = filename;
+    int sl = base.lastIndexOf('/');
+    if (sl >= 0) base = base.substring(sl + 1);
+    int dt = base.lastIndexOf('.');
+    if (dt > 0) base = base.substring(0, dt);
+    snprintf(aviTitle, sizeof(aviTitle), "%s", base.c_str());
+    if (strlen(aviTitle) > 30) { aviTitle[28] = '.'; aviTitle[29] = '.'; aviTitle[30] = 0; }
+  }
+
   // Rotasi mengikuti bentuk video (lebar>=tinggi -> landscape), dikembalikan setelah selesai.
   int prevRotation = display.getRotation();
   display.setRotation(aviW >= aviH ? 1 : 0);
@@ -765,14 +1054,11 @@ void aviPlayFile(const String& filename) {
   aviShown = aviDropped = aviBigSkipped = 0;
   aviFrameNo = 0; aviVqHead = 0; aviVqCount = 0;
   aviPausedAccum = 0;
-  aviOsdOn = false;
+  aviOsdOn = false; aviOsdBar = -1;
+  aviVolCur = musExtGetVol(); aviVolPend = -1; aviVolMs = 0;
 
   // ---- indeks seek + tanya resume ----
-  display.fillScreen(TFT_BLACK);
-  display.setTextColor(TFT_WHITE);
-  display.setTextSize(1);
-  display.setCursor(10, 10);
-  display.print("Membuka video...");
+  aviSplash("Membuka video...", false);
   aviBuildIndex();
 
   uint32_t startMs = 0;
@@ -784,18 +1070,7 @@ void aviPlayFile(const String& filename) {
     }
   }
   aviSetPos(startMs);
-
-  display.fillScreen(TFT_BLACK);
-  display.setTextColor(TFT_WHITE);
-  display.setTextSize(1);
-  display.setCursor(10, 10);
-  display.print("Memutar: "); display.println(filename);
-  display.setCursor(10, 26);
-  display.print("Ketuk: pause | Tahan: berhenti");
-  display.setCursor(10, 42);
-  display.print("Usap tepi bawah ke atas: Home");
-  display.setCursor(10, 52);
-  display.print("Usap kiri/kanan: -/+10 dtk");
+  aviSplash("Memuat...", true);
 
   // ---- audio -> TWS ----
   const char* audMsg = nullptr;
@@ -804,8 +1079,7 @@ void aviPlayFile(const String& filename) {
     if (aviAudFmt != 0x0055) {
       audMsg = "Audio bukan MP3: tanpa suara";
     } else {
-      display.setCursor(10, 72);
-      display.print("Menyambung audio ke TWS...");
+      aviSplashStatus("Menyambung audio ke TWS...");
       int rc = musExtBegin();
       if (rc == 0) aviAudioOn = true;
       else if (rc == 1) audMsg = "Bluetooth mati: tanpa suara";
@@ -814,7 +1088,7 @@ void aviPlayFile(const String& filename) {
       else              audMsg = "RAM audio kurang";
     }
   }
-  if (audMsg) { display.setCursor(10, 72); display.fillRect(10, 72, 220, 10, TFT_BLACK); display.print(audMsg); }
+  if (audMsg) aviSplashStatus(audMsg);
 
   // ---- isi antrean dulu, tunggu jam audio CAM hidup ----
   const char* syncMsg = aviPrefillSync();
@@ -826,11 +1100,17 @@ void aviPlayFile(const String& filename) {
   aviCurMs = aviWallOriginMs;
   if (startMs) aviOsdSet(">>", startMs);
 
+  const int W = display.width(), H = display.height();
   bool stopReq = false, goHome = false;
   aviFinSig = false;
   unsigned long lastTouchChk = 0;
   unsigned long lastSave = millis();
   unsigned long playT0 = millis();
+
+  // state sentuhan (non-blocking, supaya video tetap jalan saat usap cerah/volume)
+  // tsMode: 0 belum jelas | 1 usap horizontal (seek saat lepas) | 2 cerah | 3 volume | 4 Home | 5 tahan = stop
+  bool tsAct = false; int tsMode = 0, tsX0 = 0, tsY0 = 0, tsDx = 0, tsBase = 0;
+  unsigned long tsT0 = 0;
 
   while (!stopReq) {
     // 1. demux selama <=6 ms (sisa waktu buat decode)
@@ -868,72 +1148,60 @@ void aviPlayFile(const String& filename) {
     }
 
     // 4. sentuhan
-    if (millis() - lastTouchChk >= 70) {
+    if (tsAct || millis() - lastTouchChk >= 40) {
       lastTouchChk = millis();
       lgfx::touch_point_t tp;
       if (getInputPoint(tp)) {
-        int g = aviTouchGesture((int)tp.x, (int)tp.y);
-        if (g == 2)      { stopReq = true; goHome = true; }
-        else if (g == 1) { stopReq = true; }
-        else if (g == 3 || g == 4) {               // usap kanan/kiri -> loncat +/-10 dtk
+        if (!tsAct) {
+          tsAct = true; tsMode = 0; tsX0 = (int)tp.x; tsY0 = (int)tp.y; tsT0 = millis(); tsDx = 0;
+        } else {
+          int dx = (int)tp.x - tsX0, dy = (int)tp.y - tsY0;
+          int adx = dx < 0 ? -dx : dx, ady = dy < 0 ? -dy : dy;
+          tsDx = dx;
+          if (tsMode == 0) {
+            bool nearBottom = tsY0 > H - 40;
+            if (nearBottom && -dy > 28)               tsMode = 4;
+            else if (adx > 40 && adx > ady * 2)       tsMode = 1;
+            else if (ady > 16 && ady > adx * 2) {
+              tsMode = (tsX0 < W / 2) ? 2 : 3;
+              tsBase = (tsMode == 2) ? brightness : aviVolCur;
+              tsY0 = (int)tp.y;                       // titik awal geser = di sini (tdk loncat)
+            }
+            else if (adx < 12 && ady < 12 && millis() - tsT0 >= 600) tsMode = 5;
+          }
+          if (tsMode == 2 || tsMode == 3) {
+            int span = H * 55 / 100;
+            int dv = tsY0 - (int)tp.y;                // geser ke atas = naik
+            if (tsMode == 2) {
+              int nb = tsBase + dv * 245 / span;
+              aviSetBri(nb);
+              char b[20]; snprintf(b, sizeof(b), "Cerah %d%%", aviBriPct());
+              aviOsdSetTxt(b, aviBriPct());
+            } else {
+              int nv = tsBase + dv * 127 / span;
+              aviVolApply(nv, false);
+              char b[20]; snprintf(b, sizeof(b), "Vol %d%%", aviVolPct());
+              aviOsdSetTxt(b, aviVolPct());
+            }
+          }
+          if (tsMode == 4) { stopReq = true; goHome = true; }
+          if (tsMode == 5) { stopReq = true; }
+        }
+      } else if (tsAct) {                             // jari lepas
+        tsAct = false;
+        if (tsMode == 3) aviVolFlush();
+        if (tsMode == 0) {                            // ketuk -> panel kontrol
+          aviRunPanel(vt);
+          if (aviReqStop) { stopReq = true; goHome = aviReqHome; }
+          lastSave = millis();
+          lastTouchChk = millis();
+        } else if (tsMode == 1) {                     // usap kanan/kiri -> loncat +/-10 dtk
           if (aviCkN > 0) {
-            uint32_t to = (g == 3) ? vt + AVI_SEEK_STEP_MS : (vt > AVI_SEEK_STEP_MS ? vt - AVI_SEEK_STEP_MS : 0);
-            aviDoSeek(to);
+            uint32_t to = (tsDx > 0) ? vt + AVI_SEEK_STEP_MS : (vt > AVI_SEEK_STEP_MS ? vt - AVI_SEEK_STEP_MS : 0);
+            aviDoSeek(to, true);
             lastSave = millis();
           }
           lastTouchChk = millis();
-        }
-        else {                                     // ketuk -> PAUSE
-          unsigned long pauseStart = millis();
-          if (aviAudioClk) musExtPause(true);
-          aviDrawPauseOverlay(vt);
-          aviResumeStore(vt);                      // simpan posisi saat pause
-          bool resumed = false, seeked = false;
-          uint32_t seekTo = 0;
-          while (!resumed && !stopReq) {
-            lgfx::touch_point_t tp2;
-            if (getInputPoint(tp2)) {
-              if (aviCkN > 0 && aviInBar((int)tp2.x, (int)tp2.y)) {
-                // geser bar progres -> pilih posisi, lepas jari = loncat
-                uint32_t dur = aviDurMs();
-                int bw = aviOvW - 20;
-                int lastPx = -1;
-                uint32_t sel = vt;
-                while (getInputPoint(tp2)) {
-                  int px = (int)tp2.x - (aviOvX + 10);
-                  if (px < 0) px = 0;
-                  if (px > bw) px = bw;
-                  if (px != lastPx) {
-                    lastPx = px;
-                    sel = (uint32_t)(((uint64_t)dur * (uint32_t)px) / (uint32_t)bw);
-                    aviDrawOvDynamic(sel);
-                  }
-                  delay(10);
-                }
-                seeked = true; seekTo = sel; resumed = true;
-              } else {
-                int g2 = aviTouchGesture((int)tp2.x, (int)tp2.y);
-                if (g2 == 2)      { stopReq = true; goHome = true; }
-                else if (g2 == 1) { stopReq = true; }
-                else if (g2 == 3 && aviCkN > 0) { seeked = true; seekTo = vt + AVI_SEEK_STEP_MS; resumed = true; }
-                else if (g2 == 4 && aviCkN > 0) { seeked = true; seekTo = vt > AVI_SEEK_STEP_MS ? vt - AVI_SEEK_STEP_MS : 0; resumed = true; }
-                else              { resumed = true; }
-              }
-            }
-            if (wifiConnected && webServerRunning) webServer.handleClient();
-            delay(5);
-          }
-          if (aviAudioClk && !seeked) musExtPause(false);
-          if (!stopReq) {
-            display.fillScreen(TFT_BLACK);
-            if (seeked) {
-              aviDoSeek(seekTo);                   // jam & aviPausedAccum di-reset di dalam
-              lastSave = millis();
-            } else {
-              aviPausedAccum += millis() - pauseStart;
-            }
-            lastTouchChk = millis();
-          }
         }
       }
     }
@@ -946,6 +1214,13 @@ void aviPlayFile(const String& filename) {
 
     if (wifiConnected && webServerRunning) webServer.handleClient();
     yield();
+  }
+
+  aviVolFlush();
+  {                                                // jangan sampai sisa sentuhan 'bocor' ke layar berikutnya
+    lgfx::touch_point_t tp;
+    unsigned long tr = millis();
+    while (getInputPoint(tp) && millis() - tr < 1500) delay(10);
   }
 
   // ---- video habis: tunggu sisa audio yg masih tertahan di buffer CAM ----
