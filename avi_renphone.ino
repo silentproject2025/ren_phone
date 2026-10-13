@@ -424,7 +424,10 @@ static int aviZoomDraw(JPEGDRAW* d) {
     if (dy < 0 || dy >= (int)aviH) continue;
     for (int xx = 0; xx < d->iWidth; xx++) {
       int dx = d->x + xx;
-      if (dx >= 0 && dx < (int)aviW) aviZoomSrc[(size_t)dy * aviW + dx] = src[yy * d->iWidth + xx];
+      if (dx >= 0 && dx < (int)aviW) {
+        uint16_t pv = src[yy * d->iWidth + xx];                 // BIG_ENDIAN dari JPEGDEC
+        aviZoomSrc[(size_t)dy * aviW + dx] = (uint16_t)((pv >> 8) | (pv << 8));   // -> native utk blend
+      }
     }
   }
   return 1;
@@ -460,10 +463,11 @@ static bool aviZoomShow(const uint8_t* data, uint32_t size) {
       uint32_t wx = aviZoomWx[x];
       uint16_t t = aviBlend(r0[x0], r0[x1], wx);
       uint16_t b = aviBlend(r1[x0], r1[x1], wx);
-      o[x] = aviBlend(t, b, wy);
+      uint16_t px = aviBlend(t, b, wy);
+      o[x] = (uint16_t)((px >> 8) | (px << 8));                  // balik ke format swap565
     }
   }
-  display.pushImage(aviOffX, aviOffY, dw, dh, aviZoomOut);
+  display.pushImage(aviOffX, aviOffY, dw, dh, (lgfx::swap565_t*)aviZoomOut);
   return true;
 }
 
@@ -1287,7 +1291,7 @@ int aviThumbGet(const String& filename, uint32_t size, uint16_t* out, uint32_t* 
     File cf = SD_MMC.open(cp, FILE_READ);
     if (cf && !cf.isDirectory() && cf.size() == 12 + AVI_TH_BYTES) {
       uint8_t hd[12];
-      if (cf.read(hd, 12) == 12 && memcmp(hd, "NTH1", 4) == 0 &&
+      if (cf.read(hd, 12) == 12 && memcmp(hd, "NTH2", 4) == 0 &&
           cf.read((uint8_t*)out, AVI_TH_BYTES) == AVI_TH_BYTES) {
         if (durMs) *durMs = aviLE32(hd + 4);
         cf.close();
@@ -1335,6 +1339,7 @@ int aviThumbGet(const String& filename, uint32_t size, uint16_t* out, uint32_t* 
   JPEGDEC* jd = new (jm) JPEGDEC();
   int ok = 0;
   if (jd->openRAM(jbuf, (int)jlen, aviThDraw)) {
+    jd->setPixelType(RGB565_BIG_ENDIAN);                 // format swap565, sama spt bagian lain
     int iw = jd->getWidth(), ih = jd->getHeight();
     int opt = 0, sh = 0;
     if (iw > 80 || ih > 60) {
@@ -1378,7 +1383,7 @@ int aviThumbGet(const String& filename, uint32_t size, uint16_t* out, uint32_t* 
   SD_MMC.mkdir("/.thumbs");
   File wf = SD_MMC.open(cp, FILE_WRITE);
   if (wf) {
-    uint8_t hd[12] = { 'N', 'T', 'H', '1', (uint8_t)dur, (uint8_t)(dur >> 8), (uint8_t)(dur >> 16), (uint8_t)(dur >> 24),
+    uint8_t hd[12] = { 'N', 'T', 'H', '2', (uint8_t)dur, (uint8_t)(dur >> 8), (uint8_t)(dur >> 16), (uint8_t)(dur >> 24),
                        AVI_TH_W, 0, AVI_TH_H, 0 };
     wf.write(hd, 12);
     wf.write((const uint8_t*)out, AVI_TH_BYTES);

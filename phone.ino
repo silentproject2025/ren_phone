@@ -9164,7 +9164,7 @@ void drawMjpegPlayer(LGFX_Sprite& s){
       // thumbnail 64x48 (placeholder gelap sambil menunggu dibuat)
       int tx = 7, ty = itemY + 1;
       if(mjpegThumbBuf && mjpegThumbSt[idx] == 1){
-        s.pushImage(tx, ty, MJ_TH_W, MJ_TH_H, mjpegThumbBuf + (size_t)idx * (MJ_TH_W*MJ_TH_H));
+        s.pushImage(tx, ty, MJ_TH_W, MJ_TH_H, (lgfx::swap565_t*)(mjpegThumbBuf + (size_t)idx * (MJ_TH_W*MJ_TH_H)));
       } else {
         s.fillRect(tx, ty, MJ_TH_W, MJ_TH_H, 0x2104);
         s.setTextColor(T().subtext); s.setTextSize(1);
