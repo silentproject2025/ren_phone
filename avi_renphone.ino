@@ -527,7 +527,16 @@ static void aviSplash(const char* status, bool hints) {
   display.drawCircle(cx, cy, 27, TFT_WHITE);
   display.fillTriangle(cx - 8, cy - 13, cx - 8, cy + 13, cx + 15, cy, TFT_WHITE);
   aviTextC(aviTitle, cx, cy + 42, 2, TFT_WHITE);
-  aviSplashY = cy + 68;
+  {
+    char inf[48], dt[12];
+    uint32_t dms = (uint32_t)(((uint64_t)aviTotalFrames * aviUsPerFrame) / 1000ULL);
+    aviFmtTime(dt, sizeof(dt), dms);
+    uint32_t fps10 = aviUsPerFrame ? (uint32_t)(10000000ULL / aviUsPerFrame) : 0;
+    snprintf(inf, sizeof(inf), "%ux%u | %u.%u fps | %s", (unsigned)aviW, (unsigned)aviH,
+             (unsigned)(fps10 / 10), (unsigned)(fps10 % 10), dt);
+    aviTextC(inf, cx, cy + 62, 1, AVI_GRAY);
+  }
+  aviSplashY = cy + 78;
   aviSplashStatus(status);
   if (hints) {
     aviTextC("Ketuk: kontrol | Tahan: stop", cx, H - 44, 1, AVI_DARK);
@@ -1272,6 +1281,9 @@ void aviPlayFile(const String& filename) {
     return;
   }
   aviKey = aviMakeKey(filename, aviFileSize);
+  Serial.printf("[AVI] '%s' video %lux%lu | %lu us/frame | %lu frame | audio fmt 0x%04X %luHz | rotasi %d\n",
+                filename.c_str(), (unsigned long)aviW, (unsigned long)aviH, (unsigned long)aviUsPerFrame,
+                (unsigned long)aviTotalFrames, (unsigned)aviAudFmt, (unsigned long)aviAudRate, aviW >= aviH ? 1 : 0);
 
   // judul tampilan = nama file tanpa folder & ekstensi
   {
