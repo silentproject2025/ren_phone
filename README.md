@@ -154,6 +154,8 @@ Control Center berisi tombol bulat (WiFi, Airplane, DND, Tema, Orientasi, Shake,
   ```
   Audio **wajib MP3 44,1 kHz** (sampling lain bikin nada bergeser). Video portrait (mis. `scale=240:320`) diputar portrait, landscape diputar landscape.
 
+  **Daftar video.** App MJPEG menampilkan tiap file sebagai kartu: thumbnail 64×48 (frame di ±10% video, atau frame pertama untuk `.mjpeg`), durasi di pojok thumbnail, ukuran file, dan status **Lanjut mm:ss** beserta garis progres ditonton di dasar thumbnail. Ketuk di mana saja pada kartu untuk memutar. Thumbnail dibuat satu per satu di latar saat daftar dibuka lalu di-cache di SD (`/.thumbs/<hash>.th`, ±6 KB per video), jadi pembukaan berikutnya langsung muncul, juga setelah reboot. Ketuk **Scan** untuk memuat ulang daftar; hapus folder `.thumbs` bila ingin membuat ulang semua thumbnail.
+
   **Kontrol**
 
   | Gestur | Fungsi |
