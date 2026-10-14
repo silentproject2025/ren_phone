@@ -4731,6 +4731,7 @@ void drawUpdate(LGFX_Sprite&); void updTouch(int,int,bool,bool);
 // ---- BATERAI: forward declarations (BARU di v8) ----
 void battEnter(); void battExit();
 void drawBatteryApp(LGFX_Sprite&); void battTouch(int,int,bool,bool);
+void battUpdate(); void inaBegin(); void inaPoll(); bool inaWantRedraw(); void inaSaveCounters(bool);
 // ---- GAME: forward declarations ----
 void snakeEnter(); void snakeExit();
 void drawSnake(LGFX_Sprite&); void snakeTouch(int,int,bool,bool);
@@ -10422,146 +10423,15 @@ void mpuUpdate(){
 }
 
 // =================================================================
-// BATERAI: voltage divider 10k+10k (rasio 1:2), Li-ion 1 sel 3.0V-4.2V
-// Kapasitas baterai yang dipakai: 2300 mAh
-//
-// PENTING - PERBAIKAN PIN (root cause bug "lock screen gak bisa diswipe"):
-// GPIO4 TIDAK DIPAKAI LAGI di sini karena BENTROK dengan pin MISO chip
-// touch XPT2046 (cfg.pin_miso=4 di konfigurasi LGFX touch). analogRead()
-// tiap 5 detik ke GPIO4 mengubah mode pin itu dari SPI jadi ADC, merusak
-// pembacaan sentuh XPT2046 -- inilah kenapa swipe lock screen jadi gagal
-// setelah fitur baterai ditambahkan.
-// Sekarang dipindah ke GPIO8 (ADC1_CH7 di ESP32-S3), pin yang benar2
-// kosong / tidak dipakai fungsi lain di board ini, dan tetap di ADC1
-// (bukan ADC2) supaya aman dipakai bareng WiFi.
-// ==> WIRING: pindahkan kabel output voltage divider dari GPIO4 ke GPIO8.
+// BATERAI: sekarang dibaca dari sensor INA219 (lihat ina219_renphone.ino).
+// Di sini hanya variabel global yang dipakai seluruh UI. battUpdate(),
+// battEnter/battExit, drawBatteryApp dan battTouch dipindah ke ina219_renphone.ino.
+// ADC voltage divider (GPIO8) tidak dipakai lagi.
 // =================================================================
-#define BATT_ADC_PIN 8
-#define BATT_DIVIDER_RATIO 2.0f   // 10k+10k sama besar -> Vbat = Vadc * 2
-#define BATTERY_CAPACITY_MAH 2300 // kapasitas baterai yang dipakai user
 float battVoltage = 3.7f;
 int   battPercent = 100;
-bool  battCharging = false; // v109: belum ada sensor arus -> selalu false sampai INA219 dipasang
+bool  battCharging = false; // diisi dari arus INA219 (negatif = mengisi)
 bool  battWarnedLow = false, battWarnedCritical = false;
-
-void battUpdate(){
-  int raw = analogRead(BATT_ADC_PIN);
-  float vAdc = (raw/4095.0f) * 3.3f;
-  float vBat = vAdc * BATT_DIVIDER_RATIO;
-  battVoltage = battVoltage*0.7f + vBat*0.3f; // smoothing biar angkanya gak lompat-lompat
-  int pct = (int)((battVoltage - 3.0f) / (4.2f - 3.0f) * 100.0f);
-  battPercent = constrain(pct, 0, 100);
-
-  if(battPercent <= 5 && !battWarnedCritical){
-    battWarnedCritical = true;
-    showToast("Baterai kritis! Segera cas.");
-    diNotify('B', "Baterai kritis!", T().danger, 2200, false, "", SCR_BATTERY, true); // v95: event DI baru, bisa diketuk -> app Baterai
-    if(curScreen()!=SCR_BATTERY) notifAdd(SCR_BATTERY); // v-baru: badge di ikon Home spy keliatan walau toast udah lewat
-  } else if(battPercent <= 15 && !battWarnedLow){
-    battWarnedLow = true;
-    showToast("Baterai lemah, segera cas.");
-    diNotify('B', "Baterai lemah", T().accent, 1900, false, "", SCR_BATTERY, true); // v95: event DI baru (dipakai warna sama kayak battColor 15-35% di app Baterai)
-    if(curScreen()!=SCR_BATTERY) notifAdd(SCR_BATTERY);
-  } else if(battPercent > 25){
-    battWarnedLow = false; battWarnedCritical = false; // reset biar bisa warning lagi kalau turun lagi
-  }
-}
-
-// =============================================
-// APP: BATERAI
-// =============================================
-void battEnter(){ battUpdate(); }
-void battExit(){}
-
-void drawBatteryApp(LGFX_Sprite& s){
-  s.fillSprite(T().bg);
-  drawStatusBar(s);
-  s.setTextColor(0x07E0);s.setTextSize(1);s.setCursor(8,26);s.print("Baterai");
-
-  iosRR(s,SCR_W-70,24,64,18,4,T().surface2);
-  s.setTextColor(T().accent);s.setCursor(SCR_W-62,29);s.print("Refresh");
-
-  // --- Ikon baterai besar, terisi sesuai persen ---
-  int iconW = 90, iconH = 44;
-  int iconX = SCR_W/2 - iconW/2;
-  int iconY = STATUS_H + 20;
-  uint16_t battColor = (battPercent<=15)?T().danger:(battPercent<=35)?T().accent:T().good;
-
-  s.drawRoundRect(iconX,iconY,iconW,iconH,6,T().text);
-  s.drawRoundRect(iconX+1,iconY+1,iconW-2,iconH-2,5,T().text);
-  s.fillRoundRect(iconX+iconW,iconY+iconH/2-7,7,14,3,T().text); // kutub positif baterai
-
-  int innerPad=5;
-  int innerW = iconW - innerPad*2;
-  int innerH = iconH - innerPad*2;
-  int fillW = constrain((innerW*battPercent)/100,0,innerW);
-  if(fillW>0) s.fillRoundRect(iconX+innerPad,iconY+innerPad,fillW,innerH,3,battColor);
-
-  // --- Persen besar ---
-  char pctBuf[8]; sprintf(pctBuf,"%d%%",battPercent);
-  s.setTextColor(battColor); s.setTextSize(3);
-  int pw = strlen(pctBuf)*18;
-  s.setCursor(SCR_W/2-pw/2, iconY+iconH+14);
-  s.print(pctBuf);
-
-  // --- Detail teknis ---
-  int ty = iconY+iconH+52;
-  int lh = 14;
-  char buf[64];
-  s.setTextSize(1);
-
-  s.setTextColor(T().subtext); s.setCursor(14,ty); s.print("Tegangan saat ini:");
-  s.setTextColor(T().text);
-  sprintf(buf,"%.2f V", battVoltage);
-  s.setCursor(SCR_W-14-(int)s.textWidth(buf), ty); s.print(buf);
-  ty += lh;
-
-  s.setTextColor(T().subtext); s.setCursor(14,ty); s.print("Rentang tegangan:");
-  s.setTextColor(T().text); s.setCursor(SCR_W-14-11*6, ty); s.print("3.0 - 4.2 V");
-  ty += lh;
-
-  s.setTextColor(T().subtext); s.setCursor(14,ty); s.print("Kapasitas baterai:");
-  s.setTextColor(T().text);
-  sprintf(buf,"%d mAh", BATTERY_CAPACITY_MAH);
-  s.setCursor(SCR_W-14-(int)s.textWidth(buf), ty); s.print(buf);
-  ty += lh;
-
-  s.setTextColor(T().subtext); s.setCursor(14,ty); s.print("Estimasi sisa daya:");
-  s.setTextColor(T().text);
-  int remainMah = (int)(BATTERY_CAPACITY_MAH * battPercent / 100.0f);
-  sprintf(buf,"~%d mAh", remainMah);
-  s.setCursor(SCR_W-14-(int)s.textWidth(buf), ty); s.print(buf);
-  ty += lh;
-
-  s.setTextColor(T().subtext); s.setCursor(14,ty); s.print("Status:");
-  s.setTextColor(battColor);
-  const char* statusTxt = (battPercent<=5)?"Kritis, segera cas!" :
-                           (battPercent<=15)?"Lemah, segera cas" :
-                           (battPercent<=35)?"Cukup" : "Baik";
-  s.setCursor(14+7*6, ty); s.print(statusTxt);
-  ty += lh+4;
-
-  s.drawFastHLine(10,ty,SCR_W-20,T().divider);
-  ty += 8;
-  s.setTextColor(T().subtext); s.setTextWrap(true);
-  s.setCursor(10,ty);
-  s.print("Catatan: estimasi dihitung dari pembacaan tegangan (voltage divider), bukan fuel-gauge IC, jadi persen & sisa mAh di atas perkiraan kasar, bukan angka presisi.");
-  s.setTextWrap(false);
-
-  drawBack(s);
-  drawToast(s);
-}
-
-void battTouch(int x,int y,bool held,bool isNew){
-  if(!isNew) return;
-  if(isBack(x,y)){ navBack(); return; }
-  if(x>=SCR_W-70 && x<=SCR_W-6 && y>=24 && y<=42){
-    battUpdate();
-    showToast("Data baterai diperbarui");
-    needRedraw=true;
-    return;
-  }
-}
 
 // =============================================
 // APP: TRIVIA QUIZ (BARU v14)
@@ -17503,8 +17373,7 @@ void setup(){
   shakeEnabled = loadShakePref();
   vibEnabled = loadVibPref(); // v94: mode senyap sekarang persisten dr NVS
   loadNpxPref(); // v24: LED Neopixel -- pulihkan status on/off, mode, & warna terakhir
-  analogReadResolution(12);
-  analogSetAttenuation(ADC_11db);           // biar analogRead mentok di ~3.3V
+  inaBegin();                               // INA219 (I2C bareng MPU6050, SDA=15 SCL=7)
   battUpdate();
 
   if(sdReady && !SD_MMC.exists(MJPEG_FOLDER)){
@@ -17583,7 +17452,7 @@ void loop(){
   wifiConnectStep(); // v48: majuin konek WiFi & sync NTP dikit2 tanpa nge-block (lihat komentar di definisinya)
   if(!gameModeActive){
     if(millis()-lastMpu>50){ lastMpu=millis(); mpuUpdate(); }
-    if(millis()-lastBatt>5000){ lastBatt=millis(); battUpdate(); needRedraw=true; }
+    if(millis()-lastBatt>250){ lastBatt=millis(); battUpdate(); if(inaWantRedraw()) needRedraw=true; }
   }
 
   if(wifiConnected && webServerRunning){
