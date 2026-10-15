@@ -135,7 +135,7 @@ static void rcSaveCfg() {
   p.putUChar("q", rcCfg.quality);
   p.putUChar("ch", rcCfg.channel);
   p.putString("ssid", rcCfg.ssid);
-  p.putString("pass2", rcCfg.pass);
+  p.putString("pass3", rcCfg.pass);
   p.end();
 }
 
@@ -143,7 +143,7 @@ static void rcLoadCfg() {
   if (rcCfgLoaded) return;
   rcCfgLoaded = true;
   Preferences p; p.begin("rcfg", true);
-  bool had = p.isKey("pass2");
+  bool had = p.isKey("pass3");
   rcCfg.autoStart = p.getBool("as2", true);
   rcCfg.inputOn   = p.getBool("in", true);
   rcCfg.keepAwake = p.getBool("ka", true);
@@ -153,7 +153,7 @@ static void rcLoadCfg() {
   rcCfg.quality   = p.getUChar("q", 0);
   rcCfg.channel   = p.getUChar("ch", 6);
   String s = p.getString("ssid", "Accretion-Phone");
-  String w = p.getString("pass2", "");
+  String w = p.getString("pass3", "");
   p.end();
   s.toCharArray(rcCfg.ssid, sizeof(rcCfg.ssid));
   w.toCharArray(rcCfg.pass, sizeof(rcCfg.pass));
