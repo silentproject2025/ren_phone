@@ -17222,8 +17222,14 @@ void hwmonTouch(int x,int y,bool held,bool isNew){
 // disederhanakan balik jadi cuma pass-through ke touchscreen fisik.
 // =============================================
 
+// ---- zona mati sentuh (apply_touch_deadzone.py): sementara, kaca retak di pojok kiri-bawah ----
+#define TOUCH_DEAD_W 40   // lebar zona mati (px), 0 = nonaktif
+#define TOUCH_DEAD_H 40   // tinggi zona mati (px)
+
 bool getInputPoint(lgfx::touch_point_t &tp){
-  return display.getTouch(&tp);
+  if(!display.getTouch(&tp)) return false;
+  if(tp.x < TOUCH_DEAD_W && tp.y >= SCR_H - TOUCH_DEAD_H) return false;
+  return true;
 }
 
 void setup(){
