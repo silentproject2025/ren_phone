@@ -1595,6 +1595,7 @@ void saveCanvas(){
 // WEB SERVER (FILE MANAGER & INLINE TEXT EDITOR)
 // =============================================
 WebServer webServer(80);
+void rcLoopPoll(); void rcRegisterRoutes(); bool rcApIsUp(); bool rcInputPoll(int*,int*); void rcFrameMark();
 bool webServerRunning = false;
 File uploadFile;
 
