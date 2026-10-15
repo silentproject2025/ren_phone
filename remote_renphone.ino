@@ -56,6 +56,7 @@
 // =====================================================================
 
 #define RC_VERSION     "v1"
+#define RC_DEFAULT_PASS "accretion"
 #define RC_TILE        16
 #define RC_EV_MAX      64
 #define RC_VIEW_TTL_MS 4000UL     // dianggap "ada penonton" kalau poll terakhir < ini
@@ -161,7 +162,7 @@ static void rcLoadCfg() {
   if (rcCfg.channel < 1 || rcCfg.channel > 11) rcCfg.channel = 6;
   if (strlen(rcCfg.ssid) < 1) strcpy(rcCfg.ssid, "Accretion-Phone");
   if (!had || strlen(rcCfg.pass) < 8) {       // pertama kali: sandi acak 8 karakter
-    rcGenPass(rcCfg.pass, 8);
+    strcpy(rcCfg.pass, RC_DEFAULT_PASS);
     rcSaveCfg();
   }
 }
