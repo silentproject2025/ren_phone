@@ -2624,6 +2624,15 @@ void checkAiWatchdog() {
 // "'brightness' was not declared in this scope") krn di C++ variabel
 // harus sudah dikenal SEBELUM dipakai, walau baru didefinisikan
 // belakangan di file yg sama.
+// apply_touch_ghostcal.py: deteksi ghost touch saat boot
+static bool touchGhostAtBoot(){
+  delay(200);
+  int hit = 0;
+  lgfx::touch_point_t tp;
+  for(int i=0;i<10;i++){ if(display.getTouch(&tp)) hit++; delay(30); }
+  return hit >= 7;
+}
+
 extern int brightness;
 void loadOrRunCalibration(){
   Preferences p; p.begin("touch_cal",false);
@@ -2631,6 +2640,12 @@ void loadOrRunCalibration(){
   if(done){
     uint16_t d[8]; p.getBytes("data",d,sizeof(d));
     display.setTouchCalibrate(d);
+  } else if(touchGhostAtBoot()){
+    // ghost touch: lewati kalibrasi, pakai default (tidak disimpan ke NVS)
+    static const uint16_t defCal[8] = { 239, 3926, 233, 265, 3856, 3897, 3714, 308 };
+    uint16_t d[8]; memcpy(d, defCal, sizeof(d));
+    display.setTouchCalibrate(d);
+    Serial.println("[touch] ghost terdeteksi saat boot -> kalibrasi default");
   } else {
     // v45: kalibrasi pertama kali gambar LANGSUNG ke display (bukan lewat
     // canvas+push spt layar lain), jadi backlight-nya harus dinyalain
