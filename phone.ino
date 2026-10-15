@@ -17300,10 +17300,23 @@ static void touchLog(const char* tag, const lgfx::touch_point_t &t){
 #endif
 }
 
+// TOUCH_LATCH_V5 (apply_touch_deadzone_v5.py)
+#define TOUCH_LATCH_MS 150   // layar harus sepi sekian ms (sejak sentuhan terakhir) sebelum sentuhan diterima lagi setelah ghost
+
 bool getInputPoint(lgfx::touch_point_t &tp){
   static bool prevDown=false;
+  static bool latched=false;       // ghost baru saja kena blok -> tolak semua sentuhan
+  static uint32_t lastTouchMs=0;   // waktu sampel sentuhan terakhir (apa pun)
+  uint32_t now=millis();
+
+  if(latched && now-lastTouchMs>=TOUCH_LATCH_MS) latched=false;   // sudah cukup sepi
+
   if(!display.getTouch(&tp)){ prevDown=false; return false; }
-  if(touchBlocked(tp)){ touchLog("BLOKIR", tp); prevDown=false; return false; }
+  lastTouchMs=now;
+
+  if(touchBlocked(tp)){ touchLog("BLOKIR", tp); latched=true; prevDown=false; return false; }
+  if(latched){ touchLog("TAHAN", tp); prevDown=false; return false; }
+
   if(!prevDown) touchLog("SENTUH", tp);   // cuma pas sentuhan baru mulai
   prevDown=true;
   return true;
