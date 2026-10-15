@@ -56,6 +56,7 @@
 // =====================================================================
 
 #define RC_VERSION     "v1"
+#define RC_DEFAULT_PASS "accretion"   // sandi AP default (8-32 karakter), ganti sesuka lo
 #define RC_TILE        16
 #define RC_EV_MAX      64
 #define RC_VIEW_TTL_MS 4000UL     // dianggap "ada penonton" kalau poll terakhir < ini
@@ -83,7 +84,8 @@ static char          rcClientId[16] = "";
 static bool          rcWasViewing = false;
 static unsigned long rcApRestartAt = 0;
 static unsigned long rcKeepMs = 0, rcFreeCheckMs = 0, rcUiRefreshMs = 0, rcFpsMs = 0;
-static bool          rcAutoTried = false;
+static uint8_t       rcAutoTries = 0;
+static unsigned long rcAutoNextMs = 8000UL;
 static uint16_t      rcFramesThisSec = 0;
 static uint8_t       rcFpsNow = 0;
 
@@ -125,7 +127,7 @@ static void rcGenPass(char* out, int n) {
 
 static void rcSaveCfg() {
   Preferences p; p.begin("rcfg", false);
-  p.putBool("as", rcCfg.autoStart);
+  p.putBool("as2", rcCfg.autoStart);
   p.putBool("in", rcCfg.inputOn);
   p.putBool("ka", rcCfg.keepAwake);
   p.putBool("lan", rcCfg.allowLan);
@@ -134,7 +136,7 @@ static void rcSaveCfg() {
   p.putUChar("q", rcCfg.quality);
   p.putUChar("ch", rcCfg.channel);
   p.putString("ssid", rcCfg.ssid);
-  p.putString("pass", rcCfg.pass);
+  p.putString("pass3", rcCfg.pass);
   p.end();
 }
 
@@ -142,8 +144,8 @@ static void rcLoadCfg() {
   if (rcCfgLoaded) return;
   rcCfgLoaded = true;
   Preferences p; p.begin("rcfg", true);
-  bool had = p.isKey("pass");
-  rcCfg.autoStart = p.getBool("as", false);
+  bool had = p.isKey("pass3");
+  rcCfg.autoStart = p.getBool("as2", true);
   rcCfg.inputOn   = p.getBool("in", true);
   rcCfg.keepAwake = p.getBool("ka", true);
   rcCfg.allowLan  = p.getBool("lan", false);
@@ -152,7 +154,7 @@ static void rcLoadCfg() {
   rcCfg.quality   = p.getUChar("q", 0);
   rcCfg.channel   = p.getUChar("ch", 6);
   String s = p.getString("ssid", "Accretion-Phone");
-  String w = p.getString("pass", "");
+  String w = p.getString("pass3", "");
   p.end();
   s.toCharArray(rcCfg.ssid, sizeof(rcCfg.ssid));
   w.toCharArray(rcCfg.pass, sizeof(rcCfg.pass));
@@ -161,7 +163,7 @@ static void rcLoadCfg() {
   if (rcCfg.channel < 1 || rcCfg.channel > 11) rcCfg.channel = 6;
   if (strlen(rcCfg.ssid) < 1) strcpy(rcCfg.ssid, "Accretion-Phone");
   if (!had || strlen(rcCfg.pass) < 8) {       // pertama kali: sandi acak 8 karakter
-    rcGenPass(rcCfg.pass, 8);
+    strcpy(rcCfg.pass, RC_DEFAULT_PASS);
     rcSaveCfg();
   }
 }
@@ -648,6 +650,9 @@ static void rcHandleStatus() {
   j += ",\"b\":"; j += brightness;
   j += ",\"lk\":"; j += locked ? 1 : 0;
   j += ",\"kb\":"; j += (kbVisible && kbTarget) ? 1 : 0;
+  j += ",\"sip\":\"";
+  if (wifiConnected) { IPAddress si = WiFi.localIP(); char ib[20]; snprintf(ib, sizeof(ib), "%u.%u.%u.%u", si[0], si[1], si[2], si[3]); j += ib; }
+  j += "\"";
   j += ",\"v\":\"" RC_VERSION "\"}";
   webServer.sendHeader("Cache-Control", "no-store");
   webServer.send(200, "application/json", j);
@@ -761,6 +766,7 @@ input[type=range]{width:100%}
 <label class="sw">Mulai otomatis saat HP boot<input type="checkbox" id="s_as"></label>
 <label class="sw">Izinkan lewat WiFi rumah<input type="checkbox" id="s_lan"></label>
 <label class="sw">Titik sentuh (di layar web ini)<input type="checkbox" id="s_cu" checked></label>
+<div class="sm" id="lanip" style="padding:8px 0"></div>
 <div class="two"><div><div class="sm">Kualitas gambar</div><select id="s_q"><option value="0">Penuh (RGB565)</option><option value="1">Hemat (RGB332)</option></select></div>
 <div><div class="sm">Batas FPS</div><select id="s_fps"><option>6</option><option>8</option><option>12</option><option>20</option><option>30</option></select></div></div></div>
 <div class="card"><h3>WiFi remote (AP)</h3>
@@ -850,7 +856,7 @@ $('#sap').onclick=async()=>{const o={ssid:$('#s_ssid').value};const pw=$('#s_pas
 async function init(){
   try{ST=await (await fetch('/rc/st')).json();
     $('#s_in').checked=!!ST.in;$('#s_ka').checked=!!ST.ka;$('#s_as').checked=!!ST.as;$('#s_lan').checked=!!ST.lan;
-    $('#s_q').value=ST.q;$('#s_fps').value=ST.fps;$('#s_ssid').value=ST.ssid;$('#br').value=ST.b;$('#ver').textContent='NyxOS Remote '+ST.v;
+    $('#s_q').value=ST.q;$('#s_fps').value=ST.fps;$('#s_ssid').value=ST.ssid;$('#br').value=ST.b;$('#ver').textContent='NyxOS Remote '+ST.v;$('#lanip').textContent=ST.sip?('Alamat via WiFi rumah: http://'+ST.sip+'/remote'):'WiFi rumah: belum tersambung';
     const a=await (await fetch('/rc/apps')).json(),g=$('#apps');
     a.forEach(([i,n])=>{const b=document.createElement('button');b.textContent=n;b.onclick=()=>act('app',i);g.appendChild(b)})}catch(e){setTimeout(init,1500)}}
 init();loop();
@@ -880,10 +886,17 @@ void rcLoopPoll() {
   unsigned long now = millis();
 
   // mulai otomatis
-  if (!rcAutoTried && now > 8000UL) {
-    rcAutoTried = true;
+  // Percobaan ulang tiap 10 dtk (maks 6x) + getar sebagai umpan balik tanpa layar:
+  //   getar 2x pendek = AP berhasil nyala, getar 1x panjang = gagal nyala (akan dicoba lagi)
+  if (!rcApUp && rcAutoTries < 6 && now >= rcAutoNextMs) {
     rcLoadCfg();
-    if (rcCfg.autoStart && !airplaneMode) rcApStart();
+    if (rcCfg.autoStart && !airplaneMode) {
+      rcAutoTries++;
+      rcAutoNextMs = now + 10000UL;
+      if (rcApStart()) vibSuccess(); else vibError();
+    } else {
+      rcAutoTries = 6;
+    }
   }
   // Remote aktif kalau AP hidup, ATAU (opsional) lewat WiFi rumah yang diizinkan.
   bool lanOk = rcCfg.allowLan && wifiConnected;
@@ -934,7 +947,7 @@ void rcLoopPoll() {
 // APP "REMOTE" DI LAYAR HP (SCR_REMOTE)
 // =====================================================================
 #define RCU_ROW_H 26
-#define RCU_N     12
+#define RCU_N     13
 
 static float rcuScroll = 0;
 static bool  rcuReveal = false;
@@ -959,7 +972,7 @@ void remoteExit()  { rcuDown = false; rcuReveal = false; }
 static const char* const RCU_LBL[RCU_N] = {
   "Status", "Access Point", "Nama WiFi", "Sandi", "Alamat", "Buat sandi baru",
   "Mulai otomatis", "Izinkan sentuh dari web", "Layar tetap nyala", "Izinkan via WiFi rumah",
-  "Kualitas gambar", "Batas FPS"
+  "Kualitas gambar", "Batas FPS", "IP WiFi rumah"
 };
 
 void drawRemote(LGFX_Sprite& s) {
@@ -1026,6 +1039,15 @@ void drawRemote(LGFX_Sprite& s) {
       case 11: {
         s.setTextColor(T().accent);
         snprintf(buf, sizeof(buf), "%u fps", (unsigned)rcCfg.fpsCap);
+        s.setCursor(valX, ty); s.print(buf);
+        break;
+      }
+      case 12: {
+        s.setTextColor(T().subtext);
+        if (wifiConnected) {
+          IPAddress si = WiFi.localIP();
+          snprintf(buf, sizeof(buf), "%u.%u.%u.%u", si[0], si[1], si[2], si[3]);
+        } else snprintf(buf, sizeof(buf), "belum tersambung");
         s.setCursor(valX, ty); s.print(buf);
         break;
       }
