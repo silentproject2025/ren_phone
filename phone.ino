@@ -17249,6 +17249,12 @@ void hwmonTouch(int x,int y,bool held,bool isNew){
 #define TOUCH_MIN_Z    0    // tekanan minimum (tp.size), 0 = nonaktif -- isi setelah lihat log
 #define TOUCH_OOR_PX   10   // titik di luar layar lebih dari ini dianggap ghost
 #define TOUCH_DEBUG    1    // 1 = cetak log [touch] ke Serial Monitor, 0 = diam
+// TOUCH_GHOST_RECT (apply_touch_deadzone_v3.py): kotak mati di lokasi ghost terukur,
+// koordinat LANDSCAPE (320x240), tepi kanan-tengah. Aktif cuma saat landscape.
+#define TOUCH_GHOST_X0 285
+#define TOUCH_GHOST_X1 340
+#define TOUCH_GHOST_Y0 95
+#define TOUCH_GHOST_Y1 140
 
 static bool touchBlocked(const lgfx::touch_point_t &t){
   int x=(int)t.x, y=(int)t.y;
@@ -17258,6 +17264,7 @@ static bool touchBlocked(const lgfx::touch_point_t &t){
   if(TOUCH_EDGE_R>0 && x>=SCR_W-TOUCH_EDGE_R) return true;
   if(TOUCH_EDGE_T>0 && y<TOUCH_EDGE_T) return true;
   if(TOUCH_EDGE_B>0 && y>=SCR_H-TOUCH_EDGE_B) return true;
+  if(SCR_W>SCR_H && x>=TOUCH_GHOST_X0 && x<=TOUCH_GHOST_X1 && y>=TOUCH_GHOST_Y0 && y<=TOUCH_GHOST_Y1) return true;
   if(TOUCH_MIN_Z>0 && (int)t.size<TOUCH_MIN_Z) return true;
   return false;
 }
