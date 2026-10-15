@@ -56,7 +56,6 @@
 // =====================================================================
 
 #define RC_VERSION     "v1"
-#define RC_DEFAULT_PASS "accretion"
 #define RC_TILE        16
 #define RC_EV_MAX      64
 #define RC_VIEW_TTL_MS 4000UL     // dianggap "ada penonton" kalau poll terakhir < ini
@@ -126,7 +125,7 @@ static void rcGenPass(char* out, int n) {
 
 static void rcSaveCfg() {
   Preferences p; p.begin("rcfg", false);
-  p.putBool("as2", rcCfg.autoStart);
+  p.putBool("as", rcCfg.autoStart);
   p.putBool("in", rcCfg.inputOn);
   p.putBool("ka", rcCfg.keepAwake);
   p.putBool("lan", rcCfg.allowLan);
@@ -135,7 +134,7 @@ static void rcSaveCfg() {
   p.putUChar("q", rcCfg.quality);
   p.putUChar("ch", rcCfg.channel);
   p.putString("ssid", rcCfg.ssid);
-  p.putString("pass3", rcCfg.pass);
+  p.putString("pass", rcCfg.pass);
   p.end();
 }
 
@@ -143,8 +142,8 @@ static void rcLoadCfg() {
   if (rcCfgLoaded) return;
   rcCfgLoaded = true;
   Preferences p; p.begin("rcfg", true);
-  bool had = p.isKey("pass3");
-  rcCfg.autoStart = p.getBool("as2", true);
+  bool had = p.isKey("pass");
+  rcCfg.autoStart = p.getBool("as", false);
   rcCfg.inputOn   = p.getBool("in", true);
   rcCfg.keepAwake = p.getBool("ka", true);
   rcCfg.allowLan  = p.getBool("lan", false);
@@ -153,7 +152,7 @@ static void rcLoadCfg() {
   rcCfg.quality   = p.getUChar("q", 0);
   rcCfg.channel   = p.getUChar("ch", 6);
   String s = p.getString("ssid", "Accretion-Phone");
-  String w = p.getString("pass3", "");
+  String w = p.getString("pass", "");
   p.end();
   s.toCharArray(rcCfg.ssid, sizeof(rcCfg.ssid));
   w.toCharArray(rcCfg.pass, sizeof(rcCfg.pass));
@@ -162,7 +161,7 @@ static void rcLoadCfg() {
   if (rcCfg.channel < 1 || rcCfg.channel > 11) rcCfg.channel = 6;
   if (strlen(rcCfg.ssid) < 1) strcpy(rcCfg.ssid, "Accretion-Phone");
   if (!had || strlen(rcCfg.pass) < 8) {       // pertama kali: sandi acak 8 karakter
-    strcpy(rcCfg.pass, RC_DEFAULT_PASS);
+    rcGenPass(rcCfg.pass, 8);
     rcSaveCfg();
   }
 }
