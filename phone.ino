@@ -17237,13 +17237,49 @@ void hwmonTouch(int x,int y,bool held,bool isNew){
 // disederhanakan balik jadi cuma pass-through ke touchscreen fisik.
 // =============================================
 
-// ---- zona mati sentuh (apply_touch_deadzone.py): sementara, kaca retak di pojok kiri-bawah ----
-#define TOUCH_DEAD_W 40   // lebar zona mati (px), 0 = nonaktif
-#define TOUCH_DEAD_H 40   // tinggi zona mati (px)
+// ---- filter sentuhan v2 (apply_touch_deadzone_v2.py): sementara, kaca retak -> ghost touch ----
+// TOUCH_FILTER_V2
+// Semua nilai px dihitung di koordinat layar SAAT INI (ikut portrait/landscape).
+#define TOUCH_DEAD_W   40   // kotak mati pojok kiri-bawah: lebar (px), 0 = nonaktif
+#define TOUCH_DEAD_H   40   // kotak mati pojok kiri-bawah: tinggi (px)
+#define TOUCH_EDGE_L   0    // strip mati tepi KIRI  (px), 0 = nonaktif
+#define TOUCH_EDGE_R   0    // strip mati tepi KANAN (px), 0 = nonaktif
+#define TOUCH_EDGE_T   0    // strip mati tepi ATAS  (px), 0 = nonaktif
+#define TOUCH_EDGE_B   0    // strip mati tepi BAWAH (px), 0 = nonaktif
+#define TOUCH_MIN_Z    0    // tekanan minimum (tp.size), 0 = nonaktif -- isi setelah lihat log
+#define TOUCH_OOR_PX   10   // titik di luar layar lebih dari ini dianggap ghost
+#define TOUCH_DEBUG    1    // 1 = cetak log [touch] ke Serial Monitor, 0 = diam
+
+static bool touchBlocked(const lgfx::touch_point_t &t){
+  int x=(int)t.x, y=(int)t.y;
+  if(x < -TOUCH_OOR_PX || y < -TOUCH_OOR_PX || x >= SCR_W+TOUCH_OOR_PX || y >= SCR_H+TOUCH_OOR_PX) return true;
+  if(TOUCH_DEAD_W>0 && x<TOUCH_DEAD_W && y>=SCR_H-TOUCH_DEAD_H) return true;
+  if(TOUCH_EDGE_L>0 && x<TOUCH_EDGE_L) return true;
+  if(TOUCH_EDGE_R>0 && x>=SCR_W-TOUCH_EDGE_R) return true;
+  if(TOUCH_EDGE_T>0 && y<TOUCH_EDGE_T) return true;
+  if(TOUCH_EDGE_B>0 && y>=SCR_H-TOUCH_EDGE_B) return true;
+  if(TOUCH_MIN_Z>0 && (int)t.size<TOUCH_MIN_Z) return true;
+  return false;
+}
+
+static void touchLog(const char* tag, const lgfx::touch_point_t &t){
+#if TOUCH_DEBUG
+  static uint32_t lastMs=0;
+  uint32_t now=millis();
+  if(now-lastMs<150) return;   // jangan banjiri Serial kalau ghost nempel terus
+  lastMs=now;
+  Serial.printf("[touch] %s x=%d y=%d z=%d (layar %dx%d)\n", tag, (int)t.x, (int)t.y, (int)t.size, SCR_W, SCR_H);
+#else
+  (void)tag; (void)t;
+#endif
+}
 
 bool getInputPoint(lgfx::touch_point_t &tp){
-  if(!display.getTouch(&tp)) return false;
-  if(tp.x < TOUCH_DEAD_W && tp.y >= SCR_H - TOUCH_DEAD_H) return false;
+  static bool prevDown=false;
+  if(!display.getTouch(&tp)){ prevDown=false; return false; }
+  if(touchBlocked(tp)){ touchLog("BLOKIR", tp); prevDown=false; return false; }
+  if(!prevDown) touchLog("SENTUH", tp);   // cuma pas sentuhan baru mulai
+  prevDown=true;
   return true;
 }
 
