@@ -13,7 +13,7 @@
 # ACCRETION PHONE
 ### NyxOS — sistem operasi ponsel yang ditulis dari nol untuk ESP32-S3
 
-`C++ / Arduino-ESP32 3.x` · `ESP32-S3 + PSRAM OPI` · `ILI9341 320×240` · `±28.500 baris firmware` · `AGPL-3.0`
+`C++ / Arduino-ESP32 3.x` · `ESP32-S3 + PSRAM OPI` · `ILI9341 320×240` · `±30.000 baris firmware` · `AGPL-3.0`
 
 </div>
 
@@ -39,10 +39,10 @@ Nama diambil dari fisika lubang hitam: *accretion* adalah piringan materi yang b
 | Layar | ILI9341 320×240, SPI2, portrait & landscape |
 | Sentuh | XPT2046 pada bus SPI3 terpisah |
 | Penyimpanan | MicroSD via SDIO 1-bit, plus FFat internal sebagai cadangan |
-| Sensor | MPU6050 (tilt, shake, auto-rotate) |
+| Sensor | MPU6050 (tilt, shake, auto-rotate) · INA219 (tegangan, arus, daya baterai) |
 | Audio masuk | Mikrofon INMP441 (I2S) |
 | Audio keluar | Bluetooth A2DP lewat **ko-prosesor ESP32-CAM** |
-| Lain-lain | Motor getar, LED Neopixel, ADC baterai (voltage divider) |
+| Lain-lain | Motor getar, LED Neopixel |
 | Partisi | `app3M_fat9M_16MB` |
 | Jumlah aplikasi | 38 |
 | Tema | 7 (Aurora, Dark, AMOLED, Light, Pastel, iOS, Full Dark) |
@@ -145,6 +145,7 @@ Control Center berisi tombol bulat (WiFi, Airplane, DND, Tema, Orientasi, Shake,
 
 ### Yang layak dijelaskan lebih dalam
 
+- **Baterai (INA219)** — daya baterai dibaca dari sensor INA219 lewat I2C (`ina219_renphone.ino`, driver langsung via `Wire`, tanpa library tambahan). Wiring: VCC 3,3 V, GND, SDA 15, SCL 7 (satu bus dengan MPU6050); resistor shunt seri di kabel (+) baterai (baterai → VIN+, beban/charger → VIN−). Konvensi arus: positif = dipakai, negatif = diisi (bisa dibalik di pengaturan). Semua fitur chip dipakai: bus voltage, shunt voltage, current, power, register kalibrasi (dihitung otomatis dari R shunt + gain), PGA /1 /2 /4 /8, rentang bus 16/32 V, ADC bus & shunt terpisah (9–12 bit, averaging 2–128), 8 mode operasi, flag CNVR/OVF, software reset, dan auto-scan alamat 0x40–0x4F. Turunan: persen baterai (kurva OCV + R dalam + coulomb counting), deteksi charging, mAh/mWh keluar-masuk (sesi dan total di NVS), puncak/min, estimasi sisa waktu atau waktu penuh, siklus, dan grafik 10 menit. App Baterai punya 4 tab: Ringkas, Grafik, Sensor, Baterai; semua pengaturan tersimpan di NVS namespace `ina`. Default: shunt 100 mΩ, gain /8 (±320 mV), 16 V, ADC 16 sampel, kapasitas 2300 mAh, R dalam 150 mΩ.
 - **Galeri** — album = folder di SD (kedalaman maksimal 2). Thumbnail 72×72 dibuat sekali, disimpan sebagai `/.thumbs/<xx>/<hash>.th` (RGB565, ±10 KB), dan berikutnya cukup dibaca tanpa decode. Nama cache adalah hash dari path + ukuran + waktu ubah, jadi gambar yang diganti otomatis dibuat ulang. Pembuatan thumbnail dibatasi satu gambar per putaran loop dan hanya saat jari tidak menyentuh layar. **Format gambar: JPG dan PNG.** PNG di-decode dengan decoder bawaan LovyanGFX (helper `rpPng*` di `phone.ino`), dengan batas 4 MB per file dan 8 juta piksel; PNG di atas 2 MB tetap bisa dibuka tetapi tanpa thumbnail. Astronomi (APOD) memakai helper PNG yang sama.
 - **Pemutar AVI** (`avi_renphone.ino`) — video MJPEG + audio MP3 dalam satu file `.avi`, suaranya keluar lewat TWS. Video di-decode JPEGDEC ke layar; byte MP3 hasil demux masuk ring PSRAM lalu dikirim `musTask` ke ESP32-CAM lewat jalur RPLink yang sama dengan app Musik. **Jam utama = posisi putar audio di CAM** (dikurangi `AVI_BT_LATENCY_MS`), jadi frame yang telat dilewati dan suara tidak pernah tertinggal. Antrean frame di PSRAM menjaga audio tetap punya cadangan saat decode sesekali melambat. TWS belum tersambung / audio bukan MP3 → video tetap main tanpa suara. Taruh `.avi` di root SD (muncul di app MJPEG atau Files). Cara bikin file:
 
@@ -201,8 +202,8 @@ Control Center berisi tombol bulat (WiFi, Airplane, DND, Tema, Orientasi, Shake,
 | SD (SDIO 1-bit) | CLK 39 · CMD 38 · D0 40 |
 | Mikrofon (I2S) | SCK 47 · WS 46 · SD 45 |
 | Link CAM (UART) | S3 TX 41 → CAM RX 13 · S3 RX 42 ← CAM TX 14 · GND bersama |
-| MPU6050 (I2C 0x68) | SDA 15 · SCL 7 |
-| Lainnya | Motor getar 18 · Neopixel 48 · ADC baterai 8 |
+| MPU6050 (I2C 0x68) + INA219 (I2C 0x40–0x4F) | SDA 15 · SCL 7 (satu bus) |
+| Lainnya | Motor getar 18 · Neopixel 48 |
 
 Untuk ESP32-CAM: beri daya ke pin **5V**, dan **cabut kartu SD dari slotnya** karena GPIO13/14 dipakai bersama slot tersebut.
 
@@ -225,7 +226,7 @@ CI memakai `arduino-cli` dengan `esp32:esp32:esp32s3`, `FlashSize=16M`, `PSRAM=o
 
 Folder `cam_bt_coprocessor/`, board *AI Thinker ESP32-CAM*, partisi *Huge APP*, PSRAM aktif. Library: `audio-tools`, `arduino-libhelix`, `ESP32-A2DP`. Pastikan `rplink.h` identik dengan versi di root.
 
-**Catatan penamaan file**: `phone_notif_center.ino` sengaja dinamai demikian agar urutan alfabetis Arduino memasukkannya setelah `phone.ino`, sehingga definisi global `phone.ino` terlihat tanpa `extern`. Selain itu, fungsi yang menerima struct custom berisiko memicu bug prototype otomatis `arduino-cli`; beberapa struct di kode sengaja diletakkan paling atas file karena alasan ini.
+**Catatan penamaan file**: `phone_notif_center.ino` sengaja dinamai demikian agar urutan alfabetis Arduino memasukkannya setelah `phone.ino`, sehingga definisi global `phone.ino` terlihat tanpa `extern`. Selain itu, fungsi yang menerima struct custom berisiko memicu bug prototype otomatis `arduino-cli`; beberapa struct di kode sengaja diletakkan paling atas file karena alasan ini. Workflow CI menyalin tiap file `.ino` secara eksplisit ke `build_sketch/`, jadi file `.ino` baru (misalnya `ina219_renphone.ino`) harus ditambahkan juga ke langkah `cp` di `build-firmware.yml`.
 
 **Langkah CI tambahan**: `ci_hoist_types.py` memindahkan blok `#include`, struct, dan enum di bagian atas `phone.ino` (±baris 459–716) ke header `rp_types.h` yang di-`#include` di baris pertama. Ini hanya terjadi pada salinan di `build_sketch/` saat CI; `phone.ino` di repo tidak diubah. Tujuannya supaya prototipe otomatis `arduino-cli` selalu disisipkan setelah semua tipe dikenal. Jika compile gagal, workflow meng-upload artifact `diagnostik-prototipe` (hasil preprocess dan versi tool) untuk membantu melacak penyebabnya. Versi `arduino-cli`, core ESP32, dan library di CI belum dikunci, jadi update dari upstream bisa memengaruhi build.
 
@@ -272,7 +273,7 @@ ffmpeg -i input.mp4 -vf "fps=15,scale=240:320" output.mjpeg
 - RAM internal sempit. `HTTP -1` bisa berarti fragmentasi, bukan masalah jaringan; sudah ada mekanisme tunggu dan coba-ulang, tetapi belum bisa dihilangkan sepenuhnya dari level sketch.
 - Audio hanya lewat Bluetooth. Tanpa ESP32-CAM dan TWS, app Musik tidak menghasilkan suara.
 - File MP3 dengan bitrate tinggi (contoh 192 kbps) pernah memicu restart CAM; file bitrate rendah stabil. Masih dalam pengerjaan.
-- Estimasi baterai berasal dari tegangan ADC, bukan fuel-gauge, jadi hanya perkiraan kasar.
+- Persen baterai adalah estimasi fuel-gauge sederhana (kurva tegangan Li-ion + kompensasi R dalam + coulomb counting dari INA219), bukan chip fuel-gauge khusus. Akurasinya bergantung pada nilai Kapasitas dan R dalam di tab Baterai. Kalau INA219 tidak terdeteksi, persen dan tegangan berhenti diperbarui (tidak ada fallback ADC).
 - NyxPPU belum terpasang di Inferno maupun Home/Lock Screen.
 - Seek/resume AVI butuh `idx1` dan hanya mencakup bagian pertama file (AVI OpenDML > 1 GB tidak didukung). Audio dihitung dari bitrate header, jadi MP3 VBR bisa bergeser sedikit setelah lompat jauh; pakai CBR (`-b:a 128k`) seperti di atas.
 - PNG dibatasi 4 MB per file dan 8 juta piksel; decode memakai buffer penuh di PSRAM, jadi PNG di atas 2 MB tidak punya thumbnail di Galeri.
@@ -295,6 +296,7 @@ phone_notif_center.ino       notifikasi / Dynamic Island
 features_renphone.ino        screenshot, stopwatch, voice memo, widget cuaca
 gallery_renphone.ino         Galeri + thumbnail cache (JPG/PNG)
 avi_renphone.ino             pemutar AVI (MJPEG + MP3)
+ina219_renphone.ino          sensor daya INA219 + app Baterai
 about_renphone.ino  owner_renphone.ino  homeedit_renphone.ino   About Phone, Profil, Atur Home
 musicbt_renphone.ino         Musik, UART RPLink, AVRCP
 wakeword_renphone.ino        Wake Word (MFCC + DTW)
@@ -312,7 +314,9 @@ ci_hoist_types.py            langkah CI: pindahkan tipe ke rp_types.h (dijalanka
 
 Riwayat perubahan (v7 hingga v119+) ditulis sebagai komentar langsung di kode: gejala, akar masalah, dan alasan perbaikannya. Untuk memahami kenapa sebuah bagian ditulis seperti itu, mulai dari komentar di atasnya.
 
-Perbaikan terbaru: warna video. `apply_video_color_fix.py` membetulkan thumbnail daftar video dan sebagian jalur zoom; `apply_zoom_color_fix2.py` menutup sisa bug zoom (decode masih `LITTLE_ENDIAN` sehingga warna acak saat zoom aktif). Keduanya idempotent, jalankan dari root repo.
+Perubahan daya: pembacaan baterai pindah dari ADC voltage divider ke INA219 lewat `apply_ina219_patch.py` (ADC GPIO 8 tidak dipakai lagi).
+
+Perbaikan warna video. `apply_video_color_fix.py` membetulkan thumbnail daftar video dan sebagian jalur zoom; `apply_zoom_color_fix2.py` menutup sisa bug zoom (decode masih `LITTLE_ENDIAN` sehingga warna acak saat zoom aktif). Keduanya idempotent, jalankan dari root repo.
 
 ---
 
