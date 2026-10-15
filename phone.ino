@@ -628,7 +628,9 @@ enum Screen { SCR_HOME, SCR_CLOCK, SCR_CALC, SCR_SENSOR,
               SCR_OWNER,
               SCR_ABOUT,
               // Atur Home -- lihat homeedit_renphone.ino
-              SCR_HOMEEDIT };
+              SCR_HOMEEDIT,
+              // Remote Control (AP + web) -- lihat remote_renphone.ino
+              SCR_REMOTE };
 enum Orientation { ORIENT_LANDSCAPE = 0, ORIENT_PORTRAIT = 1 };
 
 // Dipindah ke atas — alasan sama dengan AiLine & Vec3f: arduino-cli men-generate
@@ -1934,6 +1936,7 @@ void startWebServer(){
   webServer.on("/download", HTTP_GET, handleWebDownload);
   webServer.on("/apikey", HTTP_GET, handleApiKeyGet);
   webServer.on("/apikey_save", HTTP_POST, handleApiKeySavePost);
+  rcRegisterRoutes(); // Remote Control: /remote, /rc/*
   webServer.begin();
   webServerRunning = true;
 }
@@ -4682,6 +4685,13 @@ void drawAppIcon(LGFX_Sprite& s, char sym, int cx, int cy, int r, uint16_t bgCir
       s.fillTriangle(cx-2,cy+w-5,cx+w/3+1,cy+1,cx+w-2,cy+w-5,ic);
       break;
     }
+    case 'r': { // Remote: monitor + kursor
+      int mw=max(14,r*3/2), mh=max(10,r), mx=cx-mw/2, my=cy-mh/2-2;
+      s.drawRoundRect(mx,my,mw,mh,2,ic); s.drawRoundRect(mx+1,my+1,mw-2,mh-2,2,ic);
+      s.fillRect(cx-1,my+mh,3,3,ic); s.fillRect(cx-mw/4,my+mh+3,max(4,mw/2),2,ic);
+      s.fillTriangle(cx-mw/6,cy-mh/3,cx+mw/6,cy+1,cx-mw/16,cy+mh/5,ic);
+      break;
+    }
     case 'i': { // About Phone
       int rr=max(8,r-6);
       s.drawCircle(cx,cy,rr,ic); s.drawCircle(cx,cy,rr-1,ic);
@@ -4860,7 +4870,12 @@ void aboutLoopPoll();
 void homeEditEnter(); void homeEditExit(); void drawHomeEdit(LGFX_Sprite&); void homeEditTouch(int,int,bool,bool);
 void homeEditPointerTick(bool,bool,int,int);
 
-AppDef apps[38] = {
+// ---- remote_renphone.ino: Remote Control (AP + web server) ----
+void remoteEnter(); void remoteExit(); void drawRemote(LGFX_Sprite&); void remoteTouch(int,int,bool,bool);
+void remotePointerTick(bool,bool,int,int);
+void rcLoopPoll(); void rcRegisterRoutes(); bool rcApIsUp(); bool rcInputPoll(int*,int*); void rcFrameMark();
+
+AppDef apps[39] = {
   { "Jam",        'J', 0, clockEnter,    clockExit,    drawClock,        clockTouch,    SCR_CLOCK },
   { "Kalkulator", '+', 0, calcEnter,     calcExit,     drawCalc,         calcTouch,     SCR_CALC },
   { "Orientasi3D", '3', 0, sensorEnter,   sensorExit,   drawSensor,       sensorTouch,   SCR_SENSOR },
@@ -4917,8 +4932,10 @@ AppDef apps[38] = {
   { "About Phone", 'i', 0, aboutEnter,   aboutExit,    drawAbout,        aboutTouch,    SCR_ABOUT },
   // ---- Atur Home: urutan & sembunyikan ikon (disembunyikan dari grid secara default; ada di Pengaturan) ----
   { "Atur Home", '#', 0xFBE0, homeEditEnter, homeEditExit, drawHomeEdit, homeEditTouch, SCR_HOMEEDIT },
+  // ---- Remote Control: kontrol penuh dari HP/laptop lewat WiFi AP sendiri ----
+  { "Remote", 'r', 0, remoteEnter, remoteExit, drawRemote, remoteTouch, SCR_REMOTE },
 };
-#define APP_COUNT 38
+#define APP_COUNT 39
 
 // =============================================
 // NOTIFIKASI BADGE (BARU) -- angka kecil merah di pojok ikon app, mirip
@@ -5028,6 +5045,7 @@ void initAppColors(){
   apps[34].color=0x565F; // Galeri - biru langit
   apps[35].color=0x5EBF; // Profil - biru muda
   apps[36].color=0x8C71; // About Phone
+  apps[38].color=0x2DFA; // Remote - cyan
 }
 
 int appIndexForScreen(Screen s){
@@ -9741,7 +9759,7 @@ unsigned long getPushLastUs(){ return nyxPushLastUs; }
 // justru karena push() lama synchronous 100% (jaminan "bus pasti idle
 // begitu push() selesai"). Versi async ngerusak jaminan itu -> dua
 // transfer numpuk di kabel yg sama. Balik ke synchronous biasa.
-void push(){ unsigned long t0=micros(); canvas.pushSprite(0,0); nyxPushLastUs=micros()-t0; }
+void push(){ unsigned long t0=micros(); canvas.pushSprite(0,0); nyxPushLastUs=micros()-t0; rcFrameMark(); }
 void renderCurrentFrame(){
   // v68 FIX: font custom (Mono/Sans/Tebal/Serif) ternyata KETINGGIAN buat
   // kotak2 UI yg didesain pas-pasan buat teks 8px (tombol, status bar, grid
@@ -9797,6 +9815,7 @@ void renderHomeBandFrame(){
   display.setClipRect(0,bt,SCR_W,bh);
   canvas.pushSprite(0,0);
   display.clearClipRect();
+  rcFrameMark();
 }
 bool toastVisibleNow(){ return toastMsg.length() && millis()<=toastUntil; }
 
@@ -17309,6 +17328,9 @@ bool getInputPoint(lgfx::touch_point_t &tp){
   static uint32_t lastTouchMs=0;   // waktu sampel sentuhan terakhir (apa pun)
   uint32_t now=millis();
 
+  { int rx=0,ry=0; // Remote Control: sentuhan dari web menang atas touchscreen fisik
+    if(rcInputPoll(&rx,&ry)){ tp.x=rx; tp.y=ry; tp.size=64; return true; } }
+
   if(latched && now-lastTouchMs>=TOUCH_LATCH_MS) latched=false;   // sudah cukup sepi
 
   if(!display.getTouch(&tp)){ prevDown=false; return false; }
@@ -17551,9 +17573,10 @@ void loop(){
     if(millis()-lastBatt>250){ lastBatt=millis(); battUpdate(); if(inaWantRedraw()) needRedraw=true; }
   }
 
-  if(wifiConnected && webServerRunning){
+  if((wifiConnected || rcApIsUp()) && webServerRunning){
     webServer.handleClient();
   }
+  rcLoopPoll(); // Remote Control: aksi tombol, status penonton, keep-awake
 
   checkAiWatchdog();
   wakeLoopPoll(); // v115: urus hasil task wake word (simpan template, aksi pas terdeteksi) -- murah kalau gak ada kerjaan
@@ -17997,6 +18020,7 @@ void loop(){
     if(curScreen()==SCR_SETTINGS && !kbVisible) settingsPointerTick(touched,wasTouched,tx,ty); // Pengaturan ala iOS: scroll + tap-saat-lepas
     if(curScreen()==SCR_FILEEXPLORER) fileExpPointerTick(touched,wasTouched,tx,ty); // File Explorer: drag-scroll + ketuk saat lepas
     if(curScreen()==SCR_GALLERY) galPointerTick(touched,wasTouched,tx,ty);          // Galeri: scroll/ketuk + pemuat thumbnail
+    if(curScreen()==SCR_REMOTE) remotePointerTick(touched,wasTouched,tx,ty);        // Remote: geser daftar + ketuk saat lepas
     if(curScreen()==SCR_HOMEEDIT) homeEditPointerTick(touched,wasTouched,tx,ty);    // Atur Home: geser daftar + ketuk saat lepas
     int idx=appIndexForScreen(curScreen());
     if(idx>=0){
