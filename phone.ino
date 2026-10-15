@@ -2633,10 +2633,29 @@ static bool touchGhostAtBoot(){
   return hit >= 7;
 }
 
+// TOUCH_CAL_V4 (apply_touch_deadzone_v4.py)
+#define TOUCH_FORCE_DEFAULT_CAL 0   // 1 = selalu pakai TOUCH_CAL_VALUES, lewati wizard & data NVS
+#define TOUCH_CAL_VALUES { 239, 3926, 233, 265, 3856, 3897, 3714, 308 }
 extern int brightness;
 void loadOrRunCalibration(){
   Preferences p; p.begin("touch_cal",false);
   bool done=p.getBool("done",false);
+  if(done){
+    uint16_t dn[8]; p.getBytes("data",dn,sizeof(dn));
+    Serial.printf("[touch] kalibrasi NVS: %u,%u,%u,%u,%u,%u,%u,%u\n",
+                  dn[0],dn[1],dn[2],dn[3],dn[4],dn[5],dn[6],dn[7]);
+  } else {
+    Serial.println("[touch] belum ada kalibrasi tersimpan di NVS");
+  }
+#if TOUCH_FORCE_DEFAULT_CAL
+  {
+    uint16_t dd[8] = TOUCH_CAL_VALUES;
+    display.setTouchCalibrate(dd);
+    Serial.println("[touch] TOUCH_FORCE_DEFAULT_CAL=1 -> kalibrasi default dipakai, wizard dilewati");
+    p.end();
+    return;
+  }
+#endif
   if(done){
     uint16_t d[8]; p.getBytes("data",d,sizeof(d));
     display.setTouchCalibrate(d);
