@@ -46,7 +46,10 @@
 #define INA_CHG_EFF       0.98f    // efisiensi coulomb saat charge
 #define INA_HIST_N        120      // titik grafik
 #define INA_HIST_MS       5000UL   // 1 titik / 5 dtk -> jendela 10 menit
-#define INA_SAVE_MS       600000UL // simpan counter total ke NVS tiap 10 menit
+#define INA_SAVE_MS       120000UL // jeda maks simpan counter ke NVS (kalau ada perubahan): 2 menit
+#define INA_SAVE_MAH      25.0f    // ...atau tiap 25 mAh perubahan (mana duluan)
+#define INA_LRN_MAX_START 55.0f    // ukur kapasitas hanya kalau charge dimulai dari <= 55%
+#define INA_LRN_MIN_SPAN  40.0f    // dan rentang pengisian minimal 40 poin persen
 #define INA_TAB_Y         40
 #define INA_TAB_H         18
 #define INA_TOP           62
@@ -100,12 +103,18 @@ bool  inaSocInit = false;
 // counter
 float inaMahOut = 0, inaMahIn = 0, inaMwhOut = 0, inaMwhIn = 0;        // sesi (sejak boot)
 float inaMahOutTot = 0, inaMahInTot = 0;                               // total (NVS)
+float inaCycles = 0;                                                    // siklus ekuivalen penuh (NVS)
+uint32_t inaBootCount = 0;                                             // boot ke-berapa (NVS)
+float inaCapLearn = 0;                                                 // kapasitas terukur mAh, 0 = belum (NVS)
+bool  inaLrnActive = false; float inaLrnSoc0 = 0, inaLrnMah = 0;       // sesi ukur kapasitas (RAM)
 float inaPeakDis = 0, inaPeakChg = 0, inaPeakP = 0, inaMinV = 9.9f, inaMaxV = 0;
 uint32_t inaSessionStart = 0;
 
 static uint8_t  inaFail = 0;
 static uint32_t inaLastPoll = 0, inaLastInt = 0, inaLastRetry = 0, inaLastSave = 0;
 static bool     inaCountersDirty = false;
+static float    inaUnsavedMah = 0;
+static bool     inaPrevCharging = false;
 
 // riwayat grafik
 static int16_t  inaHistI[INA_HIST_N];
@@ -211,6 +220,10 @@ static void inaLoadSettings() {
   inaVside     = p.getUChar("vside", 0);
   inaMahOutTot = p.getFloat("mOutT", 0);
   inaMahInTot  = p.getFloat("mInT", 0);
+  bool hasCyc  = p.isKey("cyc");
+  float cycRaw = p.getFloat("cyc", 0);
+  inaBootCount = p.getULong("boots", 0);
+  inaCapLearn  = p.getFloat("capL", 0);
   p.end();
   if (inaCfgAddr > 16) inaCfgAddr = 0;
   if (inaPga > 3) inaPga = 3;
@@ -224,6 +237,10 @@ static void inaLoadSettings() {
   if (inaVside > 1) inaVside = 0;
   if (!(inaMahOutTot >= 0)) inaMahOutTot = 0;
   if (!(inaMahInTot >= 0)) inaMahInTot = 0;
+  // siklus: kalau belum pernah disimpan (firmware lama), turunkan dari total mAh keluar
+  inaCycles = hasCyc ? cycRaw : (inaMahOutTot / (float)inaCapMah);
+  if (!(inaCycles >= 0)) inaCycles = 0;
+  if (!(inaCapLearn >= 100.0f && inaCapLearn <= 30000.0f)) inaCapLearn = 0;
 }
 
 static void inaSaveSettings() {
@@ -247,9 +264,33 @@ void inaSaveCounters(bool force) {
   Preferences p; p.begin("ina", false);
   p.putFloat("mOutT", inaMahOutTot);
   p.putFloat("mInT", inaMahInTot);
+  p.putFloat("cyc", inaCycles);
+  p.putULong("boots", inaBootCount);
+  p.putFloat("capL", inaCapLearn);
   p.end();
   inaCountersDirty = false;
+  inaUnsavedMah = 0;
   inaLastSave = millis();
+}
+
+// kapasitas yg dipakai utk hitung persen & estimasi waktu: hasil ukur kalau ada, kalau belum pakai setting
+static float inaCapEff() {
+  return (inaCapLearn > 0) ? inaCapLearn : (float)inaCapMah;
+}
+
+// dipanggil saat "charge selesai": hitung kapasitas asli dari mAh yg masuk selama sesi ukur
+static void inaLearnFinish() {
+  inaLrnActive = false;
+  float span = 100.0f - inaLrnSoc0;
+  if (span < INA_LRN_MIN_SPAN) return;
+  float est = inaLrnMah * INA_CHG_EFF / (span / 100.0f);
+  float rated = (float)inaCapMah;
+  if (est < 0.40f * rated || est > 1.30f * rated) { showToast("Ukur kapasitas batal (hasil tak wajar)"); return; }
+  inaCapLearn = (inaCapLearn > 0) ? (inaCapLearn * 0.6f + est * 0.4f) : est;
+  inaCountersDirty = true;
+  inaSaveCounters(true);
+  char b[40]; snprintf(b, sizeof(b), "Kapasitas terukur %.0f mAh", (double)inaCapLearn);
+  showToast(b);
 }
 
 // =====================================================================
@@ -299,6 +340,8 @@ void inaBegin() {
   inaSessionStart = millis();
   inaResetPeaks();
   inaLastSave = millis();
+  inaBootCount++;                           // tiap dihidupkan: catat boot + langsung simpan siklus
+  inaSaveCounters(true);
   inaTryInit(true);
 }
 
@@ -358,16 +401,16 @@ void inaPoll() {
   if (dtS > 3600.0f) dtS = 3600.0f;
   float dMah = iMa * dtS / 3600.0f;
   float dMwh = (vBat * iMa) * dtS / 3600.0f;
-  if (dMah > 0) { inaMahOut += dMah; inaMahOutTot += dMah; inaMwhOut += dMwh; }
-  else          { inaMahIn += -dMah; inaMahInTot += -dMah; inaMwhIn += -dMwh; }
-  if (dMah != 0) inaCountersDirty = true;
+  if (dMah > 0) { inaMahOut += dMah; inaMahOutTot += dMah; inaMwhOut += dMwh; inaCycles += dMah / (float)inaCapMah; }
+  else          { inaMahIn += -dMah; inaMahInTot += -dMah; inaMwhIn += -dMwh; if (inaLrnActive) inaLrnMah += -dMah; }
+  if (dMah != 0) { inaCountersDirty = true; inaUnsavedMah += fabsf(dMah); }
 
   // SoC: OCV (dikompensasi R dalam) + coulomb counting
   float ocv = vBat + (iMa / 1000.0f) * ((float)inaRintMohm / 1000.0f);
   float ocvSoc = inaOcvSoc(ocv);
   if (!inaSocInit) { inaSocF = ocvSoc; inaSocInit = true; }
   else {
-    float cap = (float)inaCapMah;
+    float cap = inaCapEff();
     if (dMah > 0) inaSocF -= dMah / cap * 100.0f;
     else          inaSocF += (-dMah) * INA_CHG_EFF / cap * 100.0f;
     if (!inaCharging) {
@@ -376,11 +419,22 @@ void inaPoll() {
     }
   }
   float fullThr = fmaxf(30.0f, 0.06f * (float)inaCapMah);
-  if (iMa < 0 && vBat >= 4.17f && -iMa < fullThr) inaSocF = 100.0f;   // charge selesai
+  if (iMa < 0 && vBat >= 4.17f && -iMa < fullThr) {                   // charge selesai
+    inaSocF = 100.0f;
+    if (inaLrnActive) inaLearnFinish();
+  }
   if (ocv < 3.0f) inaSocF = 0.0f;
   if (inaSocF < 0) inaSocF = 0;
   if (inaSocF > 100) inaSocF = 100;
   inaSoc = (int)(inaSocF + 0.5f);
+
+  // colok / cabut charger: mulai atau batalkan sesi ukur kapasitas, simpan counter
+  if (inaCharging != inaPrevCharging) {
+    inaPrevCharging = inaCharging;
+    if (inaCharging && inaSocF <= INA_LRN_MAX_START) { inaLrnActive = true; inaLrnSoc0 = inaSocF; inaLrnMah = 0; }
+    else inaLrnActive = false;
+    inaCountersDirty = true; inaSaveCounters(true);
+  }
 
   // riwayat grafik
   if (inaHistLast == 0 || now - inaHistLast >= INA_HIST_MS) {
@@ -394,7 +448,11 @@ void inaPoll() {
     if (inaHistCount < INA_HIST_N) inaHistCount++;
   }
 
-  if (now - inaLastSave >= INA_SAVE_MS) inaSaveCounters(false);
+  // simpan counter: tiap INA_SAVE_MAH perubahan, tiap INA_SAVE_MS, atau darurat kalau tegangan mendekati cut-off
+  if (inaCountersDirty) {
+    if (inaUnsavedMah >= INA_SAVE_MAH || now - inaLastSave >= INA_SAVE_MS ||
+        (vBat < 3.35f && now - inaLastSave >= 15000UL)) inaSaveCounters(false);
+  }
 }
 
 bool inaWantRedraw() {
@@ -482,9 +540,9 @@ static void inaAction(uint8_t tab, uint8_t idx) {
       showToast(inaReinit() ? "INA219 ditemukan" : "INA219 tidak ditemukan");
     }
   } else if (tab == 3) {
-    if (idx == 0) { inaSocInit = false; showToast("Persen dihitung ulang"); }
+    if (idx == 0) { inaSocInit = false; inaLrnActive = false; showToast("Persen dihitung ulang"); }
     else if (idx == 1) { inaResetSession(); showToast("Counter sesi di-reset"); }
-    else if (idx == 2) { inaMahOutTot = 0; inaMahInTot = 0; inaSaveCounters(true); showToast("Total & siklus di-reset"); }
+    else if (idx == 2) { inaMahOutTot = 0; inaMahInTot = 0; inaCycles = 0; inaCapLearn = 0; inaLrnActive = false; inaSaveCounters(true); showToast("Total, siklus & kapasitas di-reset"); }
     else { inaResetPeaks(); showToast("Puncak di-reset"); }
   }
 }
@@ -552,17 +610,18 @@ static void inaDrawSummary(LGFX_Sprite& s, int top, int bottom) {
   inaRow(s, y, inaCharging ? "Arus (mengisi)" : "Arus (memakai)", v, c); y += lh;
   snprintf(v, sizeof(v), "%.1f mW", fabsf(inaP));
   inaRow(s, y, "Daya", v, T().text); y += lh;
-  snprintf(v, sizeof(v), "%+.2f mV", inaShuntMv);
-  inaRow(s, y, "Tegangan shunt", v, T().subtext); y += lh;
+  if (inaCapLearn > 0) snprintf(v, sizeof(v), "%.0f mAh (%.0f%%)", (double)inaCapLearn, (double)(100.0f * inaCapLearn / (float)inaCapMah));
+  else snprintf(v, sizeof(v), "%s", inaLrnActive ? "mengukur..." : "belum terukur");
+  inaRow(s, y, "Kapasitas terukur", v, T().text); y += lh;
   snprintf(v, sizeof(v), "-%.0f / +%.0f mAh", inaMahOut, inaMahIn);
   inaRow(s, y, "Sesi keluar / masuk", v, T().text); y += lh;
   {
     char d[16]; float h = -1; const char* lb = "Sisa waktu";
     if (inaCharging) {
       lb = "Penuh dalam";
-      if (-inaIavg > 5.0f) h = ((100.0f - inaSocF) / 100.0f * (float)inaCapMah) / (-inaIavg);
+      if (-inaIavg > 5.0f) h = ((100.0f - inaSocF) / 100.0f * inaCapEff()) / (-inaIavg);
     } else if (inaIavg > 5.0f) {
-      h = (inaSocF / 100.0f * (float)inaCapMah) / inaIavg;
+      h = (inaSocF / 100.0f * inaCapEff()) / inaIavg;
     }
     inaFmtDur(d, sizeof(d), h);
     snprintf(v, sizeof(v), "~%s", d);
@@ -571,8 +630,9 @@ static void inaDrawSummary(LGFX_Sprite& s, int top, int bottom) {
   if (inaOvf) {
     inaRow(s, y, "PERINGATAN", "OVERFLOW: turunkan gain/R", T().danger);
   } else {
-    snprintf(v, sizeof(v), "%.2f siklus", (inaCapMah > 0) ? inaMahOutTot / (float)inaCapMah : 0.0f);
-    inaRow(s, y, "Pemakaian total", v, T().subtext);
+    char kb[28]; snprintf(kb, sizeof(kb), "Siklus (boot ke-%lu)", (unsigned long)inaBootCount);
+    snprintf(v, sizeof(v), "%.2f", (double)inaCycles);
+    inaRow(s, y, kb, v, T().subtext);
   }
 }
 
