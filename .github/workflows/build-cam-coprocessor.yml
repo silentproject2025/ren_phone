@@ -60,11 +60,16 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "cam-${{ github.run_number }}" cam_merged.bin \
-            --prerelease \
-            --target "${{ github.sha }}" \
-            --title "CAM co-processor build ${{ github.run_number }}" \
-            --notes "Commit ${{ github.sha }} (${{ github.ref_name }})"
+          TAG="cam-${{ github.run_number }}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" cam_merged.bin --clobber
+          else
+            gh release create "$TAG" cam_merged.bin \
+              --prerelease \
+              --target "${{ github.sha }}" \
+              --title "CAM co-processor build ${{ github.run_number }}" \
+              --notes "Commit ${{ github.sha }} (${{ github.ref_name }})"
+          fi
 
   flasher:
     needs: build
