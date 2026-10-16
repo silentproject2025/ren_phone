@@ -83,6 +83,7 @@ static unsigned long rcLastViewMs = 0;
 static char          rcClientId[16] = "";
 static bool          rcWasViewing = false;
 static unsigned long rcApRestartAt = 0;
+static unsigned long rcWifiAt = 0;      // jadwal konek WiFi rumah/hotspot (setelah respons HTTP terkirim)
 static unsigned long rcKeepMs = 0, rcFreeCheckMs = 0, rcUiRefreshMs = 0, rcFpsMs = 0;
 static uint8_t       rcAutoTries = 0;
 static unsigned long rcAutoNextMs = 8000UL;
@@ -709,6 +710,73 @@ static void rcHandleSet() {
 }
 
 // =====================================================================
+// FORM WiFi: HP Accretion nyambung ke WiFi rumah / hotspot HP dari halaman web
+// =====================================================================
+// GET /rc/scan?go=1  -> mulai scan async (balas "run")
+// GET /rc/scan       -> "run" kalau belum selesai, JSON [["nama",rssi,terkunci],...] kalau selesai
+// Catatan: selama scan radio lompat channel, jadi koneksi remote bisa tersendat 2-3 dtk.
+static void rcHandleScan() {
+  if (!rcAllowed()) { webServer.send(403, "text/plain", "403"); return; }
+  if (!rcCfg.inputOn) { webServer.send(200, "text/plain", "view"); return; }
+  if (webServer.hasArg("go")) {
+    if (WiFi.scanComplete() != WIFI_SCAN_RUNNING) {
+      WiFi.scanDelete();
+      if (WiFi.getMode() == WIFI_AP) WiFi.mode(WIFI_AP_STA);   // scan butuh radio STA
+      WiFi.scanNetworks(true);
+    }
+    webServer.send(200, "text/plain", "run");
+    return;
+  }
+  int n = WiFi.scanComplete();
+  if (n == WIFI_SCAN_RUNNING) { webServer.send(200, "text/plain", "run"); return; }
+  if (n < 0) { webServer.send(200, "text/plain", "fail"); return; }
+  String j; j.reserve(700);
+  j += "[";
+  bool first = true;
+  for (int i = 0; i < n && i < 20; i++) {
+    String nm = WiFi.SSID(i);
+    if (nm.length() == 0) continue;
+    if (!first) j += ",";
+    first = false;
+    j += "[\""; rcJsonEsc(j, nm.c_str()); j += "\","; j += (int)WiFi.RSSI(i);
+    j += ","; j += (WiFi.encryptionType(i) != WIFI_AUTH_OPEN) ? 1 : 0; j += "]";
+  }
+  j += "]";
+  WiFi.scanDelete();
+  webServer.sendHeader("Cache-Control", "no-store");
+  webServer.send(200, "application/json", j);
+}
+
+// GET /rc/wifi?ssid=..&pass=..  -> simpan ke penyimpanan WiFi bawaan (namespace "wifi") lalu konek
+static void rcHandleWifi() {
+  if (!rcAllowed()) { webServer.send(403, "text/plain", "403"); return; }
+  if (!rcCfg.inputOn) { webServer.send(200, "text/plain", "view"); return; }
+  String sd = webServer.arg("ssid"); sd.trim();
+  String pw = webServer.arg("pass");
+  if (sd.length() < 1 || sd.length() > 63) { webServer.send(400, "text/plain", "Nama WiFi 1-63 karakter"); return; }
+  if (pw.length() != 0 && (pw.length() < 8 || pw.length() > 63)) { webServer.send(400, "text/plain", "Sandi WiFi 8-63 karakter (kosongkan kalau WiFi terbuka)"); return; }
+  sd.toCharArray(WIFI_SSID, sizeof(WIFI_SSID));
+  pw.toCharArray(WIFI_PASSWORD, sizeof(WIFI_PASSWORD));
+  saveWifiCreds();
+  rcWifiAt = millis() + 600UL;                // konek SETELAH respons ini terkirim
+  webServer.send(200, "text/plain", "ok");
+}
+
+// GET /rc/wst -> status sambungan WiFi HP Accretion
+static void rcHandleWifiStatus() {
+  if (!rcAllowed()) { webServer.send(403, "text/plain", "403"); return; }
+  String j; j.reserve(160);
+  j += "{\"s\":\""; rcJsonEsc(j, WIFI_SSID); j += "\"";
+  j += ",\"ok\":"; j += wifiConnected ? 1 : 0;
+  j += ",\"ing\":"; j += (wifiConnecting || rcWifiAt) ? 1 : 0;
+  j += ",\"ip\":\"";
+  if (wifiConnected) { IPAddress si = WiFi.localIP(); char ib[20]; snprintf(ib, sizeof(ib), "%u.%u.%u.%u", si[0], si[1], si[2], si[3]); j += ib; }
+  j += "\"}";
+  webServer.sendHeader("Cache-Control", "no-store");
+  webServer.send(200, "application/json", j);
+}
+
+// =====================================================================
 // HALAMAN WEB  (GET /remote atau /r)
 // =====================================================================
 static const char RC_PAGE[] = R"RCPAGE(<!DOCTYPE html><html lang="id"><head><meta charset="utf-8">
@@ -774,6 +842,14 @@ input[type=range]{width:100%}
 <div class="sm">Sandi baru (8–32 karakter, kosongkan jika tidak diganti)</div><input type="password" id="s_pass" maxlength="32" autocomplete="new-password">
 <button id="sap" style="width:100%;margin-top:6px">Simpan &amp; restart AP</button>
 <div class="sm" style="margin-top:6px">Setelah restart, sambungkan ulang ke WiFi itu lalu muat ulang halaman.</div></div>
+<div class="card"><h3>WiFi HP Accretion (rumah / hotspot HP)</h3>
+<div class="sm">Biar HP Accretion nyambung internet &amp; bisa dibuka lewat WiFi itu. Gunakan WiFi 2.4 GHz.</div>
+<button id="wscan" style="width:100%;margin:8px 0">Cari jaringan</button>
+<select id="wsel" hidden></select>
+<div class="sm">Nama WiFi</div><input type="text" id="w_ssid" maxlength="63" autocomplete="off">
+<div class="sm">Sandi (kosongkan kalau WiFi terbuka)</div><input type="password" id="w_pass" maxlength="63" autocomplete="new-password">
+<button id="wgo" class="p" style="width:100%;margin-top:6px">Simpan &amp; sambungkan</button>
+<div class="sm" id="wst" style="margin-top:8px"></div></div>
 <div class="sm" style="text-align:center;padding:4px 0 24px" id="ver"></div></div>
 <div id="toast"></div>
 <script>
@@ -853,6 +929,31 @@ for(const id in bind)$('#'+id).onchange=e=>set({[bind[id]]:e.target.checked?1:0}
 $('#s_q').onchange=e=>{set({q:e.target.value});need=true};
 $('#s_fps').onchange=e=>set({fps:e.target.value});
 $('#sap').onclick=async()=>{const o={ssid:$('#s_ssid').value};const pw=$('#s_pass').value;if(pw)o.pass=pw;if(await set(o))$('#s_pass').value=''};
+const wsleep=ms=>new Promise(r=>setTimeout(r,ms));
+async function wscan(){
+  const st=$('#wst'),sel=$('#wsel');st.textContent='Mencari jaringan… (layar bisa tersendat 2-3 dtk)';
+  try{await fetch('/rc/scan?go=1');
+    for(let i=0;i<25;i++){await wsleep(1000);
+      let t='';try{t=await (await fetch('/rc/scan')).text()}catch(e){continue}
+      if(t=='view'){st.textContent='Mode lihat-saja: aktifkan "Izinkan sentuh & tombol"';return}
+      if(t=='fail'){st.textContent='Scan gagal, coba lagi';return}
+      if(t[0]=='['){const a=JSON.parse(t);sel.innerHTML='<option value="">— pilih jaringan —</option>';
+        a.sort((x,y)=>y[1]-x[1]).forEach(([n,r,l])=>{const o=document.createElement('option');o.value=n;o.textContent=n+' ('+r+' dBm'+(l?', terkunci':'')+')';sel.appendChild(o)});
+        sel.hidden=false;st.textContent=a.length+' jaringan ditemukan';return}}
+    st.textContent='Scan habis waktu'}catch(e){st.textContent='Gagal scan'}}
+$('#wscan').onclick=wscan;
+$('#wsel').onchange=e=>{if(e.target.value)$('#w_ssid').value=e.target.value};
+$('#wgo').onclick=async()=>{
+  const st=$('#wst'),s=$('#w_ssid').value.trim();if(!s){st.textContent='Isi nama WiFi dulu';return}
+  const p=new URLSearchParams({ssid:s,pass:$('#w_pass').value});
+  try{const r=await fetch('/rc/wifi?'+p);const t=await r.text();
+    if(r.status==400){st.textContent=t;return}if(t=='view'){st.textContent='Mode lihat-saja';return}}catch(e){st.textContent='Gagal kirim';return}
+  st.textContent='Menyambung ke '+s+'…';
+  for(let i=0;i<14;i++){await wsleep(1500);
+    try{const j=await (await fetch('/rc/wst')).json();
+      if(j.ok){st.textContent='Tersambung ke '+j.s+' · IP '+j.ip+' → buka http://'+j.ip+'/remote (nyalakan "Izinkan lewat WiFi rumah")';$('#lanip').textContent='Alamat via WiFi rumah: http://'+j.ip+'/remote';return}
+      if(!j.ing&&i>2){st.textContent='Gagal tersambung. Cek nama/sandi & pastikan 2.4 GHz.';return}}catch(e){st.textContent='Koneksi remote putus sebentar (normal kalau channel WiFi berubah). Sambung ulang ke Accretion-Phone, lalu cek "Alamat via WiFi rumah" di atas.'}}
+  st.textContent='Belum ada hasil. Cek lagi sebentar.'};
 async function init(){
   try{ST=await (await fetch('/rc/st')).json();
     $('#s_in').checked=!!ST.in;$('#s_ka').checked=!!ST.ka;$('#s_as').checked=!!ST.as;$('#s_lan').checked=!!ST.lan;
@@ -877,6 +978,9 @@ void rcRegisterRoutes() {
   webServer.on("/rc/st",   HTTP_GET, rcHandleStatus);
   webServer.on("/rc/set",  HTTP_GET, rcHandleSet);
   webServer.on("/rc/apps", HTTP_GET, rcHandleApps);
+  webServer.on("/rc/scan", HTTP_GET, rcHandleScan);
+  webServer.on("/rc/wifi", HTTP_GET, rcHandleWifi);
+  webServer.on("/rc/wst",  HTTP_GET, rcHandleWifiStatus);
 }
 
 // =====================================================================
@@ -910,6 +1014,12 @@ void rcLoopPoll() {
     rcApStop();
     rcApStart();
     return;
+  }
+
+  if (rcWifiAt && now >= rcWifiAt) {                // konek ke WiFi yang baru disimpan dari web
+    rcWifiAt = 0;
+    if (wifiConnected || wifiConnecting) disconnectWifi();
+    connectWifi(true);
   }
 
   rcRunAct();
