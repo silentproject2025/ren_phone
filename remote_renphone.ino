@@ -89,6 +89,9 @@ static uint8_t       rcAutoTries = 0;
 static unsigned long rcAutoNextMs = 8000UL;
 static uint16_t      rcFramesThisSec = 0;
 static uint8_t       rcFpsNow = 0;
+static uint32_t      rcLastIp = 0;           // IP WiFi (STA) terakhir yang diumumkan
+static uint8_t       rcIpRepeat = 0;         // sisa pengulangan pengumuman IP
+static unsigned long rcIpNextMs = 0;
 
 // ---- antrean input sentuh ----
 static uint8_t  rcEvT[RC_EV_MAX];
@@ -986,8 +989,29 @@ void rcRegisterRoutes() {
 // =====================================================================
 // POLL TIAP loop()  (dipanggil dari phone.ino persis setelah handleClient)
 // =====================================================================
+// Umumkan IP WiFi (rumah/hotspot) di pil Dynamic Island, supaya terlihat TANPA
+// menyentuh layar. Muncul saat IP berubah/baru dapat, lalu diulang tiap 30 dtk
+// (maks 8x) selama belum ada penonton remote lewat WiFi itu.
+static void rcAnnounceIp(unsigned long now) {
+  if (!wifiConnected) { rcLastIp = 0; return; }
+  IPAddress si = WiFi.localIP();
+  uint32_t cur = ((uint32_t)si[0] << 24) | ((uint32_t)si[1] << 16) | ((uint32_t)si[2] << 8) | (uint32_t)si[3];
+  if (cur == 0) return;
+  if (cur != rcLastIp) { rcLastIp = cur; rcIpRepeat = 8; rcIpNextMs = 0; }
+  if (rcViewerActive()) { rcIpRepeat = 0; return; }
+  if (rcIpRepeat && now >= rcIpNextMs) {
+    rcIpRepeat--;
+    rcIpNextMs = now + 30000UL;
+    char b[40];
+    snprintf(b, sizeof(b), "IP %u.%u.%u.%u", si[0], si[1], si[2], si[3]);
+    diNotify('I', b, T().accent, 7000, false);
+    Serial.printf("[remote] %s  -> http://%u.%u.%u.%u/remote\n", b, si[0], si[1], si[2], si[3]);
+  }
+}
+
 void rcLoopPoll() {
   unsigned long now = millis();
+  rcAnnounceIp(now);
 
   // mulai otomatis
   // Percobaan ulang tiap 10 dtk (maks 6x) + getar sebagai umpan balik tanpa layar:
