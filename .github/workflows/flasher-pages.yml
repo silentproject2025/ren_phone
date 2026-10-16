@@ -2,6 +2,7 @@ name: Web Flasher (GitHub Pages)
 
 # Dipanggil otomatis dari workflow build S3 & CAM setelah Release dibuat.
 # Bisa juga dijalankan manual (Run workflow) untuk membangun ulang halamannya.
+# Halaman membedakan firmware STABIL (dari main/master) dan UJI COBA (dari branch lain).
 on:
   workflow_call:
   workflow_dispatch:
@@ -21,65 +22,169 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - name: Ambil firmware terbaru dari Release
+      - name: Ambil firmware dari Release & buat halaman flasher
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
         run: |
-          mkdir -p site
-          S3TAG=$(gh release list --repo "$REPO" --limit 50 --json tagName,isPrerelease \
-            -q '[.[] | select(.isPrerelease == false and (.tagName | startswith("build-")))][0].tagName // empty')
-          CAMTAG=$(gh release list --repo "$REPO" --limit 50 --json tagName,isPrerelease \
-            -q '[.[] | select(.tagName | startswith("cam-"))][0].tagName // empty')
-          echo "S3TAG=$S3TAG" >> "$GITHUB_ENV"
-          echo "CAMTAG=$CAMTAG" >> "$GITHUB_ENV"
-          [ -n "$S3TAG" ]  && gh release download "$S3TAG"  --repo "$REPO" --pattern 'ren_phone_s3_merged.bin' --dir site || true
-          [ -n "$CAMTAG" ] && gh release download "$CAMTAG" --repo "$REPO" --pattern 'cam_merged.bin'          --dir site || true
-          ls -la site
-
-      - name: Buat halaman flasher
-        run: |
           python3 - <<'PY'
-          import os, json
+          import html, json, os, re, shutil, subprocess, datetime
+
+          repo = os.environ["REPO"]
           site = "site"
-          def has(f): return os.path.exists(os.path.join(site, f))
-          def manifest(fn, name, version, chip, binf):
-              m = {"name": name, "version": version, "new_install_prompt_erase": True,
-                   "builds": [{"chipFamily": chip, "parts": [{"path": binf, "offset": 0}]}]}
-              json.dump(m, open(os.path.join(site, fn), "w"), indent=2)
-          cards = []
-          if has("ren_phone_s3_merged.bin"):
-              v = os.environ.get("S3TAG", "")
-              manifest("s3.json", "Ren Phone (ESP32-S3)", v, "ESP32-S3", "ren_phone_s3_merged.bin")
-              cards.append(('Ren Phone (ESP32-S3)', v, 's3.json', 'Pasang firmware Ren Phone'))
-          if has("cam_merged.bin"):
-              v = os.environ.get("CAMTAG", "")
-              manifest("cam.json", "CAM BT Co-Processor (ESP32-CAM)", v, "ESP32", "cam_merged.bin")
-              cards.append(('Co-prosesor BT (ESP32-CAM)', v, 'cam.json', 'Pasang firmware CAM'))
-          html = ['<!doctype html><html lang="id"><head><meta charset="utf-8">',
+          os.makedirs(site, exist_ok=True)
+
+          def gh(*args):
+              return subprocess.run(["gh", *args], capture_output=True, text=True, check=True).stdout
+
+          DEVICES = [
+              {"key": "s3", "prefix": "build-", "asset": "ren_phone_s3_merged.bin", "chip": "ESP32-S3",
+               "title": "Ren Phone", "sub": "ESP32-S3 \u00b7 HP utama", "icon": "\U0001F4F1"},
+              {"key": "cam", "prefix": "cam-", "asset": "cam_merged.bin", "chip": "ESP32",
+               "title": "Co-prosesor Bluetooth", "sub": "ESP32-CAM \u00b7 board kamera", "icon": "\U0001F4F7"},
+          ]
+          BULAN = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"]
+
+          def tgl(iso):
+              try:
+                  y, m, d = iso[:10].split("-")
+                  return "%d %s %s" % (int(d), BULAN[int(m) - 1], y)
+              except Exception:
+                  return iso[:10]
+
+          rels = json.loads(gh("release", "list", "--repo", repo, "--limit", "80", "--json", "tagName,publishedAt"))
+          esc = html.escape
+          sections = []
+
+          for dev in DEVICES:
+              found = {}
+              checked = 0
+              for r in rels:
+                  tag = r["tagName"]
+                  if not tag.startswith(dev["prefix"]):
+                      continue
+                  if len(found) == 2 or checked >= 30:
+                      break
+                  checked += 1
+                  try:
+                      info = json.loads(gh("release", "view", tag, "--repo", repo, "--json", "body,url,assets"))
+                  except Exception:
+                      continue
+                  asset = next((a for a in info.get("assets", []) if a["name"] == dev["asset"]), None)
+                  if not asset:
+                      continue
+                  m = re.search(r"Commit ([0-9a-f]{7,40}) \(([^)]*)\)", info.get("body") or "")
+                  sha, branch = (m.group(1), m.group(2)) if m else ("", "?")
+                  chan = "stable" if branch in ("main", "master") else "test"
+                  if chan in found:
+                      continue
+                  tmp = os.path.join("dl", dev["key"] + "-" + chan)
+                  os.makedirs(tmp, exist_ok=True)
+                  try:
+                      gh("release", "download", tag, "--repo", repo, "--pattern", dev["asset"], "--dir", tmp)
+                  except Exception:
+                      continue
+                  binf = "%s-%s.bin" % (dev["key"], chan)
+                  shutil.move(os.path.join(tmp, dev["asset"]), os.path.join(site, binf))
+                  mf = "%s-%s.json" % (dev["key"], chan)
+                  json.dump({"name": dev["title"], "version": "%s (%s)" % (tag, branch),
+                             "new_install_prompt_erase": True,
+                             "builds": [{"chipFamily": dev["chip"], "parts": [{"path": binf, "offset": 0}]}]},
+                            open(os.path.join(site, mf), "w"), indent=2)
+                  found[chan] = {"tag": tag, "branch": branch, "sha": sha, "url": info.get("url", ""),
+                                 "size": asset.get("size", 0), "date": tgl(r.get("publishedAt", "")), "manifest": mf}
+
+              def card(chan, d):
+                  if chan == "stable":
+                      badge, cls = "STABIL", "b-stable"
+                      note = "Versi yang sudah digabung ke <b>%s</b>. Disarankan untuk pemakaian sehari-hari." % esc(d["branch"])
+                  else:
+                      badge, cls = "UJI COBA", "b-test"
+                      note = "Dibuat dari branch <b>%s</b>. Fitur baru, bisa belum stabil." % esc(d["branch"])
+                  commit = ""
+                  if d["sha"]:
+                      commit = '<a href="https://github.com/%s/commit/%s">%s</a>' % (esc(repo), esc(d["sha"]), esc(d["sha"][:7]))
+                  rows = ('<div class="meta"><span>Rilis</span><b>%s</b></div>'
+                          '<div class="meta"><span>Branch</span><b>%s</b></div>'
+                          '<div class="meta"><span>Tanggal</span><b>%s</b></div>'
+                          '<div class="meta"><span>Ukuran</span><b>%.2f MB</b></div>') % (
+                              esc(d["tag"]), esc(d["branch"]), esc(d["date"]), d["size"] / 1048576.0)
+                  if commit:
+                      rows += '<div class="meta"><span>Commit</span><b>%s</b></div>' % commit
+                  return ('<div class="card %s"><span class="badge %s">%s</span><p class="note">%s</p>%s'
+                          '<esp-web-install-button manifest="%s"><button slot="activate" class="btn">Pasang firmware ini</button>'
+                          '<span slot="unsupported" class="mut">Browser belum mendukung. Pakai Chrome atau Edge di komputer.</span>'
+                          '<span slot="not-allowed" class="mut">Halaman harus dibuka lewat https.</span></esp-web-install-button>'
+                          '<a class="mut link" href="%s">Lihat catatan rilis</a></div>') % (
+                              cls, cls, badge, note, rows, esc(d["manifest"]), esc(d["url"]))
+
+              body = ""
+              for chan in ("stable", "test"):
+                  if chan in found:
+                      body += card(chan, found[chan])
+              if not body:
+                  body = '<div class="card empty">Belum ada firmware untuk perangkat ini.</div>'
+              sections.append('<section><h2><span class="ico">%s</span> %s <small>%s</small></h2><div class="grid">%s</div></section>' % (
+                  dev["icon"], esc(dev["title"]), esc(dev["sub"]), body))
+
+          css = """
+          :root{color-scheme:light dark;--bg:#f4f5f9;--fg:#14151a;--card:#fff;--line:#e3e5ee;--mut:#6a6e7c;--acc:#0a84ff;--ok:#1e9e55;--warn:#d9822b}
+          @media (prefers-color-scheme:dark){:root{--bg:#0e0f13;--fg:#ececf1;--card:#181a21;--line:#2a2d38;--mut:#9a9eab;--acc:#4da3ff;--ok:#3ecf80;--warn:#f0a050}}
+          *{box-sizing:border-box}
+          body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.55 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+          header{padding:44px 20px 30px;text-align:center;background:linear-gradient(135deg,#1b2a6b,#6a2fb5 60%,#d6407a);color:#fff}
+          header h1{margin:0 0 6px;font-size:clamp(1.6rem,5vw,2.3rem);letter-spacing:-.02em}
+          header p{margin:0 auto;max-width:560px;opacity:.9}
+          .legend{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-top:16px}
+          .pill{background:rgba(255,255,255,.18);border-radius:999px;padding:4px 12px;font-size:.85rem}
+          main{max-width:920px;margin:0 auto;padding:8px 16px 40px}
+          section{margin:28px 0}
+          h2{font-size:1.25rem;margin:0 0 12px;display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
+          h2 small{color:var(--mut);font-weight:400;font-size:.8rem}.ico{font-size:1.4rem}
+          .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px}
+          .card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:18px;box-shadow:0 1px 3px rgba(0,0,0,.06);border-top:4px solid var(--line)}
+          .card.b-stable{border-top-color:var(--ok)}.card.b-test{border-top-color:var(--warn)}
+          .badge{display:inline-block;font-size:.72rem;font-weight:700;letter-spacing:.06em;border-radius:6px;padding:2px 8px;color:#fff}
+          .badge.b-stable{background:var(--ok)}.badge.b-test{background:var(--warn)}
+          .note{margin:10px 0 12px;font-size:.92rem}
+          .meta{display:flex;justify-content:space-between;gap:10px;font-size:.88rem;padding:5px 0;border-bottom:1px dashed var(--line)}
+          .meta span{color:var(--mut)}.meta a{color:var(--acc);text-decoration:none}
+          .btn{margin-top:14px;width:100%;font:inherit;font-weight:600;padding:12px 16px;border:0;border-radius:12px;color:#fff;background:linear-gradient(135deg,#0a84ff,#6a5cff);cursor:pointer}
+          .btn:hover{filter:brightness(1.08)}
+          .mut{color:var(--mut);font-size:.85rem}.link{display:block;margin-top:10px;text-align:center;color:var(--acc)}
+          .empty{color:var(--mut);text-align:center}
+          .how{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:18px 20px}
+          .how ol{margin:8px 0 0;padding-left:20px}.how li{margin:4px 0}
+          details{margin-top:10px}summary{cursor:pointer;font-weight:600}
+          details p{margin:6px 0;color:var(--mut);font-size:.92rem}
+          footer{text-align:center;color:var(--mut);font-size:.82rem;padding:0 16px 30px}
+          footer a{color:var(--acc);text-decoration:none}
+          """
+          now = datetime.datetime.now(datetime.timezone.utc).strftime("%d/%m/%Y %H:%M UTC")
+          page = ['<!doctype html><html lang="id"><head><meta charset="utf-8">',
                   '<meta name="viewport" content="width=device-width, initial-scale=1">',
+                  '<meta name="theme-color" content="#6a2fb5">',
                   '<title>Ren Phone Web Flasher</title>',
                   '<script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"></script>',
-                  '<style>:root{color-scheme:light dark;--bg:#fff;--fg:#111;--card:#f2f2f5;--mut:#666}',
-                  '@media (prefers-color-scheme:dark){:root{--bg:#111;--fg:#eee;--card:#1d1d22;--mut:#9a9aa3}}',
-                  'body{font-family:system-ui,sans-serif;background:var(--bg);color:var(--fg);max-width:640px;margin:0 auto;padding:20px;line-height:1.5}',
-                  '.card{background:var(--card);border-radius:14px;padding:16px;margin:14px 0}',
-                  '.mut{color:var(--mut);font-size:.9em}h1{font-size:1.5em}h2{font-size:1.1em;margin:0 0 4px}',
-                  'button{font-size:1em;padding:10px 16px;border-radius:10px;border:0;background:#0a84ff;color:#fff;margin-top:8px}</style></head><body>',
-                  '<h1>Ren Phone Web Flasher</h1>',
-                  '<p class="mut">Pasang firmware lewat kabel USB langsung dari browser. Pakai Chrome atau Edge di komputer (Firefox dan Safari tidak mendukung).</p>']
-          if not cards:
-              html.append('<div class="card">Belum ada firmware yang dipublikasikan.</div>')
-          for title, ver, mf, label in cards:
-              html.append('<div class="card"><h2>%s</h2><div class="mut">Rilis: %s</div>' % (title, ver))
-              html.append('<esp-web-install-button manifest="%s"><button slot="activate">%s</button>' % (mf, label))
-              html.append('<span slot="unsupported" class="mut">Browser ini belum mendukung. Pakai Chrome/Edge di komputer.</span>')
-              html.append('<span slot="not-allowed" class="mut">Halaman harus dibuka lewat https.</span></esp-web-install-button></div>')
-          html.append('<div class="card mut"><b>Tips</b><br>Colok HP ke komputer dengan kabel data, lalu klik Pasang dan pilih port. '
-                      'Kalau port tidak muncul, tahan tombol BOOT sambil mencolok kabel.<br>'
-                      'Kotak &quot;Hapus dulu&quot; akan menghapus pengaturan dan data di HP. Biarkan tidak dicentang kalau cuma mau update.<br>'
-                      'Untuk update harian, pakai tombol Terbaru di app Update langsung di HP.</div></body></html>')
-          open(os.path.join(site, "index.html"), "w", encoding="utf-8").write("\n".join(html))
+                  '<style>' + css + '</style></head><body>',
+                  '<header><h1>Ren Phone Web Flasher</h1>',
+                  '<p>Pasang firmware lewat kabel USB langsung dari browser, tanpa install apa-apa.</p>',
+                  '<div class="legend"><span class="pill">STABIL = dari main</span><span class="pill">UJI COBA = dari branch lain</span></div></header>',
+                  '<main>']
+          page += sections
+          page.append(
+              '<section class="how"><h2>Cara pakai</h2><ol>'
+              '<li>Buka halaman ini di <b>Chrome atau Edge</b> di komputer (Firefox dan Safari belum mendukung).</li>'
+              '<li>Colok perangkat dengan <b>kabel data</b>.</li>'
+              '<li>Klik <b>Pasang firmware ini</b>, pilih port, lalu tunggu sampai selesai.</li></ol>'
+              '<details><summary>Port tidak muncul?</summary><p>Untuk ESP32-S3, tahan tombol BOOT sambil mencolok kabel, lalu coba lagi. '
+              'Untuk ESP32-CAM, pakai adaptor USB-TTL dan hubungkan IO0 ke GND saat flash, lalu lepas dan tekan reset setelah selesai.</p></details>'
+              '<details><summary>Apa arti kotak &quot;Hapus dulu&quot;?</summary><p>Kalau dicentang, semua pengaturan dan data di perangkat ikut terhapus. '
+              'Biarkan kosong kalau cuma mau update.</p></details>'
+              '<details><summary>Update harian lebih mudah?</summary><p>Ya. Di HP, buka app Update lalu ketuk Terbaru, tanpa kabel dan komputer.</p></details></section>')
+          page.append('</main><footer>Dibuat otomatis oleh GitHub Actions \u00b7 %s \u00b7 <a href="https://github.com/%s">repo</a></footer></body></html>' % (now, esc(repo)))
+          open(os.path.join(site, "index.html"), "w", encoding="utf-8").write("\n".join(page))
+          print(sorted(os.listdir(site)))
           PY
 
       - name: Setup Pages
