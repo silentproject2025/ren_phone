@@ -141,13 +141,24 @@ jobs:
         run: |
           test -f build/build_sketch.ino.bin || (echo "::error::build_sketch.ino.bin tidak ada" && ls build && exit 1)
           cp build/build_sketch.ino.bin firmware.bin
+          test -f build/build_sketch.ino.merged.bin || (echo "::error::build_sketch.ino.merged.bin tidak ada" && ls build && exit 1)
+          cp build/build_sketch.ino.merged.bin ren_phone_s3_merged.bin
 
       - name: Publish GitHub Release
         if: github.event_name != 'pull_request'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "build-${{ github.run_number }}" firmware.bin \
+          gh release create "build-${{ github.run_number }}" firmware.bin ren_phone_s3_merged.bin \
             --target "${{ github.sha }}" \
             --title "Firmware build ${{ github.run_number }}" \
             --notes "Commit ${{ github.sha }} (${{ github.ref_name }})"
+
+  flasher:
+    needs: build
+    if: github.event_name != 'pull_request'
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    uses: ./.github/workflows/flasher-pages.yml

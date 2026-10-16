@@ -2,12 +2,15 @@ name: Build CAM BT Co-Processor
 
 on:
   push:
-    branches: [ "main", "master" ]
+    branches: [ "main", "master", "remote-control" ]
     paths: [ "cam_bt_coprocessor/**", ".github/workflows/build-cam-coprocessor.yml" ]
   pull_request:
     branches: [ "main", "master" ]
     paths: [ "cam_bt_coprocessor/**" ]
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -45,3 +48,29 @@ jobs:
         with:
           name: cam-bt-coprocessor-binaries
           path: build_cam/*.bin
+
+      - name: Siapkan cam_merged.bin untuk web flasher
+        if: github.event_name != 'pull_request'
+        run: |
+          test -f build_cam/cam_bt_coprocessor.ino.merged.bin || (echo "::error::cam_bt_coprocessor.ino.merged.bin tidak ada" && ls build_cam && exit 1)
+          cp build_cam/cam_bt_coprocessor.ino.merged.bin cam_merged.bin
+
+      - name: Publish Release CAM (prerelease)
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "cam-${{ github.run_number }}" cam_merged.bin \
+            --prerelease \
+            --target "${{ github.sha }}" \
+            --title "CAM co-processor build ${{ github.run_number }}" \
+            --notes "Commit ${{ github.sha }} (${{ github.ref_name }})"
+
+  flasher:
+    needs: build
+    if: github.event_name != 'pull_request'
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    uses: ./.github/workflows/flasher-pages.yml

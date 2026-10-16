@@ -1,0 +1,95 @@
+name: Web Flasher (GitHub Pages)
+
+# Dipanggil otomatis dari workflow build S3 & CAM setelah Release dibuat.
+# Bisa juga dijalankan manual (Run workflow) untuk membangun ulang halamannya.
+on:
+  workflow_call:
+  workflow_dispatch:
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Ambil firmware terbaru dari Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          mkdir -p site
+          S3TAG=$(gh release list --repo "$REPO" --limit 50 --json tagName,isPrerelease \
+            -q '[.[] | select(.isPrerelease == false and (.tagName | startswith("build-")))][0].tagName // empty')
+          CAMTAG=$(gh release list --repo "$REPO" --limit 50 --json tagName,isPrerelease \
+            -q '[.[] | select(.tagName | startswith("cam-"))][0].tagName // empty')
+          echo "S3TAG=$S3TAG" >> "$GITHUB_ENV"
+          echo "CAMTAG=$CAMTAG" >> "$GITHUB_ENV"
+          [ -n "$S3TAG" ]  && gh release download "$S3TAG"  --repo "$REPO" --pattern 'ren_phone_s3_merged.bin' --dir site || true
+          [ -n "$CAMTAG" ] && gh release download "$CAMTAG" --repo "$REPO" --pattern 'cam_merged.bin'          --dir site || true
+          ls -la site
+
+      - name: Buat halaman flasher
+        run: |
+          python3 - <<'PY'
+          import os, json
+          site = "site"
+          def has(f): return os.path.exists(os.path.join(site, f))
+          def manifest(fn, name, version, chip, binf):
+              m = {"name": name, "version": version, "new_install_prompt_erase": True,
+                   "builds": [{"chipFamily": chip, "parts": [{"path": binf, "offset": 0}]}]}
+              json.dump(m, open(os.path.join(site, fn), "w"), indent=2)
+          cards = []
+          if has("ren_phone_s3_merged.bin"):
+              v = os.environ.get("S3TAG", "")
+              manifest("s3.json", "Ren Phone (ESP32-S3)", v, "ESP32-S3", "ren_phone_s3_merged.bin")
+              cards.append(('Ren Phone (ESP32-S3)', v, 's3.json', 'Pasang firmware Ren Phone'))
+          if has("cam_merged.bin"):
+              v = os.environ.get("CAMTAG", "")
+              manifest("cam.json", "CAM BT Co-Processor (ESP32-CAM)", v, "ESP32", "cam_merged.bin")
+              cards.append(('Co-prosesor BT (ESP32-CAM)', v, 'cam.json', 'Pasang firmware CAM'))
+          html = ['<!doctype html><html lang="id"><head><meta charset="utf-8">',
+                  '<meta name="viewport" content="width=device-width, initial-scale=1">',
+                  '<title>Ren Phone Web Flasher</title>',
+                  '<script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"></script>',
+                  '<style>:root{color-scheme:light dark;--bg:#fff;--fg:#111;--card:#f2f2f5;--mut:#666}',
+                  '@media (prefers-color-scheme:dark){:root{--bg:#111;--fg:#eee;--card:#1d1d22;--mut:#9a9aa3}}',
+                  'body{font-family:system-ui,sans-serif;background:var(--bg);color:var(--fg);max-width:640px;margin:0 auto;padding:20px;line-height:1.5}',
+                  '.card{background:var(--card);border-radius:14px;padding:16px;margin:14px 0}',
+                  '.mut{color:var(--mut);font-size:.9em}h1{font-size:1.5em}h2{font-size:1.1em;margin:0 0 4px}',
+                  'button{font-size:1em;padding:10px 16px;border-radius:10px;border:0;background:#0a84ff;color:#fff;margin-top:8px}</style></head><body>',
+                  '<h1>Ren Phone Web Flasher</h1>',
+                  '<p class="mut">Pasang firmware lewat kabel USB langsung dari browser. Pakai Chrome atau Edge di komputer (Firefox dan Safari tidak mendukung).</p>']
+          if not cards:
+              html.append('<div class="card">Belum ada firmware yang dipublikasikan.</div>')
+          for title, ver, mf, label in cards:
+              html.append('<div class="card"><h2>%s</h2><div class="mut">Rilis: %s</div>' % (title, ver))
+              html.append('<esp-web-install-button manifest="%s"><button slot="activate">%s</button>' % (mf, label))
+              html.append('<span slot="unsupported" class="mut">Browser ini belum mendukung. Pakai Chrome/Edge di komputer.</span>')
+              html.append('<span slot="not-allowed" class="mut">Halaman harus dibuka lewat https.</span></esp-web-install-button></div>')
+          html.append('<div class="card mut"><b>Tips</b><br>Colok HP ke komputer dengan kabel data, lalu klik Pasang dan pilih port. '
+                      'Kalau port tidak muncul, tahan tombol BOOT sambil mencolok kabel.<br>'
+                      'Kotak &quot;Hapus dulu&quot; akan menghapus pengaturan dan data di HP. Biarkan tidak dicentang kalau cuma mau update.<br>'
+                      'Untuk update harian, pakai tombol Terbaru di app Update langsung di HP.</div></body></html>')
+          open(os.path.join(site, "index.html"), "w", encoding="utf-8").write("\n".join(html))
+          PY
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload halaman
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+      - name: Deploy ke GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
