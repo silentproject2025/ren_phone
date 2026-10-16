@@ -9545,6 +9545,7 @@ bool updInstallFromURL(const String& url){
   }
   http.setTimeout(15000);
   http.setConnectTimeout(15000);
+  http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);   // link GitHub Release di-redirect ke CDN
 
   int httpCode = http.GET();
   if(httpCode != HTTP_CODE_OK){
@@ -9631,6 +9632,8 @@ void drawUpdate(LGFX_Sprite& s){
 
   iosRR(s,SCR_W-64,24,58,18,4,T().surface2);
   s.setTextColor(T().accent); s.setCursor(SCR_W-58,29); s.print("Scan");
+  iosRR(s,SCR_W-124,24,54,18,4,T().surface2);
+  s.setTextColor(T().accent); s.setCursor(SCR_W-118,29); s.print("Terbaru");
 
   s.setTextColor(T().subtext); s.setCursor(8,UPD_ROW0); s.print("Lokal - file .bin di /update:");
 
@@ -9669,7 +9672,7 @@ void drawUpdate(LGFX_Sprite& s){
 
   s.drawFastHLine(8,UPD_DIV_Y,SCR_W-16,T().divider);
 
-  s.setTextColor(T().subtext); s.setCursor(8,UPD_WIFI_LABEL_Y); s.print("WiFi - unduh dari URL:");
+  s.setTextColor(T().subtext); s.setCursor(8,UPD_WIFI_LABEL_Y); s.print(otaWifiLabel().c_str());
 
   iosRR(s,8,UPD_URL_Y,SCR_W-16,UPD_URL_H,4,T().surface);
   s.setTextColor(T().text); s.setCursor(12,UPD_URL_Y+6);
@@ -9701,6 +9704,10 @@ void updTouch(int x,int y,bool held,bool isNew){
   if(!isNew) return;
 
   if(isBack(x,y)){ navBack(); return; }
+
+  if(x>=SCR_W-124 && x<=SCR_W-70 && y>=24 && y<=42){
+    otaCheckAndFill(); return;
+  }
 
   if(x>=SCR_W-64 && x<=SCR_W-6 && y>=24 && y<=42){
     updScanFiles(); showToast("Scan selesai"); needRedraw=true; return;
