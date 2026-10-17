@@ -9363,19 +9363,32 @@ bool updCheckConfirm(const String& action){
   return false;
 }
 
-#define UPD_ROW0         (STATUS_H+12)
-#define UPD_ITEM_Y        (UPD_ROW0+14)
-#define UPD_ITEM_H        22
-#define UPD_ITEM_GAP      4
-#define UPD_ITEMS_PAGE    2
-#define UPD_NAV_Y        (UPD_ITEM_Y + UPD_ITEMS_PAGE*(UPD_ITEM_H+UPD_ITEM_GAP))
-#define UPD_NAV_H         18
-#define UPD_DIV_Y        (UPD_NAV_Y + UPD_NAV_H + 8)
-#define UPD_WIFI_LABEL_Y (UPD_DIV_Y + 8)
-#define UPD_URL_Y        (UPD_WIFI_LABEL_Y + 14)
-#define UPD_URL_H         22
-#define UPD_BTN_Y        (UPD_URL_Y + 26)
-#define UPD_BTN_H         24
+// ---- layout app Update (UI v2) ----
+#define UPD_HERO_Y       (STATUS_H+4)
+#define UPD_HERO_H       38
+#define UPD_HB_W         (SCR_W>=300 ? 74 : 52)
+#define UPD_HB_H         22
+#define UPD_HB_X         (SCR_W-14-UPD_HB_W)
+#define UPD_HB_Y         (UPD_HERO_Y+(UPD_HERO_H-UPD_HB_H)/2)
+#define UPD_SD_LABEL_Y   (UPD_HERO_Y+UPD_HERO_H+9)
+#define UPD_ITEM_Y       (UPD_SD_LABEL_Y+13)
+#define UPD_ITEM_H       22
+#define UPD_ITEM_GAP     3
+#define UPD_ITEMS_PAGE   2
+#define UPD_SCAN_W       44
+#define UPD_SCAN_X       (SCR_W-6-UPD_SCAN_W)
+#define UPD_NEXT_X       (UPD_SCAN_X-4-22)
+#define UPD_PREV_X       (UPD_NEXT_X-4-22)
+#define UPD_WIFI_LABEL_Y (UPD_ITEM_Y+UPD_ITEMS_PAGE*(UPD_ITEM_H+UPD_ITEM_GAP)+5)
+#define UPD_URL_Y        (UPD_WIFI_LABEL_Y+13)
+#define UPD_URL_H        20
+#define UPD_BTN_Y        (UPD_URL_Y+UPD_URL_H+5)
+#define UPD_BTN_H        24
+// ---- layar progres (digambar langsung ke display) ----
+#define UPD_PG_BARX      24
+#define UPD_PG_BARW      (SCR_W-48)
+#define UPD_PG_BARY      (SCR_H/2+8)
+#define UPD_PG_BARH      14
 
 void updScanFiles(){
   updFileCount = 0;
@@ -9402,53 +9415,63 @@ void updScanFiles(){
   Serial.printf("[Update] %d file .bin ditemukan di %s\n", updFileCount, UPDATE_FOLDER);
 }
 
-void updDrawProgress(const char* title, size_t written, size_t total){
-  display.fillScreen(TFT_BLACK);
-  display.setTextColor(TFT_WHITE);
-  display.setTextSize(1);
-  display.setCursor(10,10);
-  display.print(title);
-  display.setCursor(10,26);
-  display.setTextColor(TFT_RED);
-  display.print("JANGAN MATIKAN PERANGKAT!");
-
-  int barW=SCR_W-20, barH=18, barY=50;
-  int pct = (total>0) ? (int)(((uint32_t)written*100)/total) : 0;
-  display.setTextColor(TFT_WHITE);
-  display.drawRect(10,barY,barW,barH,TFT_WHITE);
-  int fillW = (barW-4)*pct/100;
-  if(fillW>0) display.fillRect(12,barY+2,fillW,barH-4,TFT_GREEN);
-
-  char buf[32];
-  sprintf(buf,"%d%%  (%u/%u KB)", pct, (unsigned)(written/1024), (unsigned)(total/1024));
-  display.setCursor(10,barY+barH+10);
-  display.print(buf);
-}
-
-// v-speed: gambar progres RINGAN. Hanya batang + angka, dan hanya kalau persen berubah.
-// (updDrawProgress() penuh = fillScreen + gambar ulang semua -> kalau dipanggil tiap potongan data,
-// unduhan jadi tertahan nunggu layar.) Panggil updDrawProgress() sekali dulu utk kerangka layar.
+// ===== layar progres UI v2 =====
+// Kerangka (judul, trek, peringatan) digambar SEKALI oleh updDrawProgress(); selama unduh/tulis cukup
+// panggil updDrawProgressFast() -- hanya menimpa angka & menambah bagian batang yg baru, dan hanya saat
+// persen berubah (tidak ada hapus-lalu-gambar ulang -> tidak kedip, dan tidak menahan unduhan).
 static int updLastPct = -1;
 static int updBarFill = 0;
 void updDrawProgressFast(size_t written, size_t total){
   int pct = (total>0) ? (int)(((uint64_t)written*100)/total) : 0;
+  if(pct > 100) pct = 100;
   if(pct == updLastPct) return;
   updLastPct = pct;
-  int barW=SCR_W-20, barH=18, barY=50;
-  int fillW = (barW-4)*pct/100;
-  if(fillW < updBarFill) updBarFill = 0;   // jaga-jaga kalau mundur: isi ulang dari awal
-  // progres cuma maju -> gambar HANYA bagian barunya, tidak ada hapus-lalu-isi (itu yg bikin kedip)
+  int fillW = (UPD_PG_BARW-4)*pct/100;
+  if(fillW < updBarFill) updBarFill = 0;
   if(fillW > updBarFill){
-    display.fillRect(12+updBarFill,barY+2,fillW-updBarFill,barH-4,TFT_GREEN);
+    display.fillRect(UPD_PG_BARX+2+updBarFill, UPD_PG_BARY+2, fillW-updBarFill, UPD_PG_BARH-4, 0x07F5);
     updBarFill = fillW;
   }
-  // teks ditulis dgn warna latar hitam -> menimpa teks lama tanpa dihapus dulu; spasi di ujung menutup sisa karakter
-  char buf[40];
-  sprintf(buf,"%3d%%  (%u/%u KB)   ", pct, (unsigned)(written/1024), (unsigned)(total/1024));
+  char buf[32];
+  snprintf(buf, sizeof(buf), "%3d%%", pct);
+  display.setTextSize(4);
   display.setTextColor(TFT_WHITE, TFT_BLACK);
-  display.setTextSize(1);
-  display.setCursor(10,barY+barH+10);
+  display.setCursor((SCR_W-96)/2, UPD_PG_BARY-52);
   display.print(buf);
+  snprintf(buf, sizeof(buf), "%u / %u KB      ", (unsigned)(written/1024), (unsigned)(total/1024));
+  display.setTextSize(1);
+  display.setTextColor(0x8410, TFT_BLACK);
+  display.setCursor(UPD_PG_BARX, UPD_PG_BARY+UPD_PG_BARH+10);
+  display.print(buf);
+}
+
+void updDrawProgress(const char* title, size_t written, size_t total){
+  display.fillScreen(TFT_BLACK);
+  display.setTextSize(1);
+  display.setTextColor(0x07FF);
+  display.setCursor((SCR_W-display.textWidth(title))/2, UPD_PG_BARY-86);
+  display.print(title);
+  display.fillRoundRect(UPD_PG_BARX, UPD_PG_BARY, UPD_PG_BARW, UPD_PG_BARH, 3, 0x2104);
+  const char* warn = "JANGAN MATIKAN PERANGKAT!";
+  display.setTextColor(0xFD20);
+  display.setCursor((SCR_W-display.textWidth(warn))/2, UPD_PG_BARY+UPD_PG_BARH+32);
+  display.print(warn);
+  updLastPct = -2; updBarFill = 0;     // paksa gambar angka & batang pertama
+  updDrawProgressFast(written, total);
+}
+
+// layar tunggu (tanpa persen & tanpa peringatan): dipakai saat cek rilis / menghubungi server
+void updDrawBusy(const char* title){
+  display.fillScreen(TFT_BLACK);
+  display.setTextSize(1);
+  display.setTextColor(0x07FF);
+  display.setCursor((SCR_W-display.textWidth(title))/2, SCR_H/2-14);
+  display.print(title);
+  const char* sub = "mohon tunggu";
+  display.setTextColor(0x8410);
+  display.setCursor((SCR_W-display.textWidth(sub))/2, SCR_H/2+4);
+  display.print(sub);
+  for(int i=0;i<3;i++) display.fillCircle(SCR_W/2-14+i*14, SCR_H/2+28, 3, i==0 ? 0x07FF : (i==1 ? 0x0555 : 0x02AA));
 }
 
 // reason: alasan gagal yang ditampilkan LANGSUNG di layar (bukan cuma di Serial),
@@ -9456,23 +9479,38 @@ void updDrawProgressFast(size_t written, size_t total){
 void updShowResult(bool success, const String& reason){
   updBusy = false;
   display.fillScreen(TFT_BLACK);
+  int cx = SCR_W/2, cy = SCR_H/2-44;
   display.setTextSize(2);
-  display.setCursor(20,90);
   if(success){
-    display.setTextColor(TFT_GREEN);
-    display.print("Update Sukses!");
+    display.fillCircle(cx, cy, 28, 0x07F5);
+    for(int d=-1; d<=1; d++){
+      display.drawLine(cx-13, cy+d, cx-4,  cy+9+d,  0xFFFF);
+      display.drawLine(cx-4,  cy+9+d, cx+14, cy-10+d, 0xFFFF);
+    }
+    const char* t1 = "Update Sukses!";
+    display.setTextColor(0x07F5);
+    display.setCursor((SCR_W-display.textWidth(t1))/2, cy+44);
+    display.print(t1);
     display.setTextSize(1);
     display.setTextColor(TFT_WHITE);
-    display.setCursor(20,120);
-    display.print("Perangkat restart otomatis...");
+    const char* t2 = "Perangkat restart otomatis...";
+    display.setCursor((SCR_W-display.textWidth(t2))/2, cy+68);
+    display.print(t2);
     delay(1800);
     ESP.restart();
   } else {
-    display.setTextColor(TFT_RED);
-    display.print("Update Gagal");
+    display.fillCircle(cx, cy, 28, 0xF9A6);
+    for(int d=-1; d<=1; d++){
+      display.drawLine(cx-11, cy-11+d, cx+11, cy+11+d, 0xFFFF);
+      display.drawLine(cx-11, cy+11+d, cx+11, cy-11+d, 0xFFFF);
+    }
+    const char* t1 = "Update Gagal";
+    display.setTextColor(0xF9A6);
+    display.setCursor((SCR_W-display.textWidth(t1))/2, cy+44);
+    display.print(t1);
     display.setTextSize(1);
     display.setTextColor(TFT_WHITE);
-    display.setCursor(20,120);
+    display.setCursor(16, cy+70);
     display.setTextWrap(true);
     display.print(reason.length() ? reason : "Cek file/koneksi, coba lagi.");
     display.setTextWrap(false);
@@ -9549,7 +9587,7 @@ bool updInstallFromURL(const String& url){
   }
 
   updBusy = true;
-  updDrawProgress("Menghubungi server...", 0, 0);
+  updDrawBusy("Menghubungi server...");
 
   bool isHttps = url.startsWith("https://");
   if(isHttps) nasaWaitForHeap(); // v61: guard sama spt NASA/Trivia -- belum dilaporin bermasalah, tp titik yg sama persis blm kepatch
@@ -9662,65 +9700,101 @@ void updEnter(){
 }
 void updExit(){}
 
+// ===== UI v2 app Update =====
+static void updIconArrow(LGFX_Sprite& s, int cx, int cy, uint16_t col){
+  s.fillCircle(cx, cy, 13, col);
+  s.fillTriangle(cx, cy-7, cx-6, cy, cx+6, cy, 0xFFFF);
+  s.fillRect(cx-2, cy, 5, 7, 0xFFFF);
+}
+
+static void updCenterText(LGFX_Sprite& s, int x, int w, int y, const char* t){
+  s.setCursor(x + (w - s.textWidth(t))/2, y);
+  s.print(t);
+}
+
 void drawUpdate(LGFX_Sprite& s){
   iosBackdrop(s); drawStatusBar(s);
-  s.setTextColor(0xF800); s.setTextSize(1); s.setCursor(8,26); s.print("Update Firmware");
+  s.setTextSize(1);
 
-  iosRR(s,SCR_W-64,24,58,18,4,T().surface2);
-  s.setTextColor(T().accent); s.setCursor(SCR_W-58,29); s.print("Scan");
-  iosRR(s,SCR_W-124,24,54,18,4,T().surface2);
-  s.setTextColor(T().accent); s.setCursor(SCR_W-118,29); s.print("Terbaru");
+  // ---- kartu atas: versi terpasang + status cek update ----
+  int st = otaState();                       // 0 belum dicek, 1 terbaru, 2 ada update
+  uint16_t stCol = (st==2) ? (uint16_t)IOS_ORANGE : (st==1 ? (uint16_t)IOS_GREEN : T().accent);
+  drawGlassCard(s, 6, UPD_HERO_Y, SCR_W-12, UPD_HERO_H, 10, T().surface, 200);
+  updIconArrow(s, 26, UPD_HERO_Y+UPD_HERO_H/2, stCol);
+  char line[40];
+  if(st==2)      snprintf(line, sizeof(line), "Ada update: build %d", otaLatestBuild());
+  else if(st==1) snprintf(line, sizeof(line), "Sudah versi terbaru");
+  else           snprintf(line, sizeof(line), "Firmware terpasang");
+  s.setTextColor(stCol); s.setCursor(46, UPD_HERO_Y+7); s.print(line);
+  int bn = otaBuildNum();
+  char bl[24];
+  if(bn > 0) snprintf(bl, sizeof(bl), "Build %d", bn); else snprintf(bl, sizeof(bl), "Lokal");
+  s.setTextSize(2); s.setTextColor(T().text); s.setCursor(46, UPD_HERO_Y+18); s.print(bl);
+  s.setTextSize(1);
+  iosRR(s, UPD_HB_X, UPD_HB_Y, UPD_HB_W, UPD_HB_H, 8, T().accent);
+  s.setTextColor(T().bg);
+  updCenterText(s, UPD_HB_X, UPD_HB_W, UPD_HB_Y+7, (SCR_W>=300) ? "Cek update" : "Cek");
 
-  s.setTextColor(T().subtext); s.setCursor(8,UPD_ROW0); s.print("Lokal - file .bin di /update:");
+  // ---- bagian SD card ----
+  s.setTextColor(T().subtext); s.setCursor(10, UPD_SD_LABEL_Y); s.print("DARI SD CARD  /update");
+  iosRR(s, UPD_SCAN_X, UPD_SD_LABEL_Y-4, UPD_SCAN_W, 15, 6, T().surface2);
+  s.setTextColor(T().accent);
+  updCenterText(s, UPD_SCAN_X, UPD_SCAN_W, UPD_SD_LABEL_Y, "Scan");
+  if(sdReady && updFileCount > UPD_ITEMS_PAGE){
+    bool canPrev = updScrollPage > 0;
+    bool canNext = (updScrollPage+1)*UPD_ITEMS_PAGE < updFileCount;
+    iosRR(s, UPD_PREV_X, UPD_SD_LABEL_Y-4, 22, 15, 6, T().surface2);
+    s.setTextColor(canPrev ? T().text : T().divider);
+    updCenterText(s, UPD_PREV_X, 22, UPD_SD_LABEL_Y, "<");
+    iosRR(s, UPD_NEXT_X, UPD_SD_LABEL_Y-4, 22, 15, 6, T().surface2);
+    s.setTextColor(canNext ? T().text : T().divider);
+    updCenterText(s, UPD_NEXT_X, 22, UPD_SD_LABEL_Y, ">");
+  }
 
   if(!sdReady){
-    s.setTextColor(T().danger); s.setCursor(8,UPD_ITEM_Y+4); s.print("SD Card tidak siap");
+    iosRR(s, 6, UPD_ITEM_Y, SCR_W-12, UPD_ITEM_H, 6, T().surface);
+    s.setTextColor(T().danger); s.setCursor(14, UPD_ITEM_Y+7); s.print("SD Card tidak siap");
   } else if(updFileCount == 0){
-    s.setTextColor(T().subtext); s.setCursor(8,UPD_ITEM_Y+4); s.print("Tidak ada .bin. Taruh di /update");
+    iosRR(s, 6, UPD_ITEM_Y, SCR_W-12, UPD_ITEM_H, 6, T().surface);
+    s.setTextColor(T().subtext); s.setCursor(14, UPD_ITEM_Y+7); s.print("Belum ada .bin. Taruh di /update");
   } else {
     int startIdx = updScrollPage*UPD_ITEMS_PAGE;
-    for(int i=0;i<UPD_ITEMS_PAGE && (startIdx+i)<updFileCount;i++){
+    int maxCh = (SCR_W - 12 - 74 - 30 - 48) / 6;
+    if(maxCh < 8) maxCh = 8;
+    for(int i=0; i<UPD_ITEMS_PAGE && (startIdx+i)<updFileCount; i++){
       int idx = startIdx+i;
       int itemY = UPD_ITEM_Y + i*(UPD_ITEM_H+UPD_ITEM_GAP);
-      iosRR(s,4,itemY,SCR_W-8,UPD_ITEM_H,5,T().surface);
-      s.setTextColor(T().text); s.setCursor(8,itemY+6);
+      iosRR(s, 6, itemY, SCR_W-12, UPD_ITEM_H, 6, T().surface);
+      s.fillRoundRect(13, itemY+5, 10, 12, 2, T().accent);      // ikon file
+      s.fillRect(16, itemY+9, 4, 1, T().bg); s.fillRect(16, itemY+12, 4, 1, T().bg);
       String fn = updFileList[idx];
       String fnDisp = fn;
-      if(fnDisp.length()>14) fnDisp = fnDisp.substring(0,12)+"..";
-      s.print(fnDisp.c_str());
-
+      if((int)fnDisp.length() > maxCh) fnDisp = fnDisp.substring(0, maxCh-2) + "..";
+      s.setTextColor(T().text); s.setCursor(30, itemY+7); s.print(fnDisp.c_str());
+      char sz[16]; snprintf(sz, sizeof(sz), "%u KB", (unsigned)(updFileSizes[idx]/1024));
+      s.setTextColor(T().subtext); s.setCursor(SCR_W-12-58-6-s.textWidth(sz)-4, itemY+7); s.print(sz);
       bool pendingThis = (updPendingConfirm == ("sd:"+fn)) && millis()<=updPendingUntil;
-      iosRR(s,SCR_W-70,itemY+2,64,UPD_ITEM_H-4,4, pendingThis?T().danger:T().good);
-      s.setTextColor(T().bg); s.setCursor(SCR_W-64,itemY+6);
-      s.print(pendingThis?"Yakin?":"Pasang");
-    }
-    if(updFileCount > UPD_ITEMS_PAGE){
-      if(updScrollPage>0){
-        iosRR(s,SCR_W-120,UPD_NAV_Y,54,UPD_NAV_H,4,T().surface2);
-        s.setTextColor(T().text); s.setCursor(SCR_W-112,UPD_NAV_Y+4); s.print("< Prev");
-      }
-      if((updScrollPage+1)*UPD_ITEMS_PAGE < updFileCount){
-        iosRR(s,SCR_W-60,UPD_NAV_Y,54,UPD_NAV_H,4,T().surface2);
-        s.setTextColor(T().text); s.setCursor(SCR_W-54,UPD_NAV_Y+4); s.print("Next >");
-      }
+      iosRR(s, SCR_W-10-58, itemY+2, 58, UPD_ITEM_H-4, 7, pendingThis ? T().danger : T().good);
+      s.setTextColor(T().bg);
+      updCenterText(s, SCR_W-10-58, 58, itemY+7, pendingThis ? "Yakin?" : "Pasang");
     }
   }
 
-  s.drawFastHLine(8,UPD_DIV_Y,SCR_W-16,T().divider);
-
-  s.setTextColor(T().subtext); s.setCursor(8,UPD_WIFI_LABEL_Y); s.print(otaWifiLabel().c_str());
-
-  iosRR(s,8,UPD_URL_Y,SCR_W-16,UPD_URL_H,4,T().surface);
-  s.setTextColor(T().text); s.setCursor(12,UPD_URL_Y+6);
-  String uDisp = updUrl.length() ? updUrl : "(ketuk utk isi URL firmware.bin)";
-  if(uDisp.length()>34) uDisp = uDisp.substring(0,32)+"..";
-  s.print(uDisp.c_str());
+  // ---- bagian WiFi ----
+  s.setTextColor(T().subtext); s.setCursor(10, UPD_WIFI_LABEL_Y); s.print("DARI WIFI  -  URL firmware.bin");
+  iosRR(s, 6, UPD_URL_Y, SCR_W-12, UPD_URL_H, 6, T().surface);
+  int maxU = (SCR_W-28)/6;
+  String uDisp = updUrl.length() ? updUrl : String("ketuk untuk isi URL...");
+  if((int)uDisp.length() > maxU) uDisp = uDisp.substring(0, maxU-2) + "..";
+  s.setTextColor(updUrl.length() ? T().text : T().subtext);
+  s.setCursor(14, UPD_URL_Y+6); s.print(uDisp.c_str());
 
   bool pendingWifi = (updPendingConfirm == ("wifi:"+updUrl)) && millis()<=updPendingUntil;
   uint16_t wifiBtnColor = (!wifiConnected) ? T().surface2 : (pendingWifi ? T().danger : T().accent);
-  iosRR(s,8,UPD_BTN_Y,SCR_W-16,UPD_BTN_H,6, wifiBtnColor);
-  s.setTextColor((!wifiConnected) ? T().subtext : T().bg); s.setCursor(14,UPD_BTN_Y+7);
-  s.print(!wifiConnected ? "WiFi tidak terhubung" : (pendingWifi ? "Yakin? Ketuk lagi" : "Unduh & Pasang"));
+  iosRR(s, 6, UPD_BTN_Y, SCR_W-12, UPD_BTN_H, 8, wifiBtnColor);
+  s.setTextColor((!wifiConnected) ? T().subtext : T().bg);
+  updCenterText(s, 6, SCR_W-12, UPD_BTN_Y+8,
+                !wifiConnected ? "WiFi tidak terhubung" : (pendingWifi ? "Yakin? Ketuk lagi" : "Unduh & Pasang"));
 
   if(kbVisible) drawKb(s); else drawBack(s);
   drawToast(s);
@@ -9741,12 +9815,20 @@ void updTouch(int x,int y,bool held,bool isNew){
 
   if(isBack(x,y)){ navBack(); return; }
 
-  if(x>=SCR_W-124 && x<=SCR_W-70 && y>=24 && y<=42){
+  // kartu atas: Cek update
+  if(x>=UPD_HB_X && x<=UPD_HB_X+UPD_HB_W && y>=UPD_HB_Y-4 && y<=UPD_HB_Y+UPD_HB_H+4){
     otaCheckAndFill(); return;
   }
 
-  if(x>=SCR_W-64 && x<=SCR_W-6 && y>=24 && y<=42){
-    updScanFiles(); showToast("Scan selesai"); needRedraw=true; return;
+  // baris label SD: Scan, Prev, Next
+  if(y>=UPD_SD_LABEL_Y-8 && y<=UPD_SD_LABEL_Y+10){
+    if(x>=UPD_SCAN_X && x<=UPD_SCAN_X+UPD_SCAN_W){
+      updScanFiles(); showToast("Scan selesai"); needRedraw=true; return;
+    }
+    if(sdReady && updFileCount > UPD_ITEMS_PAGE){
+      if(updScrollPage>0 && x>=UPD_PREV_X && x<=UPD_PREV_X+22){ updScrollPage--; needRedraw=true; return; }
+      if((updScrollPage+1)*UPD_ITEMS_PAGE<updFileCount && x>=UPD_NEXT_X && x<=UPD_NEXT_X+22){ updScrollPage++; needRedraw=true; return; }
+    }
   }
 
   if(sdReady && updFileCount>0){
@@ -9754,20 +9836,12 @@ void updTouch(int x,int y,bool held,bool isNew){
     for(int i=0;i<UPD_ITEMS_PAGE && (startIdx+i)<updFileCount;i++){
       int idx = startIdx+i;
       int itemY = UPD_ITEM_Y + i*(UPD_ITEM_H+UPD_ITEM_GAP);
-      if(y>=itemY && y<=itemY+UPD_ITEM_H && x>=SCR_W-70 && x<=SCR_W-6){
+      if(y>=itemY && y<=itemY+UPD_ITEM_H && x>=SCR_W-74 && x<=SCR_W-6){
         String fn = updFileList[idx];
         if(updCheckConfirm("sd:"+fn)){
           updInstallFromSD(fn);
         }
         return;
-      }
-    }
-    if(updFileCount > UPD_ITEMS_PAGE){
-      if(updScrollPage>0 && x>=SCR_W-120 && x<=SCR_W-66 && y>=UPD_NAV_Y && y<=UPD_NAV_Y+UPD_NAV_H){
-        updScrollPage--; needRedraw=true; return;
-      }
-      if((updScrollPage+1)*UPD_ITEMS_PAGE<updFileCount && x>=SCR_W-60 && x<=SCR_W-6 && y>=UPD_NAV_Y && y<=UPD_NAV_Y+UPD_NAV_H){
-        updScrollPage++; needRedraw=true; return;
       }
     }
   }

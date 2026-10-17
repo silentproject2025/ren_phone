@@ -30,11 +30,7 @@ void otaCheckAndFill() {
   if (!wifiConnected) { showToast("Sambungkan WiFi dulu di Setting"); return; }
 
   updBusy = true;
-  display.fillScreen(TFT_BLACK);
-  display.setTextColor(TFT_WHITE);
-  display.setTextSize(1);
-  display.setCursor(10, 10);
-  display.print("Memeriksa rilis GitHub...");
+  updDrawBusy("Memeriksa rilis GitHub...");
 
   nasaWaitForHeap();                 // guard heap sebelum TLS, sama spt jalur update lain
   WiFiClientSecure client;
@@ -86,4 +82,13 @@ void otaCheckAndFill() {
   } else {
     showToast("Sudah versi terbaru", 2000);
   }
+}
+
+// ---- dipakai UI app Update (phone.ino). Fungsi, bukan makro, karena RP_BUILD_NUM
+//      default-nya didefinisikan di file ini yg urutannya SETELAH phone.ino ----
+int otaBuildNum()    { return (int)RP_BUILD_NUM; }
+int otaLatestBuild() { return otaLatestNum; }
+int otaState() {      // 0 belum dicek, 1 sudah terbaru, 2 ada update
+  if (!otaCheckedOk) return 0;
+  return (otaLatestNum > (int)RP_BUILD_NUM) ? 2 : 1;
 }
