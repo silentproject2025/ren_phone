@@ -2,7 +2,8 @@ name: Web Flasher (GitHub Pages)
 
 # Dipanggil otomatis dari workflow build S3 & CAM setelah Release dibuat.
 # Bisa juga dijalankan manual (Run workflow) untuk membangun ulang halamannya.
-# Halaman membedakan firmware STABIL (dari main/master) dan UJI COBA (dari branch lain).
+# Halaman membedakan firmware STABIL (dari main/master) dan UJI COBA (dari branch lain),
+# dan menyediakan tombol Unduh .bin + SHA-256 di tiap versi.
 on:
   workflow_call:
   workflow_dispatch:
@@ -28,7 +29,7 @@ jobs:
           REPO: ${{ github.repository }}
         run: |
           python3 - <<'PY'
-          import html, json, os, re, shutil, subprocess, datetime
+          import hashlib, html, json, os, re, shutil, subprocess, datetime
 
           repo = os.environ["REPO"]
           site = "site"
@@ -38,10 +39,10 @@ jobs:
               return subprocess.run(["gh", *args], capture_output=True, text=True, check=True).stdout
 
           DEVICES = [
-              {"key": "s3", "prefix": "build-", "asset": "ren_phone_s3_merged.bin", "chip": "ESP32-S3",
-               "title": "Ren Phone", "sub": "ESP32-S3 \u00b7 HP utama", "icon": "\U0001F4F1"},
-              {"key": "cam", "prefix": "cam-", "asset": "cam_merged.bin", "chip": "ESP32",
-               "title": "Co-prosesor Bluetooth", "sub": "ESP32-CAM \u00b7 board kamera", "icon": "\U0001F4F7"},
+              {"key": "s3", "prefix": "build-", "asset": "ren_phone_s3_merged.bin", "chip": "ESP32-S3", "esp": "esp32s3",
+               "title": "Ren Phone", "sub": "ESP32-S3 &middot; HP utama", "short": "Ren Phone"},
+              {"key": "cam", "prefix": "cam-", "asset": "cam_merged.bin", "chip": "ESP32", "esp": "esp32",
+               "title": "Co-prosesor Bluetooth", "sub": "ESP32-CAM &middot; board kamera", "short": "Co-prosesor BT"},
           ]
           BULAN = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"]
 
@@ -52,10 +53,57 @@ jobs:
               except Exception:
                   return iso[:10]
 
+          def sha256_of(path):
+              h = hashlib.sha256()
+              with open(path, "rb") as f:
+                  for chunk in iter(lambda: f.read(1 << 20), b""):
+                      h.update(chunk)
+              return h.hexdigest()
+
+          def fill(tpl, **kw):
+              for k, v in kw.items():
+                  tpl = tpl.replace("@@" + k + "@@", str(v))
+              return tpl
+
           rels = json.loads(gh("release", "list", "--repo", repo, "--limit", "80", "--json", "tagName,publishedAt"))
           esc = html.escape
-          sections = []
 
+          BUILD_TPL = """
+          <article class="build" data-chan="@@chan@@">
+            <div class="build-top">
+              <span class="tag @@cls@@"><i></i>@@label@@</span>
+              <span class="from">branch <b>@@branch@@</b></span>
+            </div>
+            <p class="note">@@note@@</p>
+            <dl class="spec">
+              <div><dt>rilis</dt><dd>@@tag@@</dd></div>
+              <div><dt>tanggal</dt><dd>@@date@@</dd></div>
+              <div><dt>ukuran</dt><dd>@@size@@ MB</dd></div>
+              <div><dt>commit</dt><dd>@@commit@@</dd></div>
+            </dl>
+            <button type="button" class="hash" data-copy="@@sha@@" title="Klik untuk menyalin SHA-256">
+              <span>sha256</span><code>@@sha_short@@&hellip;</code><em>salin</em>
+            </button>
+            <div class="actions">
+              <esp-web-install-button manifest="@@manifest@@">
+                <button slot="activate" class="btn primary">Pasang via USB</button>
+                <span slot="unsupported" class="mut">Browser ini belum mendukung Web Serial. Pakai tombol Unduh di samping.</span>
+                <span slot="not-allowed" class="mut">Halaman harus dibuka lewat https.</span>
+              </esp-web-install-button>
+              <a class="btn" href="@@binf@@" download="@@dlname@@">Unduh .bin <small>@@size@@ MB</small></a>
+            </div>
+            <details class="manual">
+              <summary>Flash manual pakai esptool</summary>
+              <p>File ini sudah <b>merged</b> (bootloader + partisi + aplikasi), jadi ditulis di alamat <code>0x0</code>.</p>
+              <div class="cmd"><code>esptool.py --chip @@esp@@ --baud 921600 write_flash 0x0 @@dlname@@</code>
+                <button type="button" data-copy="esptool.py --chip @@esp@@ --baud 921600 write_flash 0x0 @@dlname@@">salin</button></div>
+            </details>
+            <a class="notes" href="@@url@@">Catatan rilis &rarr;</a>
+          </article>
+          """
+
+          panels = []
+          tabs = []
           for dev in DEVICES:
               found = {}
               checked = 0
@@ -91,99 +139,230 @@ jobs:
                              "new_install_prompt_erase": True,
                              "builds": [{"chipFamily": dev["chip"], "parts": [{"path": binf, "offset": 0}]}]},
                             open(os.path.join(site, mf), "w"), indent=2)
+                  dlname = re.sub(r"[^A-Za-z0-9._-]+", "-", "ren_phone_%s_%s_%s.bin" % (dev["key"], tag, branch)).strip("-")
                   found[chan] = {"tag": tag, "branch": branch, "sha": sha, "url": info.get("url", ""),
-                                 "size": asset.get("size", 0), "date": tgl(r.get("publishedAt", "")), "manifest": mf}
+                                 "size": asset.get("size", 0), "date": tgl(r.get("publishedAt", "")),
+                                 "manifest": mf, "binf": binf, "dlname": dlname,
+                                 "hash": sha256_of(os.path.join(site, binf))}
 
-              def card(chan, d):
+              def build(chan, d):
                   if chan == "stable":
-                      badge, cls = "STABIL", "b-stable"
-                      note = "Versi yang sudah digabung ke <b>%s</b>. Disarankan untuk pemakaian sehari-hari." % esc(d["branch"])
+                      label, cls = "STABIL", "ok"
+                      note = "Sudah digabung ke <b>%s</b>. Pilihan aman untuk dipakai sehari-hari." % esc(d["branch"])
                   else:
-                      badge, cls = "UJI COBA", "b-test"
-                      note = "Dibuat dari branch <b>%s</b>. Fitur baru, bisa belum stabil." % esc(d["branch"])
-                  commit = ""
+                      label, cls = "UJI COBA", "warn"
+                      note = "Dibuat dari branch <b>%s</b>. Fitur baru, bisa saja belum stabil." % esc(d["branch"])
+                  commit = "&ndash;"
                   if d["sha"]:
                       commit = '<a href="https://github.com/%s/commit/%s">%s</a>' % (esc(repo), esc(d["sha"]), esc(d["sha"][:7]))
-                  rows = ('<div class="meta"><span>Rilis</span><b>%s</b></div>'
-                          '<div class="meta"><span>Branch</span><b>%s</b></div>'
-                          '<div class="meta"><span>Tanggal</span><b>%s</b></div>'
-                          '<div class="meta"><span>Ukuran</span><b>%.2f MB</b></div>') % (
-                              esc(d["tag"]), esc(d["branch"]), esc(d["date"]), d["size"] / 1048576.0)
-                  if commit:
-                      rows += '<div class="meta"><span>Commit</span><b>%s</b></div>' % commit
-                  return ('<div class="card %s"><span class="badge %s">%s</span><p class="note">%s</p>%s'
-                          '<esp-web-install-button manifest="%s"><button slot="activate" class="btn">Pasang firmware ini</button>'
-                          '<span slot="unsupported" class="mut">Browser belum mendukung. Pakai Chrome atau Edge di komputer.</span>'
-                          '<span slot="not-allowed" class="mut">Halaman harus dibuka lewat https.</span></esp-web-install-button>'
-                          '<a class="mut link" href="%s">Lihat catatan rilis</a></div>') % (
-                              cls, cls, badge, note, rows, esc(d["manifest"]), esc(d["url"]))
+                  return fill(BUILD_TPL, chan=chan, cls=cls, label=label, branch=esc(d["branch"]), note=note,
+                              tag=esc(d["tag"]), date=esc(d["date"]), size="%.2f" % (d["size"] / 1048576.0),
+                              commit=commit, sha=d["hash"], sha_short=d["hash"][:16], manifest=esc(d["manifest"]),
+                              binf=esc(d["binf"]), dlname=esc(d["dlname"]), esp=dev["esp"], url=esc(d["url"]))
 
-              body = ""
-              for chan in ("stable", "test"):
-                  if chan in found:
-                      body += card(chan, found[chan])
-              if not body:
-                  body = '<div class="card empty">Belum ada firmware untuk perangkat ini.</div>'
-              sections.append('<section><h2><span class="ico">%s</span> %s <small>%s</small></h2><div class="grid">%s</div></section>' % (
-                  dev["icon"], esc(dev["title"]), esc(dev["sub"]), body))
+              builds = "".join(build(c, found[c]) for c in ("stable", "test") if c in found)
+              if not builds:
+                  builds = '<p class="empty">Belum ada firmware untuk perangkat ini.</p>'
+              seg = ""
+              if len(found) == 2:
+                  seg = ('<div class="seg" role="group" aria-label="Pilih kanal">'
+                         '<button type="button" data-chan="stable">Stabil</button>'
+                         '<button type="button" data-chan="test">Uji coba</button></div>')
+              default = "stable" if "stable" in found else "test"
+              panels.append('<section class="panel" id="p-%s" data-default="%s"><header class="panel-head">'
+                            '<div><h2>%s</h2><p>%s</p></div>%s</header>%s</section>' % (
+                                dev["key"], default, esc(dev["title"]), dev["sub"], seg, builds))
+              tabs.append('<button type="button" role="tab" data-tab="p-%s">%s</button>' % (dev["key"], esc(dev["short"])))
 
-          css = """
-          :root{color-scheme:light dark;--bg:#f4f5f9;--fg:#14151a;--card:#fff;--line:#e3e5ee;--mut:#6a6e7c;--acc:#0a84ff;--ok:#1e9e55;--warn:#d9822b}
-          @media (prefers-color-scheme:dark){:root{--bg:#0e0f13;--fg:#ececf1;--card:#181a21;--line:#2a2d38;--mut:#9a9eab;--acc:#4da3ff;--ok:#3ecf80;--warn:#f0a050}}
-          *{box-sizing:border-box}
-          body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.55 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
-          header{padding:44px 20px 30px;text-align:center;background:linear-gradient(135deg,#1b2a6b,#6a2fb5 60%,#d6407a);color:#fff}
-          header h1{margin:0 0 6px;font-size:clamp(1.6rem,5vw,2.3rem);letter-spacing:-.02em}
-          header p{margin:0 auto;max-width:560px;opacity:.9}
-          .legend{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-top:16px}
-          .pill{background:rgba(255,255,255,.18);border-radius:999px;padding:4px 12px;font-size:.85rem}
-          main{max-width:920px;margin:0 auto;padding:8px 16px 40px}
-          section{margin:28px 0}
-          h2{font-size:1.25rem;margin:0 0 12px;display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
-          h2 small{color:var(--mut);font-weight:400;font-size:.8rem}.ico{font-size:1.4rem}
-          .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px}
-          .card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:18px;box-shadow:0 1px 3px rgba(0,0,0,.06);border-top:4px solid var(--line)}
-          .card.b-stable{border-top-color:var(--ok)}.card.b-test{border-top-color:var(--warn)}
-          .badge{display:inline-block;font-size:.72rem;font-weight:700;letter-spacing:.06em;border-radius:6px;padding:2px 8px;color:#fff}
-          .badge.b-stable{background:var(--ok)}.badge.b-test{background:var(--warn)}
-          .note{margin:10px 0 12px;font-size:.92rem}
-          .meta{display:flex;justify-content:space-between;gap:10px;font-size:.88rem;padding:5px 0;border-bottom:1px dashed var(--line)}
-          .meta span{color:var(--mut)}.meta a{color:var(--acc);text-decoration:none}
-          .btn{margin-top:14px;width:100%;font:inherit;font-weight:600;padding:12px 16px;border:0;border-radius:12px;color:#fff;background:linear-gradient(135deg,#0a84ff,#6a5cff);cursor:pointer}
-          .btn:hover{filter:brightness(1.08)}
-          .mut{color:var(--mut);font-size:.85rem}.link{display:block;margin-top:10px;text-align:center;color:var(--acc)}
-          .empty{color:var(--mut);text-align:center}
-          .how{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:18px 20px}
-          .how ol{margin:8px 0 0;padding-left:20px}.how li{margin:4px 0}
-          details{margin-top:10px}summary{cursor:pointer;font-weight:600}
-          details p{margin:6px 0;color:var(--mut);font-size:.92rem}
-          footer{text-align:center;color:var(--mut);font-size:.82rem;padding:0 16px 30px}
-          footer a{color:var(--acc);text-decoration:none}
+          CSS = """
+          :root{color-scheme:dark light;--bg:#12120f;--panel:#1a1a16;--ink:#ece8dc;--mut:#8d8a7d;--line:#2e2d26;--acc:#ff6b2c;--acc-ink:#14120e;--ok:#8fbf6a;--warn:#e8b23a}
+          @media (prefers-color-scheme:light){:root{--bg:#efece3;--panel:#f8f6f0;--ink:#1b1a14;--mut:#6e6b5f;--line:#d8d4c7;--acc:#d9480f;--acc-ink:#fff8f0;--ok:#3f7d2a;--warn:#a66a00}}
+          *{box-sizing:border-box}[hidden]{display:none!important}
+          html{scroll-behavior:smooth}
+          body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.6 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;-webkit-font-smoothing:antialiased}
+          a{color:inherit}code,.mono,dt,.tag,.eyebrow,.hash,.seg button,[role=tab]{font-family:ui-monospace,"JetBrains Mono","SF Mono",Menlo,Consolas,monospace}
+          .wrap{max-width:980px;margin:0 auto;padding:0 20px}
+          .hero{display:grid;grid-template-columns:1fr auto;gap:40px;align-items:center;padding:64px 0 40px;border-bottom:1px solid var(--line)}
+          .eyebrow{font-size:.75rem;letter-spacing:.14em;text-transform:uppercase;color:var(--acc);margin:0 0 14px}
+          h1{font-size:clamp(2rem,6vw,3.3rem);line-height:1.04;margin:0 0 16px;letter-spacing:-.035em;font-weight:700}
+          h1 u{text-decoration:none;box-shadow:inset 0 -.32em 0 color-mix(in srgb,var(--acc) 38%,transparent)}
+          .lead{margin:0;max-width:46ch;color:var(--mut);font-size:1.02rem}
+          .facts{display:flex;flex-wrap:wrap;gap:6px 18px;margin:22px 0 0;padding:0;list-style:none;font-size:.82rem;color:var(--mut)}
+          .facts li:before{content:"/ ";color:var(--acc)}
+          .phone{appearance:none;border:0;background:none;padding:0;cursor:pointer;perspective:700px;font:inherit;color:inherit}
+          .phone-body{position:relative;width:148px;height:296px;border:2px solid var(--ink);border-radius:26px;background:#0a0a09;overflow:hidden;transition:transform .25s ease;transform:rotateY(var(--ry,0deg)) rotateX(var(--rx,0deg));box-shadow:8px 8px 0 color-mix(in srgb,var(--ink) 14%,transparent)}
+          .phone:focus-visible{outline:2px solid var(--acc);outline-offset:6px;border-radius:30px}
+          .home{position:absolute;inset:0;display:grid;grid-template-columns:repeat(3,1fr);gap:14px 10px;align-content:center;padding:22px 16px}
+          .home span{aspect-ratio:1;border-radius:9px;background:#2a2a24}.home span:nth-child(3n+1){background:var(--acc)}.home span:nth-child(5n){background:#3d6a5c}
+          .lock{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;padding-top:44px;color:#ece8dc;background:linear-gradient(#1c1b17,#0a0a09);transition:transform .55s cubic-bezier(.7,0,.2,1)}
+          .phone.open .lock{transform:translateY(-102%)}
+          .lock .d{font-size:.62rem;opacity:.7;letter-spacing:.04em}
+          .lock .t{font:700 2.5rem/1.1 ui-monospace,Menlo,Consolas,monospace;letter-spacing:-.04em;margin-top:4px}
+          .lock .ip{margin-top:10px;font:.62rem ui-monospace,Menlo,Consolas,monospace;padding:4px 9px;border:1px solid #4a4940;border-radius:99px;background:#ffffff12;min-height:22px}
+          .lock .ip b{color:var(--acc);font-weight:600}.lock .ip i{display:inline-block;width:1px;height:.8em;background:#ece8dc;margin-left:1px;vertical-align:-1px;animation:bl 1s steps(1) infinite}
+          .lock .sw{position:absolute;bottom:14px;font-size:.55rem;opacity:.55}
+          @keyframes bl{50%{opacity:0}}
+          .hint{display:block;margin-top:12px;text-align:center;font-size:.72rem;color:var(--mut)}
+          .tabs{display:flex;gap:0;margin:34px 0 0;border-bottom:1px solid var(--line)}
+          [role=tab]{appearance:none;background:none;border:0;border-bottom:2px solid transparent;color:var(--mut);padding:10px 18px 12px;font-size:.85rem;cursor:pointer;margin-bottom:-1px}
+          [role=tab]:hover{color:var(--ink)}[role=tab][aria-selected=true]{color:var(--ink);border-bottom-color:var(--acc)}
+          .note-serial{margin:18px 0 0;padding:10px 14px;border:1px solid var(--warn);color:var(--warn);font-size:.86rem}
+          .panel{padding:26px 0 8px}
+          .panel-head{display:flex;justify-content:space-between;align-items:flex-end;gap:16px;flex-wrap:wrap;margin-bottom:18px}
+          .panel-head h2{margin:0;font-size:1.4rem;letter-spacing:-.02em}.panel-head p{margin:2px 0 0;color:var(--mut);font-size:.88rem}
+          .seg{display:inline-flex;border:1px solid var(--line)}
+          .seg button{appearance:none;border:0;background:none;color:var(--mut);padding:6px 14px;font-size:.78rem;cursor:pointer}
+          .seg button[aria-pressed=true]{background:var(--ink);color:var(--bg)}
+          .panel>.build+.build{margin-top:16px}
+          .build{background:var(--panel);border:1px solid var(--line);padding:22px;display:grid;gap:14px}
+          .build-top{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
+          .tag{display:inline-flex;align-items:center;gap:8px;font-size:.74rem;font-weight:700;letter-spacing:.1em}
+          .tag i{width:8px;height:8px;border-radius:50%;background:currentColor}.tag.ok{color:var(--ok)}.tag.warn{color:var(--warn)}
+          .from{font-size:.8rem;color:var(--mut)}.from b{color:var(--ink);font-family:ui-monospace,Menlo,Consolas,monospace;font-weight:500}
+          .note{margin:0;color:var(--mut)}.note b{color:var(--ink);font-weight:600}
+          .spec{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:0;margin:0;border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
+          .spec div{padding:10px 12px 10px 0}.spec dt{font-size:.66rem;letter-spacing:.1em;text-transform:uppercase;color:var(--mut)}
+          .spec dd{margin:2px 0 0;font:500 .9rem ui-monospace,Menlo,Consolas,monospace;overflow-wrap:anywhere}.spec dd a{color:var(--acc);text-decoration:none}
+          .hash{display:flex;align-items:center;gap:12px;width:100%;appearance:none;background:none;border:1px dashed var(--line);color:var(--ink);padding:8px 12px;cursor:pointer;font-size:.8rem;text-align:left}
+          .hash span{color:var(--mut)}.hash code{flex:1;color:var(--ink)}.hash em{font-style:normal;color:var(--acc)}.hash:hover{border-color:var(--acc)}
+          .actions{display:flex;gap:10px;flex-wrap:wrap;align-items:stretch}
+          .actions esp-web-install-button{display:contents}
+          .btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;font:600 .92rem system-ui,sans-serif;text-decoration:none;color:var(--ink);background:none;border:1px solid var(--ink);padding:11px 18px;cursor:pointer;transition:transform .12s,box-shadow .12s}
+          .btn small{font:.72rem ui-monospace,Menlo,Consolas,monospace;opacity:.65}
+          .btn:hover{transform:translate(-2px,-2px);box-shadow:3px 3px 0 var(--ink)}.btn:active{transform:none;box-shadow:none}
+          .btn.primary{background:var(--acc);border-color:var(--acc);color:var(--acc-ink)}.btn.primary:hover{box-shadow:3px 3px 0 var(--ink)}
+          .mut{color:var(--mut);font-size:.85rem;align-self:center}
+          .manual summary,.faq summary{cursor:pointer;font-size:.86rem;color:var(--mut)}.manual summary:hover,.faq summary:hover{color:var(--ink)}
+          .manual p{margin:8px 0;color:var(--mut);font-size:.88rem}
+          .cmd{display:flex;gap:10px;align-items:center;justify-content:space-between;background:var(--bg);border:1px solid var(--line);padding:10px 12px;overflow-x:auto}
+          .cmd code{font-size:.8rem;white-space:nowrap}.cmd button{appearance:none;border:0;background:none;color:var(--acc);cursor:pointer;font:inherit;font-size:.8rem}
+          .notes{font-size:.82rem;color:var(--mut);text-decoration:none}.notes:hover{color:var(--ink)}
+          .empty{color:var(--mut);padding:26px;border:1px dashed var(--line);text-align:center}
+          .how{margin:44px 0 0;padding:34px 0 0;border-top:1px solid var(--line);display:grid;grid-template-columns:200px 1fr;gap:26px}
+          .how h2{margin:0;font-size:.75rem;letter-spacing:.14em;text-transform:uppercase;color:var(--mut);font-family:ui-monospace,Menlo,Consolas,monospace;font-weight:500}
+          .how ol{margin:0;padding:0;list-style:none;counter-reset:step}.how li{counter-increment:step;display:grid;grid-template-columns:34px 1fr;padding:6px 0}
+          .how li:before{content:"0" counter(step);font:.8rem ui-monospace,Menlo,Consolas,monospace;color:var(--acc);padding-top:2px}
+          .faq{margin-top:12px;display:grid;gap:8px}.faq p{margin:6px 0 4px;color:var(--mut);font-size:.9rem}
+          footer{margin-top:50px;padding:20px 0 40px;border-top:1px solid var(--line);color:var(--mut);font-size:.8rem;display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap}
+          footer a{text-decoration:none;border-bottom:1px solid var(--line)}
+          .toast{position:fixed;left:50%;bottom:24px;transform:translate(-50%,20px);opacity:0;background:var(--ink);color:var(--bg);padding:8px 16px;font:.82rem ui-monospace,Menlo,Consolas,monospace;transition:.25s;pointer-events:none}
+          .toast.on{opacity:1;transform:translate(-50%,0)}
+          @media (max-width:760px){.hero{grid-template-columns:1fr;padding-top:40px}.phone{justify-self:start}.how{grid-template-columns:1fr}.btn{flex:1 1 100%}}
+          @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}html{scroll-behavior:auto}}
           """
+
+          JS = """
+          (function(){
+            var $=function(s,c){return [].slice.call((c||document).querySelectorAll(s));};
+            document.documentElement.classList.add('js');
+            var panels=$('.panel'), tabs=$('[role=tab]');
+            function showPanel(id){
+              panels.forEach(function(p){p.hidden=(p.id!==id);});
+              tabs.forEach(function(t){t.setAttribute('aria-selected',String(t.getAttribute('data-tab')===id));});
+              if(history.replaceState) history.replaceState(null,'','#'+id.slice(2));
+            }
+            tabs.forEach(function(t){t.addEventListener('click',function(){showPanel(t.getAttribute('data-tab'));});});
+            var want='p-'+(location.hash||'').slice(1);
+            showPanel(document.getElementById(want)?want:(panels[0]||{}).id);
+            panels.forEach(function(p){
+              var btns=$('.seg button',p), builds=$('.build',p);
+              function pick(c){
+                builds.forEach(function(b){b.hidden=(b.getAttribute('data-chan')!==c);});
+                btns.forEach(function(x){x.setAttribute('aria-pressed',String(x.getAttribute('data-chan')===c));});
+              }
+              btns.forEach(function(x){x.addEventListener('click',function(){pick(x.getAttribute('data-chan'));});});
+              if(btns.length) pick(p.getAttribute('data-default'));
+            });
+            var toast=document.getElementById('toast'), tt;
+            function say(m){toast.textContent=m;toast.classList.add('on');clearTimeout(tt);tt=setTimeout(function(){toast.classList.remove('on');},1600);}
+            $('[data-copy]').forEach(function(b){b.addEventListener('click',function(){
+              var v=b.getAttribute('data-copy');
+              function ok(){say('Tersalin');}
+              if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(v).then(ok,function(){say('Gagal menyalin');});}
+              else{var a=document.createElement('textarea');a.value=v;document.body.appendChild(a);a.select();try{document.execCommand('copy');ok();}catch(e){say('Gagal menyalin');}a.remove();}
+            });});
+            if(!('serial' in navigator)){var n=document.getElementById('serial-note');if(n)n.hidden=false;}
+            var ph=document.getElementById('phone');
+            if(ph){
+              var reduce=window.matchMedia&&matchMedia('(prefers-reduced-motion: reduce)').matches;
+              var tEl=document.getElementById('lk-t'), dEl=document.getElementById('lk-d'), ipEl=document.getElementById('lk-ip');
+              function tick(){
+                var n=new Date(), h=('0'+n.getHours()).slice(-2), m=('0'+n.getMinutes()).slice(-2);
+                tEl.textContent=h+':'+m;
+                try{dEl.textContent=n.toLocaleDateString('id-ID',{weekday:'long',day:'numeric',month:'short'});}catch(e){dEl.textContent='';}
+              }
+              tick(); setInterval(tick,5000);
+              var ipText='192.168.1.'+(20+Math.floor(Math.random()*200)), i=0;
+              function typeIp(){
+                ipEl.innerHTML='IP <b>'+ipText.slice(0,i)+'</b>'+(i<ipText.length?'<i></i>':'');
+                if(i<ipText.length){i++;setTimeout(typeIp,reduce?0:85);}
+              }
+              setTimeout(typeIp,reduce?0:700);
+              ph.addEventListener('click',function(){ph.classList.toggle('open');});
+              if(!reduce){
+                var body=ph.firstElementChild;
+                ph.addEventListener('pointermove',function(e){
+                  var r=ph.getBoundingClientRect(), x=(e.clientX-r.left)/r.width-.5, y=(e.clientY-r.top)/r.height-.5;
+                  body.style.setProperty('--ry',(x*16)+'deg');body.style.setProperty('--rx',(-y*12)+'deg');
+                });
+                ph.addEventListener('pointerleave',function(){body.style.setProperty('--ry','0deg');body.style.setProperty('--rx','0deg');});
+              }
+            }
+          })();
+          """
+
           now = datetime.datetime.now(datetime.timezone.utc).strftime("%d/%m/%Y %H:%M UTC")
-          page = ['<!doctype html><html lang="id"><head><meta charset="utf-8">',
-                  '<meta name="viewport" content="width=device-width, initial-scale=1">',
-                  '<meta name="theme-color" content="#6a2fb5">',
-                  '<title>Ren Phone Web Flasher</title>',
-                  '<script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"></script>',
-                  '<style>' + css + '</style></head><body>',
-                  '<header><h1>Ren Phone Web Flasher</h1>',
-                  '<p>Pasang firmware lewat kabel USB langsung dari browser, tanpa install apa-apa.</p>',
-                  '<div class="legend"><span class="pill">STABIL = dari main</span><span class="pill">UJI COBA = dari branch lain</span></div></header>',
-                  '<main>']
-          page += sections
-          page.append(
-              '<section class="how"><h2>Cara pakai</h2><ol>'
-              '<li>Buka halaman ini di <b>Chrome atau Edge</b> di komputer (Firefox dan Safari belum mendukung).</li>'
-              '<li>Colok perangkat dengan <b>kabel data</b>.</li>'
-              '<li>Klik <b>Pasang firmware ini</b>, pilih port, lalu tunggu sampai selesai.</li></ol>'
-              '<details><summary>Port tidak muncul?</summary><p>Untuk ESP32-S3, tahan tombol BOOT sambil mencolok kabel, lalu coba lagi. '
-              'Untuk ESP32-CAM, pakai adaptor USB-TTL dan hubungkan IO0 ke GND saat flash, lalu lepas dan tekan reset setelah selesai.</p></details>'
-              '<details><summary>Apa arti kotak &quot;Hapus dulu&quot;?</summary><p>Kalau dicentang, semua pengaturan dan data di perangkat ikut terhapus. '
-              'Biarkan kosong kalau cuma mau update.</p></details>'
-              '<details><summary>Update harian lebih mudah?</summary><p>Ya. Di HP, buka app Update lalu ketuk Terbaru, tanpa kabel dan komputer.</p></details></section>')
-          page.append('</main><footer>Dibuat otomatis oleh GitHub Actions \u00b7 %s \u00b7 <a href="https://github.com/%s">repo</a></footer></body></html>' % (now, esc(repo)))
-          open(os.path.join(site, "index.html"), "w", encoding="utf-8").write("\n".join(page))
+          page = """<!doctype html><html lang="id"><head><meta charset="utf-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1">
+          <meta name="theme-color" content="#12120f">
+          <title>Ren Phone Flasher</title>
+          <script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"></script>
+          <style>@@css@@</style></head><body>
+          <div class="wrap">
+          <div class="hero">
+            <div>
+              <p class="eyebrow">ren_phone / web flasher</p>
+              <h1>Pasang firmware, <u>tanpa install <span style="white-space:nowrap">apa-apa</span></u>.</h1>
+              <p class="lead">Colok kabel USB, pilih versi, klik pasang. Atau unduh file .bin-nya dan flash sendiri kalau lebih suka begitu.</p>
+              <ul class="facts"><li>Chrome / Edge</li><li>kabel data</li><li>sekitar 2 menit</li></ul>
+            </div>
+            <div>
+              <button type="button" class="phone" id="phone" aria-label="Simulasi layar kunci. Klik untuk membuka kunci.">
+                <div class="phone-body">
+                  <div class="home"><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span></div>
+                  <div class="lock"><div class="d" id="lk-d"></div><div class="t" id="lk-t">--:--</div><div class="ip" id="lk-ip">IP</div><div class="sw">geser ke atas</div></div>
+                </div>
+              </button>
+              <span class="hint">klik layarnya</span>
+            </div>
+          </div>
+          <nav class="tabs" role="tablist" aria-label="Perangkat">@@tabs@@</nav>
+          <p class="note-serial" id="serial-note" hidden>Browser ini belum mendukung Web Serial, jadi tombol pasang tidak aktif. Tombol <b>Unduh .bin</b> tetap bisa dipakai, atau buka halaman ini di Chrome/Edge di komputer.</p>
+          <main>@@panels@@</main>
+          <section class="how">
+            <h2>Cara pakai</h2>
+            <div>
+              <ol>
+                <li><span>Buka halaman ini di <b>Chrome atau Edge</b> di komputer.</span></li>
+                <li><span>Colok perangkat dengan <b>kabel data</b> (bukan kabel charge doang).</span></li>
+                <li><span>Klik <b>Pasang via USB</b>, pilih port, tunggu sampai selesai.</span></li>
+              </ol>
+              <div class="faq">
+                <details><summary>Port tidak muncul?</summary><p>Untuk ESP32-S3, tahan tombol BOOT sambil mencolok kabel, lalu coba lagi. Untuk ESP32-CAM, pakai adaptor USB-TTL dan hubungkan IO0 ke GND saat flash, lalu lepas dan tekan reset setelah selesai.</p></details>
+                <details><summary>Apa arti kotak &quot;Hapus dulu&quot;?</summary><p>Kalau dicentang, semua pengaturan dan data di perangkat ikut terhapus. Biarkan kosong kalau cuma mau update.</p></details>
+                <details><summary>Kapan pakai Unduh .bin?</summary><p>Kalau browser tidak mendukung Web Serial, kalau mau flash lewat esptool atau Termux/PC lain, atau kalau mau menyimpan versi tertentu sebagai cadangan. Cocokkan SHA-256 untuk memastikan file tidak rusak.</p></details>
+                <details><summary>Update harian lebih mudah?</summary><p>Ya. Di HP, buka app Update lalu ketuk Terbaru, tanpa kabel dan komputer.</p></details>
+              </div>
+            </div>
+          </section>
+          <footer><span>Dibuat otomatis oleh GitHub Actions &middot; @@now@@</span><a href="https://github.com/@@repo@@">repo</a></footer>
+          </div>
+          <div class="toast" id="toast" role="status"></div>
+          <script>@@js@@</script>
+          </body></html>
+          """
+          out = fill(page, css=CSS, js=JS, tabs="".join(tabs), panels="".join(panels), now=now, repo=esc(repo))
+          open(os.path.join(site, "index.html"), "w", encoding="utf-8").write(out)
           print(sorted(os.listdir(site)))
           PY
 
