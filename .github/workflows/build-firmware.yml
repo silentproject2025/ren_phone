@@ -7,6 +7,9 @@ on:
     branches: [ "main", "master" ]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -130,3 +133,36 @@ jobs:
         with:
           name: esp32-firmware-binaries
           path: build/*.bin
+
+      - name: Siapkan firmware untuk Release & web flasher
+        if: github.event_name != 'pull_request'
+        run: |
+          test -f build/build_sketch.ino.bin || (echo "::error::build_sketch.ino.bin tidak ada" && ls build && exit 1)
+          test -f build/build_sketch.ino.merged.bin || (echo "::error::build_sketch.ino.merged.bin tidak ada" && ls build && exit 1)
+          cp build/build_sketch.ino.bin firmware.bin
+          cp build/build_sketch.ino.merged.bin ren_phone_s3_merged.bin
+
+      - name: Publish GitHub Release
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="build-${{ github.run_number }}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" firmware.bin ren_phone_s3_merged.bin --clobber
+          else
+            gh release create "$TAG" firmware.bin ren_phone_s3_merged.bin \
+              --prerelease \
+              --target "${{ github.sha }}" \
+              --title "Firmware build ${{ github.run_number }}" \
+              --notes "Commit ${{ github.sha }} (${{ github.ref_name }})"
+          fi
+
+  flasher:
+    needs: build
+    if: github.event_name != 'pull_request'
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    uses: ./.github/workflows/flasher-pages.yml
