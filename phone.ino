@@ -9429,18 +9429,23 @@ void updDrawProgress(const char* title, size_t written, size_t total){
 // (updDrawProgress() penuh = fillScreen + gambar ulang semua -> kalau dipanggil tiap potongan data,
 // unduhan jadi tertahan nunggu layar.) Panggil updDrawProgress() sekali dulu utk kerangka layar.
 static int updLastPct = -1;
+static int updBarFill = 0;
 void updDrawProgressFast(size_t written, size_t total){
   int pct = (total>0) ? (int)(((uint64_t)written*100)/total) : 0;
   if(pct == updLastPct) return;
   updLastPct = pct;
   int barW=SCR_W-20, barH=18, barY=50;
-  display.fillRect(12,barY+2,barW-4,barH-4,TFT_BLACK);
   int fillW = (barW-4)*pct/100;
-  if(fillW>0) display.fillRect(12,barY+2,fillW,barH-4,TFT_GREEN);
-  display.fillRect(10,barY+barH+8,SCR_W-20,12,TFT_BLACK);
-  char buf[32];
-  sprintf(buf,"%d%%  (%u/%u KB)", pct, (unsigned)(written/1024), (unsigned)(total/1024));
-  display.setTextColor(TFT_WHITE);
+  if(fillW < updBarFill) updBarFill = 0;   // jaga-jaga kalau mundur: isi ulang dari awal
+  // progres cuma maju -> gambar HANYA bagian barunya, tidak ada hapus-lalu-isi (itu yg bikin kedip)
+  if(fillW > updBarFill){
+    display.fillRect(12+updBarFill,barY+2,fillW-updBarFill,barH-4,TFT_GREEN);
+    updBarFill = fillW;
+  }
+  // teks ditulis dgn warna latar hitam -> menimpa teks lama tanpa dihapus dulu; spasi di ujung menutup sisa karakter
+  char buf[40];
+  sprintf(buf,"%3d%%  (%u/%u KB)   ", pct, (unsigned)(written/1024), (unsigned)(total/1024));
+  display.setTextColor(TFT_WHITE, TFT_BLACK);
   display.setTextSize(1);
   display.setCursor(10,barY+barH+10);
   display.print(buf);
@@ -9504,7 +9509,7 @@ bool updInstallFromSD(const String& filename){
 
   uint8_t buf[4096];
   size_t written = 0;
-  updLastPct = -1;
+  updLastPct = -1; updBarFill = 0;
   while(f.available()){
     size_t n = f.read(buf, sizeof(buf));
     if(n == 0) break;
@@ -9605,7 +9610,7 @@ bool updInstallFromURL(const String& url){
   if(bufGuard.p){ buf = bufGuard.p; bufSz = 8192; }
   size_t written = 0;
   unsigned long lastData = millis();
-  updLastPct = -1;
+  updLastPct = -1; updBarFill = 0;
   updDrawProgress("Update via WiFi...", 0, contentLen);
 
   while(http.connected() && written < (size_t)contentLen){
