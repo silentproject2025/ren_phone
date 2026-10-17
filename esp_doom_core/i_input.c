@@ -40,6 +40,7 @@
 #include "z_zone.h"
 
 #include "doomgeneric.h"
+#include "doomstat.h"   // menuactive (dipakai PostMouseLook)
 
 int vanilla_keyboard_mapping = 1;
 
@@ -276,11 +277,35 @@ static void UpdateShiftStatus(int pressed, unsigned char key)
 }
 
 
+// Geser-lihat dari gamepad web (ala mouse). Diimplementasi di DoomGlue.cpp.
+// Menu DOOM terbuka -> dilewati (kalau tidak, geser malah menggeser pilihan menu).
+extern int DG_MouseTake(void);
+
+static void PostMouseLook(void)
+{
+    event_t mev;
+    int dx = DG_MouseTake();
+
+    if (dx == 0 || menuactive)
+    {
+        return;
+    }
+
+    mev.type = ev_mouse;
+    mev.data1 = 0;      // tidak ada tombol mouse
+    mev.data2 = dx;     // putar (g_game.c: angleturn -= mousex*8)
+    mev.data3 = 0;      // maju/mundur tetap lewat tombol/stick
+    mev.data4 = 0;
+    D_PostEvent(&mev);
+}
+
 void I_GetEvent(void)
 {
     event_t event;
     int pressed;
     unsigned char key;
+
+    PostMouseLook();
 
     
 	while (DG_GetKey(&pressed, &key))

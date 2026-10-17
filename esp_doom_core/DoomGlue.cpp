@@ -22,6 +22,34 @@ IDoomDisplay* DG_Display = nullptr;
 IDoomInput*   DG_Input   = nullptr;
 
 // ------------------------------------------------------------------
+//  HOOK DARI SKETCH (gamepad web) -- tombol EXTRA, geser-lihat, teks
+// ------------------------------------------------------------------
+//  IDoomInput cuma punya 8 tombol. Gamepad web butuh jauh lebih banyak
+//  (strafe, run, senjata, F-keys, ...), jadi sketch mendaftarkan 3 fungsi
+//  lewat DoomGlue_SetHooks(). Kalau tidak didaftarkan, semuanya no-op.
+//  Bit EXTMAP di bawah HARUS sama persis dgn urutan EXN[] di halaman
+//  gamepad_renphone.ino.
+typedef uint32_t (*DG_ExtKeysFn)(void);
+typedef int32_t  (*DG_MouseFn)(void);
+typedef int      (*DG_TypedFn)(void);
+static DG_ExtKeysFn hookExt   = nullptr;
+static DG_MouseFn   hookMouse = nullptr;
+static DG_TypedFn   hookTyped = nullptr;
+
+void DoomGlue_SetHooks(DG_ExtKeysFn ext, DG_MouseFn mouse, DG_TypedFn typed)
+{
+    hookExt = ext; hookMouse = mouse; hookTyped = typed;
+}
+
+// Dipanggil dari I_GetEvent() (i_input.c): delta geser-lihat sejak panggilan lalu.
+extern "C" int DG_MouseTake(void)
+{
+    return hookMouse ? (int)hookMouse() : 0;
+}
+
+extern "C" { extern int key_prevweapon; extern int key_nextweapon; }
+
+// ------------------------------------------------------------------
 //  Rescale / fill / crop
 // ------------------------------------------------------------------
 //
@@ -210,6 +238,20 @@ static const ButtonMap KEYMAP[] =
 static constexpr uint32_t POLL_INTERVAL_MS = 5;
 static uint32_t lastPoll = 0;
 
+static inline int QueueFree() { return (qHead - qTail - 1 + QUEUE_SIZE) % QUEUE_SIZE; }
+
+// bit i dari mask EXTRA -> kode tombol DOOM (urutan = EXN[] di halaman web)
+static const unsigned char EXTMAP[31] =
+{
+    KEY_STRAFE_L, KEY_STRAFE_R, KEY_RSHIFT /*run*/, KEY_RALT /*alt = strafe-hold*/,
+    '1', '2', '3', '4', '5', '6', '7',
+    KEY_TAB /*map*/, 'y', 'n', KEY_BACKSPACE, KEY_PAUSE,
+    KEY_F1, KEY_F2, KEY_F3, KEY_F4, KEY_F5, KEY_F6, KEY_F7, KEY_F8, KEY_F9, KEY_F10, KEY_F11,
+    KEY_MINUS, KEY_EQUALS,
+    ',' /*senjata sebelumnya*/, '.' /*senjata berikutnya*/
+};
+static uint32_t extPrev = 0;
+
 static void PollInput()
 {
     DG_Input->update();
@@ -218,6 +260,34 @@ static void PollInput()
     {
         if (DG_Input->pressed(m.button))       QueuePush(m.key, 1);
         else if (DG_Input->released(m.button)) QueuePush(m.key, 0);
+    }
+
+    // ---- tombol EXTRA dari gamepad web (edge: tekan/lepas) ----
+    if (hookExt)
+    {
+        uint32_t ext = hookExt();
+        uint32_t diff = ext ^ extPrev;
+        for (int i = 0; i < 31 && diff; i++)
+        {
+            uint32_t bit = 1u << i;
+            if (!(diff & bit)) continue;
+            if (QueueFree() < 1) break;          // antrean penuh -> coba lagi di poll berikut
+            QueuePush(EXTMAP[i], (ext & bit) ? 1 : 0);
+            extPrev ^= bit;
+            diff &= ~bit;
+        }
+    }
+
+    // ---- teks ketikan (nama save, cheat): 1 karakter = tekan+lepas ----
+    if (hookTyped && QueueFree() >= 2)
+    {
+        int c = hookTyped();
+        if (c > 0)
+        {
+            unsigned char k = (c == 127) ? KEY_BACKSPACE : (unsigned char)c;
+            QueuePush(k, 1);
+            QueuePush(k, 0);
+        }
     }
 }
 
@@ -299,7 +369,13 @@ void DoomGlue_Begin(const char* wadPath)
 
     static char* argv[] = { (char*)"doom", argWad, argPath };
 
+    extPrev = 0;
     doomgeneric_Create(3, argv);
+
+    // Dipaksa SETELAH doomgeneric_Create() (default.cfg di SD bisa menimpa nilainya):
+    // senjata sebelumnya / berikutnya dipakai tombol ◀ ▶ di halaman gamepad.
+    key_prevweapon = ',';
+    key_nextweapon = '.';
 }
 
 void DoomGlue_Tick()

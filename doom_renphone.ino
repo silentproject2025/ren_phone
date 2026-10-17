@@ -73,6 +73,11 @@ public:
 // cukup aman utk 8 bool independen spt ini, tidak butuh mutex.
 // -----------------------------------------------------------------
 extern volatile uint8_t rcPadMask; // gamepad_renphone.ino: bit i = DBTN_i (UP,DOWN,LEFT,RIGHT,FIRE,USE,START,SELECT)
+// Hook gamepad web lengkap (gamepad_renphone.ino) -> didaftarkan ke DoomGlue di doomTaskFunc().
+uint32_t padExtKeys();      // 31 tombol EXTRA (strafe, run, senjata, F-keys, ...)
+int32_t  padTakeMouseDX();  // geser-lihat (delta sejak panggilan lalu)
+int      padTakeTyped();    // 1 karakter ketikan (0 = kosong)
+void DoomGlue_SetHooks(uint32_t (*ext)(void), int32_t (*mouse)(void), int (*typed)(void)); // esp_doom_core/DoomGlue.cpp
 class RenPhoneDoomInput : public IDoomInput {
 public:
   volatile bool raw[DBTN_COUNT] = {false};
@@ -117,6 +122,7 @@ static void doomTaskFunc(void* arg){
   DG_FS = &SD_MMC;
   DG_Display = &doomDisplay;
   DG_Input   = &doomInput;
+  DoomGlue_SetHooks(padExtKeys, padTakeMouseDX, padTakeTyped);
   doomInput.begin();
 
   DoomGlue_Begin(DOOM_WAD_PATH);
