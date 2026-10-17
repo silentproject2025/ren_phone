@@ -176,6 +176,9 @@ jobs:
 
           GH_ICON = ('<svg class="ghi" viewBox="0 0 16 16" width="18" height="18" aria-hidden="true" fill="currentColor">'
                      '<path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>')
+          SHARE_ICON = ('<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+                        '<circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/>'
+                        '<line x1="8.6" y1="13.5" x2="15.4" y2="17.5"/><line x1="15.4" y1="6.5" x2="8.6" y2="10.5"/></svg>')
           _owner, _name = (repo.split("/", 1) + [""])[:2]
           PAGES_URL = "https://%s.github.io/%s/" % (_owner.lower(), _name)
 
@@ -207,9 +210,12 @@ jobs:
           .lock .ip b{color:var(--acc);font-weight:600}.lock .ip i{display:inline-block;width:1px;height:.8em;background:#ece8dc;margin-left:1px;vertical-align:-1px;animation:bl 1s steps(1) infinite}
           .lock .sw{position:absolute;bottom:14px;font-size:.55rem;opacity:.55}
           @keyframes bl{50%{opacity:0}}
-          .topbar{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:16px 0;border-bottom:1px solid var(--line);font-size:.8rem;color:var(--mut);font-family:ui-monospace,"JetBrains Mono",Menlo,Consolas,monospace}
-          .topbar a{display:inline-flex;gap:8px;align-items:center;text-decoration:none;color:var(--ink)}.topbar a:hover{color:var(--acc)}
-          .cta{display:flex;gap:10px;flex-wrap:wrap;margin-top:26px}.ghi{flex:none}
+          .topbar{position:sticky;top:0;z-index:5;display:flex;justify-content:space-between;align-items:center;gap:12px;padding:8px 0;border-bottom:1px solid var(--line);font-size:.8rem;color:var(--mut);font-family:ui-monospace,"JetBrains Mono",Menlo,Consolas,monospace;background:color-mix(in srgb,var(--bg) 82%,transparent);-webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px)}
+          .topbar>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+          .tools{display:flex;gap:2px;flex:none}
+          .icon{display:inline-grid;place-items:center;width:36px;height:36px;border:0;border-radius:50%;background:none;color:var(--mut);cursor:pointer;text-decoration:none;transition:color .2s,background-color .2s,transform .2s}
+          .icon:hover{color:var(--ink);background:color-mix(in srgb,var(--ink) 10%,transparent)}.icon:active{transform:scale(.9)}
+          .icon svg{display:block}.ghi{flex:none}
           footer a.gh-f{display:inline-flex;gap:7px;align-items:center}
           .hint{display:block;margin-top:12px;text-align:center;font-size:.72rem;color:var(--mut)}
           .tabs{display:flex;gap:0;margin:34px 0 0;border-bottom:1px solid var(--line)}
@@ -256,7 +262,32 @@ jobs:
           footer a{text-decoration:none;border-bottom:1px solid var(--line)}
           .toast{position:fixed;left:50%;bottom:24px;transform:translate(-50%,20px);opacity:0;background:var(--ink);color:var(--bg);padding:8px 16px;font:.82rem ui-monospace,Menlo,Consolas,monospace;transition:.25s;pointer-events:none}
           .toast.on{opacity:1;transform:translate(-50%,0)}
+
+          :root{interpolate-size:allow-keywords}
+          @keyframes up{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:none}}
+          .enter{animation:up .42s cubic-bezier(.2,.7,.2,1) both}
+          .hero>div:first-child>*{animation:up .65s cubic-bezier(.2,.7,.2,1) both}
+          .hero>div:first-child>*:nth-child(1){animation-delay:.05s}.hero>div:first-child>*:nth-child(2){animation-delay:.12s}
+          .hero>div:first-child>*:nth-child(3){animation-delay:.2s}.hero>div:first-child>*:nth-child(4){animation-delay:.28s}
+          .hero>div:last-child{animation:up .8s cubic-bezier(.2,.7,.2,1) .25s both}
+          .tabs{position:relative}
+          .ind{position:absolute;left:0;bottom:-1px;height:2px;width:0;background:var(--acc);transition:transform .38s cubic-bezier(.65,0,.25,1),width .38s cubic-bezier(.65,0,.25,1)}
+          .js [role=tab][aria-selected=true]{border-bottom-color:transparent}
+          [role=tab]{transition:color .25s}
+          .seg button{transition:background-color .25s,color .25s}
+          .hash{transition:border-color .25s}.notes{transition:color .25s}
+          .home span{transform:scale(.8);opacity:.5;transition:transform .55s cubic-bezier(.2,.7,.2,1),opacity .45s}
+          .phone.open .home span{transform:none;opacity:1}
+          .phone.open .home span:nth-child(2){transition-delay:.06s}.phone.open .home span:nth-child(3){transition-delay:.12s}
+          .phone.open .home span:nth-child(4){transition-delay:.1s}.phone.open .home span:nth-child(5){transition-delay:.16s}
+          .phone.open .home span:nth-child(6){transition-delay:.22s}.phone.open .home span:nth-child(7){transition-delay:.2s}
+          .phone.open .home span:nth-child(8){transition-delay:.26s}.phone.open .home span:nth-child(9){transition-delay:.32s}
+          details::details-content{block-size:0;overflow:clip;transition:block-size .3s ease,content-visibility .3s allow-discrete}
+          details[open]::details-content{block-size:auto}
+          .js .rv{opacity:0;transform:translateY(16px);transition:opacity .7s ease,transform .7s cubic-bezier(.2,.7,.2,1)}
+          .js .rv.in{opacity:1;transform:none}
           @media (max-width:760px){.hero{grid-template-columns:1fr;padding-top:40px}.phone{justify-self:start}.how{grid-template-columns:1fr}.btn{flex:1 1 100%}}
+          @media (max-width:760px){.hero>div:last-child{justify-self:start}}
           @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}html{scroll-behavior:auto}}
           """
 
@@ -265,18 +296,30 @@ jobs:
             var $=function(s,c){return [].slice.call((c||document).querySelectorAll(s));};
             document.documentElement.classList.add('js');
             var panels=$('.panel'), tabs=$('[role=tab]');
-            function showPanel(id){
-              panels.forEach(function(p){p.hidden=(p.id!==id);});
+            var ind=document.getElementById('ind');
+            function anim(el){el.classList.remove('enter');void el.offsetWidth;el.classList.add('enter');}
+            function moveInd(first){
+              var t=tabs.filter(function(x){return x.getAttribute('aria-selected')==='true';})[0];
+              if(!t||!ind) return;
+              if(first===true){ind.style.transition='none';}
+              ind.style.width=t.offsetWidth+'px';ind.style.transform='translateX('+t.offsetLeft+'px)';
+              if(first===true){void ind.offsetWidth;ind.style.transition='';}
+            }
+            function showPanel(id,first){
+              panels.forEach(function(p){var h=(p.id!==id);var was=p.hidden;p.hidden=h;if(!h&&was&&first!==true)anim(p);});
               tabs.forEach(function(t){t.setAttribute('aria-selected',String(t.getAttribute('data-tab')===id));});
+              moveInd(first);
               if(history.replaceState) history.replaceState(null,'','#'+id.slice(2));
             }
+            window.addEventListener('resize',function(){moveInd(true);});
+            if(document.fonts&&document.fonts.ready) document.fonts.ready.then(function(){moveInd(true);});
             tabs.forEach(function(t){t.addEventListener('click',function(){showPanel(t.getAttribute('data-tab'));});});
             var want='p-'+(location.hash||'').slice(1);
-            showPanel(document.getElementById(want)?want:(panels[0]||{}).id);
+            showPanel(document.getElementById(want)?want:(panels[0]||{}).id,true);
             panels.forEach(function(p){
               var btns=$('.seg button',p), builds=$('.build',p);
               function pick(c){
-                builds.forEach(function(b){b.hidden=(b.getAttribute('data-chan')!==c);});
+                builds.forEach(function(b){var h=(b.getAttribute('data-chan')!==c);var was=b.hidden;b.hidden=h;if(!h&&was)anim(b);});
                 btns.forEach(function(x){x.setAttribute('aria-pressed',String(x.getAttribute('data-chan')===c));});
               }
               btns.forEach(function(x){x.addEventListener('click',function(){pick(x.getAttribute('data-chan'));});});
@@ -296,6 +339,11 @@ jobs:
               if(navigator.share){navigator.share({title:document.title,text:'Ren Phone: firmware + web flasher',url:url}).catch(function(){});}
               else{copyText(url);}
             });}
+            var rv=$('.rv');
+            if('IntersectionObserver' in window){
+              var io=new IntersectionObserver(function(es){es.forEach(function(e){if(e.isIntersecting){e.target.classList.add('in');io.unobserve(e.target);}});},{threshold:.12});
+              rv.forEach(function(el){io.observe(el);});
+            }else{rv.forEach(function(el){el.classList.add('in');});}
             if(!('serial' in navigator)){var n=document.getElementById('serial-note');if(n)n.hidden=false;}
             var ph=document.getElementById('phone');
             if(ph){
@@ -338,14 +386,16 @@ jobs:
           <script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"></script>
           <style>@@css@@</style></head><body>
           <div class="wrap">
-          <div class="topbar"><span>@@repotxt@@</span><a href="https://github.com/@@repo@@" target="_blank" rel="noopener">@@gh@@ GitHub</a></div>
+          <div class="topbar"><span>@@repotxt@@</span><div class="tools">
+            <button type="button" class="icon" id="share" aria-label="Bagikan halaman ini" title="Bagikan">@@sh@@</button>
+            <a class="icon" href="https://github.com/@@repo@@" target="_blank" rel="noopener" aria-label="Lihat repo di GitHub" title="GitHub">@@gh@@</a>
+          </div></div>
           <div class="hero">
             <div>
               <p class="eyebrow">ren_phone / web flasher</p>
               <h1>Pasang firmware, <u>tanpa install <span style="white-space:nowrap">apa-apa</span></u>.</h1>
               <p class="lead">Colok kabel USB, pilih versi, klik pasang. Atau unduh file .bin-nya dan flash sendiri kalau lebih suka begitu.</p>
               <ul class="facts"><li>Chrome / Edge</li><li>kabel data</li><li>sekitar 2 menit</li></ul>
-              <div class="cta"><a class="btn gh" href="https://github.com/@@repo@@" target="_blank" rel="noopener">@@gh@@ Lihat di GitHub</a><button type="button" class="btn" id="share">Bagikan halaman ini</button></div>
             </div>
             <div>
               <button type="button" class="phone" id="phone" aria-label="Simulasi layar kunci. Klik untuk membuka kunci.">
@@ -357,10 +407,10 @@ jobs:
               <span class="hint">klik layarnya</span>
             </div>
           </div>
-          <nav class="tabs" role="tablist" aria-label="Perangkat">@@tabs@@</nav>
+          <nav class="tabs" role="tablist" aria-label="Perangkat">@@tabs@@<span class="ind" id="ind" aria-hidden="true"></span></nav>
           <p class="note-serial" id="serial-note" hidden>Browser ini belum mendukung Web Serial, jadi tombol pasang tidak aktif. Tombol <b>Unduh .bin</b> tetap bisa dipakai, atau buka halaman ini di Chrome/Edge di komputer.</p>
           <main>@@panels@@</main>
-          <section class="how">
+          <section class="how rv">
             <h2>Cara pakai</h2>
             <div>
               <ol>
@@ -376,14 +426,14 @@ jobs:
               </div>
             </div>
           </section>
-          <footer><span>Dibuat otomatis oleh GitHub Actions &middot; @@now@@</span><a class="gh-f" href="https://github.com/@@repo@@" target="_blank" rel="noopener">@@gh@@ @@repo@@</a></footer>
+          <footer class="rv"><span>Dibuat otomatis oleh GitHub Actions &middot; @@now@@</span><a class="gh-f" href="https://github.com/@@repo@@" target="_blank" rel="noopener">@@gh@@ @@repo@@</a></footer>
           </div>
           <div class="toast" id="toast" role="status"></div>
           <script>@@js@@</script>
           </body></html>
           """
           out = fill(page, css=CSS, js=JS, tabs="".join(tabs), panels="".join(panels), now=now, repo=esc(repo),
-                     repotxt=esc(repo.replace("/", " / ")), gh=GH_ICON, pages=esc(PAGES_URL))
+                     repotxt=esc(repo.replace("/", " / ")), gh=GH_ICON, sh=SHARE_ICON, pages=esc(PAGES_URL))
           open(os.path.join(site, "index.html"), "w", encoding="utf-8").write(out)
           print(sorted(os.listdir(site)))
           PY
