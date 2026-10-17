@@ -95,6 +95,7 @@ void nesInput_touch(int tx, int ty, bool held, bool newT) {
 // MAKE/BREAK cuma pas ada PERUBAHAN (bukan tiap frame tombol ditekan).
 // -----------------------------------------------------------------
 extern volatile bool nesExitRequested; // dari nes_app_renphone.ino
+extern volatile uint8_t rcPadMask;     // gamepad_renphone.ino: tombol dari HP lain (bit sama dgn NB_*)
 
 extern "C" void osd_getinput(void) {
   // Cek permintaan keluar (dari nesExit(), thread UI) DI SINI -- ini
@@ -117,7 +118,7 @@ extern "C" void osd_getinput(void) {
   };
 
   static uint8_t oldState = 0;
-  uint8_t newState = nesBtnState; // salin sekali, hindari race dgn task lain
+  uint8_t newState = nesBtnState | rcPadMask; // salin sekali, hindari race dgn task lain (+ gamepad WebSocket)
 
   for (int i = 0; i < 8; i++) {
     bool was = oldState & table[i].mask;

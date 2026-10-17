@@ -72,11 +72,12 @@ public:
 // bendera lintas-task di tempat lain di file ini (mis. gameModeActive) --
 // cukup aman utk 8 bool independen spt ini, tidak butuh mutex.
 // -----------------------------------------------------------------
+extern volatile uint8_t rcPadMask; // gamepad_renphone.ino: bit i = DBTN_i (UP,DOWN,LEFT,RIGHT,FIRE,USE,START,SELECT)
 class RenPhoneDoomInput : public IDoomInput {
 public:
   volatile bool raw[DBTN_COUNT] = {false};
   void begin() override { for(int i=0;i<DBTN_COUNT;i++){ raw[i]=false; cur[i]=false; prev[i]=false; } }
-  void update() override { for(int i=0;i<DBTN_COUNT;i++){ prev[i]=cur[i]; cur[i]=raw[i]; } }
+  void update() override { uint8_t pad=rcPadMask; for(int i=0;i<DBTN_COUNT;i++){ prev[i]=cur[i]; cur[i]=raw[i] || ((pad>>i)&1); } }
   bool down(DoomButton b)     override { return cur[idx(b)]; }
   bool pressed(DoomButton b)  override { int i=idx(b); return cur[i] && !prev[i]; }
   bool released(DoomButton b) override { int i=idx(b); return !cur[i] && prev[i]; }

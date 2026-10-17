@@ -175,6 +175,7 @@ static void rcLoadCfg() {
 // =====================================================================
 // ACCESS POINT
 // =====================================================================
+void padRegisterRoutes(); void padLoopPoll(); // gamepad_renphone.ino
 bool rcApIsUp() { return rcApUp; }
 
 static bool rcViewerActive() {
@@ -235,6 +236,9 @@ static bool rcAllowed() {
   }
   return rcCfg.allowLan;
 }
+// ---- dipakai gamepad_renphone.ino (HP lain jadi gamepad) ----
+bool rcAllowedPublic()    { return rcAllowed(); }
+bool rcLanAllowedPublic() { rcLoadCfg(); return rcCfg.allowLan; }
 
 // =====================================================================
 // INJEKSI SENTUH  (dipanggil dari getInputPoint() di phone.ino)
@@ -984,6 +988,7 @@ void rcRegisterRoutes() {
   webServer.on("/rc/scan", HTTP_GET, rcHandleScan);
   webServer.on("/rc/wifi", HTTP_GET, rcHandleWifi);
   webServer.on("/rc/wst",  HTTP_GET, rcHandleWifiStatus);
+  padRegisterRoutes(); // Gamepad: /pad + WebSocket :81
 }
 
 // =====================================================================
@@ -1012,6 +1017,7 @@ static void rcAnnounceIp(unsigned long now) {
 void rcLoopPoll() {
   unsigned long now = millis();
   rcAnnounceIp(now);
+  padLoopPoll(); // Gamepad: WebSocket + watchdog tombol (jalan terus, juga selagi NES/DOOM main)
 
   // mulai otomatis
   // Percobaan ulang tiap 10 dtk (maks 6x) + getar sebagai umpan balik tanpa layar:
