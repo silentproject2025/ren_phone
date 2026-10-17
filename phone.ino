@@ -9425,6 +9425,27 @@ void updDrawProgress(const char* title, size_t written, size_t total){
   display.print(buf);
 }
 
+// v-speed: gambar progres RINGAN. Hanya batang + angka, dan hanya kalau persen berubah.
+// (updDrawProgress() penuh = fillScreen + gambar ulang semua -> kalau dipanggil tiap potongan data,
+// unduhan jadi tertahan nunggu layar.) Panggil updDrawProgress() sekali dulu utk kerangka layar.
+static int updLastPct = -1;
+void updDrawProgressFast(size_t written, size_t total){
+  int pct = (total>0) ? (int)(((uint64_t)written*100)/total) : 0;
+  if(pct == updLastPct) return;
+  updLastPct = pct;
+  int barW=SCR_W-20, barH=18, barY=50;
+  display.fillRect(12,barY+2,barW-4,barH-4,TFT_BLACK);
+  int fillW = (barW-4)*pct/100;
+  if(fillW>0) display.fillRect(12,barY+2,fillW,barH-4,TFT_GREEN);
+  display.fillRect(10,barY+barH+8,SCR_W-20,12,TFT_BLACK);
+  char buf[32];
+  sprintf(buf,"%d%%  (%u/%u KB)", pct, (unsigned)(written/1024), (unsigned)(total/1024));
+  display.setTextColor(TFT_WHITE);
+  display.setTextSize(1);
+  display.setCursor(10,barY+barH+10);
+  display.print(buf);
+}
+
 // reason: alasan gagal yang ditampilkan LANGSUNG di layar (bukan cuma di Serial),
 // supaya kelihatan penyebab pastinya walau dipakai tanpa PC/serial monitor.
 void updShowResult(bool success, const String& reason){
@@ -9483,6 +9504,7 @@ bool updInstallFromSD(const String& filename){
 
   uint8_t buf[4096];
   size_t written = 0;
+  updLastPct = -1;
   while(f.available()){
     size_t n = f.read(buf, sizeof(buf));
     if(n == 0) break;
@@ -9495,7 +9517,7 @@ bool updInstallFromSD(const String& filename){
       return false;
     }
     written += n;
-    updDrawProgress("Update Lokal (SD Card)...", written, fileSize);
+    updDrawProgressFast(written, fileSize);
     if(wifiConnected && webServerRunning) webServer.handleClient();
     yield();
   }
@@ -9573,14 +9595,23 @@ bool updInstallFromURL(const String& url){
   }
 
   WiFiClient* stream = http.getStreamPtr();
-  uint8_t buf[2048];
+  WiFi.setSleep(false);   // pengaman: hemat daya WiFi harus mati selama unduh
+  // buffer baca 8 KB di HEAP (stack loopTask cuma 8 KB); kalau malloc gagal, pakai 2 KB di stack
+  uint8_t sbuf[2048];
+  uint8_t* buf = sbuf;
+  size_t bufSz = sizeof(sbuf);
+  struct BufGuard { uint8_t* p = nullptr; ~BufGuard(){ if(p) free(p); } } bufGuard;
+  bufGuard.p = (uint8_t*)malloc(8192);
+  if(bufGuard.p){ buf = bufGuard.p; bufSz = 8192; }
   size_t written = 0;
   unsigned long lastData = millis();
+  updLastPct = -1;
+  updDrawProgress("Update via WiFi...", 0, contentLen);
 
   while(http.connected() && written < (size_t)contentLen){
     size_t avail = stream->available();
     if(avail){
-      size_t toRead = (avail < sizeof(buf)) ? avail : sizeof(buf);
+      size_t toRead = (avail < bufSz) ? avail : bufSz;
       int n = stream->readBytes(buf, toRead);
       if(n > 0){
         if(Update.write(buf, n) != (size_t)n){
@@ -9593,7 +9624,7 @@ bool updInstallFromURL(const String& url){
         }
         written += n;
         lastData = millis();
-        updDrawProgress("Update via WiFi...", written, contentLen);
+        updDrawProgressFast(written, contentLen);
       }
     } else {
       if(millis() - lastData > 15000){
