@@ -3,7 +3,7 @@ name: Web Flasher (GitHub Pages)
 # Dipanggil otomatis dari workflow build S3 & CAM setelah Release dibuat.
 # Bisa juga dijalankan manual (Run workflow) untuk membangun ulang halamannya.
 # Halaman membedakan firmware STABIL (dari main/master) dan UJI COBA (dari branch lain),
-# dan menyediakan tombol Unduh .bin + SHA-256 di tiap versi.
+# dan menyediakan tombol Unduh .bin + SHA-256 + tautan repo GitHub & tombol Bagikan.
 on:
   workflow_call:
   workflow_dispatch:
@@ -174,6 +174,11 @@ jobs:
                                 dev["key"], default, esc(dev["title"]), dev["sub"], seg, builds))
               tabs.append('<button type="button" role="tab" data-tab="p-%s">%s</button>' % (dev["key"], esc(dev["short"])))
 
+          GH_ICON = ('<svg class="ghi" viewBox="0 0 16 16" width="18" height="18" aria-hidden="true" fill="currentColor">'
+                     '<path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>')
+          _owner, _name = (repo.split("/", 1) + [""])[:2]
+          PAGES_URL = "https://%s.github.io/%s/" % (_owner.lower(), _name)
+
           CSS = """
           :root{color-scheme:dark light;--bg:#12120f;--panel:#1a1a16;--ink:#ece8dc;--mut:#8d8a7d;--line:#2e2d26;--acc:#ff6b2c;--acc-ink:#14120e;--ok:#8fbf6a;--warn:#e8b23a}
           @media (prefers-color-scheme:light){:root{--bg:#efece3;--panel:#f8f6f0;--ink:#1b1a14;--mut:#6e6b5f;--line:#d8d4c7;--acc:#d9480f;--acc-ink:#fff8f0;--ok:#3f7d2a;--warn:#a66a00}}
@@ -182,7 +187,7 @@ jobs:
           body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.6 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;-webkit-font-smoothing:antialiased}
           a{color:inherit}code,.mono,dt,.tag,.eyebrow,.hash,.seg button,[role=tab]{font-family:ui-monospace,"JetBrains Mono","SF Mono",Menlo,Consolas,monospace}
           .wrap{max-width:980px;margin:0 auto;padding:0 20px}
-          .hero{display:grid;grid-template-columns:1fr auto;gap:40px;align-items:center;padding:64px 0 40px;border-bottom:1px solid var(--line)}
+          .hero{display:grid;grid-template-columns:1fr auto;gap:40px;align-items:center;padding:44px 0 40px;border-bottom:1px solid var(--line)}
           .eyebrow{font-size:.75rem;letter-spacing:.14em;text-transform:uppercase;color:var(--acc);margin:0 0 14px}
           h1{font-size:clamp(2rem,6vw,3.3rem);line-height:1.04;margin:0 0 16px;letter-spacing:-.035em;font-weight:700}
           h1 u{text-decoration:none;box-shadow:inset 0 -.32em 0 color-mix(in srgb,var(--acc) 38%,transparent)}
@@ -202,6 +207,10 @@ jobs:
           .lock .ip b{color:var(--acc);font-weight:600}.lock .ip i{display:inline-block;width:1px;height:.8em;background:#ece8dc;margin-left:1px;vertical-align:-1px;animation:bl 1s steps(1) infinite}
           .lock .sw{position:absolute;bottom:14px;font-size:.55rem;opacity:.55}
           @keyframes bl{50%{opacity:0}}
+          .topbar{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:16px 0;border-bottom:1px solid var(--line);font-size:.8rem;color:var(--mut);font-family:ui-monospace,"JetBrains Mono",Menlo,Consolas,monospace}
+          .topbar a{display:inline-flex;gap:8px;align-items:center;text-decoration:none;color:var(--ink)}.topbar a:hover{color:var(--acc)}
+          .cta{display:flex;gap:10px;flex-wrap:wrap;margin-top:26px}.ghi{flex:none}
+          footer a.gh-f{display:inline-flex;gap:7px;align-items:center}
           .hint{display:block;margin-top:12px;text-align:center;font-size:.72rem;color:var(--mut)}
           .tabs{display:flex;gap:0;margin:34px 0 0;border-bottom:1px solid var(--line)}
           [role=tab]{appearance:none;background:none;border:0;border-bottom:2px solid transparent;color:var(--mut);padding:10px 18px 12px;font-size:.85rem;cursor:pointer;margin-bottom:-1px}
@@ -275,12 +284,18 @@ jobs:
             });
             var toast=document.getElementById('toast'), tt;
             function say(m){toast.textContent=m;toast.classList.add('on');clearTimeout(tt);tt=setTimeout(function(){toast.classList.remove('on');},1600);}
-            $('[data-copy]').forEach(function(b){b.addEventListener('click',function(){
-              var v=b.getAttribute('data-copy');
+            function copyText(v){
               function ok(){say('Tersalin');}
               if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(v).then(ok,function(){say('Gagal menyalin');});}
               else{var a=document.createElement('textarea');a.value=v;document.body.appendChild(a);a.select();try{document.execCommand('copy');ok();}catch(e){say('Gagal menyalin');}a.remove();}
-            });});
+            }
+            $('[data-copy]').forEach(function(b){b.addEventListener('click',function(){copyText(b.getAttribute('data-copy'));});});
+            var sh=document.getElementById('share');
+            if(sh){sh.addEventListener('click',function(){
+              var url=location.href.split('#')[0];
+              if(navigator.share){navigator.share({title:document.title,text:'Ren Phone: firmware + web flasher',url:url}).catch(function(){});}
+              else{copyText(url);}
+            });}
             if(!('serial' in navigator)){var n=document.getElementById('serial-note');if(n)n.hidden=false;}
             var ph=document.getElementById('phone');
             if(ph){
@@ -316,15 +331,21 @@ jobs:
           <meta name="viewport" content="width=device-width, initial-scale=1">
           <meta name="theme-color" content="#12120f">
           <title>Ren Phone Flasher</title>
+          <meta name="description" content="Firmware Ren Phone (ESP32-S3): pasang lewat browser via USB, atau unduh file .bin-nya.">
+          <meta property="og:type" content="website"><meta property="og:title" content="Ren Phone Flasher">
+          <meta property="og:description" content="Pasang firmware Ren Phone langsung dari browser, atau unduh file .bin-nya. Open source di GitHub.">
+          <meta property="og:url" content="@@pages@@"><meta name="twitter:card" content="summary">
           <script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"></script>
           <style>@@css@@</style></head><body>
           <div class="wrap">
+          <div class="topbar"><span>@@repotxt@@</span><a href="https://github.com/@@repo@@" target="_blank" rel="noopener">@@gh@@ GitHub</a></div>
           <div class="hero">
             <div>
               <p class="eyebrow">ren_phone / web flasher</p>
               <h1>Pasang firmware, <u>tanpa install <span style="white-space:nowrap">apa-apa</span></u>.</h1>
               <p class="lead">Colok kabel USB, pilih versi, klik pasang. Atau unduh file .bin-nya dan flash sendiri kalau lebih suka begitu.</p>
               <ul class="facts"><li>Chrome / Edge</li><li>kabel data</li><li>sekitar 2 menit</li></ul>
+              <div class="cta"><a class="btn gh" href="https://github.com/@@repo@@" target="_blank" rel="noopener">@@gh@@ Lihat di GitHub</a><button type="button" class="btn" id="share">Bagikan halaman ini</button></div>
             </div>
             <div>
               <button type="button" class="phone" id="phone" aria-label="Simulasi layar kunci. Klik untuk membuka kunci.">
@@ -355,13 +376,14 @@ jobs:
               </div>
             </div>
           </section>
-          <footer><span>Dibuat otomatis oleh GitHub Actions &middot; @@now@@</span><a href="https://github.com/@@repo@@">repo</a></footer>
+          <footer><span>Dibuat otomatis oleh GitHub Actions &middot; @@now@@</span><a class="gh-f" href="https://github.com/@@repo@@" target="_blank" rel="noopener">@@gh@@ @@repo@@</a></footer>
           </div>
           <div class="toast" id="toast" role="status"></div>
           <script>@@js@@</script>
           </body></html>
           """
-          out = fill(page, css=CSS, js=JS, tabs="".join(tabs), panels="".join(panels), now=now, repo=esc(repo))
+          out = fill(page, css=CSS, js=JS, tabs="".join(tabs), panels="".join(panels), now=now, repo=esc(repo),
+                     repotxt=esc(repo.replace("/", " / ")), gh=GH_ICON, pages=esc(PAGES_URL))
           open(os.path.join(site, "index.html"), "w", encoding="utf-8").write(out)
           print(sorted(os.listdir(site)))
           PY
