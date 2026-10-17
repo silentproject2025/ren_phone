@@ -77,7 +77,13 @@ static bool padIpOk(IPAddress ip) {
   return rcLanAllowedPublic();
 }
 
-static void padWsEvent(uint8_t num, WStype_t type, uint8_t* payload, size_t length) {
+// CATATAN: handler event sengaja berupa LAMBDA di dalam padWsStart(), bukan fungsi
+// bernama. Arduino membuat prototipe otomatis utk fungsi bernama dan menaruhnya
+// di ATAS file (sebelum #include <WebSocketsServer.h>), sehingga tipe WStype_t
+// belum dikenal -> "WStype_t has not been declared". Lambda tidak diprototipe.
+static void padWsStart() {
+  if (padStarted) padWs.close();                 // dipanggil ulang kalau web server restart
+  padWs.onEvent([](uint8_t num, WStype_t type, uint8_t* payload, size_t length) {
   if (num >= PAD_MAXC) return;
   switch (type) {
     case WStype_CONNECTED: {
@@ -98,11 +104,7 @@ static void padWsEvent(uint8_t num, WStype_t type, uint8_t* payload, size_t leng
     default:
       break;
   }
-}
-
-static void padWsStart() {
-  if (padStarted) padWs.close();                 // dipanggil ulang kalau web server restart
-  padWs.onEvent(padWsEvent);
+  });
   padWs.begin();
   padWs.enableHeartbeat(3000, 2000, 2);          // ping 3 dtk; 2x gagal -> putus -> mask 0
   padStarted = true;
