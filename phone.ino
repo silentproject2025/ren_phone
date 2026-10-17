@@ -623,14 +623,7 @@ enum Screen { SCR_HOME, SCR_CLOCK, SCR_CALC, SCR_SENSOR,
               // Stopwatch & Timer + Voice Memo -- lihat features_renphone.ino
               SCR_STOPWATCH, SCR_MEMO,
               // Galeri foto/video + thumbnail cache -- lihat gallery_renphone.ino
-              SCR_GALLERY,
-              // Profil pemilik (foto + nama) -- lihat owner_renphone.ino
-              SCR_OWNER,
-              SCR_ABOUT,
-              // Atur Home -- lihat homeedit_renphone.ino
-              SCR_HOMEEDIT,
-              // Remote Control (AP + web) -- lihat remote_renphone.ino
-              SCR_REMOTE };
+              SCR_GALLERY };
 enum Orientation { ORIENT_LANDSCAPE = 0, ORIENT_PORTRAIT = 1 };
 
 // Dipindah ke atas — alasan sama dengan AiLine & Vec3f: arduino-cli men-generate
@@ -1595,7 +1588,6 @@ void saveCanvas(){
 // WEB SERVER (FILE MANAGER & INLINE TEXT EDITOR)
 // =============================================
 WebServer webServer(80);
-void rcLoopPoll(); void rcRegisterRoutes(); bool rcApIsUp(); bool rcInputPoll(int*,int*); void rcFrameMark();
 bool webServerRunning = false;
 File uploadFile;
 
@@ -1937,7 +1929,6 @@ void startWebServer(){
   webServer.on("/download", HTTP_GET, handleWebDownload);
   webServer.on("/apikey", HTTP_GET, handleApiKeyGet);
   webServer.on("/apikey_save", HTTP_POST, handleApiKeySavePost);
-  rcRegisterRoutes(); // Remote Control: /remote, /rc/*
   webServer.begin();
   webServerRunning = true;
 }
@@ -2628,47 +2619,13 @@ void checkAiWatchdog() {
 // "'brightness' was not declared in this scope") krn di C++ variabel
 // harus sudah dikenal SEBELUM dipakai, walau baru didefinisikan
 // belakangan di file yg sama.
-// apply_touch_ghostcal.py: deteksi ghost touch saat boot
-static bool touchGhostAtBoot(){
-  delay(200);
-  int hit = 0;
-  lgfx::touch_point_t tp;
-  for(int i=0;i<10;i++){ if(display.getTouch(&tp)) hit++; delay(30); }
-  return hit >= 7;
-}
-
-// TOUCH_CAL_V4 (apply_touch_deadzone_v4.py)
-#define TOUCH_FORCE_DEFAULT_CAL 0   // 1 = selalu pakai TOUCH_CAL_VALUES, lewati wizard & data NVS
-#define TOUCH_CAL_VALUES { 239, 3926, 233, 265, 3856, 3897, 3714, 308 }
 extern int brightness;
 void loadOrRunCalibration(){
   Preferences p; p.begin("touch_cal",false);
   bool done=p.getBool("done",false);
   if(done){
-    uint16_t dn[8]; p.getBytes("data",dn,sizeof(dn));
-    Serial.printf("[touch] kalibrasi NVS: %u,%u,%u,%u,%u,%u,%u,%u\n",
-                  dn[0],dn[1],dn[2],dn[3],dn[4],dn[5],dn[6],dn[7]);
-  } else {
-    Serial.println("[touch] belum ada kalibrasi tersimpan di NVS");
-  }
-#if TOUCH_FORCE_DEFAULT_CAL
-  {
-    uint16_t dd[8] = TOUCH_CAL_VALUES;
-    display.setTouchCalibrate(dd);
-    Serial.println("[touch] TOUCH_FORCE_DEFAULT_CAL=1 -> kalibrasi default dipakai, wizard dilewati");
-    p.end();
-    return;
-  }
-#endif
-  if(done){
     uint16_t d[8]; p.getBytes("data",d,sizeof(d));
     display.setTouchCalibrate(d);
-  } else if(touchGhostAtBoot()){
-    // ghost touch: lewati kalibrasi, pakai default (tidak disimpan ke NVS)
-    static const uint16_t defCal[8] = { 239, 3926, 233, 265, 3856, 3897, 3714, 308 };
-    uint16_t d[8]; memcpy(d, defCal, sizeof(d));
-    display.setTouchCalibrate(d);
-    Serial.println("[touch] ghost terdeteksi saat boot -> kalibrasi default");
   } else {
     // v45: kalibrasi pertama kali gambar LANGSUNG ke display (bukan lewat
     // canvas+push spt layar lain), jadi backlight-nya harus dinyalain
@@ -2863,14 +2820,12 @@ void playNavTransition(NavAnim anim){
   push(); // pastikan frame akhir persis sama dgn 'canvas'
 }
 
-void ownerStatsOpen(int); // Profil v2: hitung berapa kali app dibuka
 void navPush(Screen s){
   appOnExit(curScreen());
   if(navDepth<NAV_MAX) navStack[navDepth++]=s;
   appOnEnter(s);
   appMarkUsed(s); // v92: catat "kapan terakhir dipakai" utk App Memory Guard (LRU), lihat appMemGuardTick()
   notifClear(s); // v-baru: badge notifikasi app ini ilang begitu beneran dibuka
-  ownerStatsOpen((int)s); // Profil v2: statistik app paling sering dibuka
   kbVisible=false; kbTarget=nullptr;
   // v24: vibNav() DIHAPUS dr sini -- vibTap() global di loop() SUDAH getar
   // duluan pas jari nyentuh tombol yg memicu navPush ini, jd manggil vibNav()
@@ -2916,22 +2871,26 @@ const char* kbN[3][10]={
   {"~","!","@","#","$","%","^","&","*","("}};
 const char* (*kbMaps[3])[10]={kbL,kbU,kbN};
 
-// KB-FIX: semua baris 10 tuts, grid rata & di-tengah.
-int kbKeyW(){ return (SCR_W-8-18)/10; }
+int kbKeyW(){ return (SCR_W-8)/10 - 2; }
 int kbKeyH(){ return 22; }
 int kbY(){ return SCR_H - 4*(kbKeyH()+2) - 4; }
-int kbLeft(){ return (SCR_W - (10*kbKeyW()+18))/2; }
-int kbOffCol(int row){ (void)row; return kbLeft(); }
+int kbOffCol(int row){
+  int base = 4;
+  if(row==1) base += (kbKeyW()+2)/2;
+  if(row==2) base += (kbKeyW()+2);
+  return base;
+}
 
 void drawKb(LGFX_Sprite& s){
+  // IOS-KEYBOARD: panel kaca gelap + tuts bertinggi bayangan 1px, huruf besar.
   int y0=kbY();
   s.fillRect(0,y0-3,SCR_W,SCR_H-y0+3,blend565(T().bg,T().surface,175));
   s.drawFastHLine(0,y0-3,SCR_W,T().divider);
   auto* lay=kbMaps[(int)kbMode];
-  int kw=kbKeyW(), kh=kbKeyH(), L=kbLeft(), R=SCR_W-L;
-  const uint16_t keyC = blend565(T().surface2,0xFFFF,40);
-  const uint16_t fnC  = T().surface2;
-  const uint16_t shC  = blend565(T().bg,0x0000,140);
+  int kw=kbKeyW(), kh=kbKeyH();
+  const uint16_t keyC = blend565(T().surface2,0xFFFF,40);   // tuts huruf/angka: abu lebih terang
+  const uint16_t fnC  = T().surface2;                       // tuts fungsi: lebih gelap
+  const uint16_t shC  = blend565(T().bg,0x0000,140);        // bayangan di bawah tuts
   for(int r=0;r<3;r++){
     int ry=y0+r*(kh+2), ox=kbOffCol(r);
     for(int c=0;c<10;c++){
@@ -2948,33 +2907,36 @@ void drawKb(LGFX_Sprite& s){
   }
   s.setTextSize(1);
   int cy=y0+3*(kh+2);
-  int shX=L, shW=40, nmX=shX+shW+4, nmW=44, spX=nmX+nmW+4;
-  int dlW=84, dlX=R-dlW;
-  int spW=max(40, dlX-4-spX);
+  int spaceW = SCR_W - 96 - 88 - 8;
+  int spW = max(40,spaceW);
+  // Shift: putih (ikon gelap) saat aktif, abu gelap (ikon putih) saat mati
   bool up = (kbMode==KB_UPPER);
-  s.fillRoundRect(shX,cy+1,shW,kh,6,shC);
-  s.fillRoundRect(shX,cy,shW,kh,6, up?(uint16_t)0xFFFF:fnC);
+  s.fillRoundRect(4,cy+1,40,kh,6,shC);
+  s.fillRoundRect(4,cy,40,kh,6, up?(uint16_t)0xFFFF:fnC);
   {
     uint16_t ic = up? (uint16_t)0x0000 : (uint16_t)0xFFFF;
-    int acx=shX+shW/2, acy=cy+kh/2;
+    int acx=4+20, acy=cy+kh/2;
     s.fillTriangle(acx,acy-6, acx-6,acy+2, acx+6,acy+2, ic);
     s.fillRect(acx-3,acy+2,6,4,ic);
   }
-  s.fillRoundRect(nmX,cy+1,nmW,kh,6,shC);
-  s.fillRoundRect(nmX,cy,nmW,kh,6,fnC);
+  // 123 / ABC
+  s.fillRoundRect(48,cy+1,44,kh,6,shC);
+  s.fillRoundRect(48,cy,44,kh,6,fnC);
   {
     const char* nl=(kbMode==KB_NUM)?"ABC":"123";
     s.setTextColor(T().text);
-    s.setCursor(nmX+(nmW-s.textWidth(nl))/2,cy+kh/2-4); s.print(nl);
+    s.setCursor(48+(44-s.textWidth(nl))/2,cy+kh/2-4); s.print(nl);
   }
-  s.fillRoundRect(spX,cy+1,spW,kh,6,shC);
-  s.fillRoundRect(spX,cy,spW,kh,6,keyC);
+  // Spasi
+  s.fillRoundRect(96,cy+1,spW,kh,6,shC);
+  s.fillRoundRect(96,cy,spW,kh,6,keyC);
   s.setTextColor(T().text);
-  s.setCursor(spX+(spW-s.textWidth("spasi"))/2,cy+kh/2-4); s.print("spasi");
-  s.fillRoundRect(dlX,cy+1,dlW,kh,6,shC);
-  s.fillRoundRect(dlX,cy,dlW,kh,6,fnC);
+  s.setCursor(96+(spW-s.textWidth("spasi"))/2,cy+kh/2-4); s.print("spasi");
+  // Hapus (backspace) -- abu gelap + ikon putih
+  s.fillRoundRect(SCR_W-88,cy+1,84,kh,6,shC);
+  s.fillRoundRect(SCR_W-88,cy,84,kh,6,fnC);
   {
-    int acx=dlX+dlW/2-4, acy=cy+kh/2;
+    int acx=SCR_W-88+42, acy=cy+kh/2;
     s.fillTriangle(acx-8,acy, acx,acy-6, acx,acy+6, 0xFFFF);
     s.fillRect(acx,acy-3,10,6,0xFFFF);
   }
@@ -2984,28 +2946,34 @@ void kbTouch(int x,int y){
   if(!kbVisible||!kbTarget) return;
   int y0=kbY();
   if(y<y0-2) return;
-  int kw=kbKeyW(), kh=kbKeyH(), L=kbLeft(), R=SCR_W-L;
-  int cell=kh+2;
-  int cy=y0+3*cell;
-  if(y>=cy){
-    int shX=L, shW=40, nmX=shX+shW+4, nmW=44, spX=nmX+nmW+4;
-    int dlX=R-84;
-    if(x<nmX-2)                kbMode=(kbMode==KB_UPPER?KB_LOWER:KB_UPPER);
-    else if(x<spX-2)           kbMode=(kbMode==KB_NUM?KB_LOWER:KB_NUM);
-    else if(x<dlX-2)           *kbTarget+=" ";
-    else if(kbTarget->length()>0)
+  int kw=kbKeyW(), kh=kbKeyH();
+  int cy=y0+3*(kh+2);
+  int spaceW = max(40, SCR_W-96-88-8);
+  if(y>=cy&&y<=cy+kh){
+    if(x>=4&&x<=44)            kbMode=(kbMode==KB_UPPER?KB_LOWER:KB_UPPER);
+    else if(x>=48&&x<=92)      kbMode=(kbMode==KB_NUM?KB_LOWER:KB_NUM);
+    else if(x>=96&&x<=96+spaceW) *kbTarget+=" ";
+    else if(x>=SCR_W-88&&kbTarget->length()>0)
       *kbTarget=kbTarget->substring(0,kbTarget->length()-1);
     needRedraw=true;
     return;
   }
-  int r=(y-y0)/cell;
-  if(r<0||r>2) return;
-  int c=(x-L)/(kw+2);
-  if(x<L||c<0||c>9) return;
   auto* lay=kbMaps[(int)kbMode];
-  *kbTarget+=lay[r][c];
-  if(kbMode==KB_UPPER)kbMode=KB_LOWER;
-  needRedraw=true;
+  for(int r=0;r<3;r++){
+    int ry=y0+r*(kh+2);
+    if(y>=ry&&y<=ry+kh){
+      int ox=kbOffCol(r);
+      for(int c=0;c<10;c++){
+        int kx=ox+c*(kw+2);
+        if(x>=kx&&x<=kx+kw){
+          *kbTarget+=lay[r][c];
+          if(kbMode==KB_UPPER)kbMode=KB_LOWER;
+          needRedraw=true;
+          return;
+        }
+      }
+    }
+  }
 }
 
 // =============================================
@@ -4014,12 +3982,6 @@ int   ccPressIdx=-1;
 unsigned long ccPressMs=0;
 const unsigned long CC_PRESS_MS=140;
 bool  ccSliderDrag=false;
-// CC-LONGPRESS: tahan tile >= CC_LONG_MS = buka pengaturan fitur itu; ketuk biasa = aksi (diproses saat jari lepas)
-const unsigned long CC_LONG_MS=450;
-int  ccHoldIdx=-1;            // tile yg sedang ditekan (-1 = tidak ada)
-unsigned long ccHoldStart=0;
-int  ccHoldX0=0, ccHoldY0=0;
-int  settJumpCode=0;          // saat Pengaturan digambar: lompat ke 1 Wi-Fi, 2 Tema, 3 Rotasi, 4 Sensor & layar
 unsigned long ccTickLastMs=0;
 
 bool ccActiveState(int i){
@@ -4208,7 +4170,6 @@ void drawControlCenter(LGFX_Sprite& s){
       float pt=(float)(nowMs-ccPressMs)/(float)CC_PRESS_MS; if(pt>1.0f) pt=1.0f;
       rs *= 1.0f-0.12f*sinf(pt*PI);
     }
-    if(ccHoldIdx==i) rs *= 0.94f; // CC-LONGPRESS: tetap sedikit mengecil selagi ditahan
     // v109: tile persegi membulat (bukan lingkaran): ikon di atas, label kecil di bawah
     int tw2=(int)(cw*rs+0.5f), th2=(int)(ch*rs+0.5f); if(tw2<6) tw2=6; if(th2<6) th2=6;
     int tx=ccx-tw2/2, ty=ccy-th2/2, trad=min(14,th2/2);
@@ -4262,63 +4223,21 @@ void drawControlCenter(LGFX_Sprite& s){
   drawToast(s);
 }
 
-// CC-LONGPRESS ---------------------------------------------------------------
-void ccRunTap(int i){
-  void(*actions[CC_ITEMS])() = { ccActWifi, ccActAirplane, ccActDnd, ccActTheme, ccActOrient, ccActShake, nullptr, ccActNeopixel, ccActSilent, ccActBluetooth, ccActScreenshot };
-  if(i==6){ locked=true; lockScreenReset(); closeControlCenter(); return; }
-  if(actions[i]) actions[i]();
-  needRedraw=true;
-}
-
-// Tahan-lama: buka pengaturan fitur tile tsb. Panel ditutup INSTAN (bukan animasi) supaya transisi layar bersih.
-void ccLongPress(int i){
-  Screen dest=SCR_HOME; int jump=0;
-  switch(i){
-    case 0: case 1: dest=SCR_SETTINGS; jump=1; break;   // Wi-Fi, Pesawat -> bagian WI-FI
-    case 3:  dest=SCR_SETTINGS; jump=2; break;           // Tema
-    case 4:  dest=SCR_SETTINGS; jump=3; break;           // Rotasi -> Rotasi Otomatis
-    case 5:  dest=SCR_SETTINGS; jump=4; break;           // Goyang -> Sensor & layar
-    case 7:  dest=SCR_NEOPIXEL; break;
-    case 9:  dest=SCR_MUSIC;    break;                   // BT: pindai & sambung perangkat ada di Musik
-    case 10: dest=SCR_GALLERY;  break;                   // Tangkap -> album Screenshot
-    default: showToast("Tidak ada pengaturan lanjutan"); needRedraw=true; return;
-  }
-  Screen cur=curScreen();
-  if(cur==SCR_NES||cur==SCR_DOOM){ showToast("Keluar dari game dulu"); needRedraw=true; return; }
-  vibExit();                                              // getar beda dari ketukan biasa = sinyal "tahan-lama"
-  ccOffset=0; ccAnimating=false; controlCenterOpen=false;
-  if(jump) settJumpCode=jump;
-  if(cur==dest){ needRedraw=true; return; }               // sudah di layar itu (mis. Pengaturan): cukup lompat
-  navPush(dest);
-}
-
-// Dipanggil tiap putaran loop() selagi Control Center terbuka.
-void ccHoldTick(bool touched,int tx,int ty){
-  if(ccHoldIdx<0) return;
-  if(!controlCenterOpen){ ccHoldIdx=-1; return; }
-  if(touched){
-    if(abs(tx-ccHoldX0)>14 || abs(ty-ccHoldY0)>14){ ccHoldIdx=-1; needRedraw=true; return; } // jari bergeser -> batal
-    if(millis()-ccHoldStart>=CC_LONG_MS){ int i=ccHoldIdx; ccHoldIdx=-1; ccLongPress(i); needRedraw=true; }
-  } else {                                                // jari lepas sebelum ambang tahan-lama = ketukan biasa
-    int i=ccHoldIdx; ccHoldIdx=-1;
-    ccRunTap(i);
-  }
-}
-
 void ccTouch(int x,int y){
   int ph=(int)ccOffset;
   if(y> ph-9 && y<=ph+4){ closeControlCenter(); return; }
   if(y>ph) { closeControlCenter(); return; }
 
   int cw=ccCardW(), ch=ccCardH(), gap=ccGap(), top=ccGridTop(), gx=ccGridX();
+  void(*actions[CC_ITEMS])() = { ccActWifi, ccActAirplane, ccActDnd, ccActTheme, ccActOrient, ccActShake, nullptr, ccActNeopixel, ccActSilent, ccActBluetooth, ccActScreenshot };
   for(int i=0;i<CC_ITEMS;i++){
     int col=i%CC_COLS, row=i/CC_COLS;
     int bx=gx+col*(cw+gap);
     int by=top+row*(ch+gap);
     if(x>=bx&&x<=bx+cw&&y>=by&&y<=by+ch){
       ccPressIdx=i; ccPressMs=millis(); // v108: feedback tekan
-      // CC-LONGPRESS: aksi ketuk dijalankan saat jari LEPAS (ccHoldTick); tahan >= CC_LONG_MS = buka pengaturannya
-      ccHoldIdx=i; ccHoldStart=millis(); ccHoldX0=x; ccHoldY0=y;
+      if(i==6){ locked=true; lockScreenReset(); closeControlCenter(); return; }
+      if(actions[i]) actions[i]();
       needRedraw=true;
       return;
     }
@@ -4570,12 +4489,6 @@ void drawAppIcon(LGFX_Sprite& s, char sym, int cx, int cy, int r, uint16_t bgCir
     // sama case 'Y' punya Trivia (jawaban benar/centang) -- ikon NES di
     // Home/Switcher/Dock jadinya salah gambar (nampil centang, bukan
     // gamepad). Dipindah ke 'D' (belum kepake) + ditambah case-nya.
-    case '#': { // Atur Home: grid 2x2 kotak
-      int q=max(3,r/3), g2=max(2,r/6), tot=q*2+g2, x0=cx-tot/2, y0=cy-tot/2;
-      for(int a=0;a<2;a++) for(int b=0;b<2;b++)
-        s.fillRoundRect(x0+a*(q+g2),y0+b*(q+g2),q,q,2,ic);
-      break;
-    }
     case 'H': { // HWmonitor: chip CPU -- badan persegi + pin nongol di 4 sisi
       int w=r-7;
       s.fillRoundRect(cx-w,cy-w,w*2,w*2,2,ic);
@@ -4686,26 +4599,6 @@ void drawAppIcon(LGFX_Sprite& s, char sym, int cx, int cy, int r, uint16_t bgCir
       s.fillTriangle(cx-2,cy+w-5,cx+w/3+1,cy+1,cx+w-2,cy+w-5,ic);
       break;
     }
-    case 'r': { // Remote: monitor + kursor
-      int mw=max(14,r*3/2), mh=max(10,r), mx=cx-mw/2, my=cy-mh/2-2;
-      s.drawRoundRect(mx,my,mw,mh,2,ic); s.drawRoundRect(mx+1,my+1,mw-2,mh-2,2,ic);
-      s.fillRect(cx-1,my+mh,3,3,ic); s.fillRect(cx-mw/4,my+mh+3,max(4,mw/2),2,ic);
-      s.fillTriangle(cx-mw/6,cy-mh/3,cx+mw/6,cy+1,cx-mw/16,cy+mh/5,ic);
-      break;
-    }
-    case 'i': { // About Phone
-      int rr=max(8,r-6);
-      s.drawCircle(cx,cy,rr,ic); s.drawCircle(cx,cy,rr-1,ic);
-      s.fillCircle(cx,cy-rr/2,max(1,rr/7),ic);
-      s.fillRect(cx-max(1,rr/9),cy-rr/6,max(2,rr/4),rr*2/3,ic);
-      break;
-    }
-    case 'o': { // Profil: kepala + bahu
-      int rr=max(8,r-6);
-      s.fillCircle(cx,cy-rr/3,max(3,rr/3),ic);
-      s.fillRoundRect(cx-rr*2/3,cy+rr/8,rr*4/3,rr*2/3,rr/3,ic);
-      break;
-    }
     default: {
       s.setTextColor(ic); s.setTextSize(2);
       char b[2]={sym,0};
@@ -4776,7 +4669,6 @@ void drawUpdate(LGFX_Sprite&); void updTouch(int,int,bool,bool);
 // ---- BATERAI: forward declarations (BARU di v8) ----
 void battEnter(); void battExit();
 void drawBatteryApp(LGFX_Sprite&); void battTouch(int,int,bool,bool);
-void battUpdate(); void inaBegin(); void inaPoll(); bool inaWantRedraw(); void inaSaveCounters(bool);
 // ---- GAME: forward declarations ----
 void snakeEnter(); void snakeExit();
 void drawSnake(LGFX_Sprite&); void snakeTouch(int,int,bool,bool);
@@ -4853,30 +4745,8 @@ void galEnter(); void galExit(); void drawGallery(LGFX_Sprite&); void galTouch(i
 void galPointerTick(bool,bool,int,int); void galOpenFile(const char*); void galForgetFile(const char*);
 void fileExpPointerTick(bool,bool,int,int);
 void mjpegPlayFile(const String& filename);
-void aviPlayFile(const String& filename);   // avi_renphone.ino: video MJPEG + audio MP3 -> TWS
-int  aviThumbGet(const String& filename, uint32_t size, uint16_t* out, uint32_t* durMs);   // avi_renphone.ino: thumbnail 64x48 (cache SD)
-uint32_t aviResumeFor(const String& filename, uint32_t size);                               // avi_renphone.ino: posisi tersimpan (ms)
 
-// ---- owner_renphone.ino: Profil pemilik (foto + nama) ----
-void ownerEnter(); void ownerExit(); void drawOwner(LGFX_Sprite&); void ownerTouch(int,int,bool,bool);
-void ownerLoopPoll(); bool ownerHasAvatar(); const char* ownerName();
-void ownerDrawAvatar(LGFX_Sprite&,int,int,int);
-bool ownerPickActive(); void ownerPickReset(); void ownerPickChosen(const char*);
-void ownerSetAvatarUi(const char*);
-
-void aboutEnter(); void aboutExit(); void drawAbout(LGFX_Sprite&); void aboutTouch(int,int,bool,bool);
-void aboutLoopPoll();
-
-// ---- homeedit_renphone.ino: Atur Home ----
-void homeEditEnter(); void homeEditExit(); void drawHomeEdit(LGFX_Sprite&); void homeEditTouch(int,int,bool,bool);
-void homeEditPointerTick(bool,bool,int,int);
-
-// ---- remote_renphone.ino: Remote Control (AP + web server) ----
-void remoteEnter(); void remoteExit(); void drawRemote(LGFX_Sprite&); void remoteTouch(int,int,bool,bool);
-void remotePointerTick(bool,bool,int,int);
-void rcLoopPoll(); void rcRegisterRoutes(); bool rcApIsUp(); bool rcInputPoll(int*,int*); void rcFrameMark();
-
-AppDef apps[39] = {
+AppDef apps[35] = {
   { "Jam",        'J', 0, clockEnter,    clockExit,    drawClock,        clockTouch,    SCR_CLOCK },
   { "Kalkulator", '+', 0, calcEnter,     calcExit,     drawCalc,         calcTouch,     SCR_CALC },
   { "Orientasi3D", '3', 0, sensorEnter,   sensorExit,   drawSensor,       sensorTouch,   SCR_SENSOR },
@@ -4928,15 +4798,8 @@ AppDef apps[39] = {
   { "Voice Memo", 'v', 0, memoEnter,    memoExit,     drawMemo,         memoTouch,     SCR_MEMO },
   // ---- Galeri: album per folder, thumbnail cache di SD ----
   { "Galeri",     'g', 0, galEnter,     galExit,      drawGallery,      galTouch,      SCR_GALLERY },
-  // ---- Profil: foto & nama pemilik ----
-  { "Profil",     'o', 0, ownerEnter,   ownerExit,    drawOwner,        ownerTouch,    SCR_OWNER },
-  { "About Phone", 'i', 0, aboutEnter,   aboutExit,    drawAbout,        aboutTouch,    SCR_ABOUT },
-  // ---- Atur Home: urutan & sembunyikan ikon (disembunyikan dari grid secara default; ada di Pengaturan) ----
-  { "Atur Home", '#', 0xFBE0, homeEditEnter, homeEditExit, drawHomeEdit, homeEditTouch, SCR_HOMEEDIT },
-  // ---- Remote Control: kontrol penuh dari HP/laptop lewat WiFi AP sendiri ----
-  { "Remote", 'r', 0, remoteEnter, remoteExit, drawRemote, remoteTouch, SCR_REMOTE },
 };
-#define APP_COUNT 39
+#define APP_COUNT 35
 
 // =============================================
 // NOTIFIKASI BADGE (BARU) -- angka kecil merah di pojok ikon app, mirip
@@ -5044,9 +4907,6 @@ void initAppColors(){
   apps[32].color=0xFD20; // Stopwatch - oranye
   apps[33].color=0xF9A6; // Voice Memo - merah rekam
   apps[34].color=0x565F; // Galeri - biru langit
-  apps[35].color=0x5EBF; // Profil - biru muda
-  apps[36].color=0x8C71; // About Phone
-  apps[38].color=0x2DFA; // Remote - cyan
 }
 
 int appIndexForScreen(Screen s){
@@ -5410,66 +5270,6 @@ const float HOME_SPRING_K      = 0.00055f;// kekakuan pegas tepi (1/ms^2)
 const float HOME_SPRING_C      = 0.036f;  // redaman pegas (1/ms) -- zeta ~0.77 = melenting tipis
 const float HOME_PRESS_IN_MS   = 90.0f;   // durasi ikon mengecil pas ditekan
 const float HOME_PRESS_OUT_MS  = 160.0f;  // durasi ikon balik pas dilepas
-// ---- HOME-LAYOUT: urutan & sembunyikan ikon grid Home (diatur di layar "Atur Home") ----
-// homeOrder[] = urutan SEMUA app (isi: indeks apps[]), homeHide[] per indeks apps[].
-// homeVis[]/homeVisN = yang tampil di grid Home. Disimpan di NVS "homelay" per ID Screen
-// (bukan per indeks) supaya tetap benar kalau nanti ada app baru. Pencarian tetap mencari SEMUA app.
-int  homeOrder[APP_COUNT];
-bool homeHide[APP_COUNT];
-int  homeVis[APP_COUNT];
-int  homeVisN = 0;
-bool homeLayoutLoaded = false;
-
-void homeLayoutRebuildVis(){
-  homeVisN=0;
-  for(int k=0;k<APP_COUNT;k++){ int i=homeOrder[k]; if(!homeHide[i]) homeVis[homeVisN++]=i; }
-}
-void homeLayoutDefault(){
-  for(int i=0;i<APP_COUNT;i++){ homeOrder[i]=i; homeHide[i]=(apps[i].screen==SCR_HOMEEDIT); }
-  homeLayoutRebuildVis();
-}
-void homeLayoutLoad(){
-  homeLayoutLoaded=true;
-  homeLayoutDefault();
-  Preferences pr;
-  if(!pr.begin("homelay",true)) return;
-  size_t n=pr.getBytesLength("ord");
-  if(n>0 && n<=64){
-    uint8_t ids[64];
-    pr.getBytes("ord",ids,n);
-    uint64_t hid=pr.getULong64("hid",0);
-    bool used[APP_COUNT];
-    for(int i=0;i<APP_COUNT;i++) used[i]=false;
-    int w=0;
-    for(size_t k=0;k<n && w<APP_COUNT;k++){
-      for(int i=0;i<APP_COUNT;i++){
-        if(!used[i] && (int)apps[i].screen==(int)ids[k]){
-          homeOrder[w++]=i; used[i]=true;
-          homeHide[i]=(ids[k]<64) ? (((hid>>ids[k])&1ULL)!=0) : false;
-          break;
-        }
-      }
-    }
-    for(int i=0;i<APP_COUNT;i++) if(!used[i]) homeOrder[w++]=i;   // app baru: ke akhir, aturan default
-  }
-  pr.end();
-  homeLayoutRebuildVis();
-}
-void homeLayoutSave(){
-  uint8_t ids[64]; uint64_t hid=0; int n=0;
-  for(int k=0;k<APP_COUNT && n<64;k++){
-    int i=homeOrder[k]; int id=(int)apps[i].screen;
-    ids[n++]=(uint8_t)id;
-    if(homeHide[i] && id<64) hid|=(1ULL<<id);
-  }
-  Preferences pr;
-  if(!pr.begin("homelay",false)) return;
-  pr.putBytes("ord",ids,n);
-  pr.putULong64("hid",hid);
-  pr.end();
-}
-void homeLayoutEnsure(){ if(!homeLayoutLoaded) homeLayoutLoad(); }
-
 int homeCols(){ return currentOrient==ORIENT_LANDSCAPE ? 4 : 3; } // HOME-ICON-BULAT: dulu 3/2 kolom (kartu besar)
 int homeCardW(){ int cols=homeCols(); return (SCR_W - (cols+1)*10)/cols; } // HOME-ICON-BULAT: gap 10 = sama dgn drawHome/touch
 // v71 REDESIGN: kartu app dipertinggi dikit (60->68) krn ikon diperbesar &
@@ -5669,11 +5469,9 @@ void drawHome(LGFX_Sprite& s,float sc){
     s.setTextSize(1);
     uiText(s,14,gridTop-20-scPx,"Semua App",wp?(uint16_t)0xDEFB:T().subtext,wp,false);
 
-    // ---- grid app ---- (HOME-LAYOUT: urutan & app tersembunyi dari homeVis[])
-    homeLayoutEnsure();
-    for(int k=0;k<homeVisN;k++){
-      int i=homeVis[k];
-      int col=k%cols, row=k/cols;
+    // ---- grid app ----
+    for(int i=0;i<APP_COUNT;i++){
+      int col=i%cols, row=i/cols;
       int x=gap+col*(cw+gap), y=gridTop+row*(ch+gap)-scPx;
       if(y+ch<clipTop||y>contentBot)continue;
       float pa = homePressAmt(i);
@@ -5756,19 +5554,17 @@ Screen homeCheck(int x,int y,float sc){
   }
   int cols=homeCols(), cw=homeCardW(), ch=homeCardH();
   int gap=10, gridTop=homeGridTop();
-  homeLayoutEnsure();
-  for(int k=0;k<homeVisN;k++){ // HOME-LAYOUT
-    int col=k%cols,row=k/cols;
+  for(int i=0;i<APP_COUNT;i++){
+    int col=i%cols,row=i/cols;
     int ax=gap+col*(cw+gap), ay=gridTop+row*(ch+gap)-scPx;
-    if(x>=ax&&x<=ax+cw&&y>=ay&&y<=ay+ch) return apps[homeVis[k]].screen;
+    if(x>=ax&&x<=ax+cw&&y>=ay&&y<=ay+ch) return apps[i].screen;
   }
   return SCR_HOME;
 }
 
 int homeMaxScroll(){
-  homeLayoutEnsure();
   int cols=homeCols();
-  int rows=(homeVisN+cols-1)/cols; // HOME-LAYOUT: hanya app yang tampil
+  int rows=(APP_COUNT+cols-1)/cols;
   int ch=homeCardH(), gap=10, gridTop=homeGridTop(); // v-baru: samain persis sama drawHome() -- gap 8->10
   int needed = gridTop + rows*(ch+gap) - homeDockY();
   return max(0, needed);
@@ -5855,11 +5651,10 @@ int homeIndexAt(int x,int y,float sc){
   }
   if(y<homeGridClipTop()) return -1; // v105: tap di area header gak nembus ke ikon yg terpotong (gak kelihatan)
   int scPx=homeScrollPx(sc);
-  homeLayoutEnsure();
-  for(int k=0;k<homeVisN;k++){ // HOME-LAYOUT
-    int col=k%cols,row=k/cols;
+  for(int i=0;i<APP_COUNT;i++){
+    int col=i%cols,row=i/cols;
     int ax=gap+col*(cw+gap), ay=gridTop+row*(ch+gap)-scPx;
-    if(x>=ax&&x<=ax+cw&&y>=ay&&y<=ay+ch) return homeVis[k];
+    if(x>=ax&&x<=ax+cw&&y>=ay&&y<=ay+ch) return i;
   }
   return -1;
 }
@@ -7404,7 +7199,7 @@ int loadSpiOcPref(){
 // PENGATURAN ala iOS -- state layout & sentuhan (daftar scroll, tap-saat-lepas)
 // =====================================================================
 enum { SR_TITLE=0, SR_SECT, SR_BRIGHT, SR_THEME, SR_FONT, SR_ROT, SR_SPI, SR_SPIAPPLY,
-       SR_SCAN, SR_WIFI, SR_NONET, SR_SSID, SR_PASS, SR_CONNECT, SR_MPU, SR_TCAL, SR_OWNER, SR_ABOUT, SR_HOMEEDIT };
+       SR_SCAN, SR_WIFI, SR_NONET, SR_SSID, SR_PASS, SR_CONNECT, SR_MPU, SR_TCAL };
 #define SETT_MAXROWS 40
 int settRT[SETT_MAXROWS], settRG[SETT_MAXROWS], settRY[SETT_MAXROWS], settRH[SETT_MAXROWS], settRA[SETT_MAXROWS];
 const char* settRL[SETT_MAXROWS];
@@ -7436,14 +7231,12 @@ void settAddRow(int type,int grp,int h,int arg,const char* lbl,int& y){
 void settBuildLayout(){
   settRowN=0; int y=4; int g=1;
   settAddRow(SR_TITLE,0,36,0,"Pengaturan",y);
-  settAddRow(SR_OWNER,g,60,0,nullptr,y); g++;   // kartu pemilik (foto + nama)
 
   settAddRow(SR_SECT,0,22,0,"TAMPILAN",y);
   settAddRow(SR_BRIGHT,g,34,0,nullptr,y);
   settAddRow(SR_THEME,g,52,0,nullptr,y);
   settAddRow(SR_FONT,g,34,0,nullptr,y);
-  settAddRow(SR_ROT,g,34,0,nullptr,y);
-  settAddRow(SR_HOMEEDIT,g,34,0,nullptr,y); g++;
+  settAddRow(SR_ROT,g,34,0,nullptr,y); g++;
 
   settAddRow(SR_SECT,0,26,0,"KINERJA",y);
   settAddRow(SR_SPI,g,38,0,nullptr,y);
@@ -7461,9 +7254,6 @@ void settBuildLayout(){
   settAddRow(SR_SECT,0,26,0,"SENSOR & LAYAR",y);
   settAddRow(SR_MPU,g,34,0,nullptr,y);
   settAddRow(SR_TCAL,g,34,0,nullptr,y); g++;
-
-  settAddRow(SR_SECT,0,26,0,"TENTANG",y);
-  settAddRow(SR_ABOUT,g,34,0,nullptr,y); g++;
 
   y+=14; settTotalH=y;
 }
@@ -7483,13 +7273,6 @@ void settChevron(LGFX_Sprite& s,int cx,int cy,uint16_t col){ // ">" tipis
 void drawSettings(LGFX_Sprite& s){
   checkWifiScanComplete();
   settBuildLayout();
-  // CC-LONGPRESS: dibuka dari tahan-lama tile Control Center -> gulir ke bagian terkait (sekali pakai)
-  if(settJumpCode){
-    int want = settJumpCode==1 ? SR_SCAN : settJumpCode==2 ? SR_THEME : settJumpCode==3 ? SR_ROT : SR_MPU;
-    int back = (settJumpCode==1 || settJumpCode==4) ? 30 : 60;   // sisakan judul bagian di atas baris tujuan
-    for(int i=0;i<settRowN;i++) if(settRT[i]==want){ settScroll=(float)(settRY[i]-back); break; }
-    settJumpCode=0;
-  }
 
   // keyboard terbuka: geser daftar supaya kolom yg lagi diisi tetap kelihatan di atas keyboard
   if(kbVisible){
@@ -7567,10 +7350,6 @@ void drawSettings(LGFX_Sprite& s){
         settChevron(s,xr-3,ty+4,T().subtext);
         settTextR(s,xr-12,ty,uiFontNames[uiFontIdx],T().subtext);
         break;
-      case SR_HOMEEDIT:
-        s.setTextColor(T().text); s.setCursor(xl,ty); s.print("Atur Layar Home");
-        settChevron(s,xr-4,ry+rh/2,T().subtext);
-        break;
       case SR_ROT:
         s.setTextColor(T().text); s.setCursor(xl,ty); s.print("Rotasi Otomatis");
         iosSwitch(s,xr-34,ry+(rh-20)/2,autoRotateEnabled);
@@ -7636,21 +7415,6 @@ void drawSettings(LGFX_Sprite& s){
         s.setTextColor(mpuReady?T().accent:T().subtext); s.setCursor(xl,ty); s.print("Kalibrasi Sensor Gerak");
         if(!mpuReady) settTextR(s,xr,ty,"Tidak terdeteksi",T().subtext);
         break;
-      case SR_OWNER: {
-        int ar=22, acy=ry+rh/2, acx=xl+ar-4;
-        ownerDrawAvatar(s,acx,acy,ar);
-        int tx0=acx+ar+10;
-        s.setTextSize(2);
-        String onm=settFit(s,String(ownerName()),xr-18-tx0);
-        uiText(s,tx0,acy-14,onm.c_str(),T().text,false,true);
-        s.setTextSize(1);
-        s.setTextColor(T().subtext); s.setCursor(tx0,acy+6); s.print("Ketuk untuk atur profil");
-        settChevron(s,xr-4,acy,T().subtext);
-        } break;
-      case SR_ABOUT:
-        s.setTextColor(T().text); s.setCursor(xl,ty); s.print("About Phone");
-        settChevron(s,xr-4,ty+4,T().subtext);
-        break;
       case SR_TCAL:
         s.setTextColor(T().danger); s.setCursor(xl,ty); s.print("Kalibrasi Layar Sentuh");
         if(millis()<settTcalArmUntil){ settTextR(s,xr,ty,"Ketuk lagi",T().danger); needRedraw=true; }
@@ -7703,8 +7467,6 @@ void settTap(int x,int y){
       uiFontIdx=(uiFontIdx+1)%UI_FONT_COUNT; saveFontPref();
       showToast((String("Font: ")+uiFontNames[uiFontIdx]).c_str());
       needRedraw=true; break;
-    case SR_HOMEEDIT:
-      navPush(SCR_HOMEEDIT); break;
     case SR_ROT:
       autoRotateEnabled=!autoRotateEnabled; saveAutoRotatePref();
       showToast(autoRotateEnabled?"Auto-rotate aktif":"Auto-rotate mati");
@@ -7742,10 +7504,6 @@ void settTap(int x,int y){
       saveWifiCreds(); connectWifi(true);
       showToast("Menghubungkan WiFi...");
       needRedraw=true; break;
-    case SR_OWNER:
-      navPush(SCR_OWNER); break;
-    case SR_ABOUT:
-      navPush(SCR_ABOUT); break;
     case SR_MPU:
       if(mpuReady){ calibrateMPU(); needRedraw=true; }
       else showToast("Sensor MPU6050 tidak terdeteksi");
@@ -8484,18 +8242,13 @@ void expOpenEntry(int ei){
   String path = expJoin(expCwd, expEntries[ei].name);
   String low = String(expEntries[ei].name); low.toLowerCase();
 
-  if(low.endsWith(".jpg") || low.endsWith(".jpeg") || low.endsWith(".png") || low.endsWith(".bmp")){
+  if(low.endsWith(".jpg") || low.endsWith(".jpeg") || low.endsWith(".bmp")){
     expKeepCwdOnce = true;                      // balik dari Galeri tetap di folder ini
     galOpenFile(path.c_str());
     return;
   }
   if(low.endsWith(".mjpeg")){
     mjpegPlayFile(path.substring(1));           // pemutar MJPEG pakai path relatif dari root
-    needRedraw = true;
-    return;
-  }
-  if(low.endsWith(".avi")){
-    aviPlayFile(path.substring(1));             // pemutar AVI (MJPEG + MP3 -> TWS), path relatif dari root
     needRedraw = true;
     return;
   }
@@ -8864,46 +8617,6 @@ int mjpegSelectedIdx = -1;
 volatile bool mjpegPlaying       = false;
 volatile bool mjpegStopRequested = false;
 
-// ---- daftar video bergaya kartu: thumbnail + durasi + progres ditonton ----
-#define MJ_CARD_H    50                               // tinggi kartu
-#define MJ_CARD_P    54                               // jarak antar kartu
-#define MJ_TH_W      64
-#define MJ_TH_H      48
-uint16_t* mjpegThumbBuf = nullptr;                    // MJPEG_MAX_FILES x 64x48 RGB565 (PSRAM)
-uint8_t   mjpegThumbSt[MJPEG_MAX_FILES];              // 0 = belum dibuat, 1 = siap, 2 = gagal
-uint32_t  mjpegThumbDur[MJPEG_MAX_FILES];             // durasi (ms), 0 = tdk diketahui
-uint32_t  mjpegResumeMs[MJPEG_MAX_FILES];             // posisi terakhir ditonton (ms), 0 = belum
-bool      mjpegThumbWant = false;                     // ada thumbnail kosong di halaman yg terlihat
-
-int mjpegItemsPerPage(){
-  int n = (backY() - 4 - 44) / MJ_CARD_P;
-  return n < 2 ? 2 : n;
-}
-void mjpegRefreshResume(){
-  for(int i=0;i<mjpegFileCount;i++){
-    String low = mjpegFileList[i]; low.toLowerCase();
-    mjpegResumeMs[i] = low.endsWith(".avi") ? aviResumeFor(mjpegFileList[i], mjpegFileSizes[i]) : 0;
-  }
-}
-// dipanggil tiap loop(): bikin 1 thumbnail yg belum ada di halaman yg terlihat, lalu minta redraw
-void mjpegThumbPoll(){
-  if(!mjpegThumbWant || !mjpegThumbBuf || !sdReady) return;
-  if(curScreen() != SCR_MJPEG) return;
-  mjpegThumbWant = false;
-  int per = mjpegItemsPerPage();
-  int startIdx = mjpegScrollPage * per;
-  for(int i=0;i<per && (startIdx+i)<mjpegFileCount;i++){
-    int idx = startIdx+i;
-    if(mjpegThumbSt[idx] == 0){
-      int ok = aviThumbGet(mjpegFileList[idx], mjpegFileSizes[idx],
-                           mjpegThumbBuf + (size_t)idx * (MJ_TH_W*MJ_TH_H), &mjpegThumbDur[idx]);
-      mjpegThumbSt[idx] = ok ? 1 : 2;
-      needRedraw = true;                               // draw berikutnya menandai lagi kalau masih ada yg kosong
-      return;
-    }
-  }
-}
-
 MjpegClass mjpeg;
 uint8_t* mjpegBuf = nullptr;
 size_t   mjpegBufSize = 0;
@@ -8925,7 +8638,7 @@ void mjpegScanFiles(){
       int slashIdx = name.lastIndexOf('/');
       if(slashIdx >= 0) name = name.substring(slashIdx+1);
       String lower = name; lower.toLowerCase();
-      if(lower.endsWith(".mjpeg") || lower.endsWith(".avi")){
+      if(lower.endsWith(".mjpeg")){
         mjpegFileList[mjpegFileCount]  = name;
         mjpegFileSizes[mjpegFileCount] = f.size();
         mjpegFileCount++;
@@ -8934,9 +8647,6 @@ void mjpegScanFiles(){
     f = dir.openNextFile();
   }
   dir.close();
-  memset(mjpegThumbSt, 0, sizeof(mjpegThumbSt));
-  memset(mjpegThumbDur, 0, sizeof(mjpegThumbDur));
-  mjpegRefreshResume();
   Serial.printf("[MJPEG] %d file ditemukan di %s\n", mjpegFileCount, MJPEG_FOLDER);
 }
 
@@ -9177,25 +8887,21 @@ void mjpegPlayFile(const String& filename){
 }
 
 void mjpegEnter(){
-  if(!mjpegThumbBuf)
-    mjpegThumbBuf = (uint16_t*)heap_caps_malloc((size_t)MJPEG_MAX_FILES * MJ_TH_W * MJ_TH_H * 2, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
   mjpegScanFiles();
   mjpegScrollPage = 0;
 }
-void mjpegExit(){
-  if(mjpegThumbBuf){ heap_caps_free(mjpegThumbBuf); mjpegThumbBuf = nullptr; }
-  mjpegThumbWant = false;
-}
+void mjpegExit(){}
 
 void drawMjpegPlayer(LGFX_Sprite& s){
   iosBackdrop(s); drawStatusBar(s);
-  s.setTextColor(0xFBE0);s.setTextSize(1);s.setCursor(8,26);s.print("MJPEG / AVI Player");
+  s.setTextColor(0xFBE0);s.setTextSize(1);s.setCursor(8,26);s.print("MJPEG Player");
 
   iosRR(s,SCR_W-70,24,64,18,4,T().surface2);
   s.setTextColor(T().accent);s.setCursor(SCR_W-62,29);s.print("Scan");
 
   int listY = 44;
-  int itemsPerPage = mjpegItemsPerPage();
+  int itemH = 26;
+  int itemsPerPage = 5;
   int startIdx = mjpegScrollPage * itemsPerPage;
 
   if(!sdReady){
@@ -9203,80 +8909,26 @@ void drawMjpegPlayer(LGFX_Sprite& s){
     s.print("SD Card Tdk Siap");
   } else if(mjpegFileCount == 0){
     s.setTextColor(T().subtext);s.setTextSize(1);s.setCursor(14,80);
-    s.print("Tidak ada file .mjpeg / .avi");
+    s.print("Tidak ada file .mjpeg di /mjpeg");
     s.setCursor(14,96);
-    s.print("Taruh file di root SD Card,");
+    s.print("Taruh file *.mjpeg di folder itu,");
     s.setCursor(14,108);
     s.print("lalu ketuk [Scan].");
   } else {
-    bool anyMissing = false;
     for(int i=0; i<itemsPerPage && (startIdx+i)<mjpegFileCount; i++){
       int idx = startIdx+i;
-      int itemY = listY + i*MJ_CARD_P;
-      iosRR(s,4,itemY,SCR_W-8,MJ_CARD_H,8,T().surface);
+      int itemY = listY + i*(itemH+4);
+      iosRR(s,4,itemY,SCR_W-8,itemH,6,T().surface);
 
-      // thumbnail 64x48 (placeholder gelap sambil menunggu dibuat)
-      int tx = 7, ty = itemY + 1;
-      if(mjpegThumbBuf && mjpegThumbSt[idx] == 1){
-        s.pushImage(tx, ty, MJ_TH_W, MJ_TH_H, (lgfx::swap565_t*)(mjpegThumbBuf + (size_t)idx * (MJ_TH_W*MJ_TH_H)));
-      } else {
-        s.fillRect(tx, ty, MJ_TH_W, MJ_TH_H, 0x2104);
-        s.setTextColor(T().subtext); s.setTextSize(1);
-        s.setCursor(tx + 22, ty + 20);
-        s.print(mjpegThumbSt[idx] == 2 ? "[V]" : "...");
-        if(mjpegThumbBuf && mjpegThumbSt[idx] == 0) anyMissing = true;
-      }
-      uint32_t dur = mjpegThumbDur[idx];
-      uint32_t res = mjpegResumeMs[idx];
-
-      // pil durasi di pojok kanan bawah thumbnail
-      if(dur > 0){
-        char db[12]; uint32_t ds = dur/1000;
-        if(ds >= 3600) snprintf(db,sizeof(db),"%u:%02u:%02u",(unsigned)(ds/3600),(unsigned)((ds/60)%60),(unsigned)(ds%60));
-        else           snprintf(db,sizeof(db),"%u:%02u",(unsigned)(ds/60),(unsigned)(ds%60));
-        int bw = (int)strlen(db)*6 + 6;
-        s.fillRoundRect(tx + MJ_TH_W - bw - 2, ty + MJ_TH_H - 13, bw, 11, 3, 0x0000);
-        s.setTextColor(0xFFFF); s.setTextSize(1);
-        s.setCursor(tx + MJ_TH_W - bw + 1, ty + MJ_TH_H - 11);
-        s.print(db);
-      }
-      // garis progres ditonton di dasar thumbnail
-      if(dur > 0 && res > 0){
-        int fw = (int)(((uint64_t)(res > dur ? dur : res) * MJ_TH_W) / dur);
-        s.fillRect(tx, ty + MJ_TH_H - 3, MJ_TH_W, 3, 0x4208);
-        if(fw > 0) s.fillRect(tx, ty + MJ_TH_H - 3, fw, 3, T().accent);
-      }
-
-      // teks kanan: nama, info, status
-      int x0 = 78;
-      int maxc = (SCR_W - x0 - 34) / 6;
+      s.setTextColor(0xFBE0);s.setCursor(10,itemY+8);s.print("[V]");
+      s.setTextColor(T().text);s.setCursor(32,itemY+8);
       String fn = mjpegFileList[idx];
-      if((int)fn.length() > maxc) fn = fn.substring(0, maxc-2) + "..";
-      s.setTextSize(1);
-      s.setTextColor(T().text); s.setCursor(x0, itemY + 6); s.print(fn.c_str());
+      if(fn.length() > 15) fn = fn.substring(0,13) + "..";
+      s.print(fn.c_str());
 
-      char info[40];
-      uint32_t kb = mjpegFileSizes[idx] / 1024;
-      if(kb >= 1024) snprintf(info,sizeof(info),"%u.%u MB",(unsigned)(kb/1024),(unsigned)((kb%1024)*10/1024));
-      else           snprintf(info,sizeof(info),"%u KB",(unsigned)kb);
-      s.setTextColor(T().subtext); s.setCursor(x0, itemY + 20); s.print(info);
-
-      if(res > 0){
-        uint32_t rs = res/1000;
-        char rb[28]; snprintf(rb,sizeof(rb),"Lanjut %02u:%02u",(unsigned)(rs/60),(unsigned)(rs%60));
-        s.setTextColor(T().accent); s.setCursor(x0, itemY + 34); s.print(rb);
-      } else {
-        String low = mjpegFileList[idx]; low.toLowerCase();
-        s.setTextColor(T().subtext); s.setCursor(x0, itemY + 34);
-        s.print(low.endsWith(".avi") ? "Belum ditonton" : "MJPEG tanpa suara");
-      }
-
-      // tombol play bundar di kanan
-      int cx = SCR_W - 22, cy = itemY + MJ_CARD_H/2;
-      s.fillCircle(cx, cy, 11, T().good);
-      s.fillTriangle(cx-3, cy-6, cx-3, cy+6, cx+6, cy, T().bg);
+      iosRR(s,SCR_W-64,itemY+3,56,20,4,T().good);
+      s.setTextColor(T().bg);s.setCursor(SCR_W-56,itemY+8);s.print("Play");
     }
-    mjpegThumbWant = anyMissing;                      // loop() akan membuat thumbnail berikutnya
   }
 
   int pageY = backY() - 2;
@@ -9307,22 +8959,19 @@ void mjpegTouch(int x,int y,bool held,bool isNew){
   if(!sdReady) return;
 
   int listY = 44;
-  int itemsPerPage = mjpegItemsPerPage();
+  int itemH = 26;
+  int itemsPerPage = 5;
   int startIdx = mjpegScrollPage * itemsPerPage;
 
   for(int i=0;i<itemsPerPage && (startIdx+i)<mjpegFileCount;i++){
     int idx = startIdx+i;
-    int itemY = listY + i*MJ_CARD_P;
-    if(y>=itemY && y<=itemY+MJ_CARD_H){                // ketuk di mana saja pada kartu = putar
-      mjpegSelectedIdx = idx;
-      {
-        String lowName = mjpegFileList[idx]; lowName.toLowerCase();
-        if(lowName.endsWith(".avi")) aviPlayFile(mjpegFileList[idx]);   // video + suara via TWS
-        else                         mjpegPlayFile(mjpegFileList[idx]); // blocking, berhenti saat disentuh
+    int itemY = listY + i*(itemH+4);
+    if(y>=itemY && y<=itemY+itemH){
+      if(x>=SCR_W-64 && x<=SCR_W-8){
+        mjpegSelectedIdx = idx;
+        mjpegPlayFile(mjpegFileList[idx]);   // blocking, berhenti saat disentuh
+        return;
       }
-      mjpegRefreshResume();                            // posisi terakhir berubah setelah menonton
-      needRedraw = true;
-      return;
     }
   }
 
@@ -9363,32 +9012,19 @@ bool updCheckConfirm(const String& action){
   return false;
 }
 
-// ---- layout app Update (UI v2) ----
-#define UPD_HERO_Y       (STATUS_H+4)
-#define UPD_HERO_H       38
-#define UPD_HB_W         (SCR_W>=300 ? 74 : 52)
-#define UPD_HB_H         22
-#define UPD_HB_X         (SCR_W-14-UPD_HB_W)
-#define UPD_HB_Y         (UPD_HERO_Y+(UPD_HERO_H-UPD_HB_H)/2)
-#define UPD_SD_LABEL_Y   (UPD_HERO_Y+UPD_HERO_H+9)
-#define UPD_ITEM_Y       (UPD_SD_LABEL_Y+13)
-#define UPD_ITEM_H       22
-#define UPD_ITEM_GAP     3
-#define UPD_ITEMS_PAGE   2
-#define UPD_SCAN_W       44
-#define UPD_SCAN_X       (SCR_W-6-UPD_SCAN_W)
-#define UPD_NEXT_X       (UPD_SCAN_X-4-22)
-#define UPD_PREV_X       (UPD_NEXT_X-4-22)
-#define UPD_WIFI_LABEL_Y (UPD_ITEM_Y+UPD_ITEMS_PAGE*(UPD_ITEM_H+UPD_ITEM_GAP)+5)
-#define UPD_URL_Y        (UPD_WIFI_LABEL_Y+13)
-#define UPD_URL_H        20
-#define UPD_BTN_Y        (UPD_URL_Y+UPD_URL_H+5)
-#define UPD_BTN_H        24
-// ---- layar progres (digambar langsung ke display) ----
-#define UPD_PG_BARX      24
-#define UPD_PG_BARW      (SCR_W-48)
-#define UPD_PG_BARY      (SCR_H/2+8)
-#define UPD_PG_BARH      14
+#define UPD_ROW0         (STATUS_H+12)
+#define UPD_ITEM_Y        (UPD_ROW0+14)
+#define UPD_ITEM_H        22
+#define UPD_ITEM_GAP      4
+#define UPD_ITEMS_PAGE    2
+#define UPD_NAV_Y        (UPD_ITEM_Y + UPD_ITEMS_PAGE*(UPD_ITEM_H+UPD_ITEM_GAP))
+#define UPD_NAV_H         18
+#define UPD_DIV_Y        (UPD_NAV_Y + UPD_NAV_H + 8)
+#define UPD_WIFI_LABEL_Y (UPD_DIV_Y + 8)
+#define UPD_URL_Y        (UPD_WIFI_LABEL_Y + 14)
+#define UPD_URL_H         22
+#define UPD_BTN_Y        (UPD_URL_Y + 26)
+#define UPD_BTN_H         24
 
 void updScanFiles(){
   updFileCount = 0;
@@ -9415,63 +9051,27 @@ void updScanFiles(){
   Serial.printf("[Update] %d file .bin ditemukan di %s\n", updFileCount, UPDATE_FOLDER);
 }
 
-// ===== layar progres UI v2 =====
-// Kerangka (judul, trek, peringatan) digambar SEKALI oleh updDrawProgress(); selama unduh/tulis cukup
-// panggil updDrawProgressFast() -- hanya menimpa angka & menambah bagian batang yg baru, dan hanya saat
-// persen berubah (tidak ada hapus-lalu-gambar ulang -> tidak kedip, dan tidak menahan unduhan).
-static int updLastPct = -1;
-static int updBarFill = 0;
-void updDrawProgressFast(size_t written, size_t total){
-  int pct = (total>0) ? (int)(((uint64_t)written*100)/total) : 0;
-  if(pct > 100) pct = 100;
-  if(pct == updLastPct) return;
-  updLastPct = pct;
-  int fillW = (UPD_PG_BARW-4)*pct/100;
-  if(fillW < updBarFill) updBarFill = 0;
-  if(fillW > updBarFill){
-    display.fillRect(UPD_PG_BARX+2+updBarFill, UPD_PG_BARY+2, fillW-updBarFill, UPD_PG_BARH-4, 0x07F5);
-    updBarFill = fillW;
-  }
-  char buf[32];
-  snprintf(buf, sizeof(buf), "%3d%%", pct);
-  display.setTextSize(4);
-  display.setTextColor(TFT_WHITE, TFT_BLACK);
-  display.setCursor((SCR_W-96)/2, UPD_PG_BARY-52);
-  display.print(buf);
-  snprintf(buf, sizeof(buf), "%u / %u KB      ", (unsigned)(written/1024), (unsigned)(total/1024));
-  display.setTextSize(1);
-  display.setTextColor(0x8410, TFT_BLACK);
-  display.setCursor(UPD_PG_BARX, UPD_PG_BARY+UPD_PG_BARH+10);
-  display.print(buf);
-}
-
 void updDrawProgress(const char* title, size_t written, size_t total){
   display.fillScreen(TFT_BLACK);
+  display.setTextColor(TFT_WHITE);
   display.setTextSize(1);
-  display.setTextColor(0x07FF);
-  display.setCursor((SCR_W-display.textWidth(title))/2, UPD_PG_BARY-86);
+  display.setCursor(10,10);
   display.print(title);
-  display.fillRoundRect(UPD_PG_BARX, UPD_PG_BARY, UPD_PG_BARW, UPD_PG_BARH, 3, 0x2104);
-  const char* warn = "JANGAN MATIKAN PERANGKAT!";
-  display.setTextColor(0xFD20);
-  display.setCursor((SCR_W-display.textWidth(warn))/2, UPD_PG_BARY+UPD_PG_BARH+32);
-  display.print(warn);
-  updLastPct = -2; updBarFill = 0;     // paksa gambar angka & batang pertama
-  updDrawProgressFast(written, total);
-}
+  display.setCursor(10,26);
+  display.setTextColor(TFT_RED);
+  display.print("JANGAN MATIKAN PERANGKAT!");
 
-// layar tunggu (tanpa persen & tanpa peringatan): dipakai saat cek rilis / menghubungi server
-void updDrawBusy(const char* title){
-  display.fillScreen(TFT_BLACK);
-  display.setTextSize(1);
-  display.setTextColor(0x07FF);
-  display.setCursor((SCR_W-display.textWidth(title))/2, SCR_H/2-14);
-  display.print(title);
-  const char* sub = "mohon tunggu";
-  display.setTextColor(0x8410);
-  display.setCursor((SCR_W-display.textWidth(sub))/2, SCR_H/2+4);
-  display.print(sub);
-  for(int i=0;i<3;i++) display.fillCircle(SCR_W/2-14+i*14, SCR_H/2+28, 3, i==0 ? 0x07FF : (i==1 ? 0x0555 : 0x02AA));
+  int barW=SCR_W-20, barH=18, barY=50;
+  int pct = (total>0) ? (int)(((uint32_t)written*100)/total) : 0;
+  display.setTextColor(TFT_WHITE);
+  display.drawRect(10,barY,barW,barH,TFT_WHITE);
+  int fillW = (barW-4)*pct/100;
+  if(fillW>0) display.fillRect(12,barY+2,fillW,barH-4,TFT_GREEN);
+
+  char buf[32];
+  sprintf(buf,"%d%%  (%u/%u KB)", pct, (unsigned)(written/1024), (unsigned)(total/1024));
+  display.setCursor(10,barY+barH+10);
+  display.print(buf);
 }
 
 // reason: alasan gagal yang ditampilkan LANGSUNG di layar (bukan cuma di Serial),
@@ -9479,38 +9079,23 @@ void updDrawBusy(const char* title){
 void updShowResult(bool success, const String& reason){
   updBusy = false;
   display.fillScreen(TFT_BLACK);
-  int cx = SCR_W/2, cy = SCR_H/2-44;
   display.setTextSize(2);
+  display.setCursor(20,90);
   if(success){
-    display.fillCircle(cx, cy, 28, 0x07F5);
-    for(int d=-1; d<=1; d++){
-      display.drawLine(cx-13, cy+d, cx-4,  cy+9+d,  0xFFFF);
-      display.drawLine(cx-4,  cy+9+d, cx+14, cy-10+d, 0xFFFF);
-    }
-    const char* t1 = "Update Sukses!";
-    display.setTextColor(0x07F5);
-    display.setCursor((SCR_W-display.textWidth(t1))/2, cy+44);
-    display.print(t1);
+    display.setTextColor(TFT_GREEN);
+    display.print("Update Sukses!");
     display.setTextSize(1);
     display.setTextColor(TFT_WHITE);
-    const char* t2 = "Perangkat restart otomatis...";
-    display.setCursor((SCR_W-display.textWidth(t2))/2, cy+68);
-    display.print(t2);
+    display.setCursor(20,120);
+    display.print("Perangkat restart otomatis...");
     delay(1800);
     ESP.restart();
   } else {
-    display.fillCircle(cx, cy, 28, 0xF9A6);
-    for(int d=-1; d<=1; d++){
-      display.drawLine(cx-11, cy-11+d, cx+11, cy+11+d, 0xFFFF);
-      display.drawLine(cx-11, cy+11+d, cx+11, cy-11+d, 0xFFFF);
-    }
-    const char* t1 = "Update Gagal";
-    display.setTextColor(0xF9A6);
-    display.setCursor((SCR_W-display.textWidth(t1))/2, cy+44);
-    display.print(t1);
+    display.setTextColor(TFT_RED);
+    display.print("Update Gagal");
     display.setTextSize(1);
     display.setTextColor(TFT_WHITE);
-    display.setCursor(16, cy+70);
+    display.setCursor(20,120);
     display.setTextWrap(true);
     display.print(reason.length() ? reason : "Cek file/koneksi, coba lagi.");
     display.setTextWrap(false);
@@ -9547,7 +9132,6 @@ bool updInstallFromSD(const String& filename){
 
   uint8_t buf[4096];
   size_t written = 0;
-  updLastPct = -1; updBarFill = 0;
   while(f.available()){
     size_t n = f.read(buf, sizeof(buf));
     if(n == 0) break;
@@ -9560,7 +9144,7 @@ bool updInstallFromSD(const String& filename){
       return false;
     }
     written += n;
-    updDrawProgressFast(written, fileSize);
+    updDrawProgress("Update Lokal (SD Card)...", written, fileSize);
     if(wifiConnected && webServerRunning) webServer.handleClient();
     yield();
   }
@@ -9587,7 +9171,7 @@ bool updInstallFromURL(const String& url){
   }
 
   updBusy = true;
-  updDrawBusy("Menghubungi server...");
+  updDrawProgress("Menghubungi server...", 0, 0);
 
   bool isHttps = url.startsWith("https://");
   if(isHttps) nasaWaitForHeap(); // v61: guard sama spt NASA/Trivia -- belum dilaporin bermasalah, tp titik yg sama persis blm kepatch
@@ -9610,7 +9194,6 @@ bool updInstallFromURL(const String& url){
   }
   http.setTimeout(15000);
   http.setConnectTimeout(15000);
-  http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);   // link GitHub Release di-redirect ke CDN
 
   int httpCode = http.GET();
   if(httpCode != HTTP_CODE_OK){
@@ -9638,23 +9221,14 @@ bool updInstallFromURL(const String& url){
   }
 
   WiFiClient* stream = http.getStreamPtr();
-  WiFi.setSleep(false);   // pengaman: hemat daya WiFi harus mati selama unduh
-  // buffer baca 8 KB di HEAP (stack loopTask cuma 8 KB); kalau malloc gagal, pakai 2 KB di stack
-  uint8_t sbuf[2048];
-  uint8_t* buf = sbuf;
-  size_t bufSz = sizeof(sbuf);
-  struct BufGuard { uint8_t* p = nullptr; ~BufGuard(){ if(p) free(p); } } bufGuard;
-  bufGuard.p = (uint8_t*)malloc(8192);
-  if(bufGuard.p){ buf = bufGuard.p; bufSz = 8192; }
+  uint8_t buf[2048];
   size_t written = 0;
   unsigned long lastData = millis();
-  updLastPct = -1; updBarFill = 0;
-  updDrawProgress("Update via WiFi...", 0, contentLen);
 
   while(http.connected() && written < (size_t)contentLen){
     size_t avail = stream->available();
     if(avail){
-      size_t toRead = (avail < bufSz) ? avail : bufSz;
+      size_t toRead = (avail < sizeof(buf)) ? avail : sizeof(buf);
       int n = stream->readBytes(buf, toRead);
       if(n > 0){
         if(Update.write(buf, n) != (size_t)n){
@@ -9667,7 +9241,7 @@ bool updInstallFromURL(const String& url){
         }
         written += n;
         lastData = millis();
-        updDrawProgressFast(written, contentLen);
+        updDrawProgress("Update via WiFi...", written, contentLen);
       }
     } else {
       if(millis() - lastData > 15000){
@@ -9700,101 +9274,63 @@ void updEnter(){
 }
 void updExit(){}
 
-// ===== UI v2 app Update =====
-static void updIconArrow(LGFX_Sprite& s, int cx, int cy, uint16_t col){
-  s.fillCircle(cx, cy, 13, col);
-  s.fillTriangle(cx, cy-7, cx-6, cy, cx+6, cy, 0xFFFF);
-  s.fillRect(cx-2, cy, 5, 7, 0xFFFF);
-}
-
-static void updCenterText(LGFX_Sprite& s, int x, int w, int y, const char* t){
-  s.setCursor(x + (w - s.textWidth(t))/2, y);
-  s.print(t);
-}
-
 void drawUpdate(LGFX_Sprite& s){
   iosBackdrop(s); drawStatusBar(s);
-  s.setTextSize(1);
+  s.setTextColor(0xF800); s.setTextSize(1); s.setCursor(8,26); s.print("Update Firmware");
 
-  // ---- kartu atas: versi terpasang + status cek update ----
-  int st = otaState();                       // 0 belum dicek, 1 terbaru, 2 ada update
-  uint16_t stCol = (st==2) ? (uint16_t)IOS_ORANGE : (st==1 ? (uint16_t)IOS_GREEN : T().accent);
-  drawGlassCard(s, 6, UPD_HERO_Y, SCR_W-12, UPD_HERO_H, 10, T().surface, 200);
-  updIconArrow(s, 26, UPD_HERO_Y+UPD_HERO_H/2, stCol);
-  char line[40];
-  if(st==2)      snprintf(line, sizeof(line), "Ada update: build %d", otaLatestBuild());
-  else if(st==1) snprintf(line, sizeof(line), "Sudah versi terbaru");
-  else           snprintf(line, sizeof(line), "Firmware terpasang");
-  s.setTextColor(stCol); s.setCursor(46, UPD_HERO_Y+7); s.print(line);
-  int bn = otaBuildNum();
-  char bl[24];
-  if(bn > 0) snprintf(bl, sizeof(bl), "Build %d", bn); else snprintf(bl, sizeof(bl), "Lokal");
-  s.setTextSize(2); s.setTextColor(T().text); s.setCursor(46, UPD_HERO_Y+18); s.print(bl);
-  s.setTextSize(1);
-  iosRR(s, UPD_HB_X, UPD_HB_Y, UPD_HB_W, UPD_HB_H, 8, T().accent);
-  s.setTextColor(T().bg);
-  updCenterText(s, UPD_HB_X, UPD_HB_W, UPD_HB_Y+7, (SCR_W>=300) ? "Cek update" : "Cek");
+  iosRR(s,SCR_W-64,24,58,18,4,T().surface2);
+  s.setTextColor(T().accent); s.setCursor(SCR_W-58,29); s.print("Scan");
 
-  // ---- bagian SD card ----
-  s.setTextColor(T().subtext); s.setCursor(10, UPD_SD_LABEL_Y); s.print("DARI SD CARD  /update");
-  iosRR(s, UPD_SCAN_X, UPD_SD_LABEL_Y-4, UPD_SCAN_W, 15, 6, T().surface2);
-  s.setTextColor(T().accent);
-  updCenterText(s, UPD_SCAN_X, UPD_SCAN_W, UPD_SD_LABEL_Y, "Scan");
-  if(sdReady && updFileCount > UPD_ITEMS_PAGE){
-    bool canPrev = updScrollPage > 0;
-    bool canNext = (updScrollPage+1)*UPD_ITEMS_PAGE < updFileCount;
-    iosRR(s, UPD_PREV_X, UPD_SD_LABEL_Y-4, 22, 15, 6, T().surface2);
-    s.setTextColor(canPrev ? T().text : T().divider);
-    updCenterText(s, UPD_PREV_X, 22, UPD_SD_LABEL_Y, "<");
-    iosRR(s, UPD_NEXT_X, UPD_SD_LABEL_Y-4, 22, 15, 6, T().surface2);
-    s.setTextColor(canNext ? T().text : T().divider);
-    updCenterText(s, UPD_NEXT_X, 22, UPD_SD_LABEL_Y, ">");
-  }
+  s.setTextColor(T().subtext); s.setCursor(8,UPD_ROW0); s.print("Lokal - file .bin di /update:");
 
   if(!sdReady){
-    iosRR(s, 6, UPD_ITEM_Y, SCR_W-12, UPD_ITEM_H, 6, T().surface);
-    s.setTextColor(T().danger); s.setCursor(14, UPD_ITEM_Y+7); s.print("SD Card tidak siap");
+    s.setTextColor(T().danger); s.setCursor(8,UPD_ITEM_Y+4); s.print("SD Card tidak siap");
   } else if(updFileCount == 0){
-    iosRR(s, 6, UPD_ITEM_Y, SCR_W-12, UPD_ITEM_H, 6, T().surface);
-    s.setTextColor(T().subtext); s.setCursor(14, UPD_ITEM_Y+7); s.print("Belum ada .bin. Taruh di /update");
+    s.setTextColor(T().subtext); s.setCursor(8,UPD_ITEM_Y+4); s.print("Tidak ada .bin. Taruh di /update");
   } else {
     int startIdx = updScrollPage*UPD_ITEMS_PAGE;
-    int maxCh = (SCR_W - 12 - 74 - 30 - 48) / 6;
-    if(maxCh < 8) maxCh = 8;
-    for(int i=0; i<UPD_ITEMS_PAGE && (startIdx+i)<updFileCount; i++){
+    for(int i=0;i<UPD_ITEMS_PAGE && (startIdx+i)<updFileCount;i++){
       int idx = startIdx+i;
       int itemY = UPD_ITEM_Y + i*(UPD_ITEM_H+UPD_ITEM_GAP);
-      iosRR(s, 6, itemY, SCR_W-12, UPD_ITEM_H, 6, T().surface);
-      s.fillRoundRect(13, itemY+5, 10, 12, 2, T().accent);      // ikon file
-      s.fillRect(16, itemY+9, 4, 1, T().bg); s.fillRect(16, itemY+12, 4, 1, T().bg);
+      iosRR(s,4,itemY,SCR_W-8,UPD_ITEM_H,5,T().surface);
+      s.setTextColor(T().text); s.setCursor(8,itemY+6);
       String fn = updFileList[idx];
       String fnDisp = fn;
-      if((int)fnDisp.length() > maxCh) fnDisp = fnDisp.substring(0, maxCh-2) + "..";
-      s.setTextColor(T().text); s.setCursor(30, itemY+7); s.print(fnDisp.c_str());
-      char sz[16]; snprintf(sz, sizeof(sz), "%u KB", (unsigned)(updFileSizes[idx]/1024));
-      s.setTextColor(T().subtext); s.setCursor(SCR_W-12-58-6-s.textWidth(sz)-4, itemY+7); s.print(sz);
+      if(fnDisp.length()>14) fnDisp = fnDisp.substring(0,12)+"..";
+      s.print(fnDisp.c_str());
+
       bool pendingThis = (updPendingConfirm == ("sd:"+fn)) && millis()<=updPendingUntil;
-      iosRR(s, SCR_W-10-58, itemY+2, 58, UPD_ITEM_H-4, 7, pendingThis ? T().danger : T().good);
-      s.setTextColor(T().bg);
-      updCenterText(s, SCR_W-10-58, 58, itemY+7, pendingThis ? "Yakin?" : "Pasang");
+      iosRR(s,SCR_W-70,itemY+2,64,UPD_ITEM_H-4,4, pendingThis?T().danger:T().good);
+      s.setTextColor(T().bg); s.setCursor(SCR_W-64,itemY+6);
+      s.print(pendingThis?"Yakin?":"Pasang");
+    }
+    if(updFileCount > UPD_ITEMS_PAGE){
+      if(updScrollPage>0){
+        iosRR(s,SCR_W-120,UPD_NAV_Y,54,UPD_NAV_H,4,T().surface2);
+        s.setTextColor(T().text); s.setCursor(SCR_W-112,UPD_NAV_Y+4); s.print("< Prev");
+      }
+      if((updScrollPage+1)*UPD_ITEMS_PAGE < updFileCount){
+        iosRR(s,SCR_W-60,UPD_NAV_Y,54,UPD_NAV_H,4,T().surface2);
+        s.setTextColor(T().text); s.setCursor(SCR_W-54,UPD_NAV_Y+4); s.print("Next >");
+      }
     }
   }
 
-  // ---- bagian WiFi ----
-  s.setTextColor(T().subtext); s.setCursor(10, UPD_WIFI_LABEL_Y); s.print("DARI WIFI  -  URL firmware.bin");
-  iosRR(s, 6, UPD_URL_Y, SCR_W-12, UPD_URL_H, 6, T().surface);
-  int maxU = (SCR_W-28)/6;
-  String uDisp = updUrl.length() ? updUrl : String("ketuk untuk isi URL...");
-  if((int)uDisp.length() > maxU) uDisp = uDisp.substring(0, maxU-2) + "..";
-  s.setTextColor(updUrl.length() ? T().text : T().subtext);
-  s.setCursor(14, UPD_URL_Y+6); s.print(uDisp.c_str());
+  s.drawFastHLine(8,UPD_DIV_Y,SCR_W-16,T().divider);
+
+  s.setTextColor(T().subtext); s.setCursor(8,UPD_WIFI_LABEL_Y); s.print("WiFi - unduh dari URL:");
+
+  iosRR(s,8,UPD_URL_Y,SCR_W-16,UPD_URL_H,4,T().surface);
+  s.setTextColor(T().text); s.setCursor(12,UPD_URL_Y+6);
+  String uDisp = updUrl.length() ? updUrl : "(ketuk utk isi URL firmware.bin)";
+  if(uDisp.length()>34) uDisp = uDisp.substring(0,32)+"..";
+  s.print(uDisp.c_str());
 
   bool pendingWifi = (updPendingConfirm == ("wifi:"+updUrl)) && millis()<=updPendingUntil;
   uint16_t wifiBtnColor = (!wifiConnected) ? T().surface2 : (pendingWifi ? T().danger : T().accent);
-  iosRR(s, 6, UPD_BTN_Y, SCR_W-12, UPD_BTN_H, 8, wifiBtnColor);
-  s.setTextColor((!wifiConnected) ? T().subtext : T().bg);
-  updCenterText(s, 6, SCR_W-12, UPD_BTN_Y+8,
-                !wifiConnected ? "WiFi tidak terhubung" : (pendingWifi ? "Yakin? Ketuk lagi" : "Unduh & Pasang"));
+  iosRR(s,8,UPD_BTN_Y,SCR_W-16,UPD_BTN_H,6, wifiBtnColor);
+  s.setTextColor((!wifiConnected) ? T().subtext : T().bg); s.setCursor(14,UPD_BTN_Y+7);
+  s.print(!wifiConnected ? "WiFi tidak terhubung" : (pendingWifi ? "Yakin? Ketuk lagi" : "Unduh & Pasang"));
 
   if(kbVisible) drawKb(s); else drawBack(s);
   drawToast(s);
@@ -9815,20 +9351,8 @@ void updTouch(int x,int y,bool held,bool isNew){
 
   if(isBack(x,y)){ navBack(); return; }
 
-  // kartu atas: Cek update
-  if(x>=UPD_HB_X && x<=UPD_HB_X+UPD_HB_W && y>=UPD_HB_Y-4 && y<=UPD_HB_Y+UPD_HB_H+4){
-    otaCheckAndFill(); return;
-  }
-
-  // baris label SD: Scan, Prev, Next
-  if(y>=UPD_SD_LABEL_Y-8 && y<=UPD_SD_LABEL_Y+10){
-    if(x>=UPD_SCAN_X && x<=UPD_SCAN_X+UPD_SCAN_W){
-      updScanFiles(); showToast("Scan selesai"); needRedraw=true; return;
-    }
-    if(sdReady && updFileCount > UPD_ITEMS_PAGE){
-      if(updScrollPage>0 && x>=UPD_PREV_X && x<=UPD_PREV_X+22){ updScrollPage--; needRedraw=true; return; }
-      if((updScrollPage+1)*UPD_ITEMS_PAGE<updFileCount && x>=UPD_NEXT_X && x<=UPD_NEXT_X+22){ updScrollPage++; needRedraw=true; return; }
-    }
+  if(x>=SCR_W-64 && x<=SCR_W-6 && y>=24 && y<=42){
+    updScanFiles(); showToast("Scan selesai"); needRedraw=true; return;
   }
 
   if(sdReady && updFileCount>0){
@@ -9836,12 +9360,20 @@ void updTouch(int x,int y,bool held,bool isNew){
     for(int i=0;i<UPD_ITEMS_PAGE && (startIdx+i)<updFileCount;i++){
       int idx = startIdx+i;
       int itemY = UPD_ITEM_Y + i*(UPD_ITEM_H+UPD_ITEM_GAP);
-      if(y>=itemY && y<=itemY+UPD_ITEM_H && x>=SCR_W-74 && x<=SCR_W-6){
+      if(y>=itemY && y<=itemY+UPD_ITEM_H && x>=SCR_W-70 && x<=SCR_W-6){
         String fn = updFileList[idx];
         if(updCheckConfirm("sd:"+fn)){
           updInstallFromSD(fn);
         }
         return;
+      }
+    }
+    if(updFileCount > UPD_ITEMS_PAGE){
+      if(updScrollPage>0 && x>=SCR_W-120 && x<=SCR_W-66 && y>=UPD_NAV_Y && y<=UPD_NAV_Y+UPD_NAV_H){
+        updScrollPage--; needRedraw=true; return;
+      }
+      if((updScrollPage+1)*UPD_ITEMS_PAGE<updFileCount && x>=SCR_W-60 && x<=SCR_W-6 && y>=UPD_NAV_Y && y<=UPD_NAV_Y+UPD_NAV_H){
+        updScrollPage++; needRedraw=true; return;
       }
     }
   }
@@ -9877,7 +9409,7 @@ unsigned long getPushLastUs(){ return nyxPushLastUs; }
 // justru karena push() lama synchronous 100% (jaminan "bus pasti idle
 // begitu push() selesai"). Versi async ngerusak jaminan itu -> dua
 // transfer numpuk di kabel yg sama. Balik ke synchronous biasa.
-void push(){ unsigned long t0=micros(); canvas.pushSprite(0,0); nyxPushLastUs=micros()-t0; rcFrameMark(); }
+void push(){ unsigned long t0=micros(); canvas.pushSprite(0,0); nyxPushLastUs=micros()-t0; }
 void renderCurrentFrame(){
   // v68 FIX: font custom (Mono/Sans/Tebal/Serif) ternyata KETINGGIAN buat
   // kotak2 UI yg didesain pas-pasan buat teks 8px (tombol, status bar, grid
@@ -9933,7 +9465,6 @@ void renderHomeBandFrame(){
   display.setClipRect(0,bt,SCR_W,bh);
   canvas.pushSprite(0,0);
   display.clearClipRect();
-  rcFrameMark();
 }
 bool toastVisibleNow(){ return toastMsg.length() && millis()<=toastUntil; }
 
@@ -10093,7 +9624,7 @@ void bootDrawAmbientGlow(int cx,int cy,int r,float a){
 // tipis 1px di atas/bawahnya)
 void bootDrawHorizonLine(int cx,int y,int halfW,float alpha){
   if(halfW<2 || alpha<=0.01f) return;
-  const uint16_t ORG=bootRGB(70,70,78), WHT=bootRGB(165,165,174); // v117: abu-abu (dulu oranye)
+  const uint16_t ORG=bootRGB(255,120,30), WHT=bootRGB(255,240,220);
   for(int dx=-halfW; dx<halfW; dx+=2){
     float f=1.0f-fabsf((float)dx)/(float)halfW;
     f=f*f;
@@ -10113,7 +9644,7 @@ void bootDrawNyxText(int cx,int cy,int gap,float tp){
   const int n=5, cw=18;
   int totalW=n*cw+(n-1)*gap;
   int x0=cx-totalW/2, ty=cy-14;
-  uint16_t shadow=lerpColor565(0x0000,bootRGB(80,80,88),0.55f*tp); // v117: abu-abu (dulu oranye)
+  uint16_t shadow=lerpColor565(0x0000,bootRGB(255,110,30),0.40f*tp);
   uint16_t txt=lerpColor565(0x0000,0xFFFF,tp);
   canvas.setTextSize(3);
   for(int pass=0;pass<2;pass++){
@@ -10594,15 +10125,146 @@ void mpuUpdate(){
 }
 
 // =================================================================
-// BATERAI: sekarang dibaca dari sensor INA219 (lihat ina219_renphone.ino).
-// Di sini hanya variabel global yang dipakai seluruh UI. battUpdate(),
-// battEnter/battExit, drawBatteryApp dan battTouch dipindah ke ina219_renphone.ino.
-// ADC voltage divider (GPIO8) tidak dipakai lagi.
+// BATERAI: voltage divider 10k+10k (rasio 1:2), Li-ion 1 sel 3.0V-4.2V
+// Kapasitas baterai yang dipakai: 2300 mAh
+//
+// PENTING - PERBAIKAN PIN (root cause bug "lock screen gak bisa diswipe"):
+// GPIO4 TIDAK DIPAKAI LAGI di sini karena BENTROK dengan pin MISO chip
+// touch XPT2046 (cfg.pin_miso=4 di konfigurasi LGFX touch). analogRead()
+// tiap 5 detik ke GPIO4 mengubah mode pin itu dari SPI jadi ADC, merusak
+// pembacaan sentuh XPT2046 -- inilah kenapa swipe lock screen jadi gagal
+// setelah fitur baterai ditambahkan.
+// Sekarang dipindah ke GPIO8 (ADC1_CH7 di ESP32-S3), pin yang benar2
+// kosong / tidak dipakai fungsi lain di board ini, dan tetap di ADC1
+// (bukan ADC2) supaya aman dipakai bareng WiFi.
+// ==> WIRING: pindahkan kabel output voltage divider dari GPIO4 ke GPIO8.
 // =================================================================
+#define BATT_ADC_PIN 8
+#define BATT_DIVIDER_RATIO 2.0f   // 10k+10k sama besar -> Vbat = Vadc * 2
+#define BATTERY_CAPACITY_MAH 2300 // kapasitas baterai yang dipakai user
 float battVoltage = 3.7f;
 int   battPercent = 100;
-bool  battCharging = false; // diisi dari arus INA219 (negatif = mengisi)
+bool  battCharging = false; // v109: belum ada sensor arus -> selalu false sampai INA219 dipasang
 bool  battWarnedLow = false, battWarnedCritical = false;
+
+void battUpdate(){
+  int raw = analogRead(BATT_ADC_PIN);
+  float vAdc = (raw/4095.0f) * 3.3f;
+  float vBat = vAdc * BATT_DIVIDER_RATIO;
+  battVoltage = battVoltage*0.7f + vBat*0.3f; // smoothing biar angkanya gak lompat-lompat
+  int pct = (int)((battVoltage - 3.0f) / (4.2f - 3.0f) * 100.0f);
+  battPercent = constrain(pct, 0, 100);
+
+  if(battPercent <= 5 && !battWarnedCritical){
+    battWarnedCritical = true;
+    showToast("Baterai kritis! Segera cas.");
+    diNotify('B', "Baterai kritis!", T().danger, 2200, false, "", SCR_BATTERY, true); // v95: event DI baru, bisa diketuk -> app Baterai
+    if(curScreen()!=SCR_BATTERY) notifAdd(SCR_BATTERY); // v-baru: badge di ikon Home spy keliatan walau toast udah lewat
+  } else if(battPercent <= 15 && !battWarnedLow){
+    battWarnedLow = true;
+    showToast("Baterai lemah, segera cas.");
+    diNotify('B', "Baterai lemah", T().accent, 1900, false, "", SCR_BATTERY, true); // v95: event DI baru (dipakai warna sama kayak battColor 15-35% di app Baterai)
+    if(curScreen()!=SCR_BATTERY) notifAdd(SCR_BATTERY);
+  } else if(battPercent > 25){
+    battWarnedLow = false; battWarnedCritical = false; // reset biar bisa warning lagi kalau turun lagi
+  }
+}
+
+// =============================================
+// APP: BATERAI
+// =============================================
+void battEnter(){ battUpdate(); }
+void battExit(){}
+
+void drawBatteryApp(LGFX_Sprite& s){
+  s.fillSprite(T().bg);
+  drawStatusBar(s);
+  s.setTextColor(0x07E0);s.setTextSize(1);s.setCursor(8,26);s.print("Baterai");
+
+  iosRR(s,SCR_W-70,24,64,18,4,T().surface2);
+  s.setTextColor(T().accent);s.setCursor(SCR_W-62,29);s.print("Refresh");
+
+  // --- Ikon baterai besar, terisi sesuai persen ---
+  int iconW = 90, iconH = 44;
+  int iconX = SCR_W/2 - iconW/2;
+  int iconY = STATUS_H + 20;
+  uint16_t battColor = (battPercent<=15)?T().danger:(battPercent<=35)?T().accent:T().good;
+
+  s.drawRoundRect(iconX,iconY,iconW,iconH,6,T().text);
+  s.drawRoundRect(iconX+1,iconY+1,iconW-2,iconH-2,5,T().text);
+  s.fillRoundRect(iconX+iconW,iconY+iconH/2-7,7,14,3,T().text); // kutub positif baterai
+
+  int innerPad=5;
+  int innerW = iconW - innerPad*2;
+  int innerH = iconH - innerPad*2;
+  int fillW = constrain((innerW*battPercent)/100,0,innerW);
+  if(fillW>0) s.fillRoundRect(iconX+innerPad,iconY+innerPad,fillW,innerH,3,battColor);
+
+  // --- Persen besar ---
+  char pctBuf[8]; sprintf(pctBuf,"%d%%",battPercent);
+  s.setTextColor(battColor); s.setTextSize(3);
+  int pw = strlen(pctBuf)*18;
+  s.setCursor(SCR_W/2-pw/2, iconY+iconH+14);
+  s.print(pctBuf);
+
+  // --- Detail teknis ---
+  int ty = iconY+iconH+52;
+  int lh = 14;
+  char buf[64];
+  s.setTextSize(1);
+
+  s.setTextColor(T().subtext); s.setCursor(14,ty); s.print("Tegangan saat ini:");
+  s.setTextColor(T().text);
+  sprintf(buf,"%.2f V", battVoltage);
+  s.setCursor(SCR_W-14-(int)s.textWidth(buf), ty); s.print(buf);
+  ty += lh;
+
+  s.setTextColor(T().subtext); s.setCursor(14,ty); s.print("Rentang tegangan:");
+  s.setTextColor(T().text); s.setCursor(SCR_W-14-11*6, ty); s.print("3.0 - 4.2 V");
+  ty += lh;
+
+  s.setTextColor(T().subtext); s.setCursor(14,ty); s.print("Kapasitas baterai:");
+  s.setTextColor(T().text);
+  sprintf(buf,"%d mAh", BATTERY_CAPACITY_MAH);
+  s.setCursor(SCR_W-14-(int)s.textWidth(buf), ty); s.print(buf);
+  ty += lh;
+
+  s.setTextColor(T().subtext); s.setCursor(14,ty); s.print("Estimasi sisa daya:");
+  s.setTextColor(T().text);
+  int remainMah = (int)(BATTERY_CAPACITY_MAH * battPercent / 100.0f);
+  sprintf(buf,"~%d mAh", remainMah);
+  s.setCursor(SCR_W-14-(int)s.textWidth(buf), ty); s.print(buf);
+  ty += lh;
+
+  s.setTextColor(T().subtext); s.setCursor(14,ty); s.print("Status:");
+  s.setTextColor(battColor);
+  const char* statusTxt = (battPercent<=5)?"Kritis, segera cas!" :
+                           (battPercent<=15)?"Lemah, segera cas" :
+                           (battPercent<=35)?"Cukup" : "Baik";
+  s.setCursor(14+7*6, ty); s.print(statusTxt);
+  ty += lh+4;
+
+  s.drawFastHLine(10,ty,SCR_W-20,T().divider);
+  ty += 8;
+  s.setTextColor(T().subtext); s.setTextWrap(true);
+  s.setCursor(10,ty);
+  s.print("Catatan: estimasi dihitung dari pembacaan tegangan (voltage divider), bukan fuel-gauge IC, jadi persen & sisa mAh di atas perkiraan kasar, bukan angka presisi.");
+  s.setTextWrap(false);
+
+  drawBack(s);
+  drawToast(s);
+}
+
+void battTouch(int x,int y,bool held,bool isNew){
+  if(!isNew) return;
+  if(isBack(x,y)){ navBack(); return; }
+  if(x>=SCR_W-70 && x<=SCR_W-6 && y>=24 && y<=42){
+    battUpdate();
+    showToast("Data baterai diperbarui");
+    needRedraw=true;
+    return;
+  }
+}
 
 // =============================================
 // APP: TRIVIA QUIZ (BARU v14)
@@ -14247,7 +13909,6 @@ bool nasaDownloadImageToPsram(const String& imgUrl){
 PsramJpeg apodJpeg;
 LGFX_Sprite apodImg(&display); // sprite persisten khusus gambar APOD (dipakai spy gak perlu decode ulang tiap redraw)
 bool  apodImgReady=false;
-String apodImgNote=""; // v117: alasan gambar gak tampil (format gak didukung / unduh gagal) -- ditampilkan di kotak gambar
 int   apodImgW=0, apodImgH=0;
 
 enum ApodPage { APOD_LOADING, APOD_VIEW, APOD_ERROR };
@@ -14283,12 +13944,7 @@ String apodImgPath(const String& date){  return apodCacheDir()+"/"+apodSlug(date
 String apodIdPath(const String& date){   return apodCacheDir()+"/"+apodSlug(date)+"_id.txt"; }
 void apodEnsureCacheDir(){
   if(!sdReady) return;
-  if(!SD_MMC.exists(apodCacheDir())){
-    SD_MMC.mkdir(apodCacheDir());
-    // v119: cache baru dibuat -> langsung tandai format API baru (lihat apodMigrateCacheV2)
-    File mf=SD_MMC.open(apodCacheDir()+"/api_v2.flag",FILE_WRITE);
-    if(mf){ mf.print("v2"); mf.close(); }
-  }
+  if(!SD_MMC.exists(apodCacheDir())) SD_MMC.mkdir(apodCacheDir());
 }
 
 // ---- API key NASA: file di SD, pola PERSIS sama dgn loadGeminiKey() ----
@@ -14350,260 +14006,6 @@ String apodJsonUnescape(String s){
   s.replace("\\\\","\\"); // PALING TERAKHIR spy gak nge-double-unescape (sama urutannya dgn parsing Gemini)
   return s;
 }
-
-// =============================================
-// v119 FIX APOD (Astronomi): NASA memindah APOD dari apod.nasa.gov ke
-// science.nasa.gov pada 2026-09-29. Endpoint lama
-// (https://api.nasa.gov/planetary/apod?api_key=...) sekarang error 500/503,
-// atau kalau pun menjawab isinya cuma logo NASA + judul "NASA Science" +
-// penjelasan hari ini utk SEMUA tanggal; akan dimatikan 2026-12-01. Itu
-// biang "gagal ambil data" di app Astronomi.
-// Endpoint baru (tanpa API key, tanpa kuota):
-//   hari ini : https://science.nasa.gov/wp-json/wp/v2/apod-basic?per_page=1
-//   per tgl  : https://science.nasa.gov/wp-json/wp/v2/apod-basic/YYMMDD
-// Beda format yg ditangani di bawah:
-//   - "?date=" DIABAIKAN diam2 -> tanggal harus di path (YYMMDD)
-//   - per_page=1 menjawab ARRAY [ {...} ], per tanggal menjawab 1 objek
-//   - "url" kini halaman artikel; gambarnya di "hdurl" (assets.science.nasa.gov)
-//   - explanation/credit/copyright berupa HTML (tag <a>, <strong>, entitas)
-//     + ada catatan situs ("Tomorrow's picture", dst) di ujung explanation
-//   - teks non-ASCII dikirim sbg \uXXXX (gaya WordPress)
-//   - _fields=... dipakai spy respons ~3KB, bukan ~10KB/entri (basic_html)
-// =============================================
-#define APOD_API_BASE   "https://science.nasa.gov/wp-json/wp/v2/apod-basic"
-#define APOD_API_FIELDS "date,title,media_type,explanation,credit,copyright,hdurl"
-#define APOD_IMG_MAX_PX 800   // sisi terpanjang gambar yg diminta (resizer NASA); asli bisa 4000+ px / puluhan MB
-
-String apodBuildApiUrl(const String& dateYmd){
-  String url = APOD_API_BASE;
-  if(dateYmd.length()==10 && dateYmd.charAt(4)=='-' && dateYmd.charAt(7)=='-'){
-    url += "/";
-    url += dateYmd.substring(2,4);
-    url += dateYmd.substring(5,7);
-    url += dateYmd.substring(8,10);
-    url += "?_fields=" APOD_API_FIELDS;
-  } else {
-    url += "?per_page=1&_fields=" APOD_API_FIELDS;
-  }
-  return url;
-}
-
-// Tambah 1 codepoint Unicode ke String (UTF-8). Tanda baca "keriting" &
-// spasi aneh dipetakan ke ASCII biar tampil rapi di font TFT.
-void apodAppendCp(String& out, uint32_t cp){
-  switch(cp){
-    case 0: return;
-    case 0x2018: case 0x2019: case 0x201A: case 0x2032: out += '\''; return;
-    case 0x201C: case 0x201D: case 0x201E: case 0x2033: out += '"';  return;
-    case 0x2013: out += '-';   return;   // en dash
-    case 0x2014: out += "--";  return;   // em dash
-    case 0x2026: out += "..."; return;
-    case 0x00A0: case 0x2002: case 0x2003: case 0x2009: case 0x200A: case 0x202F: out += ' '; return;
-    case 0x200B: case 0x200C: case 0x200D: case 0xFEFF: return;
-  }
-  if(cp<0x80)         { out += (char)cp; }
-  else if(cp<0x800)   { out += (char)(0xC0|(cp>>6));  out += (char)(0x80|(cp&0x3F)); }
-  else if(cp<0x10000) { out += (char)(0xE0|(cp>>12)); out += (char)(0x80|((cp>>6)&0x3F)); out += (char)(0x80|(cp&0x3F)); }
-  else                { out += (char)(0xF0|(cp>>18)); out += (char)(0x80|((cp>>12)&0x3F)); out += (char)(0x80|((cp>>6)&0x3F)); out += (char)(0x80|(cp&0x3F)); }
-}
-int apodHexVal(char c){
-  if(c>='0'&&c<='9') return c-'0';
-  if(c>='a'&&c<='f') return c-'a'+10;
-  if(c>='A'&&c<='F') return c-'A'+10;
-  return -1;
-}
-// Decoder escape JSON 1-pass (\n \" \/ \\ \uXXXX + pasangan surrogate).
-// apodJsonUnescape() lama sengaja TIDAK disentuh (dipakai fitur lain).
-String apodJsonDecode(const String& s){
-  String out; out.reserve(s.length());
-  int n=s.length();
-  for(int i=0;i<n;i++){
-    char c=s[i];
-    if(c!='\\' || i+1>=n){ out += c; continue; }
-    char d=s[++i];
-    switch(d){
-      case 'n': out += '\n'; break;
-      case 't': out += ' ';  break;
-      case 'r': case 'b': case 'f': break;
-      case 'u': {
-        uint32_t cp=0; bool ok=(i+4<n);
-        for(int k=1;ok && k<=4;k++){ int h=apodHexVal(s[i+k]); if(h<0) ok=false; else cp=(cp<<4)|(uint32_t)h; }
-        if(!ok){ out += 'u'; break; }
-        i+=4;
-        if(cp>=0xD800 && cp<=0xDBFF && i+6<n && s[i+1]=='\\' && s[i+2]=='u'){
-          uint32_t lo=0; bool ok2=true;
-          for(int k=3;k<=6;k++){ int h=apodHexVal(s[i+k]); if(h<0){ ok2=false; break; } lo=(lo<<4)|(uint32_t)h; }
-          if(ok2 && lo>=0xDC00 && lo<=0xDFFF){ cp=0x10000+((cp-0xD800)<<10)+(lo-0xDC00); i+=6; }
-        }
-        apodAppendCp(out,cp);
-        break;
-      }
-      default: out += d; break;   // \"  \/  \\  dst
-    }
-  }
-  return out;
-}
-// HTML -> teks 1 baris: buang tag, decode entitas (&amp; &#039; &#8211; dst),
-// rapikan spasi/baris baru.
-String apodHtmlToText(const String& html){
-  String out; out.reserve(html.length());
-  int n=html.length();
-  for(int i=0;i<n;i++){
-    char c=html[i];
-    if(c=='<'){
-      int j=html.indexOf('>',i);
-      if(j<0) break;                       // tag gak ditutup -> buang sisanya
-      String tag=html.substring(i+1,j); tag.trim(); tag.toLowerCase();
-      if(tag.startsWith("br") || tag.startsWith("/p") || tag=="p") out += ' ';
-      i=j; continue;
-    }
-    if(c=='&'){
-      int j=html.indexOf(';',i);
-      if(j>i && j-i<=10){
-        String ent=html.substring(i+1,j);
-        uint32_t cp=0;
-        if(ent.length()>1 && ent[0]=='#'){
-          bool hex=(ent[1]=='x'||ent[1]=='X');
-          for(int k=hex?2:1;k<(int)ent.length();k++){
-            int h=apodHexVal(ent[k]);
-            if(h<0 || (!hex && h>9)){ cp=0; break; }
-            cp=cp*(hex?16:10)+(uint32_t)h;
-          }
-        }
-        else if(ent=="amp") cp='&';
-        else if(ent=="lt") cp='<';
-        else if(ent=="gt") cp='>';
-        else if(ent=="quot") cp='"';
-        else if(ent=="apos") cp='\'';
-        else if(ent=="nbsp") cp=0xA0;
-        else if(ent=="ndash") cp=0x2013;
-        else if(ent=="mdash") cp=0x2014;
-        else if(ent=="hellip") cp=0x2026;
-        else if(ent=="lsquo"||ent=="rsquo") cp=0x2019;
-        else if(ent=="ldquo"||ent=="rdquo") cp=0x201C;
-        if(cp){ apodAppendCp(out,cp); i=j; continue; }
-      }
-    }
-    out += c;
-  }
-  String res; res.reserve(out.length());
-  bool sp=false;
-  for(int i=0;i<(int)out.length();i++){
-    char c=out[i];
-    if(c==' '||c=='\t'||c=='\n'||c=='\r'){ sp=true; continue; }
-    if(sp && res.length()) res += ' ';
-    sp=false;
-    res += c;
-  }
-  return res;
-}
-// explanation: buang awalan "Explanation:" & catatan situs di ujung
-// ("Your Sky Surprise...", "APOD's email...", "Tomorrow's picture: ..."),
-// yg kalau dibiarkan ikut diterjemahkan & tampil sbg bagian penjelasan.
-String apodCleanExplanation(const String& rawJson){
-  String t = apodHtmlToText(apodJsonDecode(rawJson));
-  const char* marks[] = { "Your Sky Surprise", "APOD's email", "APOD's main NASA site", "Tomorrow's picture" };
-  int cut=-1;
-  for(int k=0;k<4;k++){
-    int p=t.indexOf(marks[k]);
-    if(p>0 && (cut<0 || p<cut)) cut=p;
-  }
-  if(cut>0) t=t.substring(0,cut);
-  t.trim();
-  if(t.startsWith("Explanation:")){ t=t.substring(12); t.trim(); }
-  return t;
-}
-// credit/copyright: teks polos, tanpa awalan "Image Credit:", maks ~200 huruf.
-String apodCleanCredit(const String& rawJson){
-  String t = apodHtmlToText(apodJsonDecode(rawJson));
-  String low=t; low.toLowerCase();
-  const char* pre[] = { "image credit & copyright:", "image credit and copyright:", "image credit:", "credit:" };
-  for(int k=0;k<4;k++){
-    if(low.startsWith(pre[k])){ t=t.substring(strlen(pre[k])); t.trim(); break; }
-  }
-  if(t.length()>200){
-    int cut=200;
-    while(cut>120 && t[cut]!=' ') cut--;
-    t = t.substring(0,cut) + "...";
-  }
-  return t;
-}
-int apodQueryInt(const String& q, const char* key){
-  String pat = String(key) + "=";
-  int i=0, n=q.length();
-  while(i<n){
-    int amp=q.indexOf('&',i); if(amp<0) amp=n;
-    String seg=q.substring(i,amp);
-    if(seg.startsWith(pat)) return seg.substring(pat.length()).toInt();
-    i=amp+1;
-  }
-  return 0;
-}
-// hdurl APOD bisa 4000+ px / puluhan MB (mis. katalog Sharpless 4455x5592
-// PNG) -- kebanyakan buat ESP32 & kotak gambar cuma 320x140. Resizer NASA
-// (assets.science.nasa.gov/dynamicimage/...?w=&h=&fit=clip) dipakai utk
-// mengecilkannya. Entri lama di /content/dam/ mengabaikan parameter resize,
-// jadi path-nya diganti ke /dynamicimage/assets/ (kalau gagal diunduh,
-// pemanggil mencoba URL asli).
-String apodShrinkImgUrl(const String& url){
-  if(url.indexOf("assets.science.nasa.gov")<0) return url;
-  String u=url;
-  u.replace("/content/dam/","/dynamicimage/assets/");
-  int q=u.indexOf('?');
-  String base = (q<0)? u : u.substring(0,q);
-  String query = (q<0)? String("") : u.substring(q+1);
-  int w=apodQueryInt(query,"w"), h=apodQueryInt(query,"h");
-  if(w<=0 || h<=0){ w=APOD_IMG_MAX_PX; h=APOD_IMG_MAX_PX; }
-  else {
-    int mx = (w>h)? w : h;
-    if(mx>APOD_IMG_MAX_PX){
-      w = (int)((long)w*APOD_IMG_MAX_PX/mx); if(w<1) w=1;
-      h = (int)((long)h*APOD_IMG_MAX_PX/mx); if(h<1) h=1;
-    }
-  }
-  return base + "?w=" + String(w) + "&h=" + String(h) + "&fit=clip";
-}
-// Cache APOD di SD yg dibuat SEBELUM v119 bisa berisi logo NASA / teks
-// "NASA Science" (endpoint lama menjawab itu utk semua tanggal sejak
-// 2026-09-29) -- dan karena cache dipakai duluan, logo itu nyangkut
-// selamanya. Sekali saja: kosongkan folder cache lalu tulis penanda.
-void apodMigrateCacheV2(){
-  if(!sdReady) return;
-  String dir=apodCacheDir();
-  String flag=dir+"/api_v2.flag";
-  if(!SD_MMC.exists(dir) || SD_MMC.exists(flag)) return;
-  bool done=false;
-  for(int pass=0; pass<40 && !done; pass++){
-    String names=""; int cnt=0;
-    File d=SD_MMC.open(dir);
-    if(!d) return;
-    if(!d.isDirectory()){ d.close(); return; }
-    File f=d.openNextFile();
-    while(f && cnt<50){
-      String nm=String(f.name());
-      int sl=nm.lastIndexOf('/'); if(sl>=0) nm=nm.substring(sl+1);
-      bool isDir=f.isDirectory();
-      f.close();
-      if(!isDir && nm.length() && nm[0]!='.' && nm!="api_v2.flag"){ names+=nm; names+='\n'; cnt++; }
-      f=d.openNextFile();
-    }
-    if(f) f.close();
-    d.close();
-    if(cnt==0){ done=true; break; }
-    int removed=0, pos=0;
-    while(pos<(int)names.length()){
-      int e=names.indexOf('\n',pos); if(e<0) break;
-      String nm=names.substring(pos,e); pos=e+1;
-      if(SD_MMC.remove(dir+"/"+nm)) removed++;
-      yield();
-    }
-    if(removed==0) return;              // gagal hapus -> jangan muter terus & jangan tulis penanda
-  }
-  if(!done) return;                     // masih ada sisa -> lanjut di pembukaan app berikutnya
-  File mf=SD_MMC.open(flag,FILE_WRITE);
-  if(mf){ mf.print("v2"); mf.close(); }
-}
-
 
 // ---- Terjemahan via MyMemory (endpoint dicek dulu lwt pencarian) ----
 String apodUrlEncode(const String& s){
@@ -14714,68 +14116,6 @@ String apodLoadIdCache(const String& date){
   return s;
 }
 
-// =============================================
-// v118: dukungan PNG (APOD + Galeri). Decoder = bawaan LovyanGFX
-// (LGFXBase::drawPng, menskala langsung saat menggambar), jadi TIDAK
-// butuh library tambahan & tidak menambah .bss. File PNG dibaca utuh ke
-// PSRAM dulu (maks 4 MB), lalu didecode dari buffer itu.
-//  - rpPngDims()    : baca lebar/tinggi dari header IHDR (tanpa decode)
-//  - rpPngLoadFile(): baca file SD ke buffer PSRAM (caller wajib heap_caps_free)
-//  - rpPngFitScale(): skala "contain", tidak pernah memperbesar
-// =============================================
-#define RP_PNG_MAX_BYTES  (4u*1024u*1024u)
-#define RP_PNG_MAX_PIXELS 8000000L
-
-bool rpPngDims(const uint8_t* d, size_t len, int* w, int* h){
-  static const uint8_t sig[8]={0x89,'P','N','G',0x0D,0x0A,0x1A,0x0A};
-  if(!d || len<33 || memcmp(d,sig,8)!=0 || memcmp(d+12,"IHDR",4)!=0) return false;
-  uint32_t pw=((uint32_t)d[16]<<24)|((uint32_t)d[17]<<16)|((uint32_t)d[18]<<8)|(uint32_t)d[19];
-  uint32_t ph=((uint32_t)d[20]<<24)|((uint32_t)d[21]<<16)|((uint32_t)d[22]<<8)|(uint32_t)d[23];
-  if(pw==0 || ph==0 || pw>16384 || ph>16384) return false;
-  *w=(int)pw; *h=(int)ph;
-  return true;
-}
-uint8_t* rpPngLoadFile(const char* path, size_t* outSize, size_t maxBytes){
-  *outSize=0;
-  File f=SD_MMC.open(path,FILE_READ);
-  if(!f) return nullptr;
-  size_t sz=(size_t)f.size();
-  *outSize=sz; // diisi walau gagal -> caller bisa bedakan "kebesaran" vs "gagal baca"
-  if(sz<33 || sz>maxBytes){ f.close(); return nullptr; }
-  uint8_t* b=(uint8_t*)heap_caps_malloc(sz,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT);
-  if(!b){ f.close(); return nullptr; }
-  size_t got=0;
-  while(got<sz){
-    size_t want=sz-got; if(want>16384) want=16384;
-    int n=f.read(b+got,want);
-    if(n<=0) break;
-    got+=(size_t)n;
-  }
-  f.close();
-  if(got!=sz){ heap_caps_free(b); return nullptr; }
-  return b;
-}
-float rpPngFitScale(int iw,int ih,int boxW,int boxH){
-  if(iw<=boxW && ih<=boxH) return 1.0f;
-  float a=(float)boxW/(float)iw, b=(float)boxH/(float)ih;
-  return (a<b)?a:b;
-}
-
-// v117: cek isi file gambar APOD yg ada di SD dr 4 byte awalnya:
-// 1 = JPEG, 2 = PNG, 3 = GIF, 0 = bukan gambar / rusak (mis. halaman error HTML).
-// Decoder di HP ini cuma JPEGDEC, jadi PNG/GIF gak bisa ditampilkan.
-int apodImgKind(const String& path){
-  File f=SD_MMC.open(path,FILE_READ);
-  if(!f) return 0;
-  uint8_t h[4]={0,0,0,0};
-  int n=f.read(h,4);
-  f.close();
-  if(n>=2 && h[0]==0xFF && h[1]==0xD8) return 1;
-  if(n>=4 && h[0]==0x89 && h[1]=='P' && h[2]=='N' && h[3]=='G') return 2;
-  if(n>=3 && h[0]=='G' && h[1]=='I' && h[2]=='F') return 3;
-  return 0;
-}
-
 // ---- Unduh gambar & simpan LANGSUNG ke SD (streaming, bukan ke RAM dulu)
 // -- pola PERSIS sama dgn updInstallFromURL() (unduh firmware OTA lewat
 // WiFi) yg sudah terbukti jalan di project ini, cuma tujuan tulisnya
@@ -14791,25 +14131,14 @@ bool apodDownloadImage(const String& imgUrl,const String& destPath){
   else beginOk=http.begin(plainClient,imgUrl);
   if(!beginOk) return false;
   http.setTimeout(15000); http.setConnectTimeout(15000);
-  http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS); // v117: ikuti redirect (http->https / pindah server), dulu langsung dianggap gagal
 
   int code = http.GET();
   if(code!=HTTP_CODE_OK){ http.end(); return false; }
   int len = http.getSize();
-  if(len==0){ http.end(); return false; }
+  if(len<=0){ http.end(); return false; }
 
   File out = SD_MMC.open(destPath,FILE_WRITE);
   if(!out){ http.end(); return false; }
-
-  if(len<0){
-    // v117: server gak kasih Content-Length (chunked) -- dulu otomatis gagal.
-    // writeToStream() yg nge-handle framing chunked-nya.
-    int r = http.writeToStream(&out);
-    out.close();
-    http.end();
-    if(r<=0){ SD_MMC.remove(destPath); return false; }
-    return true;
-  }
 
   WiFiClient* stream = http.getStreamPtr();
   uint8_t buf[2048];
@@ -14852,20 +14181,6 @@ int apodJpegDrawCallback(JPEGDRAW* pDraw){
   apodImg.pushImage(pDraw->x,pDraw->y,pDraw->iWidth,pDraw->iHeight,(lgfx::swap565_t*)pDraw->pPixels);
   return 1;
 }
-// v118: gambar PNG (dr buffer di RAM) ke sprite apodImg, gaya "contain"
-// & di tengah kotak, sama kayak jalur JPEG. Kalau gagal, apodImgNote diisi.
-bool apodDrawPng(const uint8_t* buf,size_t len,int boxW,int boxH){
-  int iw=0, ih=0;
-  if(!rpPngDims(buf,len,&iw,&ih)){ apodImgNote="File PNG rusak"; return false; }
-  if((long)iw*(long)ih>RP_PNG_MAX_PIXELS){ apodImgNote="PNG terlalu besar (resolusi)"; return false; }
-  float sc=rpPngFitScale(iw,ih,boxW,boxH);
-  int dw=(int)((float)iw*sc+0.5f), dh=(int)((float)ih*sc+0.5f);
-  if(dw<1) dw=1; if(dh<1) dh=1;
-  if(dw>boxW) dw=boxW; if(dh>boxH) dh=boxH;
-  int dx=(boxW-dw)/2, dy=(boxH-dh)/2;
-  if(!apodImg.drawPng(buf,(uint32_t)len,dx,dy,0,0,0,0,sc,sc)){ apodImgNote="Gagal decode PNG"; return false; }
-  return true;
-}
 bool apodDecodeCachedImage(){
   int boxW=SCR_W, boxH=apodImgAreaH();
   apodImg.deleteSprite();
@@ -14879,24 +14194,6 @@ bool apodDecodeCachedImage(){
   if(sdReady){
     String path = apodImgPath(apodCurDate);
     if(!SD_MMC.exists(path)) return false;
-    apodImgNote="";
-    int kind=apodImgKind(path);
-    if(kind==2){
-      // v118: PNG -> baca ke PSRAM lalu decode pakai LovyanGFX (lihat apodDrawPng)
-      size_t plen=0;
-      uint8_t* pb=rpPngLoadFile(path.c_str(),&plen,RP_PNG_MAX_BYTES);
-      bool pok=false;
-      if(!pb) apodImgNote=(plen>RP_PNG_MAX_BYTES)? "PNG terlalu besar (maks 4 MB)" : "Gagal baca file PNG";
-      else { pok=apodDrawPng(pb,plen,boxW,boxH); heap_caps_free(pb); }
-      apodImgReady=true; // tetap "ready": sukses -> gambar tampil, gagal -> pesan alasan tampil
-      return pok;
-    }
-    if(kind!=1){
-      // v117: bukan JPEG/PNG -> jelasin alasannya di layar (dulu kotak kosong tanpa penjelasan)
-      apodImgNote = (kind==3)? "Format GIF belum didukung" : "File gambar rusak";
-      apodImgReady=true;
-      return false;
-    }
     f = SD_MMC.open(path,FILE_READ);
     if(!f) return false;
     opened = apodJpeg->open(f, apodJpegDrawCallback);
@@ -14904,19 +14201,11 @@ bool apodDecodeCachedImage(){
     // v23: SD gak dipasang -- decode LANGSUNG dr buffer PSRAM hasil unduhan
     // (lihat nasaDownloadImageToPsram di atas), bukan dr file SD.
     if(!nasaRamImgBuf || nasaRamImgLen==0) return false;
-    if(nasaRamImgLen>=4 && nasaRamImgBuf[0]==0x89 && nasaRamImgBuf[1]=='P' && nasaRamImgBuf[2]=='N' && nasaRamImgBuf[3]=='G'){
-      // v118: PNG di buffer RAM (SD gak dipasang)
-      apodImgNote="";
-      bool pok=apodDrawPng(nasaRamImgBuf,nasaRamImgLen,boxW,boxH);
-      apodImgReady=true;
-      return pok;
-    }
     opened = apodJpeg->openRAM(nasaRamImgBuf, nasaRamImgLen, apodJpegDrawCallback);
   }
   if(!opened){
     if(f) f.close();
-    apodImgNote="Gagal decode (JPG progresif?)"; // v117: alasan tampil di layar
-    apodImgReady=true; // tetap "ready" -> tampil pesan drpd nge-block nunggu
+    apodImgReady=true; // tetap "ready" -> tampil kotak kosong drpd nge-block nunggu
     return false;
   }
   int iw=apodJpeg->getWidth(), ih=apodJpeg->getHeight();
@@ -14965,7 +14254,7 @@ void apodFetchAndProcess(String dateParam){
   apodEnsureCacheDir();
 
   nasaWaitForHeap(); // v53: kasih kesempatan RAM internal beres2 dulu sblm TLS
-  String body, imgUrl, imgUrlOrig;
+  String body, imgUrl;
   {
     // v69 FIX BUG UTAMA -- laporan user: "translate SELALU gagal, gambar
     // SELALU (Gambar belum tersedia)". AKAR MASALAH: client/http di bawah
@@ -14981,16 +14270,10 @@ void apodFetchAndProcess(String dateParam){
     // ke download gambar / translate di bawah.
     WiFiClientSecure client; client.setInsecure(); client.setTimeout(15000);
     HTTPClient http; http.setTimeout(15000); http.setConnectTimeout(15000);
-    // v119: endpoint baru NASA (tanpa API key) -- lihat catatan "v119 FIX APOD"
-    // di atas apodBuildApiUrl().
-    String url = apodBuildApiUrl(dateParam);
-    bool apodBeginOk = http.begin(client,url);
-    if(apodBeginOk){
-      http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
-      http.setUserAgent("Mozilla/5.0 (compatible; RenPhone-ESP32S3)");
-      http.addHeader("Accept","application/json");
-    }
-    if(!apodBeginOk){
+    String url = "https://api.nasa.gov/planetary/apod?api_key="+apodLoadNasaKey();
+    if(dateParam.length()) url += "&date="+dateParam;
+
+    if(!http.begin(client,url)){
       apodErrorMsg="Gagal inisialisasi koneksi ke server NASA.";
       apodPage=APOD_ERROR; needRedrawNow(); return;
     }
@@ -14998,29 +14281,21 @@ void apodFetchAndProcess(String dateParam){
     body = http.getString();
     http.end();
     if(code!=HTTP_CODE_OK){
-      String msg = apodHtmlToText(apodJsonDecode(apodJsonGetStringRaw(body,"message"))); // v119: error WordPress = {"code","message","data"}
-      if(code==404) msg = "tanggal ini tidak ada di arsip APOD";
-      else if(code>=500) msg = "server NASA lagi bermasalah, coba lagi nanti";
+      String msg = apodJsonUnescape(apodJsonGetStringRaw(body,"msg"));
       apodErrorMsg = "Gagal ambil data APOD (HTTP "+String(code)+")"+(msg.length()?(": "+msg):String("."))+nasaHttpErrHint(code);
       apodPage=APOD_ERROR; needRedrawNow();
       diFinishProgress('*',"Gagal muat Astronomi",T().danger,1800,false,"",SCR_APOD,true); // v96: nimpa langsung Live Activity yg lg jalan
       return;
     }
 
-    // v119: format baru -- tanggal/judul/jenis media tetap string biasa; explanation,
-    // credit & copyright berupa HTML; gambar ada di "hdurl" ("url" = halaman artikel).
-    apodCurDate       = apodJsonDecode(apodJsonGetStringRaw(body,"date"));
-    apodTitle         = apodHtmlToText(apodJsonDecode(apodJsonGetStringRaw(body,"title")));
-    apodMediaType     = apodJsonDecode(apodJsonGetStringRaw(body,"media_type"));
-    String apodCredRaw = apodJsonGetStringRaw(body,"credit");
-    if(apodCredRaw.length()==0) apodCredRaw = apodJsonGetStringRaw(body,"copyright");
-    apodCopyright     = apodCleanCredit(apodCredRaw);
-    apodExplanationEn = apodCleanExplanation(apodJsonGetStringRaw(body,"explanation"));
-    imgUrlOrig        = apodJsonDecode(apodJsonGetStringRaw(body,"hdurl"));
-    imgUrl            = apodShrinkImgUrl(imgUrlOrig);   // kecilkan lewat resizer NASA (asli bisa puluhan MB)
-    if(apodExplanationEn.length()==0) apodExplanationEn = "(Tidak ada penjelasan untuk tanggal ini.)";
+    apodCurDate       = apodJsonUnescape(apodJsonGetStringRaw(body,"date"));
+    apodTitle         = apodJsonUnescape(apodJsonGetStringRaw(body,"title"));
+    apodMediaType     = apodJsonUnescape(apodJsonGetStringRaw(body,"media_type"));
+    apodCopyright     = apodJsonUnescape(apodJsonGetStringRaw(body,"copyright"));
+    apodExplanationEn = apodJsonUnescape(apodJsonGetStringRaw(body,"explanation"));
+    imgUrl            = apodJsonUnescape(apodJsonGetStringRaw(body,"url"));
 
-    if(apodCurDate.length()==0 || apodTitle.length()==0){
+    if(apodCurDate.length()==0 || apodExplanationEn.length()==0){
       apodErrorMsg="Gagal membaca data dari server NASA (format respons tidak dikenali).";
       apodPage=APOD_ERROR; needRedrawNow(); return;
     }
@@ -15040,17 +14315,11 @@ void apodFetchAndProcess(String dateParam){
   // ini cuma bebasin buffer kita sendiri yg emang beneran udah gak dipakai.
   body="";
 
-  apodImgReady=false; apodImgNote="";
+  apodImgReady=false;
   if(apodMediaType=="image" && imgUrl.length()){
     if(sdReady){
       String imgPath=apodImgPath(apodCurDate);
-      // v117: file cache yg isinya bukan gambar (mis. halaman error) dibuang -> unduh ulang
-      if(SD_MMC.exists(imgPath) && apodImgKind(imgPath)==0) SD_MMC.remove(imgPath);
-      if(!SD_MMC.exists(imgPath)){
-        bool apodDlOk = apodDownloadImage(imgUrl,imgPath);
-        if(!apodDlOk && imgUrlOrig.length() && imgUrlOrig!=imgUrl) apodDlOk = apodDownloadImage(imgUrlOrig,imgPath); // v119: resizer gagal -> coba URL asli
-        if(!apodDlOk) apodImgNote="Unduh gambar gagal"; // lihat drawApod (alasan ditampilkan di kotak gambar)
-      }
+      if(!SD_MMC.exists(imgPath)) apodDownloadImage(imgUrl,imgPath); // gagal jg gapapa, lihat drawApod (tampil placeholder)
     } else {
       // v23: SD gak dipasang -- unduh langsung ke PSRAM spy APOD tetap
       // bisa nampilin gambar walau gak ada kartu SD (lihat catatan
@@ -15129,27 +14398,14 @@ void apodTranslateOnlyTask(void* parameter){
 }
 void apodLoadFromCacheOrFetch(String dateParam){
   if(apodTaskHandle!=NULL) return;
-  apodMigrateCacheV2(); // v119: buang cache APOD lama (logo NASA dari endpoint lama), cuma sekali
   // v23: tanggal yg diminta PERSIS sama dgn yg udah lagi ditampilkan &
   // datanya udah ada di RAM sesi ini -> jangan fetch ulang, hemat jatah
   // request api_key (penting pas pakai DEMO_KEY yg limitnya kecil).
-  // v117: kalau gambarnya BELUM berhasil dimuat (unduhan sebelumnya gagal) & WiFi ada, jangan
-  // berhenti di sini -- lanjut ke bawah supaya unduh gambar dicoba lagi. Dulu begitu gagal
-  // sekali, gambar tanggal itu gak pernah dicoba lagi (metadata teks sudah ke-cache).
-  bool apodNeedImgRetry = (apodMediaType=="image" && !apodImgReady && WiFi.status()==WL_CONNECTED);
-  if(dateParam.length() && dateParam==apodCurDate && apodExplanationEn.length()>0 && !apodNeedImgRetry){
+  if(dateParam.length() && dateParam==apodCurDate && apodExplanationEn.length()>0){
     apodPage=APOD_VIEW; needRedraw=true; return;
   }
   if(dateParam.length() && apodLoadMeta(dateParam)){
-    apodImgReady=false; apodImgNote="";
-    if(apodMediaType=="image" && sdReady && WiFi.status()==WL_CONNECTED){
-      String ip=apodImgPath(dateParam);
-      if(!SD_MMC.exists(ip) || apodImgKind(ip)==0){
-        if(SD_MMC.exists(ip)) SD_MMC.remove(ip);
-        apodStartFetch(dateParam); // gambar belum ada di SD -> fetch penuh lagi
-        return;
-      }
-    }
+    apodImgReady=false;
     String cachedId = apodLoadIdCache(dateParam);
     apodExplanationId = cachedId.length()? cachedId : apodExplanationEn; // sementara tampilkan EN kalau blm ada cache terjemahan
     if(apodMediaType=="image" && SD_MMC.exists(apodImgPath(dateParam))) apodDecodeCachedImage();
@@ -15252,12 +14508,12 @@ void drawApod(LGFX_Sprite& s){
     s.setTextColor(T().subtext); s.setTextSize(1);
     const char* m="(Konten hari ini video, tdk bisa ditampilkan)";
     s.setCursor(SCR_W/2-(int)strlen(m)*3,imgTop+imgH/2-4); s.print(m);
-  } else if(apodImgReady && apodImgNote.length()==0){
+  } else if(apodImgReady){
     if(apodImgW!=SCR_W || apodImgH!=imgH) apodDecodeCachedImage(); // orientasi berubah -> decode ulang dr cache lokal (gak perlu internet)
     apodImg.pushSprite(&s,0,imgTop);
   } else {
     s.setTextColor(T().subtext); s.setTextSize(1);
-    const char* m = apodImgNote.length()? apodImgNote.c_str() : "(Gambar belum tersedia)";
+    const char* m="(Gambar belum tersedia)";
     s.setCursor(SCR_W/2-(int)strlen(m)*3,imgTop+imgH/2-4); s.print(m);
   }
 
@@ -17393,73 +16649,8 @@ void hwmonTouch(int x,int y,bool held,bool isNew){
 // disederhanakan balik jadi cuma pass-through ke touchscreen fisik.
 // =============================================
 
-// ---- filter sentuhan v2 (apply_touch_deadzone_v2.py): sementara, kaca retak -> ghost touch ----
-// TOUCH_FILTER_V2
-// Semua nilai px dihitung di koordinat layar SAAT INI (ikut portrait/landscape).
-#define TOUCH_DEAD_W   40   // kotak mati pojok kiri-bawah: lebar (px), 0 = nonaktif
-#define TOUCH_DEAD_H   40   // kotak mati pojok kiri-bawah: tinggi (px)
-#define TOUCH_EDGE_L   0    // strip mati tepi KIRI  (px), 0 = nonaktif
-#define TOUCH_EDGE_R   0    // strip mati tepi KANAN (px), 0 = nonaktif
-#define TOUCH_EDGE_T   0    // strip mati tepi ATAS  (px), 0 = nonaktif
-#define TOUCH_EDGE_B   0    // strip mati tepi BAWAH (px), 0 = nonaktif
-#define TOUCH_MIN_Z    0    // tekanan minimum (tp.size), 0 = nonaktif -- isi setelah lihat log
-#define TOUCH_OOR_PX   10   // titik di luar layar lebih dari ini dianggap ghost
-#define TOUCH_DEBUG    1    // 1 = cetak log [touch] ke Serial Monitor, 0 = diam
-// TOUCH_GHOST_RECT (apply_touch_deadzone_v3.py): kotak mati di lokasi ghost terukur,
-// koordinat LANDSCAPE (320x240), tepi kanan-tengah. Aktif cuma saat landscape.
-#define TOUCH_GHOST_X0 285
-#define TOUCH_GHOST_X1 340
-#define TOUCH_GHOST_Y0 95
-#define TOUCH_GHOST_Y1 140
-
-static bool touchBlocked(const lgfx::touch_point_t &t){
-  int x=(int)t.x, y=(int)t.y;
-  if(x < -TOUCH_OOR_PX || y < -TOUCH_OOR_PX || x >= SCR_W+TOUCH_OOR_PX || y >= SCR_H+TOUCH_OOR_PX) return true;
-  if(TOUCH_DEAD_W>0 && x<TOUCH_DEAD_W && y>=SCR_H-TOUCH_DEAD_H) return true;
-  if(TOUCH_EDGE_L>0 && x<TOUCH_EDGE_L) return true;
-  if(TOUCH_EDGE_R>0 && x>=SCR_W-TOUCH_EDGE_R) return true;
-  if(TOUCH_EDGE_T>0 && y<TOUCH_EDGE_T) return true;
-  if(TOUCH_EDGE_B>0 && y>=SCR_H-TOUCH_EDGE_B) return true;
-  if(SCR_W>SCR_H && x>=TOUCH_GHOST_X0 && x<=TOUCH_GHOST_X1 && y>=TOUCH_GHOST_Y0 && y<=TOUCH_GHOST_Y1) return true;
-  if(TOUCH_MIN_Z>0 && (int)t.size<TOUCH_MIN_Z) return true;
-  return false;
-}
-
-static void touchLog(const char* tag, const lgfx::touch_point_t &t){
-#if TOUCH_DEBUG
-  static uint32_t lastMs=0;
-  uint32_t now=millis();
-  if(now-lastMs<150) return;   // jangan banjiri Serial kalau ghost nempel terus
-  lastMs=now;
-  Serial.printf("[touch] %s x=%d y=%d z=%d (layar %dx%d)\n", tag, (int)t.x, (int)t.y, (int)t.size, SCR_W, SCR_H);
-#else
-  (void)tag; (void)t;
-#endif
-}
-
-// TOUCH_LATCH_V5 (apply_touch_deadzone_v5.py)
-#define TOUCH_LATCH_MS 150   // layar harus sepi sekian ms (sejak sentuhan terakhir) sebelum sentuhan diterima lagi setelah ghost
-
 bool getInputPoint(lgfx::touch_point_t &tp){
-  static bool prevDown=false;
-  static bool latched=false;       // ghost baru saja kena blok -> tolak semua sentuhan
-  static uint32_t lastTouchMs=0;   // waktu sampel sentuhan terakhir (apa pun)
-  uint32_t now=millis();
-
-  { int rx=0,ry=0; // Remote Control: sentuhan dari web menang atas touchscreen fisik
-    if(rcInputPoll(&rx,&ry)){ tp.x=rx; tp.y=ry; tp.size=64; return true; } }
-
-  if(latched && now-lastTouchMs>=TOUCH_LATCH_MS) latched=false;   // sudah cukup sepi
-
-  if(!display.getTouch(&tp)){ prevDown=false; return false; }
-  lastTouchMs=now;
-
-  if(touchBlocked(tp)){ touchLog("BLOKIR", tp); latched=true; prevDown=false; return false; }
-  if(latched){ touchLog("TAHAN", tp); prevDown=false; return false; }
-
-  if(!prevDown) touchLog("SENTUH", tp);   // cuma pas sentuhan baru mulai
-  prevDown=true;
-  return true;
+  return display.getTouch(&tp);
 }
 
 void setup(){
@@ -17609,7 +16800,8 @@ void setup(){
   shakeEnabled = loadShakePref();
   vibEnabled = loadVibPref(); // v94: mode senyap sekarang persisten dr NVS
   loadNpxPref(); // v24: LED Neopixel -- pulihkan status on/off, mode, & warna terakhir
-  inaBegin();                               // INA219 (I2C bareng MPU6050, SDA=15 SCL=7)
+  analogReadResolution(12);
+  analogSetAttenuation(ADC_11db);           // biar analogRead mentok di ~3.3V
   battUpdate();
 
   if(sdReady && !SD_MMC.exists(MJPEG_FOLDER)){
@@ -17688,18 +16880,16 @@ void loop(){
   wifiConnectStep(); // v48: majuin konek WiFi & sync NTP dikit2 tanpa nge-block (lihat komentar di definisinya)
   if(!gameModeActive){
     if(millis()-lastMpu>50){ lastMpu=millis(); mpuUpdate(); }
-    if(millis()-lastBatt>250){ lastBatt=millis(); battUpdate(); if(inaWantRedraw()) needRedraw=true; }
+    if(millis()-lastBatt>5000){ lastBatt=millis(); battUpdate(); needRedraw=true; }
   }
 
-  if((wifiConnected || rcApIsUp()) && webServerRunning){
+  if(wifiConnected && webServerRunning){
     webServer.handleClient();
   }
-  rcLoopPoll(); // Remote Control: aksi tombol, status penonton, keep-awake
 
   checkAiWatchdog();
   wakeLoopPoll(); // v115: urus hasil task wake word (simpan template, aksi pas terdeteksi) -- murah kalau gak ada kerjaan
   musicLoopPoll(); // Musik: toast/redraw/simpan prefs -- no-op kalau app belum pernah dibuka
-  mjpegThumbPoll(); // Daftar video: bikin thumbnail yg belum ada, 1 per putaran -- no-op di luar app MJPEG
   featuresLoopPoll(); // Stopwatch/Timer tick, screenshot, Voice Memo, cuaca (features_renphone.ino)
   appMemGuardTick(); // v92: "batas aman RAM" -- kill cache RAM app astronomi paling lama nganggur kalau RAM internal mepet, lihat definisinya dekat appOnEnter/appOnExit
   diUpdate();              // v14: urus animasi/auto-collapse Dynamic Island
@@ -17779,7 +16969,6 @@ void loop(){
     ccTick(); // v108: animasi warna tombol + feedback tekan
     if(newT) ccTouch(tx,ty);
     else if(touched && ccSliderDrag) ccSliderSet(tx); // v108: drag slider Brightness
-    ccHoldTick(touched,tx,ty); // CC-LONGPRESS: tahan tile = buka pengaturannya; ketuk = aksi saat jari lepas
     if(!touched) ccSliderDrag=false;
     if(needRedraw){ renderCurrentFrame(); push(); needRedraw=false; }
     wasTouched=touched; delay(1); return;
@@ -18138,8 +17327,6 @@ void loop(){
     if(curScreen()==SCR_SETTINGS && !kbVisible) settingsPointerTick(touched,wasTouched,tx,ty); // Pengaturan ala iOS: scroll + tap-saat-lepas
     if(curScreen()==SCR_FILEEXPLORER) fileExpPointerTick(touched,wasTouched,tx,ty); // File Explorer: drag-scroll + ketuk saat lepas
     if(curScreen()==SCR_GALLERY) galPointerTick(touched,wasTouched,tx,ty);          // Galeri: scroll/ketuk + pemuat thumbnail
-    if(curScreen()==SCR_REMOTE) remotePointerTick(touched,wasTouched,tx,ty);        // Remote: geser daftar + ketuk saat lepas
-    if(curScreen()==SCR_HOMEEDIT) homeEditPointerTick(touched,wasTouched,tx,ty);    // Atur Home: geser daftar + ketuk saat lepas
     int idx=appIndexForScreen(curScreen());
     if(idx>=0){
       bool held = touched&&wasTouched;
@@ -18169,8 +17356,6 @@ void loop(){
     // v31: HWmonitor -- sampling tiap 500ms (jendela sampel yg dipakai
     // hwmonPoll() buat hitung persen sibuk per core, lihat komentarnya)
     if(curScreen()==SCR_HWMON && millis()-hwmonLastPoll>500){ hwmonPoll(); needRedraw=true; hwmonLastPoll=millis(); }
-    ownerLoopPoll(); // Profil: tutup Galeri setelah foto profil dipilih
-    if(curScreen()==SCR_ABOUT) aboutLoopPoll();
     // v58 FIX bug "Labirin gak bisa digerakin sama sekali": SCR_MAZE lupa
     // didaftarin di sini pas game-nya dibikin (v56/v57). Tanpa ini,
     // drawMaze() -- tempat mazePlayerTick()/mazeGhostTick() dipanggil --
