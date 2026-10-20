@@ -35,6 +35,9 @@
 //                    direset ke 0 (tombol gak bakal "nyangkut").
 //   * Multi klien  : maks 5 koneksi, maskanya di-OR (dua HP = satu pad).
 //
+//   * LAPTOP/PC    : halaman /pad juga bisa dikontrol keyboard + mouse (WASD/panah, Spasi/Z/J,
+//                    E/X/K, Enter, Esc, 1-7, Shift, dst; L = mouse-look DOOM). Tombol "⌨"
+//                    di bar atas (muncul di perangkat bermouse) menampilkan daftar tombol.
 //   * HUD HW MONITOR: tiap 1 dtk (kalau ada klien) firmware kirim paket teks "t..."
 //                    berisi CPU per-core, RAM/PSRAM, suhu chip/board/baterai (NTC opsional),
 //                    % baterai, tegangan, arus, daya (INA219) & FPS game. Halaman /pad
@@ -313,9 +316,12 @@ body.g1{--ac:#e63946}body.g2{--ac:#ff8a1f}
 #dot{width:9px;height:9px;border-radius:50%;background:#c0392b;flex:none}
 #dot.ok{background:#2ecc71}#dot.wait{background:#f1c40f}
 #st{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-#fs,#mn,#xcl,#hw,.btn{background:var(--key);color:var(--fg);border:1px solid var(--ln);border-radius:8px;padding:6px 10px;font:inherit;font-size:12px}
+#fs,#mn,#xcl,#hw,#kb,.btn{background:var(--key);color:var(--fg);border:1px solid var(--ln);border-radius:8px;padding:6px 10px;font:inherit;font-size:12px}
 #mn{display:none}body.g2 #mn{display:block}
 #hw.off{opacity:.45}
+#kb{display:none}@media (pointer:fine){#kb{display:block}}
+#kh{display:none;position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:8;pointer-events:none;background:rgba(7,8,12,.94);border:1px solid var(--ln);border-radius:14px;padding:14px 18px;font:600 13px/1.65 system-ui,sans-serif;max-width:92vw;color:var(--fg)}
+#kh.open{display:block}#kh b{color:var(--ac)}
 #hud{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:3;pointer-events:none;display:none;padding:5px 9px;border-radius:10px;background:rgba(7,8,12,.55);border:1px solid rgba(42,49,66,.7);font:600 clamp(9px,2.5vmin,12px)/1.45 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;white-space:nowrap;text-align:center;color:var(--fg)}
 body.hud #hud{display:block}
 #hud b{color:var(--dim);font-weight:700}#hud .w{color:#f1c40f}#hud .x{color:#ff5a4d}#hud .o{color:#2ecc71}
@@ -352,8 +358,9 @@ body.g2 #bA{width:25vmin;height:25vmin;font-size:4.4vmin}
 #rot{display:none;position:fixed;inset:0;background:var(--bg);z-index:9;align-items:center;justify-content:center;flex-direction:column;gap:12px;text-align:center;font-size:18px}
 @media (orientation:portrait){#rot{display:flex}}
 </style></head><body>
-<div id="bar"><span id="dot"></span><span id="st">menyambung…</span><button id="hw" class="ui">HW</button><button id="mn" class="ui">☰ Tombol</button><button id="fs" class="ui" hidden>⛶</button></div>
+<div id="bar"><span id="dot"></span><span id="st">menyambung…</span><button id="kb" class="ui" title="Daftar tombol keyboard">⌨</button><button id="hw" class="ui">HW</button><button id="mn" class="ui">☰ Tombol</button><button id="fs" class="ui" hidden>⛶</button></div>
 <div id="hud"><div id="h1">menunggu data…</div><div id="h2"></div><div id="h3"></div></div>
+<div id="kh"><b>Gerak</b> WASD / panah (DOOM: panah kiri-kanan = putar, A/D = strafe)<br><b>A / FIRE</b> Spasi, Z, J &nbsp;·&nbsp; <b>B / USE</b> E, X, K<br><b>START / ENTER</b> Enter &nbsp;·&nbsp; <b>SELECT / ESC</b> Esc<br><b>DOOM</b> Shift = lari · 1-7 = senjata · [ ] = senjata sebelum/berikut · Tab = peta · P = pause · Y / N · Backspace · V = alt · F1-F11 · − = zoom<br><b>Mouse-look DOOM</b> tekan L (klik kiri = tembak, klik kanan = pakai, Esc = keluar)<br><b>H</b> tampil/sembunyi HUD &nbsp;·&nbsp; <b>/</b> tutup bantuan ini</div>
 <div id="wp" class="dm"></div>
 <div id="pad">
   <div id="dp"><span class="ar" id="au">▲</span><span class="ar" id="ad">▼</span><span class="ar" id="al">◀</span><span class="ar" id="ar">▶</span><div id="nub"></div></div>
@@ -447,7 +454,7 @@ function open(){
   ws.onopen=()=>{conn='ok';last=-1;lastE=-1;paint();send(true);sendEx(true)};
   ws.onclose=()=>{conn='off';paint();clearTimeout(rt);rt=setTimeout(open,1000)};
   ws.onerror=()=>{try{ws.close()}catch(e){}};
-  ws.onmessage=e=>{if(typeof e.data!=='string')return;if(e.data[0]==='g'){game=+e.data[1]||0;tg=0;tgs.forEach(t=>t.classList.remove('on'));paint()}else if(e.data[0]==='t')showHud(e.data.slice(1).split(','))};
+  ws.onmessage=e=>{if(typeof e.data!=='string')return;if(e.data[0]==='g'){game=+e.data[1]||0;tg=0;tgs.forEach(t=>t.classList.remove('on'));paint();kbRecalc()}else if(e.data[0]==='t')showHud(e.data.slice(1).split(','))};
 }
 function send(force){
   if(!ws||ws.readyState!==1)return;
@@ -467,7 +474,7 @@ function hit(b,x,y){
 }
 function btnAt(x,y){for(const b of btns)if(vis(b)&&hit(b,x,y))return b;return null}
 function calc(){
-  let m=0,ex=tg,nx=0,ny=0;const on=new Set();
+  let m=kbM,ex=tg|kbE,nx=0,ny=0;const on=new Set();
   for(const p of ptr.values()){
     if(p.look||p.tgl)continue;
     if(p.own){
@@ -482,6 +489,7 @@ function calc(){
     }
   }
   nub.style.transform='translate('+nx+'px,'+ny+'px)';
+  for(const b of btns){const n=b.dataset.b;if((n in BIT&&(kbM&BIT[n]))||(n in EX&&(kbE&EX[n])))on.add(b)}
   btns.forEach(b=>b.classList.toggle('on',on.has(b)));
   $('#au').classList.toggle('on',!!(m&1));$('#ad').classList.toggle('on',!!(m&2));
   $('#al').classList.toggle('on',!!(m&4)||!!(ex&EX.SL));$('#ar').classList.toggle('on',!!(m&8)||!!(ex&EX.SR));
@@ -497,7 +505,7 @@ function calc(){
 const portrait=()=>matchMedia('(orientation:portrait)').matches;
 function ownsDp(x,y){const r=dp.getBoundingClientRect(),R=r.width/2;return Math.hypot(x-(r.left+R),y-(r.top+R))<=R*1.3}
 addEventListener('pointerdown',e=>{
-  if(portrait())return;
+  if(portrait()||document.pointerLockElement)return;
   const t=e.target;
   if(t.closest('#fs,#mn,#xcl,.ui'))return;
   if(t.closest('#pn')&&!t.closest('.k'))return;
@@ -517,7 +525,7 @@ addEventListener('pointermove',e=>{
   p.x=e.clientX;p.y=e.clientY;calc();
 });
 ['pointerup','pointercancel'].forEach(t=>addEventListener(t,e=>{if(ptr.delete(e.pointerId))calc()}));
-function release(){ptr.clear();tg=0;tgs.forEach(t=>t.classList.remove('on'));lookAcc=0;calc();send(true);sendEx(true)}
+function release(){kbHeld.clear();mA=mB=0;kbM=kbE=0;ptr.clear();tg=0;tgs.forEach(t=>t.classList.remove('on'));lookAcc=0;calc();send(true);sendEx(true)}
 addEventListener('blur',release);
 document.addEventListener('visibilitychange',()=>{if(document.hidden)release()});
 addEventListener('orientationchange',release);
@@ -530,7 +538,53 @@ setInterval(()=>{
   lookAcc-=v;v=Math.max(-32000,Math.min(32000,v));
   ws.send(Uint8Array.of(2,v&255,(v>>8)&255));
 },25);
-const fs=$('#fs'),de=document.documentElement;
+const de=document.documentElement;
+const KM={ArrowUp:1,KeyW:1,ArrowDown:2,KeyS:2,ArrowLeft:4,ArrowRight:8,Enter:64,NumpadEnter:64,Escape:128,Space:16,KeyZ:16,KeyJ:16,KeyX:32,KeyK:32,KeyE:32};
+const KX={ShiftLeft:'RUN',ShiftRight:'RUN',KeyV:'ALT',Tab:'MAP',KeyP:'PAUSE',KeyY:'Y',KeyN:'N',Backspace:'BS',Minus:'MINUS',Equal:'EQ',BracketLeft:'PREV',BracketRight:'NEXT'};
+for(let i=1;i<=7;i++){KX['Digit'+i]='W'+i;KX['Numpad'+i]='W'+i}
+for(let i=1;i<=11;i++)KX['F'+i]='F'+i;
+const kbHeld=new Set();let kbM=0,kbE=0,mA=0,mB=0;
+const kbKnown=c=>c in KM||c in KX||c==='KeyA'||c==='KeyD';
+function kbRecalc(){
+  let m=(mA?16:0)|(mB?32:0),e=0;
+  for(const c of kbHeld){
+    if(c in KM)m|=KM[c];
+    else if(c in KX)e|=EX[KX[c]];
+    else if(c==='KeyA'){if(game===2)e|=EX.SL;else m|=4}
+    else if(c==='KeyD'){if(game===2)e|=EX.SR;else m|=8}
+  }
+  kbM=m;kbE=e;calc();
+}
+const inField=t=>!!(t&&t.closest&&t.closest('input,textarea'));
+addEventListener('keydown',e=>{
+  if(e.ctrlKey||e.metaKey||e.altKey||inField(e.target))return;
+  if(e.code==='KeyH'){if(!e.repeat){hud=!hud;saveCfg();paintHud()}return}
+  if(e.code==='Slash'){e.preventDefault();$('#kh').classList.toggle('open');return}
+  if(e.code==='KeyL'){
+    if(!e.repeat){if(document.pointerLockElement)document.exitPointerLock();
+      else if(game===2&&de.requestPointerLock){try{de.requestPointerLock()}catch(x){}}}
+    return;
+  }
+  if(!kbKnown(e.code))return;
+  e.preventDefault();
+  if(kbHeld.has(e.code))return;
+  kbHeld.add(e.code);kbRecalc();
+});
+addEventListener('keyup',e=>{if(kbHeld.delete(e.code)){e.preventDefault();kbRecalc()}});
+addEventListener('mousemove',e=>{if(document.pointerLockElement&&game===2)lookAcc+=e.movementX*sens*(inv?-1:1)});
+addEventListener('mousedown',e=>{
+  if(!document.pointerLockElement)return;
+  if(e.button===0)mA=1;else if(e.button===2)mB=1;else return;
+  e.preventDefault();kbRecalc();
+});
+addEventListener('mouseup',e=>{
+  if(!mA&&!mB)return;
+  if(e.button===0)mA=0;else if(e.button===2)mB=0;
+  kbRecalc();
+});
+document.addEventListener('pointerlockchange',()=>{if(!document.pointerLockElement&&(mA||mB)){mA=mB=0;kbRecalc()}});
+$('#kb').onclick=()=>$('#kh').classList.toggle('open');
+const fs=$('#fs');
 if(de.requestFullscreen){fs.hidden=false;fs.onclick=async()=>{
   try{await de.requestFullscreen();if(screen.orientation&&screen.orientation.lock)screen.orientation.lock('landscape').catch(()=>{})}catch(e){}}}
 paintHud();paint();open();
