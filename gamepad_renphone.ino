@@ -35,6 +35,11 @@
 //                    direset ke 0 (tombol gak bakal "nyangkut").
 //   * Multi klien  : maks 5 koneksi, maskanya di-OR (dua HP = satu pad).
 //
+//   * HUD HW MONITOR: tiap 1 dtk (kalau ada klien) firmware kirim paket teks "t..."
+//                    berisi CPU per-core, RAM/PSRAM, suhu chip/board/baterai (NTC opsional),
+//                    % baterai, tegangan, arus, daya (INA219) & FPS game. Halaman /pad
+//                    menampilkannya sbg overlay transparan; tombol "HW" = on/off.
+//
 // DIPASANG lewat apply_gamepad_patch.py (idempoten). Butuh library
 // "WebSockets" (arduino-cli lib install "WebSockets").
 // =====================================================================
@@ -168,10 +173,106 @@ static void padWsStart() {
   Serial.println("[pad] WebSocket gamepad siap di port 81");
 }
 
+// =====================================================================
+// HUD HW MONITOR -- telemetri firmware -> halaman /pad
+// =====================================================================
+// SUHU BATERAI: modul INA219 TIDAK punya sensor suhu. Supaya benar-benar
+// suhu baterai, tempelkan termistor NTC 10k (B=3950) ke badan baterai:
+//   3V3 --[10k resistor]--+--[NTC 10k]-- GND ,  titik tengah -> pin ADC1
+// lalu isi nomor pinnya di bawah (pakai pin ADC1 = GPIO1..10 yg masih
+// bebas di PCB-mu). Kalau -1 (default) -> baris "Bat" tidak ditampilkan
+// & HUD hanya menampilkan suhu chip ESP32-S3 + suhu board (MPU6050).
+#ifndef PAD_NTC_PIN
+#define PAD_NTC_PIN   -1
+#endif
+#define PAD_NTC_R0    10000.0f   // hambatan NTC pada 25 C
+#define PAD_NTC_BETA  3950.0f
+#define PAD_NTC_RS    10000.0f   // resistor seri ke 3V3
+
+extern volatile uint32_t hwmonIdleHits0, hwmonIdleHits1;  // phone.ino (idle hook per-core)
+extern uint32_t hwmonBaseline0, hwmonBaseline1;           // baseline app HWmonitor (jendela 500 ms)
+extern int hwmonUsage0, hwmonUsage1;
+extern float mpuTempC;  extern bool mpuReady;             // phone.ino
+extern float battVoltage; extern int battPercent; extern bool battCharging;
+extern bool inaOk; extern float inaI, inaP;               // ina219_renphone.ino
+
+volatile uint32_t padFrames = 0;   // ++ oleh NES (nesOverlay_afterFrame) & DOOM (doomTaskFunc) tiap frame
+
+static uint32_t padHudMs = 0, padCpuMs = 0, padFpsMs = 0, padFpsLast = 0;
+static float    padBase0 = 0, padBase1 = 0;      // hits-per-ms saat paling nganggur
+static int      padCpu0 = 0, padCpu1 = 0, padFpsV = 0;
+
+// Persen sibuk per core dari idle hook. Kalau app HWmonitor sedang dibuka,
+// pakai hasil dia (dia yg mereset penghitung), supaya tidak saling ganggu.
+static void padSampleCpu(uint32_t now) {
+  if (padCpuMs == 0) { padCpuMs = now; hwmonIdleHits0 = 0; hwmonIdleHits1 = 0; return; }
+  uint32_t dt = now - padCpuMs;
+  if (dt < 1000) return;
+  if (curScreen() == SCR_HWMON) { padCpu0 = hwmonUsage0; padCpu1 = hwmonUsage1; padCpuMs = 0; return; }
+  padCpuMs = now;
+  uint32_t c0 = hwmonIdleHits0, c1 = hwmonIdleHits1;
+  hwmonIdleHits0 = 0; hwmonIdleHits1 = 0;
+  float r0 = (float)c0 / (float)dt, r1 = (float)c1 / (float)dt;
+  float h0 = (hwmonBaseline0 > 1) ? (float)hwmonBaseline0 / 500.0f : 0;
+  float h1 = (hwmonBaseline1 > 1) ? (float)hwmonBaseline1 / 500.0f : 0;
+  if (r0 > padBase0) padBase0 = r0;
+  if (h0 > padBase0) padBase0 = h0;
+  if (r1 > padBase1) padBase1 = r1;
+  if (h1 > padBase1) padBase1 = h1;
+  if (padBase0 > 0) padCpu0 = constrain(100 - (int)(r0 * 100.0f / padBase0 + 0.5f), 0, 100);
+  if (padBase1 > 0) padCpu1 = constrain(100 - (int)(r1 * 100.0f / padBase1 + 0.5f), 0, 100);
+}
+
+// Suhu NTC dalam C*10, atau -999 kalau tidak dipasang / tidak terbaca.
+static int padNtcX10() {
+#if PAD_NTC_PIN >= 0
+  uint32_t acc = 0;
+  for (int i = 0; i < 8; i++) acc += analogReadMilliVolts(PAD_NTC_PIN);
+  float v = (float)acc / 8.0f;
+  if (v < 50.0f || v > 3250.0f) return -999;          // kabel putus / korslet
+  float r = PAD_NTC_RS * v / (3300.0f - v);
+  float t = 1.0f / (1.0f / 298.15f + logf(r / PAD_NTC_R0) / PAD_NTC_BETA) - 273.15f;
+  return (int)(t * 10.0f);
+#else
+  return -999;
+#endif
+}
+
+// Paket teks: "t" + 14 angka dipisah koma:
+//  cpu0,cpu1, heapFreeKB, heapMaxBlokKB, psramFreeKB, chipC*10, boardC*10, batC*10(-999=tdk ada),
+//  batPct, batMilliVolt, batMilliAmp(+ = diisi), dayaMilliWatt(abs), flag(bit0=INA ok, bit1=charging), fps
+static void padHudSend(uint32_t now) {
+  if (now - padFpsMs >= 1000UL) {                   // FPS dihitung terus (murah)
+    uint32_t df = padFrames - padFpsLast;
+    padFpsV = (int)((df * 1000UL) / (now - padFpsMs));
+    padFpsLast = padFrames; padFpsMs = now;
+  }
+  if (now - padHudMs < 1000UL) return;
+  padHudMs = now;
+  if (padWs.connectedClients() == 0) return;        // gak ada yg nonton -> hemat
+  int chip  = (int)(temperatureRead() * 10.0f);
+  int board = (mpuReady && mpuTempC > 1.0f) ? (int)(mpuTempC * 10.0f) : -999;
+  int ntc   = padNtcX10();
+  int mv    = (int)(battVoltage * 1000.0f);
+  int ma    = inaOk ? (int)(-inaI) : 0;               // INA: + = dipakai -> dibalik: + = diisi
+  int mw    = inaOk ? (int)fabsf(inaP) : 0;
+  int fl    = (inaOk ? 1 : 0) | (battCharging ? 2 : 0);
+  char b[128];
+  snprintf(b, sizeof(b), "t%d,%d,%u,%u,%u,%d,%d,%d,%d,%d,%d,%d,%d,%d",
+           padCpu0, padCpu1,
+           (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024),
+           (unsigned)(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL) / 1024),
+           (unsigned)(ESP.getFreePsram() / 1024),
+           chip, board, ntc, battPercent, mv, ma, mw, fl, (padGame == 1 || padGame == 2) ? padFpsV : 0);
+  padWs.broadcastTXT(b);
+}
+
 // Dipanggil dari rcLoopPoll() tiap putaran loop().
 void padLoopPoll() {
   if (!padStarted) return;
   padWs.loop();
+  padSampleCpu(millis());
+  padHudSend(millis());
 
   uint32_t now = millis();
   bool ch = false;
@@ -212,8 +313,12 @@ body.g1{--ac:#e63946}body.g2{--ac:#ff8a1f}
 #dot{width:9px;height:9px;border-radius:50%;background:#c0392b;flex:none}
 #dot.ok{background:#2ecc71}#dot.wait{background:#f1c40f}
 #st{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-#fs,#mn,#xcl,.btn{background:var(--key);color:var(--fg);border:1px solid var(--ln);border-radius:8px;padding:6px 10px;font:inherit;font-size:12px}
+#fs,#mn,#xcl,#hw,.btn{background:var(--key);color:var(--fg);border:1px solid var(--ln);border-radius:8px;padding:6px 10px;font:inherit;font-size:12px}
 #mn{display:none}body.g2 #mn{display:block}
+#hw.off{opacity:.45}
+#hud{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:3;pointer-events:none;display:none;padding:5px 9px;border-radius:10px;background:rgba(7,8,12,.55);border:1px solid rgba(42,49,66,.7);font:600 clamp(9px,2.5vmin,12px)/1.45 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;white-space:nowrap;text-align:center;color:var(--fg)}
+body.hud #hud{display:block}
+#hud b{color:var(--dim);font-weight:700}#hud .w{color:#f1c40f}#hud .x{color:#ff5a4d}#hud .o{color:#2ecc71}
 #pad{position:fixed;inset:0;display:flex;align-items:center;justify-content:space-between;padding:calc(env(safe-area-inset-top,0px) + 28px) max(5vw,env(safe-area-inset-right,0px)) 10px max(5vw,env(safe-area-inset-left,0px))}
 #dp{position:relative;width:46vmin;height:46vmin;border-radius:50%;background:radial-gradient(circle,#1d2230,#10131b 70%);border:2px solid #232a3a;flex:none}
 .ar{position:absolute;color:#3b4458;font-size:6vmin;line-height:1}
@@ -247,7 +352,8 @@ body.g2 #bA{width:25vmin;height:25vmin;font-size:4.4vmin}
 #rot{display:none;position:fixed;inset:0;background:var(--bg);z-index:9;align-items:center;justify-content:center;flex-direction:column;gap:12px;text-align:center;font-size:18px}
 @media (orientation:portrait){#rot{display:flex}}
 </style></head><body>
-<div id="bar"><span id="dot"></span><span id="st">menyambung…</span><button id="mn" class="ui">☰ Tombol</button><button id="fs" class="ui" hidden>⛶</button></div>
+<div id="bar"><span id="dot"></span><span id="st">menyambung…</span><button id="hw" class="ui">HW</button><button id="mn" class="ui">☰ Tombol</button><button id="fs" class="ui" hidden>⛶</button></div>
+<div id="hud"><div id="h1">menunggu data…</div><div id="h2"></div><div id="h3"></div></div>
 <div id="wp" class="dm"></div>
 <div id="pad">
   <div id="dp"><span class="ar" id="au">▲</span><span class="ar" id="ad">▼</span><span class="ar" id="al">◀</span><span class="ar" id="ar">▶</span><div id="nub"></div></div>
@@ -285,10 +391,28 @@ mk($('#wp'),'PREV','\u25c0');mk($('#wp'),'NEXT','\u25b6');
 [['F1','F1 Bantuan'],['F2','F2 Simpan'],['F3','F3 Muat'],['F4','F4 Suara'],['F5','F5 Detail'],['F6','F6 QSave'],['F7','F7 Akhiri'],['F8','F8 Pesan'],['F9','F9 QLoad'],['F10','F10 Keluar'],['F11','F11 Gamma']].forEach(a=>mk($('#g3'),a[0],a[1]));
 let ws=null,mask=0,exm=0,last=-1,lastE=-1,game=0,conn='wait',rt=0,tg=0,lookAcc=0;
 const ptr=new Map();
-let sens=4,inv=false,stk=true;
-try{const s=JSON.parse(localStorage.getItem('padcfg')||'{}');if(s.sens)sens=s.sens;inv=!!s.inv;if(s.stk===false)stk=false}catch(e){}
+let sens=4,inv=false,stk=true,hud=true;
+try{const s=JSON.parse(localStorage.getItem('padcfg')||'{}');if(s.sens)sens=s.sens;inv=!!s.inv;if(s.stk===false)stk=false;if(s.hud===false)hud=false}catch(e){}
 $('#sens').value=sens;$('#sv').textContent=sens;$('#inv').checked=inv;$('#stk').checked=stk;
-function saveCfg(){try{localStorage.setItem('padcfg',JSON.stringify({sens,inv,stk}))}catch(e){}}
+function saveCfg(){try{localStorage.setItem('padcfg',JSON.stringify({sens,inv,stk,hud}))}catch(e){}}
+function paintHud(){document.body.classList.toggle('hud',hud);$('#hw').classList.toggle('off',!hud)}
+$('#hw').onclick=()=>{hud=!hud;saveCfg();paintHud()};
+const lv=(v,w,x)=>v>=x?'x':v>=w?'w':'o';
+const tc=(t,w,x)=>t<=-900?'':'<span class="'+lv(t/10,w,x)+'">'+(t/10).toFixed(1)+'\u00b0</span>';
+function showHud(a){
+  const n=a.map(Number);if(n.length<14||n.some(isNaN))return;
+  const [c0,c1,hf,hb,pf,chip,brd,ntc,bp,mv,ma,mw,fl,fps]=n;
+  $('#h1').innerHTML='<b>CPU</b> <span class="'+lv(c0,55,85)+'">'+c0+'%</span>/<span class="'+lv(c1,55,85)+'">'+c1+'%</span> <b>RAM</b> '+hf+'K (blok '+hb+'K) <b>PSRAM</b> '+(pf/1024).toFixed(1)+'M';
+  let b;
+  if(fl&1){const chg=!!(fl&2);b='<b>BAT</b> <span class="'+(bp<=15?'x':bp<=35?'w':'o')+'">'+bp+'%</span> '+(mv/1000).toFixed(2)+'V '+(chg?'\u26a1':'')+(ma>0?'+':'')+ma+'mA '+(mw/1000).toFixed(2)+'W'}
+  else b='<b>BAT</b> '+bp+'% '+(mv/1000).toFixed(2)+'V <span class="w">(INA219 tdk terbaca)</span>';
+  $('#h2').innerHTML=b;
+  let t='<b>SUHU</b> chip '+tc(chip,55,70);
+  if(brd>-900)t+=' board '+tc(brd,45,55);
+  if(ntc>-900)t+=' bat '+tc(ntc,40,45);
+  if(game===1||game===2)t+=' <b>FPS</b> <span class="'+(fps>=(game===1?55:20)?'o':fps>=(game===1?30:12)?'w':'x')+'">'+fps+'</span>';
+  $('#h3').innerHTML=t;
+}
 $('#sens').oninput=e=>{sens=+e.target.value;$('#sv').textContent=sens;saveCfg()};
 $('#inv').onchange=e=>{inv=e.target.checked;saveCfg()};
 $('#stk').onchange=e=>{stk=e.target.checked;saveCfg()};
@@ -323,7 +447,7 @@ function open(){
   ws.onopen=()=>{conn='ok';last=-1;lastE=-1;paint();send(true);sendEx(true)};
   ws.onclose=()=>{conn='off';paint();clearTimeout(rt);rt=setTimeout(open,1000)};
   ws.onerror=()=>{try{ws.close()}catch(e){}};
-  ws.onmessage=e=>{if(typeof e.data==='string'&&e.data[0]==='g'){game=+e.data[1]||0;tg=0;tgs.forEach(t=>t.classList.remove('on'));paint()}};
+  ws.onmessage=e=>{if(typeof e.data!=='string')return;if(e.data[0]==='g'){game=+e.data[1]||0;tg=0;tgs.forEach(t=>t.classList.remove('on'));paint()}else if(e.data[0]==='t')showHud(e.data.slice(1).split(','))};
 }
 function send(force){
   if(!ws||ws.readyState!==1)return;
@@ -409,7 +533,7 @@ setInterval(()=>{
 const fs=$('#fs'),de=document.documentElement;
 if(de.requestFullscreen){fs.hidden=false;fs.onclick=async()=>{
   try{await de.requestFullscreen();if(screen.orientation&&screen.orientation.lock)screen.orientation.lock('landscape').catch(()=>{})}catch(e){}}}
-paint();open();
+paintHud();paint();open();
 </script></body></html>)PADPAGE";
 
 static void padHandlePage() {

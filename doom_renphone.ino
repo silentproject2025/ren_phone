@@ -118,6 +118,7 @@ static String doomErrorMsg = "";               // non-kosong -> drawDoom() tampi
 
 bool doomIsPlaying(){ return doomPlaying; }
 
+extern volatile uint32_t padFrames; // gamepad_renphone.ino
 static void doomTaskFunc(void* arg){
   DG_FS = &SD_MMC;
   DG_Display = &doomDisplay;
@@ -131,6 +132,7 @@ static void doomTaskFunc(void* arg){
   while(!doomStopRequested){
     DoomGlue_Tick();
     doomDrawOverlay(); // gambar tombol virtual DI ATAS frame yg baru saja ditulis DoomGlue_Tick()
+    padFrames++;       // HUD HW monitor di halaman /pad (gamepad_renphone.ino)
     vTaskDelay(1); // kasih jatah idle task FreeRTOS (WiFi/BT/WDT), sama alasannya dgn delay(1) di loop() utama
   }
 

@@ -137,7 +137,9 @@ extern "C" void osd_getinput(void) {
 // gak nutupin game & gak berat -- highlight nyala pas lagi disentuh
 // biar ada feedback visual tombol kena/nggak.
 // -----------------------------------------------------------------
+extern volatile uint32_t padFrames; // gamepad_renphone.ino (HUD HW monitor)
 void nesOverlay_afterFrame() {
+  padFrames++;
   // --- update hitungan FPS (lihat catatan definisi variabel di atas) ---
   nesFpsFrameCount++;
   uint32_t nowMs = millis();
