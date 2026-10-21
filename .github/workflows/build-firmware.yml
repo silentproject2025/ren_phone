@@ -33,6 +33,7 @@ jobs:
           arduino-cli lib install "JPEGDEC"
           arduino-cli lib install "lvgl"
           arduino-cli lib install "WebSockets"
+          arduino-cli lib install "PubSubClient"
           arduino-cli lib install "ESP32-audioI2S-master@3.4.6" || \
             arduino-cli lib install --git-url https://github.com/schreibfaul1/ESP32-audioI2S.git
 
@@ -52,6 +53,7 @@ jobs:
           cp homeedit_renphone.ino build_sketch/
           cp about_renphone.ino build_sketch/
           cp remote_renphone.ino build_sketch/
+          cp chat_renphone.ino build_sketch/
           cp gamepad_renphone.ino build_sketch/
           cp ina219_renphone.ino build_sketch/
           cp ota_check_renphone.ino build_sketch/

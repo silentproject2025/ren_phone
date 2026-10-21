@@ -630,7 +630,9 @@ enum Screen { SCR_HOME, SCR_CLOCK, SCR_CALC, SCR_SENSOR,
               // Atur Home -- lihat homeedit_renphone.ino
               SCR_HOMEEDIT,
               // Remote Control (AP + web) -- lihat remote_renphone.ino
-              SCR_REMOTE };
+              SCR_REMOTE,
+              // Chat MQTT -- lihat chat_renphone.ino
+              SCR_CHAT };
 enum Orientation { ORIENT_LANDSCAPE = 0, ORIENT_PORTRAIT = 1 };
 
 // Dipindah ke atas — alasan sama dengan AiLine & Vec3f: arduino-cli men-generate
@@ -4726,6 +4728,13 @@ void drawAppIcon(LGFX_Sprite& s, char sym, int cx, int cy, int r, uint16_t bgCir
       s.fillTriangle(cx-2,cy+w-5,cx+w/3+1,cy+1,cx+w-2,cy+w-5,ic);
       break;
     }
+    case 'c': { // Chat: gelembung pesan + ekor + 3 titik
+      int bw=max(16,r*3/2), bh=max(11,r), bx=cx-bw/2, by=cy-bh/2-2;
+      s.drawRoundRect(bx,by,bw,bh,4,ic); s.drawRoundRect(bx+1,by+1,bw-2,bh-2,3,ic);
+      s.fillTriangle(bx+bw/4,by+bh-1,bx+bw/4+6,by+bh-1,bx+bw/4-1,by+bh+4,ic);
+      int dy=by+bh/2; for(int i=-1;i<=1;i++) s.fillCircle(cx+i*5,dy,1,ic);
+      break;
+    }
     case 'r': { // Remote: monitor + kursor
       int mw=max(14,r*3/2), mh=max(10,r), mx=cx-mw/2, my=cy-mh/2-2;
       s.drawRoundRect(mx,my,mw,mh,2,ic); s.drawRoundRect(mx+1,my+1,mw-2,mh-2,2,ic);
@@ -4813,6 +4822,8 @@ void drawMjpegPlayer(LGFX_Sprite&); void mjpegTouch(int,int,bool,bool);
 // ---- UPDATE (OTA): forward declarations ----
 void updEnter(); void updExit();
 void drawUpdate(LGFX_Sprite&); void updTouch(int,int,bool,bool);
+// ---- Chat MQTT: forward declarations (chat_renphone.ino) ----
+void chatEnter(); void chatExit(); void drawChat(LGFX_Sprite&); void chatTouch(int,int,bool,bool); void chatLoopPoll();
 // ---- BATERAI: forward declarations (BARU di v8) ----
 void battEnter(); void battExit();
 void drawBatteryApp(LGFX_Sprite&); void battTouch(int,int,bool,bool);
@@ -4916,7 +4927,7 @@ void remoteEnter(); void remoteExit(); void drawRemote(LGFX_Sprite&); void remot
 void remotePointerTick(bool,bool,int,int);
 void rcLoopPoll(); void rcRegisterRoutes(); bool rcApIsUp(); bool rcInputPoll(int*,int*); void rcFrameMark();
 
-AppDef apps[39] = {
+AppDef apps[40] = {
   { "Jam",        'J', 0, clockEnter,    clockExit,    drawClock,        clockTouch,    SCR_CLOCK },
   { "Kalkulator", '+', 0, calcEnter,     calcExit,     drawCalc,         calcTouch,     SCR_CALC },
   { "Orientasi3D", '3', 0, sensorEnter,   sensorExit,   drawSensor,       sensorTouch,   SCR_SENSOR },
@@ -4975,8 +4986,9 @@ AppDef apps[39] = {
   { "Atur Home", '#', 0xFBE0, homeEditEnter, homeEditExit, drawHomeEdit, homeEditTouch, SCR_HOMEEDIT },
   // ---- Remote Control: kontrol penuh dari HP/laptop lewat WiFi AP sendiri ----
   { "Remote", 'r', 0, remoteEnter, remoteExit, drawRemote, remoteTouch, SCR_REMOTE },
+  { "Chat",   'c', 0, chatEnter,   chatExit,   drawChat,   chatTouch,   SCR_CHAT   },
 };
-#define APP_COUNT 39
+#define APP_COUNT 40
 
 // =============================================
 // NOTIFIKASI BADGE (BARU) -- angka kecil merah di pojok ikon app, mirip
@@ -5087,6 +5099,7 @@ void initAppColors(){
   apps[35].color=0x5EBF; // Profil - biru muda
   apps[36].color=0x8C71; // About Phone
   apps[38].color=0x2DFA; // Remote - cyan
+  apps[39].color=0x34DF; // Chat - biru lembut
 }
 
 int appIndexForScreen(Screen s){
@@ -17734,6 +17747,7 @@ void loop(){
   if((wifiConnected || rcApIsUp()) && webServerRunning){
     webServer.handleClient();
   }
+  chatLoopPoll(); // Chat: redraw kalau ada pesan/status baru dari task MQTT
   rcLoopPoll(); // Remote Control: aksi tombol, status penonton, keep-awake
 
   checkAiWatchdog();
