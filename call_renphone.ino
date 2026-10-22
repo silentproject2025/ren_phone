@@ -39,7 +39,7 @@
 #define CALL_SIP_PORT     5060
 #define CALL_RTP_PORT     40000
 #define CALL_SAMPLES      160          // 8 kHz x 20 ms
-#define CALL_REG_EXPIRES  300
+#define CALL_REG_EXPIRES  120   // pendek: alamat publik di CGNAT/hotspot sering berubah, daftar ulang lebih sering
 #define CALL_UA           "NyxOS/1.0"
 #define CALL_STUN_HOST    "stun.l.google.com"
 #define CALL_STUN_PORT    19302
@@ -95,6 +95,8 @@ static volatile uint8_t  callRegState = 0;   // 0 mati, 1 mendaftar, 2 terdaftar
 static volatile bool     callDirty = false;
 static volatile bool     callIncomingNew = false;
 static volatile bool     callEndedNew = false;
+static char              callDbgRx[40] = "";            // SIP terakhir yg diterima (utk diagnosa)
+static volatile uint32_t callDbgRxMs = 0;
 static volatile bool     callMuted = false;
 static volatile bool     callIsLan = false;
 static volatile bool     callAudioOut = false;      // jalur ke TWS hidup
@@ -791,7 +793,7 @@ static void regStart() {
   callRandHex(regCallId, 16); strcat(regCallId, "@nyx");
   callRandHex(regTag, 8);
   regAuthSent = false;
-  callRegState = 1; callSetRegMsg("Mendaftar...");
+  if (callRegState != 2) { callRegState = 1; callSetRegMsg("Mendaftar..."); }   // perpanjangan diam-diam: tetap 'terdaftar'
   regSend(nullptr);
 }
 
@@ -1717,6 +1719,18 @@ static void callStartScan() {
 // ---------------------------------------------------------------------
 static void callOnSip(const char* msg, int len, const char* srcIp, int srcPort) {
   if (len < 12) return;                                   // pong keepalive dsb.
+  {
+    int dc = sipStatus(msg);
+    if (dc > 0) {
+      char dcs[40]; sipHdr(msg, "CSeq", "", 0, dcs, sizeof(dcs));
+      const char* sp = strchr(dcs, ' ');
+      snprintf(callDbgRx, sizeof(callDbgRx), "%d %s", dc, sp ? sp + 1 : "");
+    } else {
+      char dm[16]; sipMethodOf(msg, dm, sizeof(dm));
+      snprintf(callDbgRx, sizeof(callDbgRx), "%s %s", dm, srcIp);
+    }
+    callDbgRxMs = millis(); callDirty = true;
+  }
   int code = sipStatus(msg);
   if (code > 0) {
     char cs[40]; sipHdr(msg, "CSeq", "", 0, cs, sizeof(cs));
@@ -2279,8 +2293,8 @@ void callLoopPoll() {
       diNotify('p', t, 0xF9A6, 3500, false, String(""), SCR_CALL, true);
       notifAdd(SCR_CALL, 1);
       vibWarn();
-    } else if (curScreen() != SCR_CALL) {
-      showToast(st, 1800);
+    } else {
+      showToast(st, 2600);                           // alasan panggilan berakhir: tampil juga saat sedang di halaman Telepon
     }
     needRedraw = true;
   }
@@ -2524,6 +2538,11 @@ void drawCall(LGFX_Sprite& s) {
       char row[48]; snprintf(row, sizeof(row), "%s  %s", callScanName[i], callScanIp[i]);
       s.setTextColor(T().text); s.setCursor(12, y + 5); s.print(row);
     }
+  }
+  if (!kbVisible && callDbgRx[0]) {
+    char d[64]; unsigned ag = (unsigned)((millis() - callDbgRxMs) / 1000UL);
+    snprintf(d, sizeof(d), "SIP rx: %s (%us)", callDbgRx, ag);
+    s.setTextColor(T().subtext); s.setCursor(backX() + BACK_W + 8, backY() + 5); s.print(d);
   }
   if (kbVisible) drawKb(s); else drawBack(s);
   drawToast(s);
