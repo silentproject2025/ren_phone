@@ -782,7 +782,7 @@ static void callOnRegResp(const char* msg, int code) {
     }
   }
   if (code == 401 || code == 407) {
-    if (regAuthSent) { regFail("Username/password SIP salah", 60000UL); return; }
+    if (regAuthSent) { regFail("Username/password VoIP salah", 60000UL); return; }
     char uri[100]; snprintf(uri, sizeof(uri), "sip:%s", tHostName);
     char auth[700];
     if (!callBuildAuth(msg, code == 407, "REGISTER", uri, auth, sizeof(auth))) { regFail("Auth tdk didukung server", 60000UL); return; }
@@ -824,7 +824,7 @@ static void callRegStep(uint32_t now) {
     return;
   }
   if ((int32_t)(now - regNextAt) >= 0) { regStart(); return; }
-  if (callRegState == 2 && now - regKeepAt >= 25000UL && srvOk) {      // jaga lubang NAT tetap terbuka
+  if (callRegState == 2 && (int32_t)(now - regKeepAt) >= 25000 && srvOk) {      // jaga lubang NAT tetap terbuka
     regKeepAt = now;
     sipTxTo(srvIpStr, tPort, "\r\n\r\n", 4);
   }
@@ -1117,7 +1117,7 @@ static void callBeginDial(const char* targetIn) {
   if (strchr(tp, '@')) snprintf(reqUri, sizeof(reqUri), "sip:%s", tp);
   else if (callLooksLikeIp(tp)) snprintf(reqUri, sizeof(reqUri), "sip:nyx@%s", tp);
   else {
-    if (!tHostName[0]) { callToast("Isi akun SIP dulu (Atur)"); return; }
+    if (!tHostName[0]) { callToast("Isi akun VoIP dulu (Atur)"); return; }
     snprintf(reqUri, sizeof(reqUri), "sip:%s@%s", tp, tHostName);
   }
   if (!sipUri(reqUri, user, sizeof(user), host, sizeof(host), &port)) { callToast("Alamat tidak valid"); return; }
@@ -1125,13 +1125,13 @@ static void callBeginDial(const char* targetIn) {
   char dip[16]; int dport; bool viaServer = false, direct = false;
   if (callLooksLikeIp(host)) { direct = true; callCopy(dip, sizeof(dip), host); dport = port > 0 ? port : 5060; }
   else if (tHostName[0] && strcasecmp(host, tHostName) == 0) {
-    if (!callResolveServer()) { callToast("DNS server SIP gagal"); return; }
+    if (!callResolveServer()) { callToast("DNS server VoIP gagal"); return; }
     viaServer = true; callCopy(dip, sizeof(dip), srvIpStr); dport = tPort;
   } else {
     if (!callResolve(host, dip)) { callToast("Alamat tidak ditemukan"); return; }
     dport = port > 0 ? port : 5060;
   }
-  if (viaServer && callRegState != 2) { callToast("SIP belum terdaftar"); return; }
+  if (viaServer && callRegState != 2) { callToast("VoIP belum terdaftar"); return; }
 
   wakeYieldMic(4000);
   if (micI2SReady) { callToast("Mic sedang dipakai app lain"); return; }
@@ -1212,7 +1212,7 @@ static void callOnInvite(const char* msg, const char* srcIp, int srcPort) {
   sipTxTo(srcIp, srcPort, sipTx, n);
 
   callPhase = CPH_INCOMING;
-  callSetStatus(dlg.lan ? "Panggilan langsung (LAN)" : "Panggilan SIP masuk");
+  callSetStatus(dlg.lan ? "Panggilan langsung (LAN)" : "Panggilan VoIP masuk");
   int rc = callAudioStart();                       // supaya nada dering terdengar di TWS (kalau ada)
   if (rc == 0) { toneMode = 2; toneT = 0; toneLastMs = 0; }
   callIncomingNew = true;
@@ -1495,17 +1495,17 @@ static void callPhaseTimers(uint32_t now) {
         uint32_t step = 500UL << dlg.retxN; if (step > 4000UL) step = 4000UL;
         dlg.retxAt = now + step; dlg.retxN++;
       }
-      if (now - dlg.t0 > CALL_DIAL_MS) callHangup();
+      if ((int32_t)(now - dlg.t0) > (int32_t)CALL_DIAL_MS) callHangup();
       break;
     case CPH_ENDING:
       if ((int32_t)(now - dlg.retxAt) >= 0) {
-        if (dlg.retxN >= 3 || now - dlg.t0 > 4000UL) { callFinish(dlg.byeSent ? "Panggilan selesai" : "Dibatalkan"); break; }
+        if (dlg.retxN >= 3 || (int32_t)(now - dlg.t0) > 4000) { callFinish(dlg.byeSent ? "Panggilan selesai" : "Dibatalkan"); break; }
         sipResend();
         dlg.retxAt = now + (500UL << dlg.retxN); dlg.retxN++;
       }
       break;
     case CPH_INCOMING:
-      if (now - dlg.t0 > CALL_RING_MS) callRejectIncoming(480, "Temporarily Unavailable", "Panggilan terlewat");
+      if ((int32_t)(now - dlg.t0) > (int32_t)CALL_RING_MS) callRejectIncoming(480, "Temporarily Unavailable", "Panggilan terlewat");
       break;
     case CPH_ACTIVE:
       if (!dlg.uac && !dlg.ackd && (int32_t)(now - dlg.retxAt) >= 0) {   // ulangi 200 OK sampai ACK
@@ -1514,7 +1514,7 @@ static void callPhaseTimers(uint32_t now) {
         uint32_t step = 500UL << dlg.retxN; if (step > 4000UL) step = 4000UL;
         dlg.retxAt = now + step; dlg.retxN++;
       }
-      if (now - lastRtpRx > 45000UL) { callHangup(); }
+      if ((int32_t)(now - lastRtpRx) > 45000) { callHangup(); }
       break;
     default: break;
   }
@@ -1631,7 +1631,7 @@ static void callRtpSend(const uint8_t* g711, int n) {
 static void callMicStep(uint32_t now) {
   uint8_t out[CALL_SAMPLES];
   bool alaw = (dlg.pt == 8);
-  if (now - micYieldAt > 1000UL) { micYieldAt = now; wakeYieldMic(4000); }
+  if ((int32_t)(now - micYieldAt) > 1000) { micYieldAt = now; wakeYieldMic(4000); }
   size_t want = (size_t)(CALL_SAMPLES * 2) * 2 * sizeof(int32_t);          // 320 frame stereo 32-bit
   size_t got = micI2S.readBytes((char*)micRaw, want);
   int frames = (int)(got / (2 * sizeof(int32_t)));
@@ -1656,7 +1656,7 @@ static void callMicStep(uint32_t now) {
   }
   while (oi < CALL_SAMPLES) out[oi++] = alaw ? 0xD5 : 0xFF;
   callRtpSend(out, CALL_SAMPLES);
-  if (now - lastLvlMs > 100UL) { lastLvlMs = now; callMicLvl = (uint8_t)min(100, (int)(pk * 100 / 12000)); }
+  if ((int32_t)(now - lastLvlMs) > 100) { lastLvlMs = now; callMicLvl = (uint8_t)min(100, (int)(pk * 100 / 12000)); }
 }
 
 // ---------------------------------------------------------------------
@@ -1727,6 +1727,7 @@ static void callTaskFunc(void*) {
       callOnSip(sipRx, r, ip, (int)sipUdp.remotePort());
     }
 
+    now = millis();   // PENTING: callHandleReq()/callOnSip() bisa memakan waktu & mengisi dlg.t0/lastRtpRx dgn millis() yg lebih baru dari 'now' di atas
     callRegStep(now);
     callPhaseTimers(now);
 
@@ -1863,8 +1864,21 @@ static void callPost(uint8_t r, const char* arg) {
 //  SIKLUS HIDUP & POLL (UI thread)
 // =====================================================================
 void callEnter() {
+  // DIAGNOSA: kalau HP baru saja restart sendiri, tampilkan penyebabnya (sekali per boot)
+  static bool rstShown = false;
+  if (!rstShown) {
+    rstShown = true;
+    esp_reset_reason_t rr = esp_reset_reason();
+    const char* why = nullptr;
+    if (rr == ESP_RST_PANIC)        why = "Reset terakhir: CRASH (panic)";
+    else if (rr == ESP_RST_BROWNOUT) why = "Reset terakhir: BROWNOUT (daya drop)";
+    else if (rr == ESP_RST_TASK_WDT) why = "Reset terakhir: task watchdog";
+    else if (rr == ESP_RST_INT_WDT)  why = "Reset terakhir: interrupt watchdog";
+    else if (rr == ESP_RST_WDT)      why = "Reset terakhir: watchdog";
+    if (why) showToast(why, 4000);
+  }
   callEnsureInit();
-  if (!callSipConfigured() && callCfgFromSd()) { callCfgSave(); showToast("Akun SIP dimuat dari SD", 2000); }
+  if (!callSipConfigured() && callCfgFromSd()) { callCfgSave(); showToast("Akun VoIP dimuat dari SD", 2000); }
   callPage = 0; callCfgEdit = -1;
   needRedraw = true;
 }
@@ -1958,7 +1972,7 @@ static void callDrawInCall(LGFX_Sprite& s) {
   uint8_t ph = callPhase;
   int cy = 52;
   s.setTextSize(1); s.setTextColor(T().subtext);
-  callCenter(s, 0, SCR_W, cy, callIsLan ? "LAN langsung" : "SIP");
+  callCenter(s, 0, SCR_W, cy, callIsLan ? "LAN langsung" : "VoIP");
   s.setTextSize(2); s.setTextColor(T().text);
   String nm = pe; int maxC = (SCR_W - 16) / 12;
   if ((int)nm.length() > maxC) nm = nm.substring(0, maxC);
@@ -2011,7 +2025,7 @@ void drawCallOverlay(LGFX_Sprite& s) {
 }
 
 static const char* callCfgLabel(int i) {
-  static const char* L[4] = { "Server SIP (mis. sip.linphone.org)", "Username SIP", "Password SIP", "Nama tampilan" };
+  static const char* L[4] = { "Server VoIP (mis. sip.linphone.org)", "Username VoIP", "Password VoIP", "Nama tampilan" };
   return L[i];
 }
 static String* callCfgField(int i) { return i == 0 ? &callHostS : (i == 1 ? &callUserS : (i == 2 ? &callPassS : &callNameS)); }
@@ -2060,10 +2074,10 @@ static void callDrawCfg(LGFX_Sprite& s) {
 
 static void callRegText(char* out, int cap, uint16_t* col) {
   uint8_t st = callRegState;
-  if (st == 2) { callCopy(out, cap, "SIP terdaftar"); *col = T().good; }
+  if (st == 2) { callCopy(out, cap, "VoIP terdaftar"); *col = T().good; }
   else if (st == 1) { callCopy(out, cap, "mendaftar..."); *col = T().subtext; }
   else if (st == 3) { char m[40]; callLock(); callCopy(m, sizeof(m), callRegMsg); callUnlock(); callCopy(out, cap, m); *col = T().danger; }
-  else { callCopy(out, cap, callSipConfigured() ? "SIP belum aktif" : "SIP belum diatur"); *col = T().subtext; }
+  else { callCopy(out, cap, callSipConfigured() ? "VoIP belum aktif" : "VoIP belum diatur"); *col = T().subtext; }
 }
 
 void drawCall(LGFX_Sprite& s) {
@@ -2096,7 +2110,7 @@ void drawCall(LGFX_Sprite& s) {
   for (int i = 0; i < 2; i++) {
     iosRR(s, 6 + i * (tw + 4), 46, tw, 18, 6, callTab == i ? (uint16_t)T().accent : (uint16_t)T().surface2);
     s.setTextColor(callTab == i ? (uint16_t)T().bg : (uint16_t)T().text);
-    callCenter(s, 6 + i * (tw + 4), tw, 51, i == 0 ? "SIP" : "LAN (antar HP)");
+    callCenter(s, 6 + i * (tw + 4), tw, 51, i == 0 ? "VoIP" : "LAN (antar HP)");
   }
   String* tgt = callTab == 0 ? &callTargetS : &callLanIpS;
   bool typing = kbVisible && kbTarget == tgt;
