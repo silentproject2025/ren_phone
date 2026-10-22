@@ -782,7 +782,7 @@ static void callOnRegResp(const char* msg, int code) {
     }
   }
   if (code == 401 || code == 407) {
-    if (regAuthSent) { regFail("Username/password VoIP salah", 60000UL); return; }
+    if (regAuthSent) { regFail("Username/password SIP salah", 60000UL); return; }
     char uri[100]; snprintf(uri, sizeof(uri), "sip:%s", tHostName);
     char auth[700];
     if (!callBuildAuth(msg, code == 407, "REGISTER", uri, auth, sizeof(auth))) { regFail("Auth tdk didukung server", 60000UL); return; }
@@ -1117,7 +1117,7 @@ static void callBeginDial(const char* targetIn) {
   if (strchr(tp, '@')) snprintf(reqUri, sizeof(reqUri), "sip:%s", tp);
   else if (callLooksLikeIp(tp)) snprintf(reqUri, sizeof(reqUri), "sip:nyx@%s", tp);
   else {
-    if (!tHostName[0]) { callToast("Isi akun VoIP dulu (Atur)"); return; }
+    if (!tHostName[0]) { callToast("Isi akun SIP dulu (Atur)"); return; }
     snprintf(reqUri, sizeof(reqUri), "sip:%s@%s", tp, tHostName);
   }
   if (!sipUri(reqUri, user, sizeof(user), host, sizeof(host), &port)) { callToast("Alamat tidak valid"); return; }
@@ -1125,13 +1125,13 @@ static void callBeginDial(const char* targetIn) {
   char dip[16]; int dport; bool viaServer = false, direct = false;
   if (callLooksLikeIp(host)) { direct = true; callCopy(dip, sizeof(dip), host); dport = port > 0 ? port : 5060; }
   else if (tHostName[0] && strcasecmp(host, tHostName) == 0) {
-    if (!callResolveServer()) { callToast("DNS server VoIP gagal"); return; }
+    if (!callResolveServer()) { callToast("DNS server SIP gagal"); return; }
     viaServer = true; callCopy(dip, sizeof(dip), srvIpStr); dport = tPort;
   } else {
     if (!callResolve(host, dip)) { callToast("Alamat tidak ditemukan"); return; }
     dport = port > 0 ? port : 5060;
   }
-  if (viaServer && callRegState != 2) { callToast("VoIP belum terdaftar"); return; }
+  if (viaServer && callRegState != 2) { callToast("SIP belum terdaftar"); return; }
 
   wakeYieldMic(4000);
   if (micI2SReady) { callToast("Mic sedang dipakai app lain"); return; }
@@ -1212,7 +1212,7 @@ static void callOnInvite(const char* msg, const char* srcIp, int srcPort) {
   sipTxTo(srcIp, srcPort, sipTx, n);
 
   callPhase = CPH_INCOMING;
-  callSetStatus(dlg.lan ? "Panggilan langsung (LAN)" : "Panggilan VoIP masuk");
+  callSetStatus(dlg.lan ? "Panggilan langsung (LAN)" : "Panggilan SIP masuk");
   int rc = callAudioStart();                       // supaya nada dering terdengar di TWS (kalau ada)
   if (rc == 0) { toneMode = 2; toneT = 0; toneLastMs = 0; }
   callIncomingNew = true;
@@ -1864,7 +1864,7 @@ static void callPost(uint8_t r, const char* arg) {
 // =====================================================================
 void callEnter() {
   callEnsureInit();
-  if (!callSipConfigured() && callCfgFromSd()) { callCfgSave(); showToast("Akun VoIP dimuat dari SD", 2000); }
+  if (!callSipConfigured() && callCfgFromSd()) { callCfgSave(); showToast("Akun SIP dimuat dari SD", 2000); }
   callPage = 0; callCfgEdit = -1;
   needRedraw = true;
 }
@@ -1958,7 +1958,7 @@ static void callDrawInCall(LGFX_Sprite& s) {
   uint8_t ph = callPhase;
   int cy = 52;
   s.setTextSize(1); s.setTextColor(T().subtext);
-  callCenter(s, 0, SCR_W, cy, callIsLan ? "LAN langsung" : "VoIP");
+  callCenter(s, 0, SCR_W, cy, callIsLan ? "LAN langsung" : "SIP");
   s.setTextSize(2); s.setTextColor(T().text);
   String nm = pe; int maxC = (SCR_W - 16) / 12;
   if ((int)nm.length() > maxC) nm = nm.substring(0, maxC);
@@ -2011,7 +2011,7 @@ void drawCallOverlay(LGFX_Sprite& s) {
 }
 
 static const char* callCfgLabel(int i) {
-  static const char* L[4] = { "Server VoIP (mis. sip.linphone.org)", "Username VoIP", "Password VoIP", "Nama tampilan" };
+  static const char* L[4] = { "Server SIP (mis. sip.linphone.org)", "Username SIP", "Password SIP", "Nama tampilan" };
   return L[i];
 }
 static String* callCfgField(int i) { return i == 0 ? &callHostS : (i == 1 ? &callUserS : (i == 2 ? &callPassS : &callNameS)); }
@@ -2060,10 +2060,10 @@ static void callDrawCfg(LGFX_Sprite& s) {
 
 static void callRegText(char* out, int cap, uint16_t* col) {
   uint8_t st = callRegState;
-  if (st == 2) { callCopy(out, cap, "VoIP terdaftar"); *col = T().good; }
+  if (st == 2) { callCopy(out, cap, "SIP terdaftar"); *col = T().good; }
   else if (st == 1) { callCopy(out, cap, "mendaftar..."); *col = T().subtext; }
   else if (st == 3) { char m[40]; callLock(); callCopy(m, sizeof(m), callRegMsg); callUnlock(); callCopy(out, cap, m); *col = T().danger; }
-  else { callCopy(out, cap, callSipConfigured() ? "VoIP belum aktif" : "VoIP belum diatur"); *col = T().subtext; }
+  else { callCopy(out, cap, callSipConfigured() ? "SIP belum aktif" : "SIP belum diatur"); *col = T().subtext; }
 }
 
 void drawCall(LGFX_Sprite& s) {
@@ -2096,7 +2096,7 @@ void drawCall(LGFX_Sprite& s) {
   for (int i = 0; i < 2; i++) {
     iosRR(s, 6 + i * (tw + 4), 46, tw, 18, 6, callTab == i ? (uint16_t)T().accent : (uint16_t)T().surface2);
     s.setTextColor(callTab == i ? (uint16_t)T().bg : (uint16_t)T().text);
-    callCenter(s, 6 + i * (tw + 4), tw, 51, i == 0 ? "VoIP" : "LAN (antar HP)");
+    callCenter(s, 6 + i * (tw + 4), tw, 51, i == 0 ? "SIP" : "LAN (antar HP)");
   }
   String* tgt = callTab == 0 ? &callTargetS : &callLanIpS;
   bool typing = kbVisible && kbTarget == tgt;
