@@ -569,6 +569,15 @@ static void handleFrame(uint8_t type, const uint8_t* p, uint16_t len) {
     case RP_VOLUME:
       if (len >= 1) { pendingVol = p[0] > 127 ? 127 : p[0]; volDirty = true; }
       break;
+    case RP_PREFILL:
+      if (len >= 2) {
+        uint32_t v = (uint32_t)p[0] | ((uint32_t)p[1] << 8);
+        if (v == 0) v = PREFILL_BYTES;
+        if (v < 4096) v = 4096;
+        if (v > pcmRing.size / 2) v = pcmRing.size / 2;
+        prefillBytes = v;
+      }
+      break;
     case RP_STOP:
       decErr = false;
       doFlush();

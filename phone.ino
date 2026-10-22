@@ -632,7 +632,9 @@ enum Screen { SCR_HOME, SCR_CLOCK, SCR_CALC, SCR_SENSOR,
               // Remote Control (AP + web) -- lihat remote_renphone.ino
               SCR_REMOTE,
               // Chat MQTT -- lihat chat_renphone.ino
-              SCR_CHAT };
+              SCR_CHAT,
+              // Telepon SIP/LAN -- lihat call_renphone.ino
+              SCR_CALL };
 enum Orientation { ORIENT_LANDSCAPE = 0, ORIENT_PORTRAIT = 1 };
 
 // Dipindah ke atas — alasan sama dengan AiLine & Vec3f: arduino-cli men-generate
@@ -4728,6 +4730,13 @@ void drawAppIcon(LGFX_Sprite& s, char sym, int cx, int cy, int r, uint16_t bgCir
       s.fillTriangle(cx-2,cy+w-5,cx+w/3+1,cy+1,cx+w-2,cy+w-5,ic);
       break;
     }
+    case 'p': { // Telepon: gagang telepon
+      int rr=max(8,r-6);
+      s.fillRoundRect(cx-rr,cy-rr/3,rr*2,rr*2/3,rr/3,ic);
+      s.fillRoundRect(cx-rr,cy-rr/3,rr*2/3,rr*4/3,rr/3,ic);
+      s.fillRoundRect(cx+rr/3,cy-rr/3,rr*2/3,rr*4/3,rr/3,ic);
+      break;
+    }
     case 'c': { // Chat: gelembung pesan + ekor + 3 titik
       int bw=max(16,r*3/2), bh=max(11,r), bx=cx-bw/2, by=cy-bh/2-2;
       s.drawRoundRect(bx,by,bw,bh,4,ic); s.drawRoundRect(bx+1,by+1,bw-2,bh-2,3,ic);
@@ -4824,6 +4833,9 @@ void updEnter(); void updExit();
 void drawUpdate(LGFX_Sprite&); void updTouch(int,int,bool,bool);
 // ---- Chat MQTT: forward declarations (chat_renphone.ino) ----
 void chatEnter(); void chatExit(); void drawChat(LGFX_Sprite&); void chatTouch(int,int,bool,bool); void chatLoopPoll();
+// ---- Telepon SIP/LAN: forward declarations (call_renphone.ino) ----
+void callEnter(); void callExit(); void drawCall(LGFX_Sprite&); void callTouch(int,int,bool,bool); void callLoopPoll();
+bool callOverlayActive(); void drawCallOverlay(LGFX_Sprite&); void callOverlayTouch(bool,int,int);
 // ---- BATERAI: forward declarations (BARU di v8) ----
 void battEnter(); void battExit();
 void drawBatteryApp(LGFX_Sprite&); void battTouch(int,int,bool,bool);
@@ -4927,7 +4939,7 @@ void remoteEnter(); void remoteExit(); void drawRemote(LGFX_Sprite&); void remot
 void remotePointerTick(bool,bool,int,int);
 void rcLoopPoll(); void rcRegisterRoutes(); bool rcApIsUp(); bool rcInputPoll(int*,int*); void rcFrameMark();
 
-AppDef apps[40] = {
+AppDef apps[41] = {
   { "Jam",        'J', 0, clockEnter,    clockExit,    drawClock,        clockTouch,    SCR_CLOCK },
   { "Kalkulator", '+', 0, calcEnter,     calcExit,     drawCalc,         calcTouch,     SCR_CALC },
   { "Orientasi3D", '3', 0, sensorEnter,   sensorExit,   drawSensor,       sensorTouch,   SCR_SENSOR },
@@ -4987,8 +4999,9 @@ AppDef apps[40] = {
   // ---- Remote Control: kontrol penuh dari HP/laptop lewat WiFi AP sendiri ----
   { "Remote", 'r', 0, remoteEnter, remoteExit, drawRemote, remoteTouch, SCR_REMOTE },
   { "Chat",   'c', 0, chatEnter,   chatExit,   drawChat,   chatTouch,   SCR_CHAT   },
+  { "Telepon", 'p', 0, callEnter,   callExit,   drawCall,   callTouch,   SCR_CALL   },
 };
-#define APP_COUNT 40
+#define APP_COUNT 41
 
 // =============================================
 // NOTIFIKASI BADGE (BARU) -- angka kecil merah di pojok ikon app, mirip
@@ -5100,6 +5113,7 @@ void initAppColors(){
   apps[36].color=0x8C71; // About Phone
   apps[38].color=0x2DFA; // Remote - cyan
   apps[39].color=0x34DF; // Chat - biru lembut
+  apps[40].color=0x2E8B; // Telepon - hijau
 }
 
 int appIndexForScreen(Screen s){
@@ -9945,7 +9959,9 @@ void renderCurrentFrame(){
   bool screenAllowsCustomFont = (curScreen()==SCR_NOTEPAD || curScreen()==SCR_AICHAT);
   canvas.setFont(screenAllowsCustomFont ? uiFontList[uiFontIdx] : &lgfx::fonts::Font0);
   canvas.setTextWrap(false); // reset state teks tiap frame: app yg lupa/bocorin wrap gak bikin layar lain numpuk
-  if(appSwitcherOpen){
+  if(callOverlayActive()){
+    drawCallOverlay(canvas); // panggilan masuk / panggilan saat terkunci menimpa semua layar
+  } else if(appSwitcherOpen){
     drawAppSwitcher(canvas); // v96: App Switcher -- modal penuh, gantiin base+overlay lain sepenuhnya selagi kebuka
   } else if(locked){
     drawLockScreen(canvas);
@@ -17748,6 +17764,7 @@ void loop(){
     webServer.handleClient();
   }
   chatLoopPoll(); // Chat: redraw kalau ada pesan/status baru dari task MQTT
+  callLoopPoll(); // Telepon: panggilan masuk, dering, notifikasi, siaga (no-op kalau belum dipakai)
   rcLoopPoll(); // Remote Control: aksi tombol, status penonton, keep-awake
 
   checkAiWatchdog();
@@ -17794,6 +17811,11 @@ void loop(){
   // controlCenterOpen di bawah. Dicek SEBELUM locked cuma buat konsisten
   // urutan prioritas (praktiknya gak akan pernah true bareng locked, krn
   // gesture pembukanya cuma nyala selagi !locked -- lihat di bawah).
+  if(callOverlayActive()){
+    callOverlayTouch(newT,tx,ty);
+    if(needRedraw){ renderCurrentFrame(); push(); needRedraw=false; }
+    wasTouched=touched; delay(1); return;
+  }
   if(appSwitcherOpen){
     switcherAnimTick(); // v107: animasi buka/tutup App Switcher (berbasis waktu)
     // v97 FIX: selama switcherSuppressUntilRelease msh true, sentuhan yg

@@ -54,6 +54,7 @@ jobs:
           cp about_renphone.ino build_sketch/
           cp remote_renphone.ino build_sketch/
           cp chat_renphone.ino build_sketch/
+          cp call_renphone.ino build_sketch/
           cp gamepad_renphone.ino build_sketch/
           cp ina219_renphone.ino build_sketch/
           cp ota_check_renphone.ino build_sketch/
