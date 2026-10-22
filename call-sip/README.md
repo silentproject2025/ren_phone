@@ -27,3 +27,23 @@ HP penerima harus WiFi sama dan "Siaga terima panggilan" aktif (Atur).
 - Latensi satu arah perkiraan 300-500 ms (A2DP).
 - Siaga default MATI (hemat RAM/baterai). Panggilan masuk ditolak otomatis saat NES/DOOM jalan.
 - Mic dipakai bersama fitur lain: tutup Voice Memo/Mic Level sebelum menelepon. Wake word dijeda otomatis.
+
+## TURN (relay suara utk CGNAT / NAT ketat)
+Tanpa TURN, panggilan lewat internet di CGNAT bisa bisu/satu arah. Dengan TURN, suara dibungkus lewat server relay.
+Hanya dipakai utk panggilan lewat internet (SIP); panggilan LAN tidak berubah. Kalau TURN gagal, otomatis kembali ke STUN dan muncul toast alasannya.
+
+Isi `/turn.cfg` di root SD (dibaca ulang tiap app Telepon dibuka; toast "TURN dimuat dari /turn.cfg"):
+```
+host=turn.cloudflare.com
+port=3478
+user=USERNAME_DARI_API
+pass=CREDENTIAL_DARI_API
+```
+Cloudflare Realtime TURN: buat "TURN key" di dashboard, lalu buat kredensial berumur pendek (contoh TTL 24 jam):
+```
+curl -s -X POST -H "Authorization: Bearer $TURN_KEY_API_TOKEN" -H "Content-Type: application/json" \
+  -d '{"ttl": 86400}' https://rtc.live.cloudflare.com/v1/turn/keys/$TURN_KEY_ID/credentials/generate
+```
+Salin `username` dan `credential` dari hasilnya ke `user=` dan `pass=`. Kredensial kedaluwarsa sesuai TTL: buat ulang dan timpa `/turn.cfg`.
+Server TURN lain (mis. coturn sendiri, UDP, auth long-term) juga bisa: isi host/port/user/pass-nya.
+Batasan: hanya TURN lewat UDP (belum TCP/TLS), belum ICE.

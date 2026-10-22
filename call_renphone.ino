@@ -84,6 +84,8 @@ static StaticTask_t      callTCB;
 
 static String callHostS = "", callUserS = "", callPassS = "", callNameS = "";
 static String callTargetS = "", callLanIpS = "";
+static String callTurnHostS = "", callTurnUserS = "", callTurnPassS = "";   // TURN (relay RTP utk CGNAT)
+static int    callTurnPortV = 3478;
 static bool   callStandby = true;
 static bool   callCfgLoaded = false;
 static volatile uint32_t callCfgGen = 0;     // naik tiap konfigurasi disimpan -> task daftar ulang
@@ -104,6 +106,31 @@ static char              callPeer[44] = "";
 static char              callStatus[44] = "";
 static volatile uint8_t  callMicLvl = 0;            // 0..100 utk meter kecil di layar
 static volatile int      callBacklogMs = 0;         // diagnosa: antrean suara di CAM
+
+// ---- DIAGNOSA CRASH: penanda langkah terakhir (RTC, selamat dari restart) ----
+static RTC_NOINIT_ATTR uint32_t callCrumbT;     // langkah terakhir di callTask
+static RTC_NOINIT_ATTR uint32_t callCrumbU;     // langkah terakhir di UI thread
+static inline void callMarkT(uint32_t n) { callCrumbT = 0xC4110000u | n; }
+static inline void callMarkU(uint32_t n) { callCrumbU = 0xC4110000u | n; }
+static bool     callBootCap = false;
+static uint32_t callBootT = 0, callBootU = 0;
+static char     callBootMsg[56] = "";
+static bool     callBootShown = false;
+static void callCaptureBoot() {                 // panggil SEBELUM ada callMark pertama
+  if (callBootCap) return;
+  callBootCap = true;
+  esp_reset_reason_t rr = esp_reset_reason();
+  const char* why = nullptr;
+  if (rr == ESP_RST_PANIC)         why = "CRASH";
+  else if (rr == ESP_RST_BROWNOUT) why = "BROWNOUT";
+  else if (rr == ESP_RST_TASK_WDT) why = "WDT-task";
+  else if (rr == ESP_RST_INT_WDT)  why = "WDT-int";
+  else if (rr == ESP_RST_WDT)      why = "WDT";
+  if (!why) return;
+  callBootT = ((callCrumbT & 0xFFFF0000u) == 0xC4110000u) ? (callCrumbT & 0xFFFFu) : 0;
+  callBootU = ((callCrumbU & 0xFFFF0000u) == 0xC4110000u) ? (callCrumbU & 0xFFFFu) : 0;
+  snprintf(callBootMsg, sizeof(callBootMsg), "Reset: %s  task=%u ui=%u", why, (unsigned)callBootT, (unsigned)callBootU);
+}
 
 static char     callScanName[CALL_SCAN_MAX][24];
 static char     callScanIp[CALL_SCAN_MAX][16];
@@ -533,13 +560,17 @@ static const char* callAudioErr(int rc) {
 static int callAudioStart() {
   if (aoOn) return 0;
   if (musExtActive()) return 9;                      // pemutar AVI sedang memakai jalur ini
+  callMarkT(50);
   int rc = musExtBegin();
+  callMarkT(51);
   if (rc != 0) return rc;
   uint8_t pf[2] = { (uint8_t)(CALL_PREFILL_BYTES & 0xFF), (uint8_t)(CALL_PREFILL_BYTES >> 8) };
   rpSend(Serial1, RP_PREFILL, pf, 2);                // CAM lama mengabaikan ini (default prefill 32 KB)
+  callMarkT(52);
   uint8_t hdr[WAV_HEADER_SIZE];
   micWriteWavHeader(hdr, 0x7FFFF000u, 8000);         // header WAV 8 kHz mono -> CAM masuk mode WAV (tanpa Helix)
   musExtWrite(hdr, WAV_HEADER_SIZE);
+  callMarkT(53);
   aoOn = true; aoDrop = false; aoSent = 0; callAudioOut = true; callBacklogMs = 0;
   return 0;
 }
@@ -890,8 +921,10 @@ static bool callParseSdp(const char* body) {
 // ---------------------------------------------------------------------
 // RTP SOCKET + STUN
 // ---------------------------------------------------------------------
+static void callTurnRelease();
+static void callOnRtp(const uint8_t* p, int len, const char* srcIp, int srcPort);
 static void callRtpOpen() {
-  if (rtpOpen) rtpUdp.stop();
+  if (rtpOpen) { callTurnRelease(); rtpUdp.stop(); }
   rtpUdp.begin(CALL_RTP_PORT);
   rtpOpen = true;
   callCopy(dlg.myRtpIp, sizeof(dlg.myRtpIp), lip);
@@ -899,7 +932,7 @@ static void callRtpOpen() {
 }
 
 static void callRtpClose() {
-  if (rtpOpen) { rtpUdp.stop(); rtpOpen = false; }
+  if (rtpOpen) { callTurnRelease(); rtpUdp.stop(); rtpOpen = false; }
 }
 
 // alamat publik RTP lewat STUN (hanya utk panggilan lewat internet). Gagal = tetap pakai IP lokal.
@@ -949,6 +982,258 @@ static void callStunMap() {
       vTaskDelay(pdMS_TO_TICKS(5));
     }
   }
+}
+
+// ---------------------------------------------------------------------
+// TURN (RFC 5766, UDP) - relay RTP lewat server TURN utk NAT simetris / CGNAT.
+// Alokasi memakai socket RTP yg sama; paket suara ke/dari lawan dibungkus
+// Send/Data Indication. Gagal = otomatis kembali ke STUN.
+// ---------------------------------------------------------------------
+static bool      turnOn = false;                 // alokasi aktif utk panggilan ini
+static IPAddress turnSrv;
+static uint16_t  turnPort = 3478;
+static char      turnUser[100], turnPass[100], turnRealm[80], turnNonce[130];
+static uint8_t   turnKey[16];
+static uint32_t  turnRefreshAt = 0;
+static uint8_t   turnStale = 0;
+static char      turnPermIp[16] = "";
+static char      turnErr[40] = "";
+static uint8_t   turnReq[512], turnRsp[600], turnTx[256], turnTid[12];   // hanya dipakai callTask
+
+static inline void turnPut16(uint8_t* b, int v) { b[0] = (uint8_t)(v >> 8); b[1] = (uint8_t)v; }
+
+static int turnHdr(uint8_t* b, uint16_t type) {
+  turnPut16(b, type); turnPut16(b + 2, 0);
+  b[4] = 0x21; b[5] = 0x12; b[6] = 0xA4; b[7] = 0x42;
+  for (int i = 0; i < 12; i++) turnTid[i] = (uint8_t)(esp_random() & 0xFF);
+  memcpy(b + 8, turnTid, 12);
+  return 20;
+}
+
+static int turnAttr(uint8_t* b, int len, uint16_t type, const void* d, int dl) {
+  turnPut16(b + len, type); turnPut16(b + len + 2, dl);
+  if (dl) memcpy(b + len + 4, d, (size_t)dl);
+  int pad = (4 - (dl & 3)) & 3;
+  for (int i = 0; i < pad; i++) b[len + 4 + dl + i] = 0;
+  return len + 4 + dl + pad;
+}
+
+static int turnAttrXorAddr(uint8_t* b, int len, uint16_t type, IPAddress ip, int port) {
+  uint8_t v[8];
+  v[0] = 0; v[1] = 1;
+  turnPut16(v + 2, port ^ 0x2112);
+  v[4] = (uint8_t)(ip[0] ^ 0x21); v[5] = (uint8_t)(ip[1] ^ 0x12);
+  v[6] = (uint8_t)(ip[2] ^ 0xA4); v[7] = (uint8_t)(ip[3] ^ 0x42);
+  return turnAttr(b, len, type, v, 8);
+}
+
+// MESSAGE-INTEGRITY (long-term): HMAC-SHA1(key, pesan dgn field panjang sudah memuat atribut MI)
+static int turnFinish(uint8_t* b, int len, bool integrity) {
+  if (integrity) {
+    turnPut16(b + 2, len - 20 + 24);
+    uint8_t mac[20];
+    const mbedtls_md_info_t* mi = mbedtls_md_info_from_type(MBEDTLS_MD_SHA1);
+    if (mi) mbedtls_md_hmac(mi, turnKey, 16, b, (size_t)len, mac); else memset(mac, 0, sizeof(mac));
+    len = turnAttr(b, len, 0x0008, mac, 20);
+  }
+  turnPut16(b + 2, len - 20);
+  return len;
+}
+
+static void turnMakeKey() {      // key = MD5(user:realm:pass)
+  char in[300];
+  snprintf(in, sizeof(in), "%s:%s:%s", turnUser, turnRealm, turnPass);
+  const mbedtls_md_info_t* mi = mbedtls_md_info_from_type(MBEDTLS_MD_MD5);
+  if (mi) mbedtls_md(mi, (const unsigned char*)in, strlen(in), turnKey);
+}
+
+static const uint8_t* turnFindAttr(const uint8_t* b, int n, uint16_t type, int* alen) {
+  int mlen = 20 + ((b[2] << 8) | b[3]); if (mlen > n) mlen = n;
+  int pos = 20;
+  while (pos + 4 <= mlen) {
+    int t = (b[pos] << 8) | b[pos + 1], l = (b[pos + 2] << 8) | b[pos + 3];
+    if (pos + 4 + l > mlen) break;
+    if (t == type) { *alen = l; return b + pos + 4; }
+    pos += 4 + ((l + 3) & ~3);
+  }
+  return nullptr;
+}
+
+static bool turnDecodeXor(const uint8_t* v, int l, char* ip, int cap, int* port) {
+  if (l < 8 || v[1] != 1) return false;
+  *port = ((v[2] << 8) | v[3]) ^ 0x2112;
+  snprintf(ip, (size_t)cap, "%u.%u.%u.%u", (unsigned)(v[4] ^ 0x21), (unsigned)(v[5] ^ 0x12), (unsigned)(v[6] ^ 0xA4), (unsigned)(v[7] ^ 0x42));
+  return true;
+}
+
+static void turnTakeRealmNonce(const uint8_t* r, int rl) {
+  int al; const uint8_t* e;
+  e = turnFindAttr(r, rl, 0x0014, &al);
+  if (e && al > 0 && al < (int)sizeof(turnRealm)) { memcpy(turnRealm, e, (size_t)al); turnRealm[al] = 0; }
+  e = turnFindAttr(r, rl, 0x0015, &al);
+  if (e && al > 0 && al < (int)sizeof(turnNonce)) { memcpy(turnNonce, e, (size_t)al); turnNonce[al] = 0; }
+  turnMakeKey();
+}
+
+static void turnSendRaw(const uint8_t* b, int n) {
+  rtpUdp.beginPacket(turnSrv, turnPort);
+  rtpUdp.write(b, (size_t)n);
+  rtpUdp.endPacket();
+}
+
+static int turnBuildReq(uint16_t type, bool transport, int lifetime, bool hasPeer, IPAddress peer, bool auth) {
+  uint8_t* b = turnReq;
+  int n = turnHdr(b, type);
+  if (transport) { uint8_t v[4] = { 17, 0, 0, 0 }; n = turnAttr(b, n, 0x0019, v, 4); }        // REQUESTED-TRANSPORT = UDP
+  if (lifetime >= 0) {
+    uint8_t v[4] = { (uint8_t)(lifetime >> 24), (uint8_t)(lifetime >> 16), (uint8_t)(lifetime >> 8), (uint8_t)lifetime };
+    n = turnAttr(b, n, 0x000D, v, 4);
+  }
+  if (hasPeer) n = turnAttrXorAddr(b, n, 0x0012, peer, 0);
+  if (auth) {
+    n = turnAttr(b, n, 0x0006, turnUser, (int)strlen(turnUser));
+    n = turnAttr(b, n, 0x0014, turnRealm, (int)strlen(turnRealm));
+    n = turnAttr(b, n, 0x0015, turnNonce, (int)strlen(turnNonce));
+  }
+  return turnFinish(b, n, auth);
+}
+
+// kirim turnReq & tunggu respons dgn transaction-ID sama. Return: 0 timeout, 1 sukses, selain itu kode error (mis. 401)
+static int turnTransact(int rlen, int* respLen) {
+  uint8_t tid[12]; memcpy(tid, turnReq + 8, 12);
+  for (int attempt = 0; attempt < 3; attempt++) {
+    turnSendRaw(turnReq, rlen);
+    uint32_t t0 = millis();
+    while ((uint32_t)(millis() - t0) < 600UL) {
+      int n = rtpUdp.parsePacket();
+      if (n >= 20) {
+        int r = rtpUdp.read(turnRsp, (int)sizeof(turnRsp));
+        if (r >= 20 && memcmp(turnRsp + 8, tid, 12) == 0) {
+          *respLen = r;
+          int type = (turnRsp[0] << 8) | turnRsp[1];
+          if ((type & 0x0110) == 0x0100) return 1;
+          int al; const uint8_t* e = turnFindAttr(turnRsp, r, 0x0009, &al);
+          return (e && al >= 4) ? (e[2] & 7) * 100 + e[3] : 999;
+        }
+      } else if (n > 0) {
+        uint8_t junk[16]; rtpUdp.read(junk, sizeof(junk));
+      }
+      vTaskDelay(pdMS_TO_TICKS(5));
+    }
+  }
+  return 0;
+}
+
+static bool turnPermit(const char* ipStr, bool wait) {
+  if (!turnOn) return false;
+  IPAddress a; if (!a.fromString(ipStr)) return false;
+  int n = turnBuildReq(0x0008, false, -1, true, a, true);
+  if (!wait) { turnSendRaw(turnReq, n); callCopy(turnPermIp, sizeof(turnPermIp), ipStr); return true; }
+  int rl = 0, code = turnTransact(n, &rl);
+  if (code == 438 || code == 401) {
+    turnTakeRealmNonce(turnRsp, rl);
+    n = turnBuildReq(0x0008, false, -1, true, a, true);
+    code = turnTransact(n, &rl);
+  }
+  if (code == 1) { callCopy(turnPermIp, sizeof(turnPermIp), ipStr); return true; }
+  return false;
+}
+
+static bool callTurnAllocate() {
+  turnOn = false; turnPermIp[0] = 0; turnErr[0] = 0; turnStale = 0;
+  char host[80]; int port;
+  callLock();
+  callCopy(host, sizeof(host), callTurnHostS.c_str());
+  callCopy(turnUser, sizeof(turnUser), callTurnUserS.c_str());
+  callCopy(turnPass, sizeof(turnPass), callTurnPassS.c_str());
+  port = callTurnPortV;
+  callUnlock();
+  if (!host[0] || !turnUser[0] || !turnPass[0]) return false;            // TURN tdk diatur: bukan error
+  if (!rtpOpen) return false;
+  char ip[16];
+  if (!callResolve(host, ip) || !turnSrv.fromString(ip)) { callCopy(turnErr, sizeof(turnErr), "DNS TURN gagal"); return false; }
+  turnPort = (uint16_t)(port > 0 ? port : 3478);
+  turnRealm[0] = 0; turnNonce[0] = 0;
+
+  int rl = 0;
+  int n = turnBuildReq(0x0003, true, -1, false, IPAddress(), false);
+  int code = turnTransact(n, &rl);
+  if (code == 401 || code == 438) {
+    turnTakeRealmNonce(turnRsp, rl);
+    if (!turnRealm[0]) { callCopy(turnErr, sizeof(turnErr), "TURN: realm kosong"); return false; }
+    n = turnBuildReq(0x0003, true, -1, false, IPAddress(), true);
+    code = turnTransact(n, &rl);
+  }
+  if (code != 1) {
+    if (code == 0) callCopy(turnErr, sizeof(turnErr), "TURN tdk merespons");
+    else snprintf(turnErr, sizeof(turnErr), "TURN ditolak (%d)", code);
+    return false;
+  }
+  int al = 0;
+  const uint8_t* e = turnFindAttr(turnRsp, rl, 0x0016, &al);                 // XOR-RELAYED-ADDRESS
+  char rip[16]; int rport = 0;
+  if (!e || !turnDecodeXor(e, al, rip, sizeof(rip), &rport) || rport <= 0) { callCopy(turnErr, sizeof(turnErr), "TURN: alamat relay tdk ada"); return false; }
+  callCopy(dlg.myRtpIp, sizeof(dlg.myRtpIp), rip);
+  dlg.myRtpPort = rport;
+  turnOn = true;
+  turnRefreshAt = millis() + 240000UL;                                         // izin berlaku 300 dtk -> perbarui tiap 240
+  return true;
+}
+
+// dipanggil tiap putaran callTask selama panggilan: perbarui alokasi & izin (tanpa menunggu respons)
+static void callTurnTick(uint32_t now) {
+  if (!turnOn || (int32_t)(now - turnRefreshAt) < 0) return;
+  turnRefreshAt = now + 240000UL;
+  int n = turnBuildReq(0x0004, false, 600, false, IPAddress(), true);
+  turnSendRaw(turnReq, n);
+  if (turnPermIp[0]) {
+    IPAddress a;
+    if (a.fromString(turnPermIp)) { n = turnBuildReq(0x0008, false, -1, true, a, true); turnSendRaw(turnReq, n); }
+  }
+}
+
+static void callTurnRelease() {
+  if (!turnOn) return;
+  int n = turnBuildReq(0x0004, false, 0, false, IPAddress(), true);          // LIFETIME=0 -> bebaskan alokasi
+  turnSendRaw(turnReq, n);
+  turnOn = false; turnPermIp[0] = 0;
+}
+
+static void turnSendData(const uint8_t* d, int n, IPAddress peer, int peerPort) {
+  if (n <= 0 || n > 200) return;
+  uint8_t* b = turnTx;
+  int len = turnHdr(b, 0x0016);                                               // Send Indication
+  len = turnAttrXorAddr(b, len, 0x0012, peer, peerPort);
+  turnPut16(b + len, 0x0013); turnPut16(b + len + 2, n);
+  memcpy(b + len + 4, d, (size_t)n);
+  len += 4 + n;
+  while (len & 3) b[len++] = 0;
+  turnPut16(b + 2, len - 20);
+  turnSendRaw(b, len);
+}
+
+// paket dari server TURN. true = sudah ditangani (jangan diproses sbg RTP biasa)
+static bool callTurnOnPacket(const uint8_t* p, int r) {
+  if (r < 20 || p[4] != 0x21 || p[5] != 0x12 || p[6] != 0xA4 || p[7] != 0x42) return true;
+  int type = (p[0] << 8) | p[1];
+  if (type == 0x0017) {                                                      // Data Indication
+    int al = 0, dl = 0;
+    const uint8_t* pe = turnFindAttr(p, r, 0x0012, &al);
+    const uint8_t* dt = turnFindAttr(p, r, 0x0013, &dl);
+    char ip[16]; int port = 0;
+    if (pe && dt && dl > 0 && turnDecodeXor(pe, al, ip, sizeof(ip), &port)) callOnRtp(dt, dl, ip, port);
+    return true;
+  }
+  if ((type & 0x0110) == 0x0110) {                                           // respons error utk refresh/izin
+    int al = 0; const uint8_t* e = turnFindAttr(p, r, 0x0009, &al);
+    int code = (e && al >= 4) ? (e[2] & 7) * 100 + e[3] : 0;
+    if ((code == 438 || code == 401) && turnStale < 5) {                    // nonce basi: ambil yg baru, kirim ulang
+      turnStale++;
+      turnTakeRealmNonce(p, r);
+      turnRefreshAt = millis();
+    }
+  }
+  return true;
 }
 
 // ---------------------------------------------------------------------
@@ -1093,6 +1378,7 @@ static void callMediaStart() {
   if (!rtpOpen) callRtpOpen();
   IPAddress a; a.fromString(dlg.rtpIp);
   rtpDest = a; rtpDestPort = dlg.rtpPort; rtpLatched = false;
+  if (turnOn && strcmp(turnPermIp, dlg.rtpIp) != 0) { turnPermit(dlg.rtpIp, false); turnRefreshAt = millis() + 1000UL; }   // kirim ulang 1 dtk lagi (jaga paket hilang)
   rtpSeqTx = (uint16_t)esp_random(); rtpTsTx = esp_random(); rtpSsrc = esp_random(); rtpFirst = true;
   rxInit = false; rxLoss = 0; rxGapAt = 0; memset(jbUsed, 0, sizeof(jbUsed)); memset(rxLast, 0, sizeof(rxLast));
   lastRtpRx = millis();
@@ -1136,11 +1422,17 @@ static void callBeginDial(const char* targetIn) {
   wakeYieldMic(4000);
   if (micI2SReady) { callToast("Mic sedang dipakai app lain"); return; }
 
+  callMarkT(20);
   memset(&dlg, 0, sizeof(dlg));
   dlg.uac = true; dlg.lan = direct && callIsPrivateIp(dip);
   callRtpOpen();
-  if (!dlg.lan) callStunMap();
+  callMarkT(21);
+  if (!dlg.lan) {
+    if (!callTurnAllocate()) { if (turnErr[0]) callToast(turnErr); callStunMap(); }
+  }
+  callMarkT(22);
   int rc = callAudioStart();
+  callMarkT(23);
   if (rc != 0) { callToast(callAudioErr(rc)); callRtpClose(); memset(&dlg, 0, sizeof(dlg)); return; }
 
   char cid[20]; callRandHex(cid, 16);
@@ -1158,7 +1450,9 @@ static void callBeginDial(const char* targetIn) {
   callIsLan = dlg.lan;
   callPhase = CPH_DIAL; toneMode = 0;
   callSetStatus("Memanggil...");
+  callMarkT(24);
   callSendInvite(nullptr);
+  callMarkT(25);
 }
 
 // ---------------------------------------------------------------------
@@ -1221,7 +1515,10 @@ static void callOnInvite(const char* msg, const char* srcIp, int srcPort) {
 static void callAnswer() {
   if (callPhase != CPH_INCOMING) return;
   callRtpOpen();
-  if (!dlg.lan) callStunMap();
+  if (!dlg.lan) {
+    if (callTurnAllocate()) turnPermit(dlg.rtpIp, true);            // izin utk IP lawan SEBELUM 200 OK
+    else { if (turnErr[0]) callToast(turnErr); callStunMap(); }
+  }
   toneMode = 0;
   char sdp[640]; callBuildSdp(sdp, sizeof(sdp), true);
   char cont[40]; callContactStr(cont, sizeof(cont), dlg.lan);
@@ -1605,7 +1902,9 @@ static void callRtpRxStep(uint32_t now) {
     if (n <= 0) break;
     int r = rtpUdp.read(rtpRx, 512);
     if (r <= 0) break;
-    char ip[16]; IPAddress ra = rtpUdp.remoteIP();
+    IPAddress ra = rtpUdp.remoteIP();
+    if (turnOn && ra == turnSrv && (uint16_t)rtpUdp.remotePort() == turnPort) { callTurnOnPacket(rtpRx, r); continue; }
+    char ip[16];
     snprintf(ip, sizeof(ip), "%u.%u.%u.%u", (unsigned)ra[0], (unsigned)ra[1], (unsigned)ra[2], (unsigned)ra[3]);
     callOnRtp(rtpRx, r, ip, (int)rtpUdp.remotePort());
   }
@@ -1622,6 +1921,7 @@ static void callRtpSend(const uint8_t* g711, int n) {
   pkt[8] = (uint8_t)(rtpSsrc >> 24); pkt[9] = (uint8_t)(rtpSsrc >> 16); pkt[10] = (uint8_t)(rtpSsrc >> 8); pkt[11] = (uint8_t)rtpSsrc;
   memcpy(pkt + 12, g711, (size_t)n);
   rtpSeqTx++; rtpTsTx += (uint32_t)n; rtpFirst = false;
+  if (turnOn) { turnSendData(pkt, 12 + n, rtpDest, rtpDestPort); return; }
   rtpUdp.beginPacket(rtpDest, (uint16_t)rtpDestPort);
   rtpUdp.write(pkt, (size_t)(12 + n));
   rtpUdp.endPacket();
@@ -1713,7 +2013,9 @@ static void callTaskFunc(void*) {
     }
     if (tCfgGen != callCfgGen) callSnapshotCfg();
 
+    callMarkT(30);
     callHandleReq();
+    callMarkT(31);
 
     int guard = 0;
     while (guard++ < 6) {                                   // terima SIP
@@ -1724,14 +2026,21 @@ static void callTaskFunc(void*) {
       sipRx[r] = 0;
       IPAddress ra = sipUdp.remoteIP();
       char ip[16]; snprintf(ip, sizeof(ip), "%u.%u.%u.%u", (unsigned)ra[0], (unsigned)ra[1], (unsigned)ra[2], (unsigned)ra[3]);
+      callMarkT(60);
       callOnSip(sipRx, r, ip, (int)sipUdp.remotePort());
+      callMarkT(61);
     }
 
     now = millis();   // PENTING: callHandleReq()/callOnSip() bisa memakan waktu & mengisi dlg.t0/lastRtpRx dgn millis() yg lebih baru dari 'now' di atas
+    callMarkT(70);
     callRegStep(now);
+    callMarkT(71);
     callPhaseTimers(now);
+    callMarkT(72);
+    callTurnTick(now);
 
     if (callPhase == CPH_ACTIVE && mediaOn) {
+      callMarkT(80);
       if (micOn) callMicStep(now);
       else {                                                // tanpa mic: tetap kirim senyap tiap 20 ms
         static uint32_t lastSil = 0;
@@ -1742,9 +2051,13 @@ static void callTaskFunc(void*) {
         }
         vTaskDelay(pdMS_TO_TICKS(4));
       }
+      callMarkT(82);
       callRtpRxStep(millis());
+      callMarkT(83);
     } else {
+      callMarkT(84);
       callToneStep(now);
+      callMarkT(85);
       vTaskDelay(pdMS_TO_TICKS(callPhase == CPH_IDLE ? 15 : 6));
     }
   }
@@ -1785,6 +2098,8 @@ static void callCfgLoad() {
     callNameS = p.getString("name", "");
     callStandby = p.getBool("standby", false);
     callLanIpS = p.getString("lanip", "");
+    callTurnHostS = p.getString("th", ""); callTurnUserS = p.getString("tu", "");
+    callTurnPassS = p.getString("tw", ""); callTurnPortV = p.getInt("tp", 3478);
     String r = p.getString("rec", "");
     p.end();
     callRecentCount = 0;
@@ -1814,6 +2129,37 @@ static void callCfgSave() {
   }
   callUnlock();
   callCfgGen++;
+}
+
+// /turn.cfg di SD: host= port= user= pass=  (dibaca tiap app Telepon dibuka; kredensial Cloudflare berumur pendek)
+static bool callTurnCfgFromSd() {
+  if (!sdReady || !SD_MMC.exists("/turn.cfg")) return false;
+  File f = SD_MMC.open("/turn.cfg", FILE_READ);
+  if (!f) return false;
+  String h = "", u = "", w = "", pt = "";
+  while (f.available()) {
+    String l = f.readStringUntil('\n'); l.trim();
+    if (l.startsWith("host=")) h = l.substring(5);
+    else if (l.startsWith("port=")) pt = l.substring(5);
+    else if (l.startsWith("user=")) u = l.substring(5);
+    else if (l.startsWith("pass=")) w = l.substring(5);
+  }
+  f.close();
+  h.trim(); u.trim(); w.trim(); pt.trim();
+  if (!h.length() || !u.length() || !w.length()) return false;
+  callLock();
+  callTurnHostS = h; callTurnUserS = u; callTurnPassS = w;
+  callTurnPortV = pt.length() ? pt.toInt() : 3478;
+  if (callTurnPortV <= 0) callTurnPortV = 3478;
+  callUnlock();
+  callLock();
+  Preferences p;
+  if (p.begin("sip", false)) {
+    p.putString("th", h); p.putString("tu", u); p.putString("tw", w); p.putInt("tp", callTurnPortV);
+    p.end();
+  }
+  callUnlock();
+  return true;
 }
 
 static bool callSipConfigured() { return callHostS.length() > 3 && callUserS.length() > 0 && callPassS.length() > 0; }
@@ -1864,19 +2210,10 @@ static void callPost(uint8_t r, const char* arg) {
 //  SIKLUS HIDUP & POLL (UI thread)
 // =====================================================================
 void callEnter() {
-  // DIAGNOSA: kalau HP baru saja restart sendiri, tampilkan penyebabnya (sekali per boot)
-  static bool rstShown = false;
-  if (!rstShown) {
-    rstShown = true;
-    esp_reset_reason_t rr = esp_reset_reason();
-    const char* why = nullptr;
-    if (rr == ESP_RST_PANIC)        why = "Reset terakhir: CRASH (panic)";
-    else if (rr == ESP_RST_BROWNOUT) why = "Reset terakhir: BROWNOUT (daya drop)";
-    else if (rr == ESP_RST_TASK_WDT) why = "Reset terakhir: task watchdog";
-    else if (rr == ESP_RST_INT_WDT)  why = "Reset terakhir: interrupt watchdog";
-    else if (rr == ESP_RST_WDT)      why = "Reset terakhir: watchdog";
-    if (why) showToast(why, 4000);
-  }
+  callCaptureBoot();
+  if (!callCfgLoaded) callCfgLoad();
+  if (callTurnCfgFromSd()) showToast("TURN dimuat dari /turn.cfg", 1600);
+  if (!callBootShown && callBootMsg[0]) { callBootShown = true; showToast(callBootMsg, 6000); }
   callEnsureInit();
   if (!callSipConfigured() && callCfgFromSd()) { callCfgSave(); showToast("Akun VoIP dimuat dari SD", 2000); }
   callPage = 0; callCfgEdit = -1;
@@ -1892,6 +2229,8 @@ static bool callGameBusy() {
 }
 
 void callLoopPoll() {
+  callCaptureBoot();
+  callMarkU(40);
   uint32_t now = millis();
   if (!callCfgLoaded && now > 3000) callCfgLoad();
   if (!callTask && callCfgLoaded && callStandby && wifiConnected && !airplaneMode && now - callPollMs > 5000) {
@@ -2081,6 +2420,7 @@ static void callRegText(char* out, int cap, uint16_t* col) {
 }
 
 void drawCall(LGFX_Sprite& s) {
+  callMarkU(41);
   iosBackdrop(s); drawStatusBar(s);
   s.setTextWrap(false); s.setTextSize(1);
   if (!callTask && !callEnsureInit()) {
@@ -2157,8 +2497,11 @@ static void callDoDial(const String& target, bool remember) {
   String t = target; t.trim();
   if (!t.length()) { showToast("Isi tujuan dulu", 1500); return; }
   if (!wifiConnected) { showToast("WiFi belum tersambung", 1800); return; }
+  callMarkU(10);
   if (remember) callRecentAdd(t.c_str());
+  callMarkU(11);
   callPost(CRQ_DIAL, t.c_str());
+  callMarkU(12);
   needRedraw = true;
 }
 
@@ -2192,6 +2535,7 @@ void callOverlayTouch(bool newT, int x, int y) {
 }
 
 void callTouch(int x, int y, bool held, bool isNew) {
+  callMarkU(42);
   if (kbVisible) {
     if (!isNew) return;
     if (y < kbY() - 2) { kbVisible = false; kbTarget = nullptr; callCfgEdit = -1; }
