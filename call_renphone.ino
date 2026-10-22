@@ -886,25 +886,66 @@ static int callBuildSdp(char* out, int cap, bool answer) {
     (unsigned)sid, (unsigned)sid, dlg.myRtpIp, dlg.myRtpIp, dlg.myRtpPort, pts, maps);
 }
 
+// alasan SDP lawan ditolak (utk toast). nullptr = tidak ada masalah
+static const char* sdpWhy = nullptr;
+
+static const char* sdpEol(const char* p) {            // akhir baris: \r atau \n
+  while (*p && *p != '\r' && *p != '\n') p++;
+  return p;
+}
+
 static bool callParseSdp(const char* body) {
-  const char* m = strstr(body, "m=audio ");
-  if (!m) return false;
+  sdpWhy = nullptr;
+  if (!body || !body[0]) { sdpWhy = "Lawan tdk kirim SDP"; return false; }
+
+  // cari baris m=audio pertama yang port-nya > 0; kalau profilnya SRTP (SAVP) catat saja
+  const char* m = body;
+  const char* hit = nullptr;
+  bool sawSrtp = false, sawZeroPort = false;
+  while ((m = strstr(m, "m=audio ")) != nullptr) {
+    int port = atoi(m + 8);
+    const char* eol = sdpEol(m);
+    bool plain = false;
+    for (const char* q = m; q + 8 <= eol; q++) {
+      if (!strncmp(q, "RTP/AVP", 7)) { plain = true; break; }   // juga cocok "RTP/AVPF"
+      if (!strncmp(q, "RTP/SAVP", 8)) { sawSrtp = true; }
+    }
+    if (port <= 0) sawZeroPort = true;
+    else if (plain) { hit = m; break; }
+    m = eol;
+  }
+  if (!hit) {
+    sdpWhy = sawSrtp ? "Lawan wajib SRTP (enkripsi)"
+           : sawZeroPort ? "Lawan menolak audio"
+           : "SDP lawan tanpa audio";
+    return false;
+  }
+  m = hit;
   int port = atoi(m + 8);
-  if (port <= 0) return false;
-  const char* c = strstr(m, "c=IN IP4 ");
+
+  // alamat media: c= di bagian media dulu, lalu c= tingkat sesi
+  const char* c = nullptr;
+  const char* mEol = sdpEol(m);
+  const char* nextM = strstr(mEol, "\nm=");
+  const char* cm = strstr(mEol, "c=IN IP4 ");
+  if (cm && (!nextM || cm < nextM)) c = cm;
   if (!c) c = strstr(body, "c=IN IP4 ");
-  if (!c) return false;
-  char ip[20]; int n = 0; c += 9;
-  while (*c && *c != '\r' && *c != '\n' && *c != '/' && n < 19) ip[n++] = *c++;
-  ip[n] = 0;
-  if (!callLooksLikeIp(ip) || strcmp(ip, "0.0.0.0") == 0) return false;
-  // daftar payload setelah "RTP/AVP"
+  if (!c) { sdpWhy = "SDP lawan tanpa alamat IPv4"; return false; }
+  char host[64]; int n = 0; c += 9;
+  while (*c && *c != '\r' && *c != '\n' && *c != '/' && *c != ' ' && n < 63) host[n++] = *c++;
+  host[n] = 0;
+  char ip[16];
+  if (!callResolve(host, ip) || !ip[0]) { sdpWhy = "Alamat media lawan tak valid"; return false; }
+  if (strcmp(ip, "0.0.0.0") == 0) { sdpWhy = "Lawan minta panggilan ditahan"; return false; }
+
+  // daftar payload di baris m= : ambil PCMU(0) / PCMA(8)
   const char* av = strstr(m, "RTP/AVP");
   int pick = -1;
   if (av) {
     const char* p = av + 7;
-    const char* eol = strstr(p, "\r\n");
-    while (*p && p < (eol ? eol : p + 64)) {
+    while (*p && *p != '\r' && *p != '\n') {
+      while (*p == ' ') p++;
+      if (*p == 'F' && p[-1] == 'P') p++;          // "RTP/AVPF"
       while (*p == ' ') p++;
       if (!isdigit((unsigned char)*p)) break;
       int v = atoi(p);
@@ -912,7 +953,7 @@ static bool callParseSdp(const char* body) {
       while (isdigit((unsigned char)*p)) p++;
     }
   }
-  if (pick < 0) return false;
+  if (pick < 0) { sdpWhy = "Lawan tdk dukung G.711"; return false; }
   callCopy(dlg.rtpIp, sizeof(dlg.rtpIp), ip);
   dlg.rtpPort = port;
   dlg.pt = (uint8_t)pick;
@@ -1582,7 +1623,7 @@ static void callOnInviteResp(const char* msg, int code) {
     callSendAck2xx();
     if (callPhase == CPH_ENDING || !sdpOk) {                            // sudah dibatalkan / SDP tak cocok
       callSendBye();
-      callFinish(sdpOk ? "Dibatalkan" : "Codec tidak cocok");
+      callFinish(sdpOk ? "Dibatalkan" : (sdpWhy ? sdpWhy : "Codec tidak cocok"));
       return;
     }
     callPhase = CPH_ACTIVE;
@@ -1608,7 +1649,14 @@ static void callOnInviteResp(const char* msg, int code) {
     case 480: callCopy(b, sizeof(b), "Tidak tersedia"); break;
     case 486: callCopy(b, sizeof(b), "Sedang sibuk"); break;
     case 487: callCopy(b, sizeof(b), "Dibatalkan"); break;
-    case 488: callCopy(b, sizeof(b), "Codec tidak cocok"); break;
+    case 488: {
+      char wn[80]; wn[0] = 0;
+      sipHdr(msg, "Warning", "", 0, wn, sizeof(wn));
+      Serial.printf("[CALL] 488 dari lawan. Warning: %s\n", wn[0] ? wn : "(kosong)");
+      const char* why = "Ditolak 488: codec/enkripsi";
+      if (strstr(wn, "301") || strstr(wn, "302") || strstr(wn, "304")) why = "Lawan tdk cocok (media)";
+      callCopy(b, sizeof(b), why);
+    } break;
     case 603: callCopy(b, sizeof(b), "Ditolak"); break;
     case 408: case 504: callCopy(b, sizeof(b), "Tidak terjangkau"); break;
     default: snprintf(b, sizeof(b), "Gagal (%d)", code); break;
