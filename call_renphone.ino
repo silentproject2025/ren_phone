@@ -211,6 +211,14 @@ static void callCopy(char* dst, int cap, const char* src) {
   dst[n] = 0;
 }
 
+// riwayat diagnosa: 4 kejadian terakhir (paket masuk + keputusan atas INVITE)
+static char callDbgHist[4][40];
+static void callDbgPush(const char* m) {
+  for (int i = 3; i > 0; i--) memcpy(callDbgHist[i], callDbgHist[i - 1], sizeof(callDbgHist[i]));
+  callCopy(callDbgHist[0], sizeof(callDbgHist[0]), m);
+  Serial.printf("[CALL] %s\n", m);
+}
+
 // teks status bersama (dipanggil dari task)
 static void callSetStatus(const char* s) {
   callLock(); callCopy(callStatus, sizeof(callStatus), s); callUnlock();
@@ -1509,6 +1517,8 @@ static void callOnInvite(const char* msg, const char* srcIp, int srcPort) {
       int n = sipBuildReply(1, 180, "Ringing", nullptr, nullptr, sipTx, SIP_BUF);
       sipTxTo(dlg.peerIp, dlg.peerPort, sipTx, n);
     } else {
+      char dg[40]; snprintf(dg, sizeof(dg), "-> 486 sibuk (fase %d)", (int)callPhase);
+      callDbgPush(dg);
       int n = sipBuildReply(0, 486, "Busy Here", nullptr, nullptr, sipTx, SIP_BUF);
       sipTxTo(srcIp, srcPort, sipTx, n);
     }
@@ -1516,6 +1526,7 @@ static void callOnInvite(const char* msg, const char* srcIp, int srcPort) {
   }
   memset(&dlg, 0, sizeof(dlg));
   if (!callParseSdp(sipBody(msg))) {
+    { char dg[40]; snprintf(dg, sizeof(dg), "-> 488 %s", sdpWhy ? sdpWhy : "SDP"); callDbgPush(dg); }
     int n = sipBuildReply(0, 488, "Not Acceptable Here", nullptr, nullptr, sipTx, SIP_BUF);
     sipTxTo(srcIp, srcPort, sipTx, n);
     return;
@@ -1554,6 +1565,7 @@ static void callOnInvite(const char* msg, const char* srcIp, int srcPort) {
   int rc = callAudioStart();                       // supaya nada dering terdengar di TWS (kalau ada)
   if (rc == 0) { toneMode = 2; toneT = 0; toneLastMs = 0; }
   callIncomingNew = true;
+  callDbgPush("-> 180 berdering");
 }
 
 static void callAnswer() {
@@ -1701,6 +1713,7 @@ static void callOnOptions(const char* msg, const char* srcIp, int srcPort) {
 
 static void callOnBye(const char* msg, const char* srcIp, int srcPort) {
   sipSplitReq(msg);
+  { char dg[40]; snprintf(dg, sizeof(dg), "BYE: fase %d, id %s", (int)callPhase, strcmp(rq.callId, dlg.callId) == 0 ? "cocok" : "beda"); callDbgPush(dg); }
   int n = sipBuildReply(0, 200, "OK", nullptr, nullptr, sipTx, SIP_BUF);
   sipTxTo(srcIp, srcPort, sipTx, n);
   if (callPhase == CPH_IDLE || strcmp(rq.callId, dlg.callId) != 0) return;
@@ -1778,6 +1791,7 @@ static void callOnSip(const char* msg, int len, const char* srcIp, int srcPort) 
       snprintf(callDbgRx, sizeof(callDbgRx), "%s %s", dm, srcIp);
     }
     callDbgRxMs = millis(); callDirty = true;
+    { char dg[40]; snprintf(dg, sizeof(dg), "rx %s", callDbgRx); callDbgPush(dg); }
   }
   int code = sipStatus(msg);
   if (code > 0) {
@@ -2308,6 +2322,7 @@ void callLoopPoll() {
   if (callIncomingNew) {
     callIncomingNew = false;
     if (callGameBusy()) {
+      callDbgPush("-> ditolak: NES/DOOM jalan");
       callPost(CRQ_REJECT, "");
     } else {
       callOvl = true; callOvlLocked = locked;
@@ -2587,10 +2602,14 @@ void drawCall(LGFX_Sprite& s) {
       s.setTextColor(T().text); s.setCursor(12, y + 5); s.print(row);
     }
   }
-  if (!kbVisible && callDbgRx[0]) {
-    char d[64]; unsigned ag = (unsigned)((millis() - callDbgRxMs) / 1000UL);
-    snprintf(d, sizeof(d), "SIP rx: %s (%us)", callDbgRx, ag);
-    s.setTextColor(T().subtext); s.setCursor(backX() + BACK_W + 8, backY() + 5); s.print(d);
+  if (!kbVisible && callDbgHist[0][0]) {
+    int y0 = backY() - 4 * 12 - 2;
+    s.fillRect(0, y0 - 1, SCR_W, 4 * 12 + 2, T().bg);
+    s.setTextColor(T().subtext);
+    for (int i = 0; i < 4; i++) {
+      if (!callDbgHist[3 - i][0]) continue;
+      s.setCursor(4, y0 + i * 12); s.print(callDbgHist[3 - i]);
+    }
   }
   if (kbVisible) drawKb(s); else drawBack(s);
   drawToast(s);
