@@ -141,7 +141,7 @@ static char     callRecent[CALL_REC_MAX][44];
 static int      callRecentCount = 0;
 
 // UI
-static int   callPage = 0;          // 0 telepon, 1 pengaturan
+static int   callPage = 0;          // 0 telepon, 1 pengaturan, 2 pengaturan TURN
 static int   callTab = 0;           // 0 SIP, 1 LAN
 static int   callCfgEdit = -1;
 static bool  callToastFlag = false;
@@ -1148,6 +1148,7 @@ static bool callTurnAllocate() {
   callCopy(turnPass, sizeof(turnPass), callTurnPassS.c_str());
   port = callTurnPortV;
   callUnlock();
+  { char* c = strchr(host, ':'); if (c) { int pp = atoi(c + 1); *c = 0; if (pp > 0) port = pp; } }   // "host:port"
   if (!host[0] || !turnUser[0] || !turnPass[0]) return false;            // TURN tdk diatur: bukan error
   if (!rtpOpen) return false;
   char ip[16];
@@ -2117,6 +2118,7 @@ static void callCfgLoad() {
 
 static void callCfgSave() {
   callHostS.trim(); callUserS.trim(); callPassS.trim(); callNameS.trim(); callLanIpS.trim();
+  callTurnHostS.trim(); callTurnUserS.trim(); callTurnPassS.trim();
   if (callNameS.length() > 20) callNameS = callNameS.substring(0, 20);
   if (!callNameS.length()) callNameS = "HP";
   callLock();
@@ -2125,6 +2127,8 @@ static void callCfgSave() {
     p.putString("host", callHostS); p.putString("user", callUserS);
     p.putString("pass", callPassS); p.putString("name", callNameS);
     p.putBool("standby", callStandby); p.putString("lanip", callLanIpS);
+    p.putString("th", callTurnHostS); p.putString("tu", callTurnUserS);
+    p.putString("tw", callTurnPassS); p.putInt("tp", callTurnPortV);
     p.end();
   }
   callUnlock();
@@ -2212,7 +2216,7 @@ static void callPost(uint8_t r, const char* arg) {
 void callEnter() {
   callCaptureBoot();
   if (!callCfgLoaded) callCfgLoad();
-  if (callTurnCfgFromSd()) showToast("TURN dimuat dari /turn.cfg", 1600);
+  if (!callTurnHostS.length() && callTurnCfgFromSd()) showToast("TURN dimuat dari /turn.cfg", 1600);
   if (!callBootShown && callBootMsg[0]) { callBootShown = true; showToast(callBootMsg, 6000); }
   callEnsureInit();
   if (!callSipConfigured() && callCfgFromSd()) { callCfgSave(); showToast("Akun VoIP dimuat dari SD", 2000); }
@@ -2364,13 +2368,50 @@ void drawCallOverlay(LGFX_Sprite& s) {
 }
 
 static const char* callCfgLabel(int i) {
-  static const char* L[4] = { "Server VoIP (mis. sip.linphone.org)", "Username VoIP", "Password VoIP", "Nama tampilan" };
+  static const char* L[7] = { "Server VoIP (mis. sip.linphone.org)", "Username VoIP", "Password VoIP", "Nama tampilan",
+                              "Server TURN (host atau host:port)", "Username TURN", "Password TURN" };
   return L[i];
 }
-static String* callCfgField(int i) { return i == 0 ? &callHostS : (i == 1 ? &callUserS : (i == 2 ? &callPassS : &callNameS)); }
+static String* callCfgField(int i) {
+  switch (i) {
+    case 0: return &callHostS;     case 1: return &callUserS;     case 2: return &callPassS;
+    case 4: return &callTurnHostS; case 5: return &callTurnUserS; case 6: return &callTurnPassS;
+    default: return &callNameS;
+  }
+}
+
+static void callDrawTurnCfg(LGFX_Sprite& s) {
+  s.setTextColor(T().accent); s.setCursor(8, 26); s.print("Telepon - TURN (relay)");
+  for (int i = 0; i < 3; i++) {
+    int ly = 40 + i * 27;
+    s.setTextColor(T().subtext); s.setCursor(10, ly); s.print(callCfgLabel(4 + i));
+    iosRR(s, 6, ly + 9, SCR_W - 12, 16, 5, T().surface);
+    String v;
+    if (i == 2) { for (size_t k = 0; k < callTurnPassS.length(); k++) v += '*'; } else v = *callCfgField(4 + i);
+    int maxC = (SCR_W - 28) / 6;
+    if ((int)v.length() > maxC) v = String("..") + v.substring(v.length() - (maxC - 2));
+    s.setTextColor(v.length() ? (uint16_t)T().text : (uint16_t)T().subtext);
+    s.setCursor(12, ly + 13); s.print(v.length() ? v.c_str() : "ketuk untuk mengisi...");
+  }
+  int by = 40 + 3 * 27 + 8;
+  bool sdCfg = sdReady && SD_MMC.exists("/turn.cfg");
+  int saveW = sdCfg ? (SCR_W - 12) * 6 / 10 : (SCR_W - 12);
+  iosRR(s, 6, by, saveW, 22, 7, T().accent);
+  s.setTextColor(T().bg); callCenter(s, 6, saveW, by + 7, "Simpan");
+  if (sdCfg) {
+    int bx = 6 + saveW + 4, bw = SCR_W - 6 - bx;
+    iosRR(s, bx, by, bw, 22, 7, T().surface2);
+    s.setTextColor(T().accent); callCenter(s, bx, bw, by + 7, "Muat SD");
+  }
+  s.setTextColor(T().subtext);
+  s.setCursor(10, by + 32); s.print("Dipakai utk panggilan lewat internet.");
+  s.setCursor(10, by + 44); s.print("Kosong = pakai STUN saja.");
+  if (turnErr[0]) { s.setTextColor(T().danger); s.setCursor(10, by + 58); s.print(turnErr); }
+}
 
 static void callDrawCfg(LGFX_Sprite& s) {
-  s.setTextColor(T().accent); s.setCursor(8, 26); s.print("Telepon - Pengaturan");
+  if (callPage == 2 && callCfgEdit < 0) { callDrawTurnCfg(s); return; }
+  s.setTextColor(T().accent); s.setCursor(8, 26); s.print(callPage == 2 ? "Telepon - TURN (relay)" : "Telepon - Pengaturan");
   if (callCfgEdit >= 0) {
     s.setTextColor(T().subtext); s.setCursor(10, 50); s.print(callCfgLabel(callCfgEdit));
     iosRR(s, 6, 62, SCR_W - 12, 22, 5, T().surface);
@@ -2393,6 +2434,8 @@ static void callDrawCfg(LGFX_Sprite& s) {
     s.setTextColor(v.length() ? (uint16_t)T().text : (uint16_t)T().subtext);
     s.setCursor(12, ly + 13); s.print(v.length() ? v.c_str() : "ketuk untuk mengisi...");
   }
+  iosRR(s, SCR_W - 62, 20, 56, 16, 6, T().surface2);
+  s.setTextColor(T().accent); callCenter(s, SCR_W - 62, 56, 24, "TURN >");
   int ty = 40 + 4 * 27;
   iosRR(s, 6, ty, SCR_W - 12, 18, 5, T().surface);
   s.setTextColor(T().text); s.setCursor(12, ty + 5); s.print("Siaga terima panggilan");
@@ -2431,7 +2474,7 @@ void drawCall(LGFX_Sprite& s) {
     callDrawInCall(s);
     drawBack(s); drawToast(s); return;
   }
-  if (callPage == 1) {
+  if (callPage == 1 || callPage == 2) {
     callDrawCfg(s);
     if (kbVisible) drawKb(s); else drawBack(s);
     drawToast(s); return;
@@ -2549,8 +2592,28 @@ void callTouch(int x, int y, bool held, bool isNew) {
     callInCallTouch(x, y);
     return;
   }
+  if (callPage == 2) {
+    if (isBack(x, y)) { callCfgSave(); callPage = 1; needRedraw = true; return; }
+    for (int i = 0; i < 3; i++) {
+      int ly = 40 + i * 27;
+      if (y >= ly + 7 && y <= ly + 27) { callCfgEdit = 4 + i; callStartTyping(callCfgField(4 + i)); return; }
+    }
+    int by = 40 + 3 * 27 + 8;
+    if (y >= by && y <= by + 22) {
+      bool sdCfg = sdReady && SD_MMC.exists("/turn.cfg");
+      int saveW = sdCfg ? (SCR_W - 12) * 6 / 10 : (SCR_W - 12);
+      if (x <= 6 + saveW) { callCfgSave(); callPage = 1; showToast("TURN tersimpan", 1200); needRedraw = true; }
+      else if (sdCfg) {
+        if (callTurnCfgFromSd()) showToast("Dimuat dari /turn.cfg", 1600);
+        else showToast("/turn.cfg tdk valid (host= user= pass=)", 2600);
+        needRedraw = true;
+      }
+    }
+    return;
+  }
   if (callPage == 1) {
     if (isBack(x, y)) { callCfgSave(); callPage = 0; needRedraw = true; return; }
+    if (x >= SCR_W - 62 && y >= 18 && y <= 38) { callCfgSave(); callPage = 2; needRedraw = true; return; }
     for (int i = 0; i < 4; i++) {
       int ly = 40 + i * 27;
       if (y >= ly + 7 && y <= ly + 27) { callCfgEdit = i; callStartTyping(callCfgField(i)); return; }

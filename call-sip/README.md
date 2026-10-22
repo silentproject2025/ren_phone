@@ -32,12 +32,13 @@ HP penerima harus WiFi sama dan "Siaga terima panggilan" aktif (Atur).
 Tanpa TURN, panggilan lewat internet di CGNAT bisa bisu/satu arah. Dengan TURN, suara dibungkus lewat server relay.
 Hanya dipakai utk panggilan lewat internet (SIP); panggilan LAN tidak berubah. Kalau TURN gagal, otomatis kembali ke STUN dan muncul toast alasannya.
 
-Isi `/turn.cfg` di root SD (dibaca ulang tiap app Telepon dibuka; toast "TURN dimuat dari /turn.cfg"):
+Isi lewat UI: Telepon > Atur > tombol **TURN >** (kanan atas). Server boleh `host` atau `host:port` (default port 3478).
+Atau lewat SD: buat `/turn.cfg` di root SD. File ini dibaca otomatis hanya saat TURN belum diisi, atau lewat tombol "Muat SD" di halaman TURN:
 ```
-host=turn.cloudflare.com
+host=free.expressturn.com
 port=3478
-user=USERNAME_DARI_API
-pass=CREDENTIAL_DARI_API
+user=USERNAME
+pass=PASSWORD
 ```
 Cloudflare Realtime TURN: buat "TURN key" di dashboard, lalu buat kredensial berumur pendek (contoh TTL 24 jam):
 ```
