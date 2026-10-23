@@ -818,6 +818,11 @@ static void callOnRegResp(const char* msg, int code) {
   if (!regPending || code < 100) return;
   char cid[72]; sipHdr(msg, "Call-ID", "i", 0, cid, sizeof(cid));
   if (strcmp(cid, regCallId) != 0) return;
+  {                                                                    // balasan utk REGISTER lama -> abaikan
+    char cs[40]; sipHdr(msg, "CSeq", "", 0, cs, sizeof(cs));
+    unsigned long rcs = strtoul(cs, nullptr, 10);
+    if (rcs && rcs != (unsigned long)regCseq) return;
+  }
   if (code < 200) return;
   {   // pelajari alamat publik dari Via (received / rport)
     char via[200], v[40];
@@ -1612,7 +1617,14 @@ static void callOnInviteResp(const char* msg, int code) {
   char cid[72]; sipHdr(msg, "Call-ID", "i", 0, cid, sizeof(cid));
   if (!dlg.uac || strcmp(cid, dlg.callId) != 0) return;
   char cs[40]; sipHdr(msg, "CSeq", "", 0, cs, sizeof(cs));
-  if (strstr(cs, "CANCEL")) return;                                    // 200 utk CANCEL: abaikan, tunggu 487
+  if (strstr(cs, "CANCEL")) return;
+  {                                                                    // balasan utk INVITE lama (retransmit 401 dst) -> abaikan
+    unsigned long rcs = strtoul(cs, nullptr, 10);
+    if (rcs && rcs != (unsigned long)dlg.inviteCseq) {
+      Serial.printf("[CALL] abaikan respons INVITE lama: kode %d cseq %lu (sekarang %lu)\n", code, rcs, (unsigned long)dlg.inviteCseq);
+      return;
+    }
+  }                                    // 200 utk CANCEL: abaikan, tunggu 487
   if (callPhase == CPH_ACTIVE && code == 200) { callSendAck2xx(); return; }   // 200 diulang
   if (callPhase != CPH_DIAL && callPhase != CPH_RINGBACK && callPhase != CPH_ENDING) return;
 
