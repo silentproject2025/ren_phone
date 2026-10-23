@@ -947,6 +947,9 @@ int musExtBegin() {
   while (!musExtReady && millis() - t0 < 1500) delay(5);
   return musExtReady ? 0 : 2;
 }
+// dipanggil dari UI thread (callEnsureInit): nyalakan link ke CAM di luar callTask (stack PSRAM, tak boleh sentuh NVS)
+void musExtPrepare() { btCcEnabled(); musBegin(); }
+bool musExtLinkUp()  { return musStarted; }
 uint32_t musExtFree() {
   return MUS_EXT_RING - (musExtHead - musExtTail);
 }

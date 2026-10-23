@@ -552,6 +552,8 @@ static uint32_t lastCfgGenSeen = 0;
 
 // deklarasi maju fungsi di file lain
 void wakeYieldMic(uint32_t holdMs);
+void musExtPrepare();
+bool musExtLinkUp();
 
 // ---------------------------------------------------------------------
 // AUDIO KELUAR -> CAM -> TWS (jalur musExt* milik pemutar AVI)
@@ -562,6 +564,7 @@ static const char* callAudioErr(int rc) {
     case 2: return "Modul BT (ESP32-CAM) tdk terdeteksi";
     case 3: return "TWS belum tersambung (Musik > cari TWS)";
     case 4: return "RAM kurang utk audio";
+    case 5: return "Audio belum siap (buka Telepon dulu)";
     case 9: return "Audio dipakai pemutar lain";
     default: return "Audio keluar gagal";
   }
@@ -570,6 +573,7 @@ static const char* callAudioErr(int rc) {
 static int callAudioStart() {
   if (aoOn) return 0;
   if (musExtActive()) return 9;                      // pemutar AVI sedang memakai jalur ini
+  if (!musExtLinkUp()) return 5;                     // link CAM belum menyala: jangan inisialisasi dari callTask
   callMarkT(50);
   int rc = musExtBegin();
   callMarkT(51);
@@ -2275,6 +2279,7 @@ static bool callEnsureInit() {
   if (!callMx) callMx = xSemaphoreCreateMutex();
   if (!callMx) return false;
   if (!callCfgLoaded) callCfgLoad();
+  musExtPrepare();                                  // link CAM harus dinyalakan di sini (UI thread), bukan di callTask
   if (callTask) return true;
   if (heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL) < 24000) return false;
   const uint32_t SZ = 20480;
