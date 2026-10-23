@@ -402,8 +402,8 @@ static void sipDisplay(const char* hdr, char* out, int cap) {
 // semua Record-Route -> daftar dipisah koma. reverse=true utk sisi UAC (urutan dibalik)
 static void sipCollectRR(const char* msg, bool reverse, char* out, int cap) {
   out[0] = 0;
-  char ent[6][100]; int ne = 0;
-  char line[320];
+  char ent[6][160]; int ne = 0;
+  char line[480];
   for (int k = 0; k < 6; k++) {
     if (!sipHdr(msg, "Record-Route", "", k, line, sizeof(line))) break;
     const char* p = line;
@@ -413,7 +413,7 @@ static void sipCollectRR(const char* msg, bool reverse, char* out, int cap) {
       const char* gt = strchr(lt, '>');
       if (!gt) break;
       int n = (int)(gt - lt + 1);
-      if (n > 99) n = 99;
+      if (n > 159) { callDbgPush("RR dipotong"); n = 159; }
       memcpy(ent[ne], lt, (size_t)n); ent[ne][n] = 0; ne++;
       p = gt + 1;
     }
@@ -475,8 +475,8 @@ static bool callDigestParam(const char* hdr, const char* key, char* out, int cap
 //  TIPE (di puncak -- jangan dipakai di signature fungsi)
 // =====================================================================
 struct CallReqHdr {            // header penting dari sebuah request (utk membangun balasan)
-  char via[300]; char from[170]; char to[170]; char callId[72];
-  char cseq[40]; char rr[260]; char contact[200];
+  char via[640]; char from[170]; char to[170]; char callId[72];
+  char cseq[40]; char rr[420]; char contact[200];
 };
 
 // ---------------------------------------------------------------------
@@ -1592,11 +1592,12 @@ static bool callTurnOnPacket(const uint8_t* p, int r) {
 static void sipSplitReq(const char* msg) {
   memset(&rq, 0, sizeof(rq));
   int n = 0;
-  for (int k = 0; k < 6; k++) {
-    char v[160];
+  for (int k = 0; k < 8; k++) {
+    char v[300];
     if (!sipHdr(msg, "Via", "v", k, v, sizeof(v))) break;
     int l = (int)strlen(v);
-    if (n + l + 8 >= (int)sizeof(rq.via)) break;
+    if (l >= (int)sizeof(v) - 1) callDbgPush("Via dipotong");
+    if (n + l + 8 >= (int)sizeof(rq.via)) { callDbgPush("Via terlalu panjang"); break; }
     n += snprintf(rq.via + n, sizeof(rq.via) - n, "Via: %s\r\n", v);
   }
   sipHdr(msg, "From", "f", 0, rq.from, sizeof(rq.from));
@@ -1658,6 +1659,7 @@ static void callSendInvite(const char* authLine) {
     dlg.reqUri, lip, CALL_SIP_PORT, dlg.branch, dlg.localHdr, dlg.remoteHdr, dlg.callId,
     (unsigned long)dlg.inviteCseq, fu, cont, authLine ? authLine : "", (int)strlen(sdp), sdp);
   sipSendKeep(dlg.destIp, dlg.destPort, n);
+  { char dg[40]; snprintf(dg, sizeof(dg), "tx INVITE %dB %s%s", n, sipRtxTcp ? "TCP" : "UDP", (authLine && authLine[0]) ? " auth" : ""); callDbgPush(dg); }
   dlg.retxAt = millis() + 500UL; dlg.retxN = 0; dlg.gotProv = false;
 }
 
@@ -1898,6 +1900,7 @@ static void callAnswer() {
   char ex[160]; snprintf(ex, sizeof(ex), "Contact: <sip:%s@%s>\r\n", u[0] ? u : "nyx", cont);
   int n = sipBuildReply(1, 200, "OK", ex, sdp, sipTx, SIP_BUF);
   sipSendKeep(dlg.peerIp, dlg.peerPort, n);
+  { char dg[40]; snprintf(dg, sizeof(dg), "tx 200 OK %dB %s", n, sipRtxTcp ? "TCP" : "UDP"); callDbgPush(dg); }
   dlg.retxAt = millis() + 500UL; dlg.retxN = 0; dlg.ackd = false;
   callPhase = CPH_ACTIVE;
   callSetStatus("Terhubung");
