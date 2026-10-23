@@ -1512,6 +1512,7 @@ static void callBeginDial(const char* targetIn) {
 // ---------------------------------------------------------------------
 static void callOnInvite(const char* msg, const char* srcIp, int srcPort) {
   sipSplitReq(msg);
+  callMarkT(70);
   if (callPhase != CPH_IDLE) {
     if (callPhase == CPH_INCOMING && strcmp(rq.callId, dlg.callId) == 0) {      // INVITE ulang: kirim lagi 180
       int n = sipBuildReply(1, 180, "Ringing", nullptr, nullptr, sipTx, SIP_BUF);
@@ -1557,14 +1558,18 @@ static void callOnInvite(const char* msg, const char* srcIp, int srcPort) {
   callSetPeer(nm[0] ? nm : srcIp);
   callIsLan = dlg.lan;
 
+  callMarkT(71);
   int n = sipBuildReply(1, 180, "Ringing", nullptr, nullptr, sipTx, SIP_BUF);
   sipTxTo(srcIp, srcPort, sipTx, n);
+  callMarkT(72);
 
   callPhase = CPH_INCOMING;
   callSetStatus(dlg.lan ? "Panggilan langsung (LAN)" : "Panggilan VoIP masuk");
   int rc = callAudioStart();                       // supaya nada dering terdengar di TWS (kalau ada)
+  callMarkT(73);
   if (rc == 0) { toneMode = 2; toneT = 0; toneLastMs = 0; }
   callIncomingNew = true;
+  callMarkT(74);
   callDbgPush("-> 180 berdering");
 }
 
@@ -2295,7 +2300,7 @@ void callEnter() {
   callCaptureBoot();
   if (!callCfgLoaded) callCfgLoad();
   if (!callTurnHostS.length() && callTurnCfgFromSd()) showToast("TURN dimuat dari /turn.cfg", 1600);
-  if (!callBootShown && callBootMsg[0]) { callBootShown = true; showToast(callBootMsg, 6000); }
+  if (!callBootShown && callBootMsg[0]) { callBootShown = true; showToast(callBootMsg, 6000); callDbgPush(callBootMsg); }
   callEnsureInit();
   if (!callSipConfigured() && callCfgFromSd()) { callCfgSave(); showToast("Akun VoIP dimuat dari SD", 2000); }
   callPage = 0; callCfgEdit = -1;
@@ -2323,12 +2328,15 @@ void callLoopPoll() {
 
   if (callIncomingNew) {
     callIncomingNew = false;
+    callMarkU(70);
     if (callGameBusy()) {
       callDbgPush("-> ditolak: NES/DOOM jalan");
       callPost(CRQ_REJECT, "");
     } else {
       callOvl = true; callOvlLocked = locked;
+      callMarkU(71);
       homeAodWake();
+      callMarkU(72);
       callLastRingVib = 0;
       needRedraw = true;
     }
@@ -2337,7 +2345,9 @@ void callLoopPoll() {
   if (ph == CPH_INCOMING && callOvl && now - callLastRingVib > 2600) {
     callLastRingVib = now;
     static const VibStep rp[] = { {1, 350}, {0, 150}, {1, 350}, {0, 1} };
+    callMarkU(73);
     vibPlayPattern(rp, 4);
+    callMarkU(74);
   }
   if (ph == CPH_ACTIVE && callPrevPhase != CPH_ACTIVE) {
     vibSuccess();
@@ -2442,7 +2452,9 @@ static void callDrawInCall(LGFX_Sprite& s) {
 void drawCallOverlay(LGFX_Sprite& s) {
   iosBackdrop(s); drawStatusBar(s);
   s.setTextWrap(false);
+  callMarkU(75);
   callDrawInCall(s);
+  callMarkU(76);
   drawToast(s);
 }
 
