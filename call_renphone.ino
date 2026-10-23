@@ -472,7 +472,7 @@ static bool callDigestParam(const char* hdr, const char* key, char* out, int cap
 // =====================================================================
 struct CallReqHdr {            // header penting dari sebuah request (utk membangun balasan)
   char via[300]; char from[170]; char to[170]; char callId[72];
-  char cseq[40]; char rr[260]; char contact[110];
+  char cseq[40]; char rr[260]; char contact[200];
 };
 
 // ---------------------------------------------------------------------
@@ -517,7 +517,7 @@ static struct {
   bool uac, lan, gotProv, ackd, authTried;
   char callId[72];
   char localHdr[170], remoteHdr[170];
-  char target[110], route[260], ltag[14], branch[28];
+  char target[200], route[260], ltag[14], branch[28];
   char reqUri[110];
   char destIp[16]; int destPort;
   char peerIp[16]; int peerPort;
@@ -1519,6 +1519,22 @@ static void callBeginDial(const char* targetIn) {
 // ---------------------------------------------------------------------
 // PANGGILAN MASUK
 // ---------------------------------------------------------------------
+// URI dari header Contact. Bentuk "<sip:...;param>": ambil SEMUA sampai '>' (parameter URI dipakai proxy NAT,
+// mis. Flexisip fs-conn-id/gr). Bentuk tanpa kurung: berhenti di ';' / spasi / ','.
+static bool sipContactUri(const char* ct, char* out, int cap) {
+  const char* s = strstr(ct, "sip:");
+  if (!s) s = strstr(ct, "sips:");
+  if (!s) return false;
+  bool br = false;
+  for (const char* q = ct; q < s; q++) if (*q == '<') br = true;
+  const char* e = s;
+  while (*e && *e != '>' && !(!br && (*e == ';' || *e == ' ' || *e == ','))) e++;
+  int l = (int)(e - s);
+  if (l <= 0 || l >= cap) return false;
+  memcpy(out, s, (size_t)l); out[l] = 0;
+  return true;
+}
+
 static void callOnInvite(const char* msg, const char* srcIp, int srcPort) {
   sipSplitReq(msg);
   callMarkT(70);
@@ -1548,13 +1564,10 @@ static void callOnInvite(const char* msg, const char* srcIp, int srcPort) {
   callRandHex(dlg.ltag, 8);
   snprintf(dlg.localHdr, sizeof(dlg.localHdr), "%s;tag=%s", rq.to, dlg.ltag);
   callCopy(dlg.remoteHdr, sizeof(dlg.remoteHdr), rq.from);
-  { char u[40], h[64]; int p; char ct[110];
+  { char u[40], h[64]; int p; char ct[200];
     callCopy(ct, sizeof(ct), rq.contact);
     if (sipUri(ct, u, sizeof(u), h, sizeof(h), &p)) {
-      char* e = ct; while (*e && *e != '>' && *e != ';') e++;   // buang parameter
-      const char* s = strstr(ct, "sip:");
-      int l = (int)(e - (s ? s : ct));
-      if (s && l > 0 && l < (int)sizeof(dlg.target) - 1) { memcpy(dlg.target, s, (size_t)l); dlg.target[l] = 0; }
+      sipContactUri(ct, dlg.target, sizeof(dlg.target));
     }
   }
   if (!dlg.target[0]) snprintf(dlg.target, sizeof(dlg.target), "sip:%s:%d", srcIp, srcPort);
@@ -1640,15 +1653,10 @@ static void callOnInviteResp(const char* msg, int code) {
     return;
   }
   if (code == 200) {
-    char to[170], ct[110]; sipHdr(msg, "To", "t", 0, to, sizeof(to));
+    char to[170], ct[200]; sipHdr(msg, "To", "t", 0, to, sizeof(to));
     callCopy(dlg.remoteHdr, sizeof(dlg.remoteHdr), to);
     if (sipHdr(msg, "Contact", "m", 0, ct, sizeof(ct))) {
-      const char* s = strstr(ct, "sip:");
-      if (s) {
-        const char* e = s; while (*e && *e != '>' && *e != ';') e++;
-        int l = (int)(e - s);
-        if (l > 0 && l < (int)sizeof(dlg.target) - 1) { memcpy(dlg.target, s, (size_t)l); dlg.target[l] = 0; }
-      }
+      sipContactUri(ct, dlg.target, sizeof(dlg.target));
     }
     if (!dlg.target[0]) callCopy(dlg.target, sizeof(dlg.target), dlg.reqUri);
     sipCollectRR(msg, true, dlg.route, sizeof(dlg.route));
