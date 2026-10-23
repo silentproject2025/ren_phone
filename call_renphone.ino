@@ -1791,7 +1791,9 @@ static void callOnSip(const char* msg, int len, const char* srcIp, int srcPort) 
       snprintf(callDbgRx, sizeof(callDbgRx), "%s %s", dm, srcIp);
     }
     callDbgRxMs = millis(); callDirty = true;
-    { char dg[40]; snprintf(dg, sizeof(dg), "rx %s", callDbgRx); callDbgPush(dg); }
+    if (strstr(callDbgRx, "REGISTER") == nullptr) {      // REGISTER berkala tdk masuk riwayat
+      char dg[40]; snprintf(dg, sizeof(dg), "rx %s", callDbgRx); callDbgPush(dg);
+    } else Serial.printf("[CALL] rx %s\n", callDbgRx);
   }
   int code = sipStatus(msg);
   if (code > 0) {
