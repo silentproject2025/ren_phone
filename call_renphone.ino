@@ -2101,13 +2101,15 @@ static bool callAllocBuffers() {
   return true;
 }
 
+static WiFiServer sipTcp(CALL_SIP_PORT);          // hanya utk diagnosa: mencatat sambungan TCP masuk
+
 static void callTaskFunc(void*) {
   if (!callAllocBuffers()) { callTask = nullptr; vTaskDelete(nullptr); return; }
   for (;;) {
     uint32_t now = millis();
     if (WiFi.status() != WL_CONNECTED) {
       if (callPhase != CPH_IDLE) callFinish("WiFi terputus");
-      if (sipOpen) { sipUdp.stop(); sipOpen = false; }
+      if (sipOpen) { sipUdp.stop(); sipTcp.end(); sipOpen = false; }
       if (callRegState != 0) { callRegState = 0; callSetRegMsg("WiFi belum tersambung"); regPending = false; regNextAt = 0; }
       srvOk = false;
       vTaskDelay(pdMS_TO_TICKS(500));
@@ -2116,6 +2118,7 @@ static void callTaskFunc(void*) {
     if (!sipOpen) {
       callLocalIpStr(lip, sizeof(lip));
       sipUdp.begin(CALL_SIP_PORT);
+      sipTcp.begin();
       sipOpen = true;
       regNextAt = 0;
     }
@@ -2137,6 +2140,23 @@ static void callTaskFunc(void*) {
       callMarkT(60);
       callOnSip(sipRx, r, ip, (int)sipUdp.remotePort());
       callMarkT(61);
+    }
+
+    {                                                       // DIAGNOSA: sambungan TCP masuk? (catat lalu tutup)
+      WiFiClient tc = sipTcp.available();
+      if (tc) {
+        uint32_t t0 = millis(); char b[40]; int n = 0;
+        while (millis() - t0 < 200 && n < (int)sizeof(b) - 1) {
+          if (tc.available()) { int c = tc.read(); if (c < 0 || c == '\r' || c == '\n') break; b[n++] = (char)c; }
+          else vTaskDelay(pdMS_TO_TICKS(5));
+        }
+        b[n] = 0;
+        IPAddress ra = tc.remoteIP();
+        char dg[40];
+        snprintf(dg, sizeof(dg), "TCP %u.%u.%u.%u %s", (unsigned)ra[0], (unsigned)ra[1], (unsigned)ra[2], (unsigned)ra[3], b);
+        callDbgPush(dg);
+        tc.stop();
+      }
     }
 
     now = millis();   // PENTING: callHandleReq()/callOnSip() bisa memakan waktu & mengisi dlg.t0/lastRtpRx dgn millis() yg lebih baru dari 'now' di atas
