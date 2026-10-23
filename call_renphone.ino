@@ -212,9 +212,9 @@ static void callCopy(char* dst, int cap, const char* src) {
 }
 
 // riwayat diagnosa: 4 kejadian terakhir (paket masuk + keputusan atas INVITE)
-static char callDbgHist[4][40];
+static char callDbgHist[6][40];
 static void callDbgPush(const char* m) {
-  for (int i = 3; i > 0; i--) memcpy(callDbgHist[i], callDbgHist[i - 1], sizeof(callDbgHist[i]));
+  for (int i = 5; i > 0; i--) memcpy(callDbgHist[i], callDbgHist[i - 1], sizeof(callDbgHist[i]));
   callCopy(callDbgHist[0], sizeof(callDbgHist[0]), m);
   Serial.printf("[CALL] %s\n", m);
 }
@@ -1821,7 +1821,7 @@ static void callOnSip(const char* msg, int len, const char* srcIp, int srcPort) 
       snprintf(callDbgRx, sizeof(callDbgRx), "%s %s", dm, srcIp);
     }
     callDbgRxMs = millis(); callDirty = true;
-    if (strstr(callDbgRx, "REGISTER") == nullptr) {      // REGISTER berkala tdk masuk riwayat
+    if (strstr(callDbgRx, "REGISTER") == nullptr && strstr(callDbgRx, "NOTIFY") == nullptr) {      // REGISTER berkala tdk masuk riwayat
       char dg[40]; snprintf(dg, sizeof(dg), "rx %s", callDbgRx); callDbgPush(dg);
     } else Serial.printf("[CALL] rx %s\n", callDbgRx);
   }
@@ -2665,12 +2665,12 @@ void drawCall(LGFX_Sprite& s) {
     }
   }
   if (!kbVisible && callDbgHist[0][0]) {
-    int y0 = backY() - 4 * 12 - 2;
-    s.fillRect(0, y0 - 1, SCR_W, 4 * 12 + 2, T().bg);
+    int y0 = backY() - 6 * 12 - 2;
+    s.fillRect(0, y0 - 1, SCR_W, 6 * 12 + 2, T().bg);
     s.setTextColor(T().subtext);
-    for (int i = 0; i < 4; i++) {
-      if (!callDbgHist[3 - i][0]) continue;
-      s.setCursor(4, y0 + i * 12); s.print(callDbgHist[3 - i]);
+    for (int i = 0; i < 6; i++) {
+      if (!callDbgHist[5 - i][0]) continue;
+      s.setCursor(4, y0 + i * 12); s.print(callDbgHist[5 - i]);
     }
   }
   if (kbVisible) drawKb(s); else drawBack(s);
