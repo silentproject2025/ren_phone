@@ -87,6 +87,10 @@ static String callTargetS = "", callLanIpS = "";
 static String callTurnHostS = "", callTurnUserS = "", callTurnPassS = "";   // TURN (relay RTP utk CGNAT)
 static int    callTurnPortV = 3478;
 static bool   callStandby = true;
+#ifndef CALL_TCP_DEFAULT
+#define CALL_TCP_DEFAULT 1
+#endif
+static bool   callTcpPref = (CALL_TCP_DEFAULT != 0);   // SIP ke server lewat TCP (false = UDP); sip.cfg: transport=udp|tcp
 static bool   callCfgLoaded = false;
 static volatile uint32_t callCfgGen = 0;     // naik tiap konfigurasi disimpan -> task daftar ulang
 
@@ -662,8 +666,133 @@ static void callMicStop() {
 // ---------------------------------------------------------------------
 // JARINGAN DASAR
 // ---------------------------------------------------------------------
+// ---------------------------------------------------------------------
+// TRANSPORT TCP KE SERVER (opsional; SIP LAN antar-HP, scan & RTP tetap UDP)
+// ---------------------------------------------------------------------
+static WiFiClient srvTc;                         // sambungan ke server SIP (nama 'sipTcp' sdh dipakai server diagnosa)
+static bool     tcpUp = false, tcpFallback = false;
+static uint8_t  tcpFails = 0;
+static uint32_t tcpNextTry = 0;
+static char*    tcpBuf = nullptr;                // aliran masuk (SIP_BUF * 2)
+static char*    tcpTxBuf = nullptr;              // salinan keluar utk ganti Via UDP -> TCP (SIP_BUF)
+static int      tcpLen = 0;
+static bool     sipRtxTcp = false;               // pesan retransmisi terakhir lewat TCP? (kalau ya, tdk perlu dikirim ulang)
+static void callOnSip(const char* msg, int len, const char* srcIp, int srcPort);   // deklarasi maju
+
+static bool callTcpActive() { return callTcpPref && !tcpFallback && tcpBuf != nullptr; }
+static bool callViaTcp(const char* ip) { return callTcpActive() && srvOk && ip && strcmp(ip, srvIpStr) == 0; }
+
+static void tcpReset() {
+  srvTc.stop(); tcpUp = false; tcpLen = 0; tcpFails = 0; tcpFallback = false; tcpNextTry = 0;
+}
+
+static void tcpClose(const char* why) {
+  bool was = tcpUp;
+  srvTc.stop(); tcpUp = false; tcpLen = 0;
+  if (was) {
+    if (why && why[0]) callDbgPush(why);
+    regPending = false; regNextAt = 0;           // ikatan registrasi ikut hilang bersama sambungan -> daftar ulang
+  }
+}
+
+static bool tcpConnect(int timeoutMs) {
+  if (tcpUp) return true;
+  if (!srvOk) return false;
+  uint32_t now = millis();
+  if ((int32_t)(now - tcpNextTry) < 0) return false;
+  srvTc.stop();
+  if (srvTc.connect(srvIp, (uint16_t)tPort, timeoutMs)) {
+    srvTc.setNoDelay(true);
+    tcpUp = true; tcpLen = 0; tcpFails = 0;
+    callDbgPush("TCP tersambung");
+    regNextAt = 0;                               // sambungan baru belum punya registrasi
+    return true;
+  }
+  tcpFails++;
+  tcpNextTry = millis() + (tcpFails < 5 ? 2000UL * tcpFails : 10000UL);
+  if (tcpFails >= 3) {
+    tcpFallback = true; regPending = false; regNextAt = 0;
+    callDbgPush("TCP gagal -> UDP");
+  } else callDbgPush("TCP gagal konek");
+  return false;
+}
+
+static void tcpSend(const char* data, int len) {
+  if (len <= 0 || len >= SIP_BUF || !tcpTxBuf) return;
+  if (!tcpUp) {
+    if (len <= 4) return;                        // keepalive tdk perlu memicu sambung ulang
+    if (!tcpConnect(callPhase == CPH_IDLE ? 3000 : 1000)) return;
+  }
+  memcpy(tcpTxBuf, data, (size_t)len); tcpTxBuf[len] = 0;
+  for (char* p = tcpTxBuf; (p = strstr(p, "SIP/2.0/UDP")) != nullptr; p += 11) { p[8] = 'T'; p[9] = 'C'; p[10] = 'P'; }
+  int w = (int)srvTc.write((const uint8_t*)tcpTxBuf, (size_t)len);
+  if (w != len) tcpClose("TCP kirim gagal");
+}
+
+// Ambil satu pesan SIP utuh dari awal aliran TCP (framing lewat Content-Length).
+// return: byte yg dikonsumsi dari awal buf; 0 = belum lengkap; -1 = aliran rusak/terlalu besar.
+// *off, *mlen = posisi & panjang pesan di buf (mlen 0 = hanya CRLF keepalive/pong).
+static int sipStreamTake(const char* buf, int len, int maxTotal, int* off, int* mlen) {
+  int i = 0;
+  while (i < len && (buf[i] == '\r' || buf[i] == '\n' || buf[i] == ' ')) i++;
+  *off = i; *mlen = 0;
+  if (i >= len) return len;
+  int he = -1;
+  for (int k = i; k + 3 < len; k++) {
+    if (buf[k] == '\r' && buf[k + 1] == '\n' && buf[k + 2] == '\r' && buf[k + 3] == '\n') { he = k; break; }
+  }
+  if (he < 0) return (len - i > maxTotal) ? -1 : 0;
+  int cl = 0;
+  for (int k = i; k < he; ) {
+    int e = k; while (e < he && buf[e] != '\n') e++;
+    int c = -1;
+    if (e - k > 15 && strncasecmp(buf + k, "content-length", 14) == 0) c = k + 14;
+    else if (e - k > 2 && (buf[k] == 'l' || buf[k] == 'L')) c = k + 1;
+    if (c >= 0) {
+      while (c < e && buf[c] == ' ') c++;
+      if (c < e && buf[c] == ':') { c++; while (c < e && buf[c] == ' ') c++; cl = atoi(buf + c); }
+    }
+    k = e + 1;
+  }
+  if (cl < 0 || he + 4 + cl > maxTotal) return -1;
+  int total = he + 4 + cl;
+  if (len < total) return 0;
+  *mlen = total - i;
+  return total;
+}
+
+static void tcpPoll() {
+  if (!tcpUp || !tcpBuf) return;
+  int guard = 0;
+  while (guard++ < 6 && srvTc.available() > 0) {
+    int room = SIP_BUF * 2 - tcpLen;
+    if (room <= 0) { tcpLen = 0; callDbgPush("TCP buf penuh"); break; }
+    int r = srvTc.read((uint8_t*)tcpBuf + tcpLen, (size_t)room);
+    if (r <= 0) break;
+    tcpLen += r;
+    for (int g = 0; g < 8 && tcpLen > 0; g++) {
+      int off = 0, ml = 0;
+      int used = sipStreamTake(tcpBuf, tcpLen, SIP_BUF * 2, &off, &ml);
+      if (used < 0) { tcpLen = 0; callDbgPush("TCP aliran rusak"); break; }
+      if (used == 0) break;
+      if (ml > 0 && ml < SIP_BUF) {
+        memcpy(sipRx, tcpBuf + off, (size_t)ml); sipRx[ml] = 0;
+        callOnSip(sipRx, ml, srvIpStr, tPort);
+        if (!tcpUp) { tcpLen = 0; return; }      // handler menutup sambungan
+      } else if (ml >= SIP_BUF) callDbgPush("TCP pesan >1.5KB");
+      tcpLen -= used;
+      if (tcpLen > 0) memmove(tcpBuf, tcpBuf + used, (size_t)tcpLen);
+    }
+  }
+  if (tcpUp && !srvTc.connected() && srvTc.available() <= 0) tcpClose("TCP putus");
+}
+
+// ---------------------------------------------------------------------
+// JARINGAN DASAR
+// ---------------------------------------------------------------------
 static void sipTxTo(const char* ip, int port, const char* data, int len) {
   if (!sipOpen || len <= 0) return;
+  if (callViaTcp(ip)) { tcpSend(data, len); return; }
   IPAddress a;
   if (!a.fromString(ip)) return;
   sipUdp.beginPacket(a, (uint16_t)port);
@@ -677,10 +806,11 @@ static void sipSendKeep(const char* ip, int port, int len) {
   sipTxTo(ip, port, sipTx, len);
   memcpy(sipRtx, sipTx, (size_t)len); sipRtx[len] = 0;
   sipRtxLen = len; callCopy(sipRtxIp, sizeof(sipRtxIp), ip); sipRtxPort = port;
+  sipRtxTcp = callViaTcp(ip) && tcpUp;           // terkirim lewat TCP -> jangan dikirim ulang (nanti dobel)
 }
 
 static void sipResend() {
-  if (sipRtxLen > 0) sipTxTo(sipRtxIp, sipRtxPort, sipRtx, sipRtxLen);
+  if (sipRtxLen > 0 && !sipRtxTcp) sipTxTo(sipRtxIp, sipRtxPort, sipRtx, sipRtxLen);
 }
 
 static bool callResolve(const char* host, char* ipOut) {
@@ -706,6 +836,10 @@ static bool callResolveServer() {
 
 // "ip:port" utk header Contact (publik kalau sdh dipelajari lewat rport, kecuali panggilan LAN)
 static void callContactStr(char* out, int cap, bool lan) {
+  if (!lan && callTcpActive()) {                  // TCP: rport = port acak sambungan keluar, jangan dipakai
+    snprintf(out, cap, "%s:%d;transport=tcp", lip, CALL_SIP_PORT);
+    return;
+  }
   if (!lan && natIp[0] && natPort > 0) snprintf(out, cap, "%s:%d", natIp, natPort);
   else snprintf(out, cap, "%s:%d", lip, CALL_SIP_PORT);
 }
@@ -802,6 +936,13 @@ static void regStart() {
   if (!callResolveServer()) {
     callRegState = 3; callSetRegMsg("DNS server gagal");
     regNextAt = millis() + 15000UL; return;
+  }
+  if (callTcpActive() && !tcpUp && !tcpConnect(callPhase == CPH_IDLE ? 3000 : 1000)) {
+    if (callTcpActive()) {                        // masih TCP (belum jatuh ke UDP): coba lagi setelah jeda
+      if (callRegState != 2) { callRegState = 3; callSetRegMsg("TCP belum tersambung"); }
+      regNextAt = ((int32_t)(tcpNextTry - millis()) > 0) ? tcpNextTry : millis() + 2000UL;
+      return;
+    }
   }
   callRandHex(regCallId, 16); strcat(regCallId, "@nyx");
   callRandHex(regTag, 8);
@@ -2086,13 +2227,14 @@ static void callSnapshotCfg() {
   tProxyName[0] = 0;                                // format "domain/proxy": pisahkan domain akun & server yang dihubungi
   { char* sl = strchr(tHostName, '/'); if (sl) { *sl = 0; callCopy(tProxyName, sizeof(tProxyName), sl + 1); } }
   srvOk = false; natIp[0] = 0; natPort = 0;
+  tcpReset();
   regPending = false; regNextAt = 0; callRegState = 0;
   tCfgGen = callCfgGen;
 }
 
 static bool callAllocBuffers() {
   if (callBufOk) return true;
-  const size_t total = (SIP_BUF * 3) + 512 + (CALL_SAMPLES * 4 * 4) + (CALL_JB * 320 * 2) + 64;
+  const size_t total = (SIP_BUF * 3) + 512 + (CALL_SAMPLES * 4 * 4) + (CALL_JB * 320 * 2) + 64 + (SIP_BUF * 3);
   uint8_t* b = (uint8_t*)heap_caps_malloc(total, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
   if (!b) b = (uint8_t*)malloc(total);
   if (!b) return false;
@@ -2100,6 +2242,8 @@ static bool callAllocBuffers() {
   rtpRx = b + SIP_BUF * 3;
   micRaw = (int32_t*)(b + SIP_BUF * 3 + 512);
   jbPcm  = (int16_t*)(b + SIP_BUF * 3 + 512 + CALL_SAMPLES * 4 * 4);
+  tcpBuf = (char*)(b + SIP_BUF * 3 + 512 + CALL_SAMPLES * 4 * 4 + CALL_JB * 320 * 2 + 64);
+  tcpTxBuf = tcpBuf + SIP_BUF * 2;
   callBufOk = true;
   return true;
 }
@@ -2112,6 +2256,7 @@ static void callTaskFunc(void*) {
     uint32_t now = millis();
     if (WiFi.status() != WL_CONNECTED) {
       if (callPhase != CPH_IDLE) callFinish("WiFi terputus");
+      tcpReset();
       if (sipOpen) { sipUdp.stop(); sipTcp.end(); sipOpen = false; }
       if (callRegState != 0) { callRegState = 0; callSetRegMsg("WiFi belum tersambung"); regPending = false; regNextAt = 0; }
       srvOk = false;
@@ -2144,6 +2289,7 @@ static void callTaskFunc(void*) {
       callOnSip(sipRx, r, ip, (int)sipUdp.remotePort());
       callMarkT(61);
     }
+    tcpPoll();                                              // SIP lewat TCP dari server
 
     {                                                       // DIAGNOSA: sambungan TCP masuk? (catat lalu tutup)
       WiFiClient tc = sipTcp.available();
@@ -2228,6 +2374,7 @@ static void callCfgLoad() {
     callPassS = p.getString("pass", "");
     callNameS = p.getString("name", "");
     callStandby = p.getBool("standby", false);
+    callTcpPref = p.getBool("tcp", CALL_TCP_DEFAULT != 0);
     callLanIpS = p.getString("lanip", "");
     callTurnHostS = p.getString("th", ""); callTurnUserS = p.getString("tu", "");
     callTurnPassS = p.getString("tw", ""); callTurnPortV = p.getInt("tp", 3478);
@@ -2257,6 +2404,7 @@ static void callCfgSave() {
     p.putString("host", callHostS); p.putString("user", callUserS);
     p.putString("pass", callPassS); p.putString("name", callNameS);
     p.putBool("standby", callStandby); p.putString("lanip", callLanIpS);
+    p.putBool("tcp", callTcpPref);
     p.putString("th", callTurnHostS); p.putString("tu", callTurnUserS);
     p.putString("tw", callTurnPassS); p.putInt("tp", callTurnPortV);
     p.end();
@@ -2302,10 +2450,11 @@ static bool callCfgFromSd() {
   if (!sdReady || !SD_MMC.exists("/sip.cfg")) return false;
   File f = SD_MMC.open("/sip.cfg", FILE_READ);
   if (!f) return false;
-  String h = "", u = "", w = "", n = "";
+  String h = "", u = "", w = "", n = "", tr = "";
   while (f.available()) {
     String l = f.readStringUntil('\n'); l.trim();
     if (l.startsWith("host=")) h = l.substring(5);
+    else if (l.startsWith("transport=")) tr = l.substring(10);
     else if (l.startsWith("user=")) u = l.substring(5);
     else if (l.startsWith("pass=")) w = l.substring(5);
     else if (l.startsWith("name=")) n = l.substring(5);
@@ -2315,6 +2464,7 @@ static bool callCfgFromSd() {
   if (!h.length() || !u.length() || !w.length()) return false;
   callHostS = h; callUserS = u; callPassS = w;
   if (n.length()) callNameS = n;
+  tr.trim(); if (tr.length()) callTcpPref = tr.equalsIgnoreCase("tcp");
   return true;
 }
 
