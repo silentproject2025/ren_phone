@@ -482,7 +482,7 @@ struct CallReqHdr {            // header penting dari sebuah request (utk memban
 // ---------------------------------------------------------------------
 // STATE MILIK TASK (hanya task yg menyentuh ini)
 // ---------------------------------------------------------------------
-#define SIP_BUF 1500
+#define SIP_BUF 4096
 static char tHost[64] = "", tHostName[64] = "", tUser[40] = "", tPass[40] = "", tName[24] = "";
 static int  tPort = CALL_SIP_PORT;
 static int  tPortCfg = CALL_SIP_PORT;           // port dari konfigurasi (tPort bisa diganti hasil SRV)
@@ -782,7 +782,7 @@ static void tcpPoll() {
         memcpy(sipRx, tcpBuf + off, (size_t)ml); sipRx[ml] = 0;
         callOnSip(sipRx, ml, srvIpStr, tPort);
         if (!tcpUp) { tcpLen = 0; return; }      // handler menutup sambungan
-      } else if (ml >= SIP_BUF) callDbgPush("TCP pesan >1.5KB");
+      } else if (ml >= SIP_BUF) { char dg[40]; snprintf(dg, sizeof(dg), "TCP pesan %dB dibuang", ml); callDbgPush(dg); }
       tcpLen -= used;
       if (tcpLen > 0) memmove(tcpBuf, tcpBuf + used, (size_t)tcpLen);
     }
