@@ -481,6 +481,7 @@ struct CallReqHdr {            // header penting dari sebuah request (utk memban
 #define SIP_BUF 1500
 static char tHost[64] = "", tHostName[64] = "", tUser[40] = "", tPass[40] = "", tName[24] = "";
 static int  tPort = CALL_SIP_PORT;
+static char tProxyName[64] = "";                 // opsional: server yang dihubungi (outbound proxy); kosong = pakai domain
 static uint32_t tCfgGen = 0xFFFFFFFFu;
 
 static WiFiUDP sipUdp, rtpUdp;
@@ -696,7 +697,7 @@ static bool callResolveServer() {
   if (srvOk && millis() - srvAt < 600000UL) return true;
   if (!tHostName[0]) return false;
   char ip[16];
-  if (!callResolve(tHostName, ip)) { srvOk = false; return false; }
+  if (!callResolve(tProxyName[0] ? tProxyName : tHostName, ip)) { srvOk = false; return false; }
   srvOk = true; srvAt = millis();
   callCopy(srvIpStr, sizeof(srvIpStr), ip);
   srvIp.fromString(ip);
@@ -2082,6 +2083,8 @@ static void callSnapshotCfg() {
   char* c = strchr(tHostName, ':');
   if (c) { tPort = atoi(c + 1); *c = 0; if (tPort <= 0) tPort = CALL_SIP_PORT; }
   { char* s = strstr(tHostName, "sip:"); if (s == tHostName) memmove(tHostName, tHostName + 4, strlen(tHostName + 4) + 1); }
+  tProxyName[0] = 0;                                // format "domain/proxy": pisahkan domain akun & server yang dihubungi
+  { char* sl = strchr(tHostName, '/'); if (sl) { *sl = 0; callCopy(tProxyName, sizeof(tProxyName), sl + 1); } }
   srvOk = false; natIp[0] = 0; natPort = 0;
   regPending = false; regNextAt = 0; callRegState = 0;
   tCfgGen = callCfgGen;
