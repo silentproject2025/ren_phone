@@ -874,7 +874,7 @@ static void callRegStep(uint32_t now) {
     return;
   }
   if ((int32_t)(now - regNextAt) >= 0) { regStart(); return; }
-  if (callRegState == 2 && (int32_t)(now - regKeepAt) >= 25000 && srvOk) {      // jaga lubang NAT tetap terbuka
+  if (callRegState == 2 && (int32_t)(now - regKeepAt) >= 12000 && srvOk) {      // jaga lubang NAT tetap terbuka
     regKeepAt = now;
     sipTxTo(srvIpStr, tPort, "\r\n\r\n", 4);
   }
