@@ -77,9 +77,16 @@ jobs:
           tail -n 5 "$F"
 
       - name: Build library esp32s3 (LAMA)
+        env:
+          AR_REPO_URL: https://github.com/espressif/arduino-esp32.git
+          IDF_REPO_URL: https://github.com/espressif/esp-idf.git
+          GIT_TERMINAL_PROMPT: "0"
         run: |
           cd "$HOME/lib-builder"
-          ./build.sh -t esp32s3
+          CORE_VER=$(cat "$RUNNER_TEMP/core-version.txt")
+          AR_BRANCH="release/v${CORE_VER%.*}.x"
+          echo "Arduino branch: $AR_BRANCH"
+          env -u GITHUB_REPOSITORY ./build.sh -t esp32s3 -A "$AR_BRANCH"
 
       - name: Cek hasil + paketkan
         run: |
