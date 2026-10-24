@@ -468,6 +468,7 @@ struct HomeRect{ int x,y,w,h; }; // harus paling atas: prototype otomatis Arduin
 #include <FFat.h> // v47: fallback penyimpanan wallpaper (flash internal) pas SD Card gak kedetek
 #include "esp_heap_caps.h"
 #include <Update.h>   // OTA: flashing firmware baru (dari SD lokal atau WiFi)
+#include <esp_ota_ops.h> // OTA guard/rollback (ota_check_renphone.ino): tipe esp_partition_t dipakai di prototype
 #include <math.h>     // dipakai boot sequence (cosf/sinf utk animasi logo) + sensor 3D
 #include <Wire.h>     // I2C utk MPU6050 (accel+gyro)
 #include "esp_bt.h"   // v29 FIX: buat esp_bt_controller_mem_release()
@@ -4832,6 +4833,11 @@ void drawMjpegPlayer(LGFX_Sprite&); void mjpegTouch(int,int,bool,bool);
 // ---- UPDATE (OTA): forward declarations ----
 void updEnter(); void updExit();
 void drawUpdate(LGFX_Sprite&); void updTouch(int,int,bool,bool);
+// ---- ota_check_renphone.ino: channel (branch) + pengaman boot/rollback ----
+void otaGuardBoot(); void otaGuardPoll(); void otaGuardArm();
+String otaBranchName(); String otaChannelName(); void otaChannelCycle(); void otaAddBranchBegin(); void otaAddBranchPoll();
+bool otaRollbackReady(); void otaRollbackRefresh(); bool otaRollbackNow(bool);
+void otaHdrReset(); bool otaHdrFeed(const uint8_t*,size_t,size_t); bool otaPreInstall(const String&,int,String&); void otaApplyExpect(const String&);
 // ---- Chat MQTT: forward declarations (chat_renphone.ino) ----
 void chatEnter(); void chatExit(); void drawChat(LGFX_Sprite&); void chatTouch(int,int,bool,bool); void chatLoopPoll();
 // ---- Telepon SIP/LAN: forward declarations (call_renphone.ino) ----
@@ -9480,6 +9486,15 @@ bool updCheckConfirm(const String& action){
 #define UPD_URL_H        20
 #define UPD_BTN_Y        (UPD_URL_Y+UPD_URL_H+5)
 #define UPD_BTN_H        24
+// baris channel (di atas kolom URL WiFi): [pill channel] [+ tambah branch] [rollback]
+#define UPD_CH_Y         (UPD_WIFI_LABEL_Y-4)
+#define UPD_CH_H         15
+#define UPD_RB_W         26
+#define UPD_ADD_W        22
+#define UPD_CHP_W        108
+#define UPD_RB_X         (SCR_W-6-UPD_RB_W)
+#define UPD_ADD_X        (UPD_RB_X-4-UPD_ADD_W)
+#define UPD_CHP_X        (UPD_ADD_X-4-UPD_CHP_W)
 // ---- layar progres (digambar langsung ke display) ----
 #define UPD_PG_BARX      24
 #define UPD_PG_BARW      (SCR_W-48)
@@ -9578,6 +9593,7 @@ void updShowResult(bool success, const String& reason){
   int cx = SCR_W/2, cy = SCR_H/2-44;
   display.setTextSize(2);
   if(success){
+    otaGuardArm(); // firmware baru ditandai 'pending' -> otaGuardBoot()/otaGuardPoll() di boot berikutnya
     display.fillCircle(cx, cy, 28, 0x07F5);
     for(int d=-1; d<=1; d++){
       display.drawLine(cx-13, cy+d, cx-4,  cy+9+d,  0xFFFF);
@@ -9644,9 +9660,15 @@ bool updInstallFromSD(const String& filename){
   uint8_t buf[4096];
   size_t written = 0;
   updLastPct = -1; updBarFill = 0;
+  otaHdrReset();
   while(f.available()){
     size_t n = f.read(buf, sizeof(buf));
     if(n == 0) break;
+    if(!otaHdrFeed(buf, n, written)){
+      Update.abort(); f.close();
+      updShowResult(false, "File .bin bukan image ESP32-S3 yg valid. Dibatalkan, firmware lama aman.");
+      return false;
+    }
     if(Update.write(buf, n) != n){
       Update.abort();
       f.close();
@@ -9724,6 +9746,7 @@ bool updInstallFromURL(const String& url){
     updShowResult(false, "Server tidak mengirim Content-Length");
     return false;
   }
+  { String otaWhy; if(!otaPreInstall(url, contentLen, otaWhy)){ http.end(); updShowResult(false, otaWhy); return false; } }
 
   if(!Update.begin((size_t)contentLen, U_FLASH)){
     http.end();
@@ -9733,6 +9756,7 @@ bool updInstallFromURL(const String& url){
     return false;
   }
 
+  otaApplyExpect(url); otaHdrReset(); // MD5 dari info channel (kalau ada) + penampung 36 byte header image
   WiFiClient* stream = http.getStreamPtr();
   WiFi.setSleep(false);   // pengaman: hemat daya WiFi harus mati selama unduh
   // buffer baca 8 KB di HEAP (stack loopTask cuma 8 KB); kalau malloc gagal, pakai 2 KB di stack
@@ -9753,6 +9777,11 @@ bool updInstallFromURL(const String& url){
       size_t toRead = (avail < bufSz) ? avail : bufSz;
       int n = stream->readBytes(buf, toRead);
       if(n > 0){
+        if(!otaHdrFeed(buf, (size_t)n, written)){
+          Update.abort(); http.end();
+          updShowResult(false, "Header bukan image ESP32-S3 yg valid. Dibatalkan, firmware lama aman.");
+          return false;
+        }
         if(Update.write(buf, n) != (size_t)n){
           Update.abort();
           http.end();
@@ -9790,6 +9819,7 @@ bool updInstallFromURL(const String& url){
 }
 
 void updEnter(){
+  otaRollbackRefresh(); // slot OTA lain berisi firmware sebelumnya yg valid?
   updScanFiles();
   updScrollPage = 0;
   updPendingConfirm = "";
@@ -9808,7 +9838,33 @@ static void updCenterText(LGFX_Sprite& s, int x, int w, int y, const char* t){
   s.print(t);
 }
 
+static void updDrawChanRow(LGFX_Sprite& s){
+  // pill channel (ketuk = ganti branch sumber firmware)
+  iosRR(s, UPD_CHP_X, UPD_CH_Y, UPD_CHP_W, UPD_CH_H, 6, T().surface2);
+  String cn = otaChannelName();
+  int maxC = (UPD_CHP_W-18)/6;
+  if((int)cn.length() > maxC) cn = cn.substring(0, maxC-2) + "..";
+  s.setTextColor(T().accent);
+  s.setCursor(UPD_CHP_X+6, UPD_CH_Y+4); s.print(cn.c_str());
+  s.setTextColor(T().subtext);
+  s.setCursor(UPD_CHP_X+UPD_CHP_W-10, UPD_CH_Y+4); s.print(">");
+  // "+" tambah branch
+  iosRR(s, UPD_ADD_X, UPD_CH_Y, UPD_ADD_W, UPD_CH_H, 6, T().surface2);
+  s.setTextColor(T().accent);
+  updCenterText(s, UPD_ADD_X, UPD_ADD_W, UPD_CH_Y+4, "+");
+  // panah balik = kembalikan ke firmware sebelumnya (slot OTA lain)
+  bool rbOk   = otaRollbackReady();
+  bool rbPend = (updPendingConfirm == "rb") && millis()<=updPendingUntil;
+  uint16_t rbBg = rbPend ? T().danger : T().surface2;
+  uint16_t rbFg = rbPend ? T().bg : (rbOk ? T().text : T().divider);
+  iosRR(s, UPD_RB_X, UPD_CH_Y, UPD_RB_W, UPD_CH_H, 6, rbBg);
+  int acx = UPD_RB_X+UPD_RB_W/2, acy = UPD_CH_Y+UPD_CH_H/2;
+  s.fillTriangle(acx-7, acy, acx-2, acy-4, acx-2, acy+4, rbFg);
+  s.fillRect(acx-2, acy-1, 8, 3, rbFg);
+}
+
 void drawUpdate(LGFX_Sprite& s){
+  otaAddBranchPoll(); // simpan branch baru begitu keyboard tertutup
   iosBackdrop(s); drawStatusBar(s);
   s.setTextSize(1);
 
@@ -9821,7 +9877,11 @@ void drawUpdate(LGFX_Sprite& s){
   if(st==2)      snprintf(line, sizeof(line), "Ada update: build %d", otaLatestBuild());
   else if(st==1) snprintf(line, sizeof(line), "Sudah versi terbaru");
   else           snprintf(line, sizeof(line), "Firmware terpasang");
-  s.setTextColor(stCol); s.setCursor(46, UPD_HERO_Y+7); s.print(line);
+  String heroL = String(line);
+  { String hb = String(" [") + otaBranchName() + "]"; // branch firmware yg sedang jalan (kalau muat)
+    int maxHc = (UPD_HB_X - 46 - 4) / 6;
+    if((int)(heroL.length()+hb.length()) <= maxHc) heroL += hb; }
+  s.setTextColor(stCol); s.setCursor(46, UPD_HERO_Y+7); s.print(heroL.c_str());
   int bn = otaBuildNum();
   char bl[24];
   if(bn > 0) snprintf(bl, sizeof(bl), "Build %d", bn); else snprintf(bl, sizeof(bl), "Lokal");
@@ -9877,7 +9937,8 @@ void drawUpdate(LGFX_Sprite& s){
   }
 
   // ---- bagian WiFi ----
-  s.setTextColor(T().subtext); s.setCursor(10, UPD_WIFI_LABEL_Y); s.print("DARI WIFI  -  URL firmware.bin");
+  s.setTextColor(T().subtext); s.setCursor(10, UPD_WIFI_LABEL_Y); s.print("DARI WIFI");
+  updDrawChanRow(s);
   iosRR(s, 6, UPD_URL_Y, SCR_W-12, UPD_URL_H, 6, T().surface);
   int maxU = (SCR_W-28)/6;
   String uDisp = updUrl.length() ? updUrl : String("ketuk untuk isi URL...");
@@ -9898,6 +9959,7 @@ void drawUpdate(LGFX_Sprite& s){
 
 void updTouch(int x,int y,bool held,bool isNew){
   if(updBusy) return;
+  otaAddBranchPoll();
 
   if(kbVisible){
     if(!isNew) return;
@@ -9940,6 +10002,16 @@ void updTouch(int x,int y,bool held,bool isNew){
         return;
       }
     }
+  }
+
+  // baris channel: [pill channel] [+ tambah branch] [rollback]
+  if(y>=UPD_CH_Y-3 && y<=UPD_CH_Y+UPD_CH_H+1 && x>=UPD_CHP_X-2){
+    if(x>=UPD_RB_X-2){
+      if(!otaRollbackReady()){ showToast("Tidak ada versi sebelumnya di slot lain", 2200); return; }
+      if(updCheckConfirm("rb")) otaRollbackNow(true);
+    } else if(x>=UPD_ADD_X-2){ otaAddBranchBegin(); }
+    else { otaChannelCycle(); }
+    return;
   }
 
   if(y>=UPD_URL_Y && y<=UPD_URL_Y+UPD_URL_H){
@@ -17562,6 +17634,7 @@ bool getInputPoint(lgfx::touch_point_t &tp){
 
 void setup(){
   Serial.begin(115200);
+  otaGuardBoot(); // PALING AWAL: pengaman update -- rollback otomatis kalau firmware baru tak kunjung sehat
 
   // v29 FIX: proyek ini SAMA SEKALI gak pakai Bluetooth/BLE (sudah dicek
   // ulang di file ini jg, nol pemakaian). ESP32-S3 defaultnya tetap
@@ -17794,6 +17867,7 @@ void loop(){
   }
   chatLoopPoll(); // Chat: redraw kalau ada pesan/status baru dari task MQTT
   callLoopPoll(); // Telepon: panggilan masuk, dering, notifikasi, siaga (no-op kalau belum dipakai)
+  otaGuardPoll(); // OTA guard: tandai firmware sehat setelah hidup 30 dtk (+ toast kalau barusan di-rollback)
   rcLoopPoll(); // Remote Control: aksi tombol, status penonton, keep-awake
 
   checkAiWatchdog();
