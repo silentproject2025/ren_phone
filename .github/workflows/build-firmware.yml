@@ -60,10 +60,11 @@ jobs:
           if ! grep -q '^CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y' esp32s3/sdkconfig; then
             echo "::warning::Paket kustom tidak berisi opsi yg diharapkan -> dilewati"; exit 0
           fi
-          DEST=$(find "$HOME/.arduino15" -type d -name esp32s3 -path '*esp32-arduino-libs*' | head -n1)
+          DEST=$(find "$HOME" /opt /usr/local -type f -path '*/esp32s3/sdkconfig' -not -path '/tmp/*' 2>/dev/null | head -n1 | xargs -r dirname)
           if [ -z "$DEST" ]; then
             echo "::warning::folder libs esp32s3 tidak ketemu -> dilewati"
-            find "$HOME/.arduino15" -maxdepth 7 -iname '*arduino-libs*' | head
+            arduino-cli config dump | grep -iE "data|user|downloads"
+            find "$HOME" /opt /usr/local -type d -name esp32s3 -not -path '/tmp/*' 2>/dev/null | head -20
             exit 0
           fi
           echo "Target: $DEST"
