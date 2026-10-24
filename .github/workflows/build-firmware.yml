@@ -60,10 +60,15 @@ jobs:
           if ! grep -q '^CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y' esp32s3/sdkconfig; then
             echo "::warning::Paket kustom tidak berisi opsi yg diharapkan -> dilewati"; exit 0
           fi
-          LIBS_ROOT=$(find "$HOME/.arduino15/packages/esp32/tools/esp32-arduino-libs" -mindepth 1 -maxdepth 1 -type d | head -n1)
-          test -n "$LIBS_ROOT" || { echo "::warning::folder libs core tidak ketemu -> dilewati"; exit 0; }
-          mv "$LIBS_ROOT/esp32s3" "$LIBS_ROOT/esp32s3.orig"
-          mv /tmp/customlibs/esp32s3 "$LIBS_ROOT/esp32s3"
+          DEST=$(find "$HOME/.arduino15" -type d -name esp32s3 -path '*esp32-arduino-libs*' | head -n1)
+          if [ -z "$DEST" ]; then
+            echo "::warning::folder libs esp32s3 tidak ketemu -> dilewati"
+            find "$HOME/.arduino15" -maxdepth 7 -iname '*arduino-libs*' | head
+            exit 0
+          fi
+          echo "Target: $DEST"
+          mv "$DEST" /tmp/esp32s3.orig
+          mv /tmp/customlibs/esp32s3 "$DEST"
           echo "::notice::Library kustom (mbedTLS di PSRAM) terpasang utk core $CORE_NOW"
 
       - name: Tentukan nama branch & cek kompatibilitas base
