@@ -6,6 +6,11 @@ on:
   pull_request:
     branches: [ "main", "master" ]
   workflow_dispatch:
+    inputs:
+      use_custom_libs:
+        description: "Pasang library kustom (mbedTLS di PSRAM)? false = pakai bawaan (untuk tes A/B)"
+        type: boolean
+        default: true
 
 permissions:
   contents: write
@@ -38,6 +43,7 @@ jobs:
             arduino-cli lib install --git-url https://github.com/schreibfaul1/ESP32-audioI2S.git
 
       - name: Pasang library core kustom (mbedTLS di PSRAM) - opsional
+        if: ${{ inputs.use_custom_libs != false }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
