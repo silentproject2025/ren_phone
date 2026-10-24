@@ -59,6 +59,7 @@ Tanpa Android, tanpa Linux. Launcher, notifikasi, jaringan, emulator, sampai mes
 | Pemutar AVI (seek, resume, zoom) | `OK` | |
 | Wake Word "Hei Nyx" | `OK` | Berhasil dikenali |
 | Update OTA per channel | `OK` | Termasuk pengaman rollback |
+| mbedTLS di PSRAM (library core kustom) | `OK` | Dipasang otomatis oleh CI. Uji awal: RAM internal terpakai turun sekitar 40 KB saat HTTPS aktif |
 | Remote Control (web) | `OK` | |
 | Gamepad web untuk NES dan DOOM | `OK` | |
 | Baterai (INA219), Galeri, HWmonitor, Profil, dll | `OK` | |
@@ -311,6 +312,8 @@ Memperbarui firmware dari GitHub tanpa kabel, dengan banyak pengaman.
 
 Catatan: pengaman rollback baru aktif untuk update yang dilakukan oleh firmware yang sudah memuat kode ini, dan repo harus **public** agar HP bisa mengunduh tanpa login.
 
+Branch yang belum pernah di-build menampilkan pesan *Channel belum dipublikasikan*. Jalankan workflow build untuk branch itu sekali, supaya release `channel-<branch>` terbentuk. Firmware lama yang belum memuat kode channel tidak punya pemilih branch, jadi pasang satu kali lewat flasher atau SD.
+
 #### HWmonitor
 
 Pantau langsung di HP: beban per-core, RAM internal, PSRAM, dan *largest free block*. Alat utama untuk mendiagnosa masalah memori.
@@ -379,6 +382,27 @@ Screenshot (BMP ke `/screenshot`), Stopwatch dan Timer (tetap jalan di latar), P
 
 **Build ko-prosesor (CAM):** folder `cam_bt_coprocessor/`, board *AI Thinker ESP32-CAM*, partisi *Huge APP*, PSRAM aktif. Library: `audio-tools`, `arduino-libhelix`, `ESP32-A2DP`. Pastikan `rplink.h` **identik** di kedua sisi.
 
+**Library core kustom (mbedTLS di PSRAM).** Opsional, tetapi dipakai oleh build CI. Library bawaan core menaruh buffer mbedTLS di RAM internal. Library kustom memindahkannya ke PSRAM (`CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y`), sehingga RAM internal lebih lega saat koneksi HTTPS aktif. Dua workflow bekerja berurutan:
+
+1. **Build Arduino Libs (mbedTLS di PSRAM)**: dijalankan manual, **sekali per versi core**. Memakai `esp32-arduino-lib-builder`, lalu hasilnya diunggah ke Release prerelease `arduino-libs-custom` (`esp32s3-libs.tar.gz` dan `core-version.txt`). Prosesnya lama dan bisa memakan waktu berjam-jam.
+2. **Build firmware**: tiap build mengunduh paket itu dan menimpanya ke `~/.arduino15/packages/esp32/tools/esp32s3-libs/<versi core>/`, lalu meng-compile sketch.
+
+Step pemasangan sengaja dibuat aman. Paket hanya dipasang kalau Release-nya ada, versi core sama dengan `core-version.txt`, dan `sdkconfig` di paket memuat opsi di atas. Kalau salah satu gagal, build **tetap jalan dengan library bawaan** dan hanya mengeluarkan notice atau warning. Jadi build yang hijau belum tentu memakai library kustom. Cek lognya:
+
+- Step *Pasang library core kustom*: harus ada `Library kustom (mbedTLS di PSRAM) terpasang utk core X.Y.Z`.
+- Step *Verifikasi library kustom terpasang*: mencetak `sdkconfig`, `sdkconfig.h` (harus `CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC 1`), dan hash `libmbedtls.a` terpasang versus asli (harus berbeda).
+
+Jalankan ulang workflow libs hanya kalau versi core berubah atau opsi sdkconfig diubah. Hasil build libs tersimpan di Release, jadi build firmware berikutnya tidak perlu mengulangnya.
+
+**Hasil uji awal.** Di HWmonitor saat app Astronomi memuat data lewat HTTPS, dibandingkan dengan firmware sebelum library kustom:
+
+| Ukuran | Sebelum | Sesudah |
+|---|---|---|
+| RAM internal terpakai | 167 KB | 127 KB |
+| Blok terbesar | 21 KB | 30 KB |
+
+Ini satu cuplikan per firmware pada satu unit, jadi anggap sebagai indikasi, bukan angka pasti.
+
 **Memasang fitur lewat patch.** Banyak fitur berupa pasangan `*_renphone.ino` dan `apply_*.py`. Jalankan dari root repo; skrip aman dijalankan ulang.
 
 ```bash
@@ -426,6 +450,7 @@ RAM internal hanya **±162 KB**, sedangkan satu koneksi HTTPS butuh blok **konti
 | Tunggu sebelum menyerah | Ada jeda dan coba-ulang agar lwIP sempat melepas buffer TLS sebelumnya |
 | App jaringan bisa dikorbankan | **App Memory Guard** melepas cache app latar saat RAM menipis |
 | mbedTLS diperkecil | Flag compile di bagian 5 |
+| Buffer mbedTLS di PSRAM | Library core kustom (`CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC`), lihat bagian 5 |
 
 ### Pembagian task
 
@@ -475,6 +500,7 @@ Volume absolut AVRCP sengaja **tidak diiklankan**, karena pada sebagian earbuds 
 - **AVI OpenDML (> 1 GB)** tidak didukung untuk seek dan resume. MP3 VBR bisa bergeser sedikit setelah lompat jauh.
 - **NyxPPU** belum terpasang di Inferno maupun Home/Lock Screen.
 - **Build CI** tidak mengunci versi tool, jadi update upstream bisa memecahkan build tanpa perubahan di repo.
+- **Library core kustom** terikat pada satu versi core. Kalau versi core di CI berubah, paket di Release dilewati (build tetap hijau, tetapi memakai library bawaan) sampai workflow *Build Arduino Libs* dijalankan ulang.
 
 ---
 
@@ -497,7 +523,7 @@ chat-mqtt/  call-sip/        panduan Chat dan Telepon
 nofrendo_core/ esp_doom_core/  core pihak ketiga (di-vendor)
 apply_*.py  patch_*.py       skrip patch bertahap (idempoten)
 ci_hoist_types.py            langkah CI untuk menghindari bug prototype arduino-cli
-.github/workflows/           build S3, build CAM, flasher web
+.github/workflows/           build S3, build libs kustom, build CAM, flasher web
 Bruce-accretion-phone.bin    firmware alternatif (fork Bruce), terpisah dari NyxOS
 ```
 
