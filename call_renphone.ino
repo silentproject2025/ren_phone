@@ -1672,6 +1672,13 @@ static void callSendAckNon2xx(const char* resp) {
   sipTxTo(dlg.destIp, dlg.destPort, sipTx, n);
 }
 
+static void callFixTargetTcp(const char* viaIp) {
+  if (!callViaTcp(viaIp)) return;
+  if (strstr(dlg.target, "transport=")) return;
+  if (strlen(dlg.target) > sizeof(dlg.target) - 16) return;
+  strcat(dlg.target, ";transport=tcp");
+}
+
 static void callSendAck2xx() {
   char br[28]; callNewBranch(br, sizeof(br));
   char ip[16]; int port;
@@ -1861,6 +1868,7 @@ static void callOnInvite(const char* msg, const char* srcIp, int srcPort) {
     }
   }
   if (!dlg.target[0]) snprintf(dlg.target, sizeof(dlg.target), "sip:%s:%d", srcIp, srcPort);
+  callFixTargetTcp(srcIp);
   callCopy(dlg.route, sizeof(dlg.route), rq.rr);
   dlg.cseq = (esp_random() % 900u) + 100u;
   dlg.lan = (!srvOk || strcmp(srcIp, srvIpStr) != 0);
@@ -1950,6 +1958,7 @@ static void callOnInviteResp(const char* msg, int code) {
       sipContactUri(ct, dlg.target, sizeof(dlg.target));
     }
     if (!dlg.target[0]) callCopy(dlg.target, sizeof(dlg.target), dlg.reqUri);
+    callFixTargetTcp(dlg.destIp);
     sipCollectRR(msg, true, dlg.route, sizeof(dlg.route));
     bool sdpOk = callParseSdp(sipBody(msg));
     callSendAck2xx();
