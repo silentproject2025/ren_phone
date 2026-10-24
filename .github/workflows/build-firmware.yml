@@ -60,16 +60,16 @@ jobs:
           if ! grep -q '^CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y' esp32s3/sdkconfig; then
             echo "::warning::Paket kustom tidak berisi opsi yg diharapkan -> dilewati"; exit 0
           fi
-          DEST=$(find "$HOME" /opt /usr/local -type f -path '*/esp32s3/sdkconfig' -not -path '/tmp/*' 2>/dev/null | head -n1 | xargs -r dirname)
-          if [ -z "$DEST" ]; then
-            echo "::warning::folder libs esp32s3 tidak ketemu -> dilewati"
-            arduino-cli config dump | grep -iE "data|user|downloads"
-            find "$HOME" /opt /usr/local -type d -name esp32s3 -not -path '/tmp/*' 2>/dev/null | head -20
+          DEST=$(find "$HOME/.arduino15/packages/esp32/tools/esp32s3-libs" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | head -n1)
+          if [ -z "$DEST" ] || [ ! -f "$DEST/sdkconfig" ]; then
+            echo "::warning::folder esp32s3-libs tidak sesuai -> dilewati (DEST=$DEST)"
+            ls "$HOME/.arduino15/packages/esp32/tools" | grep -i libs
+            [ -n "$DEST" ] && ls "$DEST"
             exit 0
           fi
           echo "Target: $DEST"
-          mv "$DEST" /tmp/esp32s3.orig
-          mv /tmp/customlibs/esp32s3 "$DEST"
+          cp -a "$DEST" /tmp/esp32s3-libs.orig
+          cp -a /tmp/customlibs/esp32s3/. "$DEST"/
           echo "::notice::Library kustom (mbedTLS di PSRAM) terpasang utk core $CORE_NOW"
 
       - name: Tentukan nama branch & cek kompatibilitas base
