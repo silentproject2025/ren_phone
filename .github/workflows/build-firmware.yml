@@ -37,6 +37,35 @@ jobs:
           arduino-cli lib install "ESP32-audioI2S-master@3.4.6" || \
             arduino-cli lib install --git-url https://github.com/schreibfaul1/ESP32-audioI2S.git
 
+      - name: Pasang library core kustom (mbedTLS di PSRAM) - opsional
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Aman: kalau rilis belum ada / versi core beda / unduhan gagal -> lewati
+          # dan pakai library bawaan core (build tetap jalan seperti biasa).
+          TAG=arduino-libs-custom
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            echo "::notice::Rilis $TAG belum ada -> pakai library core bawaan"; exit 0
+          fi
+          mkdir -p /tmp/customlibs && cd /tmp/customlibs
+          if ! gh release download "$TAG" -p 'esp32s3-libs.tar.gz' -p 'core-version.txt' --clobber; then
+            echo "::warning::Gagal mengunduh library kustom -> pakai bawaan"; exit 0
+          fi
+          CORE_NOW=$(arduino-cli core list | awk '$1=="esp32:esp32"{print $2}')
+          CORE_LIBS=$(cat core-version.txt)
+          if [ "$CORE_NOW" != "$CORE_LIBS" ]; then
+            echo "::warning::Versi core ($CORE_NOW) beda dgn library kustom ($CORE_LIBS) -> TIDAK dipasang. Jalankan ulang workflow Build Arduino Libs."; exit 0
+          fi
+          tar -xzf esp32s3-libs.tar.gz
+          if ! grep -q '^CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y' esp32s3/sdkconfig; then
+            echo "::warning::Paket kustom tidak berisi opsi yg diharapkan -> dilewati"; exit 0
+          fi
+          LIBS_ROOT=$(find "$HOME/.arduino15/packages/esp32/tools/esp32-arduino-libs" -mindepth 1 -maxdepth 1 -type d | head -n1)
+          test -n "$LIBS_ROOT" || { echo "::warning::folder libs core tidak ketemu -> dilewati"; exit 0; }
+          mv "$LIBS_ROOT/esp32s3" "$LIBS_ROOT/esp32s3.orig"
+          mv /tmp/customlibs/esp32s3 "$LIBS_ROOT/esp32s3"
+          echo "::notice::Library kustom (mbedTLS di PSRAM) terpasang utk core $CORE_NOW"
+
       - name: Compile Sketch
         run: |
           mkdir -p build_sketch

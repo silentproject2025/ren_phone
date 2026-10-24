@@ -1,0 +1,93 @@
+name: Build Arduino Libs (mbedTLS di PSRAM)
+
+# Dijalankan MANUAL (Actions -> pilih workflow ini -> Run workflow).
+# Membangun ulang library ESP-IDF milik core Arduino-ESP32 (target esp32s3)
+# dgn CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y, lalu menyimpannya di GitHub Release
+# bertag "arduino-libs-custom" (prerelease, supaya TIDAK jadi "latest" yg
+# dibaca fitur Update OTA). build-firmware.yml otomatis memakainya.
+# Proses ini LAMA (bisa berjam-jam) -- cukup dijalankan sekali per versi core.
+
+on:
+  workflow_dispatch:
+    inputs:
+      lib_builder_branch:
+        description: "Branch esp32-arduino-lib-builder (samakan dgn IDF core, mis. release/v5.5)"
+        default: "release/v5.5"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  libs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+
+    steps:
+      - name: Bebaskan ruang disk
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
+          df -h /
+
+      - name: Setup Arduino CLI + catat versi core
+        uses: arduino/setup-arduino-cli@v2
+
+      - name: Pasang core esp32 (hanya utk mencatat versi)
+        run: |
+          arduino-cli config init --overwrite
+          arduino-cli config set board_manager.additional_urls https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
+          arduino-cli core update-index
+          arduino-cli core install esp32:esp32
+          CORE_VER=$(arduino-cli core list | awk '$1=="esp32:esp32"{print $2}')
+          test -n "$CORE_VER" || (echo "::error::versi core tidak terbaca" && exit 1)
+          echo "$CORE_VER" > "$RUNNER_TEMP/core-version.txt"
+          echo "Versi core: $CORE_VER"
+          ls "$HOME/.arduino15/packages/esp32/tools/esp32-arduino-libs" || true
+
+      - name: Dependensi lib-builder
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git wget curl libssl-dev libncurses-dev flex bison gperf \
+            python3 python3-pip python3-venv python3-setuptools cmake ninja-build ccache jq p7zip-full
+          git config --global user.email "ci@example.com"
+          git config --global user.name "ci"
+
+      - name: Clone lib-builder
+        run: |
+          git clone --branch "${{ inputs.lib_builder_branch }}" https://github.com/espressif/esp32-arduino-lib-builder "$HOME/lib-builder"
+
+      - name: Tambah opsi sdkconfig (mbedTLS ke PSRAM)
+        run: |
+          cd "$HOME/lib-builder"
+          ls configs
+          printf '\nCONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y\n' >> configs/defconfig.esp32s3
+          tail -n 5 configs/defconfig.esp32s3
+
+      - name: Build library esp32s3 (LAMA)
+        run: |
+          cd "$HOME/lib-builder"
+          ./build.sh -t esp32s3
+
+      - name: Cek hasil + paketkan
+        run: |
+          cd "$HOME/lib-builder"
+          OUT=$(find "$PWD" -type d -path '*/esp32-arduino-libs/esp32s3' -not -path '*/include/*' | head -n1)
+          test -n "$OUT" || (echo "::error::folder hasil esp32s3 tidak ketemu" && find "$PWD" -maxdepth 4 -type d | head -50 && exit 1)
+          echo "Hasil: $OUT"
+          grep -q '^CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y' "$OUT/sdkconfig" || (echo "::error::opsi tidak masuk ke sdkconfig hasil build" && exit 1)
+          mkdir -p "$HOME/pkg"
+          tar -czf "$HOME/pkg/esp32s3-libs.tar.gz" -C "$(dirname "$OUT")" esp32s3
+          cp "$RUNNER_TEMP/core-version.txt" "$HOME/pkg/core-version.txt"
+          ls -la "$HOME/pkg"
+
+      - name: Upload ke GitHub Release (prerelease)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG=arduino-libs-custom
+          REPO=${{ github.repository }}
+          gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1 || \
+            gh release create "$TAG" --repo "$REPO" --prerelease --target "${{ github.sha }}" \
+              --title "Library core kustom (mbedTLS di PSRAM)" \
+              --notes "Dibangun oleh workflow Build Arduino Libs. Bukan firmware -- jangan dipakai utk OTA."
+          gh release upload "$TAG" "$HOME/pkg/esp32s3-libs.tar.gz" "$HOME/pkg/core-version.txt" --repo "$REPO" --clobber
