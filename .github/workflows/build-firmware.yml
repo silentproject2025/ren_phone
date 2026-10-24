@@ -48,7 +48,7 @@ jobs:
             echo "::notice::Rilis $TAG belum ada -> pakai library core bawaan"; exit 0
           fi
           mkdir -p /tmp/customlibs && cd /tmp/customlibs
-          if ! gh release download "$TAG" -p 'esp32s3-libs.tar.gz' -p 'core-version.txt' --clobber; then
+          if ! gh release download "$TAG" --repo "$GITHUB_REPOSITORY" -p 'esp32s3-libs.tar.gz' -p 'core-version.txt' --clobber; then
             echo "::warning::Gagal mengunduh library kustom -> pakai bawaan"; exit 0
           fi
           CORE_NOW=$(arduino-cli core list | awk '$1=="esp32:esp32"{print $2}')
