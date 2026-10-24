@@ -7,7 +7,7 @@
  │  [ OK  ] storage      microSD + FFat                         │
  │  [ OK  ] coprocessor  ESP32-CAM  (Bluetooth audio)           │
  │  [ OK  ] apps         41 loaded                              │
- │  [BETA ] phone-call   SIP + LAN         <- belum diuji       │
+ │  [ OK  ] phone-call   SIP + LAN         <- diuji: sip2sip    │
  │  [ EXP ] nyx-ppu      pixel engine, fase 1                   │
  │                                                              │
  │  Accretion Phone ready.                                      │
@@ -22,7 +22,7 @@ Tanpa Android, tanpa Linux. Launcher, notifikasi, jaringan, emulator, sampai mes
 
 `ESP32-S3` · `PSRAM 8 MB` · `41 aplikasi` · `±34.000 baris firmware` · `AGPL-3.0`
 
-> **Soal status fitur.** Hampir semua fitur di sini sudah diuji langsung oleh pembuatnya di perangkat asli. Satu fitur, **Telepon**, baru dirilis dan **belum pernah dites**, jadi bug-nya mungkin ada. Dua hal lain punya catatan khusus: NyxPPU masih eksperimen, dan SPI Overclock tergantung kualitas kabel. Penjelasan lengkapnya ada di [bagian 2](#2--fitur-beta-dan-eksperimen).
+> **Soal status fitur.** Hampir semua fitur di sini sudah diuji langsung oleh pembuatnya di perangkat asli. Satu fitur, **Telepon**, sudah diuji dengan domain `sip2sip.info` (SIP lewat TCP), tetapi penyedia SIP lain dan mode LAN belum dikonfirmasi. Dua hal lain punya catatan khusus: NyxPPU masih eksperimen, dan SPI Overclock tergantung kualitas kabel. Penjelasan lengkapnya ada di [bagian 2](#2--fitur-beta-dan-eksperimen).
 
 ---
 
@@ -62,7 +62,7 @@ Tanpa Android, tanpa Linux. Launcher, notifikasi, jaringan, emulator, sampai mes
 | Remote Control (web) | `OK` | |
 | Gamepad web untuk NES dan DOOM | `OK` | |
 | Baterai (INA219), Galeri, HWmonitor, Profil, dll | `OK` | |
-| **Telepon (SIP + LAN)** | **`BETA`** | **Fitur baru rilis, belum pernah dites** |
+| **Telepon (SIP + LAN)** | `OK` | Teruji dengan domain `sip2sip.info` (SIP lewat TCP). Penyedia lain dan mode LAN belum dikonfirmasi |
 | SPI Overclock layar | `HW` | Hasilnya tergantung batas fisik kabel |
 | NyxPPU (mesin piksel) | `EXP` | Baru fase 1, hanya di app PPU Demo |
 
@@ -72,9 +72,9 @@ Tanpa Android, tanpa Linux. Launcher, notifikasi, jaringan, emulator, sampai mes
 
 ## 2 · Fitur Beta dan eksperimen
 
-Bagian ini menjelaskan tiga fitur yang statusnya bukan `OK`, supaya kamu tahu persis apa yang boleh diharapkan.
+Bagian ini menjelaskan tiga fitur yang statusnya bukan `OK` penuh (Telepon teruji sebagian), supaya kamu tahu persis apa yang boleh diharapkan.
 
-### 2.1 Telepon (SIP + antar-HP lewat WiFi) &nbsp; `BETA`
+### 2.1 Telepon (SIP + antar-HP lewat WiFi) &nbsp; `TERUJI`
 
 **Apa ini?** Aplikasi panggilan suara lewat WiFi. Ada dua mode:
 
@@ -83,9 +83,9 @@ Bagian ini menjelaskan tiga fitur yang statusnya bukan `OK`, supaya kamu tahu pe
 | **SIP** | Menelepon alamat SIP lain (`teman@sip.linphone.org`) lewat akun gratis | Ya |
 | **LAN** | Menelepon langsung antar HP NyxOS yang berada di WiFi yang sama | Tidak |
 
-Keduanya memakai satu "agen SIP" yang sama di UDP port 5060, dengan suara G.711 (PCMU/PCMA, 8 kHz, paket 20 ms) lewat RTP.
+Keduanya memakai satu "agen SIP" yang sama (port 5060), dengan suara G.711 (PCMU/PCMA, 8 kHz, paket 20 ms) lewat RTP. Mode SIP menghubungi server lewat **TCP** secara default (bisa diganti ke UDP dengan `transport=udp` di `sip.cfg`; kalau TCP gagal tersambung, otomatis turun ke UDP). Mode LAN memakai UDP.
 
-**Kenapa disebut Beta?** Karena belum ada satu pun panggilan nyata yang pernah dilakukan dengan fitur ini di HP asli. Yang sudah dicek baru sintaks kode serta uji codec dan parser di PC. Artinya, risiko bug ada di mana-mana: dari pendaftaran akun, bunyi dering, sampai suara tidak terdengar.
+**Status pengujian.** Sudah diuji di HP asli dengan akun `sip2sip.info` (SIP lewat TCP): pendaftaran akun berhasil, serta panggilan keluar dan masuk antara Ren Phone dan HP Android (aplikasi Linphone) tersambung. Yang belum dikonfirmasi: penyedia SIP lain, mode LAN antar dua HP NyxOS, dan kondisi NAT yang berbeda-beda, jadi bug masih mungkin ada.
 
 **Alur suara (penting dipahami):**
 
@@ -101,7 +101,7 @@ Karena ponsel ini **tidak punya speaker**, suara lawan bicara hanya bisa terdeng
 **Cara memakai:**
 
 1. Pasang fitur lewat `python3 apply_call_patch.py` (aman dijalankan ulang).
-2. **Mode SIP:** daftar akun gratis di <https://subscribe.linphone.org>. Di app Telepon buka *Atur*, isi Server `sip.linphone.org`, username, password, dan nama. Atau taruh file `/sip.cfg` di SD (isi `host=`, `user=`, `pass=`, `name=`). Lalu di tab SIP ketik alamat tujuan dan tekan Panggil.
+2. **Mode SIP:** daftar akun gratis. Yang sudah teruji: `sip2sip.info` (isi Server `sip2sip.info`). Alternatif: <https://subscribe.linphone.org> (Server `sip.linphone.org`, belum dikonfirmasi). Di app Telepon buka *Atur*, isi Server, username, password, dan nama. Atau taruh file `/sip.cfg` di SD (isi `host=`, `user=`, `pass=`, `name=`). Lalu di tab SIP ketik alamat tujuan dan tekan Panggil.
 3. **Mode LAN:** di tab LAN isi IP HP lawan, atau tekan **Cari HP NyxOS** (mengirim broadcast SIP OPTIONS), lalu ketuk hasilnya. HP penerima harus satu WiFi dan opsi **Siaga terima panggilan** aktif.
 4. Sambungkan TWS dulu lewat app Musik.
 
@@ -109,7 +109,7 @@ Karena ponsel ini **tidak punya speaker**, suara lawan bicara hanya bisa terdeng
 
 - Hanya bisa menelepon alamat SIP. **Nomor HP biasa (PSTN) tidak bisa** lewat layanan gratis.
 - Tidak ada ICE, jadi panggilan lewat internet bisa **satu arah atau bisu** di jaringan dengan NAT tertentu. Mode LAN paling andal.
-- UDP polos tanpa enkripsi. Password dikirim sebagai hash digest, tetapi suaranya tidak terenkripsi.
+- Tanpa enkripsi: SIP lewat TCP/UDP polos (belum TLS) dan suara RTP tidak terenkripsi. Password dikirim sebagai hash digest.
 - Latensi satu arah diperkirakan 300–500 ms (karena A2DP).
 - Siaga **mati secara default** untuk menghemat RAM dan baterai. Panggilan masuk ditolak otomatis saat NES atau DOOM berjalan.
 - Mic dipakai bersama fitur lain. Tutup Voice Memo dan Mic Level sebelum menelepon. Wake Word dijeda otomatis.
@@ -118,7 +118,7 @@ Karena ponsel ini **tidak punya speaker**, suara lawan bicara hanya bisa terdeng
 **Kalau mau membantu menguji**, urutan yang paling berguna:
 
 1. Mode LAN antar dua HP NyxOS (paling sedikit variabelnya).
-2. Mode SIP ke akun Linphone lain.
+2. Mode SIP ke penyedia selain `sip2sip.info` (mis. akun Linphone lain).
 3. Catat: apakah dering muncul, apakah suara dua arah, seberapa jernih, dan apakah ada restart.
 
 Panduan singkat fitur ini juga ada di [`call-sip/README.md`](./call-sip/README.md).
@@ -188,9 +188,9 @@ Chat pribadi antar HP **tanpa server buatan sendiri**. Sebuah broker MQTT (TLS, 
 
 Batasan: tidak ada notifikasi saat app tertutup, dua HP yang kirim di detik yang sama bisa bertabrakan di satu slot, layar hanya menampilkan ASCII, dan sertifikat broker tidak diverifikasi (`setInsecure()`), jadi jangan kirim hal sensitif.
 
-#### Telepon &nbsp; `BETA`
+#### Telepon &nbsp; `TERUJI`
 
-Lihat [bagian 2.1](#21-telepon-sip--antar-hp-lewat-wifi--beta).
+Lihat [bagian 2.1](#21-telepon-sip--antar-hp-lewat-wifi--teruji).
 
 ### 3.3 Kendali jarak jauh
 
@@ -407,7 +407,7 @@ git add -A && git commit -m "Telepon SIP + LAN" && git push
 | `/gemini_key.txt` | AI Chat dan dikte. Kalau SD tidak terdeteksi, disimpan di NVS |
 | `/nasa_key.txt` | NEO, EPIC, Galeri NASA (`DEMO_KEY` boleh, limitnya kecil). Astronomi tidak butuh key |
 | `/chat.cfg` | Chat: `host=`, `user=`, `pass=`, `name=` |
-| `/sip.cfg` | Telepon: `host=`, `user=`, `pass=`, `name=` |
+| `/sip.cfg` | Telepon: `host=`, `user=`, `pass=`, `name=`, `transport=tcp` atau `udp` (opsional, default tcp) |
 
 **Web File Manager.** Saat WiFi aktif, buka `http://<IP-perangkat>/` untuk unggah, edit, unduh, hapus, atur key Gemini, dan ganti wallpaper (nama berkas harus persis `wallpaper.jpg`).
 
@@ -467,7 +467,7 @@ Volume absolut AVRCP sengaja **tidak diiklankan**, karena pada sebagian earbuds 
 
 - **RAM internal sempit.** `HTTP -1` sering berarti fragmentasi memori, bukan jaringan. Sudah ada mekanisme tunggu dan coba-ulang, tetapi belum bisa dihilangkan sepenuhnya dari level sketch.
 - **Audio hanya lewat Bluetooth.** Tanpa ESP32-CAM dan TWS, tidak ada suara dari app mana pun.
-- **Telepon belum teruji** (lihat bagian 2.1).
+- **Telepon teruji terbatas:** berhasil dengan `sip2sip.info` lewat TCP; penyedia lain dan mode LAN belum dikonfirmasi (lihat bagian 2.1).
 - **Sertifikat TLS tidak diverifikasi** (`setInsecure()`) di fitur jaringan. Jangan kirim data sensitif.
 - **Chat:** layar hanya ASCII; tidak ada notifikasi saat app tertutup.
 - **Baterai:** persen adalah estimasi. Kalau INA219 tidak terdeteksi, persen dan tegangan berhenti diperbarui (tidak ada fallback ADC).
