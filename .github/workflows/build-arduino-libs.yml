@@ -56,7 +56,7 @@ jobs:
         run: |
           CORE_VER=$(cat "$RUNNER_TEMP/core-version.txt")
           BRANCH="${{ inputs.lib_builder_branch }}"
-          [ "$BRANCH" = "auto" ] && BRANCH="release/v${CORE_VER%.*}.x"
+          [ "$BRANCH" = "auto" ] && BRANCH="release/v${CORE_VER%.*}"
           echo "Branch: $BRANCH"
           git ls-remote --exit-code --heads https://github.com/espressif/esp32-arduino-lib-builder "$BRANCH" \
             || (echo "::error::branch $BRANCH tidak ada" && git ls-remote --heads https://github.com/espressif/esp32-arduino-lib-builder | grep release; exit 1)
