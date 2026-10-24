@@ -94,6 +94,25 @@ jobs:
           echo "RP_BRANCH=$RP_BRANCH" >> "$GITHUB_ENV"
           echo "RP_BASE_REV=$MY_BASE" >> "$GITHUB_ENV"
 
+      - name: Verifikasi library kustom terpasang
+        run: |
+          DEST=$(find "$HOME/.arduino15/packages/esp32/tools/esp32s3-libs" -mindepth 1 -maxdepth 1 -type d | head -n1)
+          echo "Target: $DEST"
+          echo "=== sdkconfig (harus EXTERNAL=y) ==="
+          grep -nE "MBEDTLS_(EXTERNAL|INTERNAL)_MEM_ALLOC" "$DEST/sdkconfig" || true
+          echo "=== sdkconfig.h ==="
+          find "$DEST" -name sdkconfig.h | head -5 | while read f; do
+            echo "$f"; grep -nE "MBEDTLS_(EXTERNAL|INTERNAL)_MEM_ALLOC" "$f" || true
+          done
+          echo "=== sha256 libmbedtls.a: terpasang (atas) vs asli (bawah) ==="
+          (cd "$DEST" && find . -name libmbedtls.a | sort | xargs -r sha256sum)
+          echo "---"
+          if [ -d /tmp/esp32s3-libs.orig ]; then
+            (cd /tmp/esp32s3-libs.orig && find . -name libmbedtls.a | sort | xargs -r sha256sum)
+          else
+            echo "(tidak ada salinan asli -> libs kustom TIDAK terpasang)"
+          fi
+
       - name: Compile Sketch
         run: |
           mkdir -p build_sketch
