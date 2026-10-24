@@ -24,6 +24,19 @@
 class MjpegClass
 {
 public:
+  // RAM FIX: objek ini sekarang dibuat/dibuang per pemutaran (lihat mjpegAcquire()
+  // di phone.ino), jadi buffer baca 1 KB-nya WAJIB ikut dilepas -- kalau tidak,
+  // bocor 1 KB RAM internal tiap kali video diputar.
+  void releaseBuffers()
+  {
+    if (_read_buf)
+    {
+      free(_read_buf);
+      _read_buf = nullptr;
+    }
+  }
+  ~MjpegClass() { releaseBuffers(); }
+
   int getWidth() const { return _jpgWidth; }   
   int getHeight() const { return _jpgHeight; } 
   int getScale() const { return _scale; }      // 0, 1⁄2, 1⁄4, 1⁄8  (JPEG_SCALE_x)
@@ -215,7 +228,7 @@ private:
   int _jpgWidth;
   int _jpgHeight;
 
-  uint8_t *_read_buf;
+  uint8_t *_read_buf = nullptr;
   int32_t _mjpeg_buf_offset = 0;
 
   JPEGDEC _jpeg;

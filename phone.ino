@@ -487,8 +487,9 @@ struct HomeRect{ int x,y,w,h; }; // harus paling atas: prototype otomatis Arduin
 // (wallpaper, APOD, EPIC, ImgLib) = ~70KB RAM internal kepakai permanen sejak
 // boot, walau app-nya gak pernah dibuka. Sekarang objeknya dialokasikan
 // LAZY di PSRAM (sekali, pas pertama dipakai). Cara pakai sama spt pointer:
-// wallpaperJpeg->open(...). Objek `mjpeg` (MjpegClass) SENGAJA tetap di RAM
-// internal krn kecepatan decode video lebih penting.
+// wallpaperJpeg->open(...). Objek MjpegClass SENGAJA tetap di RAM
+// internal krn kecepatan decode video lebih penting, TAPI sekarang cuma
+// dialokasi selama pemutaran (lihat mjpegAcquire()).
 #include <new>
 struct PsramJpeg {
   JPEGDEC* p = nullptr;
@@ -8971,7 +8972,28 @@ void mjpegThumbPoll(){
   }
 }
 
-MjpegClass mjpeg;
+// RAM INTERNAL FIX (hemat +-18 KB): dulu `MjpegClass mjpeg;` GLOBAL -- di dalamnya
+// ada 1 objek JPEGDEC (+-18 KB) yg masuk .bss RAM internal PERMANEN sejak boot,
+// walau pemutar MJPEG gak pernah dibuka. Sekarang dibuat cuma selama
+// mjpegPlayFile() jalan lalu dibuang lagi. Tetap RAM INTERNAL dulu (kecepatan
+// decode video penting), PSRAM cuma cadangan kalau RAM internal terlalu
+// terfragmentasi utk blok 18 KB. Sengaja fungsi bool/void (bukan return
+// MjpegClass*) spy prototipe otomatis arduino-cli gak ketemu masalah tipe.
+MjpegClass* mjpegObj = nullptr;
+bool mjpegAcquire(){
+  if(mjpegObj) return true;
+  void* m = heap_caps_calloc(1, sizeof(MjpegClass), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+  if(!m) m = heap_caps_calloc(1, sizeof(MjpegClass), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  if(!m) return false;
+  mjpegObj = new (m) MjpegClass();
+  return true;
+}
+void mjpegRelease(){
+  if(!mjpegObj) return;
+  mjpegObj->~MjpegClass();      // sekalian lepas buffer baca 1 KB-nya
+  heap_caps_free(mjpegObj);
+  mjpegObj = nullptr;
+}
 uint8_t* mjpegBuf = nullptr;
 size_t   mjpegBufSize = 0;
 unsigned long mjpegTotalFrames = 0;
@@ -9127,6 +9149,12 @@ void mjpegPlayFile(const String& filename){
     return;
   }
 
+  if(!mjpegAcquire()){
+    mjFile.close();
+    showToast("RAM tidak cukup utk MJPEG");
+    return;
+  }
+
   // FIX: paksa PORTRAIT selama pemutaran, apapun orientasi device saat ini.
   // Video di-encode (ffmpeg) pas ukuran panel native 240x320 portrait, jadi
   // kalau device lagi landscape (320x240 -- gak match ukuran asli video),
@@ -9155,7 +9183,7 @@ void mjpegPlayFile(const String& filename){
   mjpegTotalFrames   = 0;
   mjpegStartMs       = millis();
 
-  mjpeg.setup(&mjFile, mjpegBuf, mjpegDrawCallback, true /* useBigEndian */,
+  mjpegObj->setup(&mjFile, mjpegBuf, mjpegDrawCallback, true /* useBigEndian */,
               0 /* x */, 0 /* y */, display.width(), display.height());
 
   int frameCheckCounter = 0;
@@ -9168,8 +9196,8 @@ void mjpegPlayFile(const String& filename){
   // yang diambil di sini). Dikombinasikan dengan buffer decode yang jauh
   // lebih besar (lihat mjpegEnsureBuffer di atas), frame besar tidak lagi
   // gagal terbaca sehingga tidak ada lagi frame/akhir video yang "kepotong".
-  while(!mjpegStopRequested && mjFile.available() && mjpeg.readMjpegBuf()){
-    mjpeg.drawJpg();
+  while(!mjpegStopRequested && mjFile.available() && mjpegObj->readMjpegBuf()){
+    mjpegObj->drawJpg();
     mjpegTotalFrames++;
 
     // Cek sentuhan setiap beberapa frame supaya tidak terlalu membebani SPI
@@ -9221,6 +9249,7 @@ void mjpegPlayFile(const String& filename){
   }
 
   mjFile.close();
+  mjpegRelease(); // balikin +-18 KB RAM internal begitu video selesai/dihentikan
   mjpegPlaying       = false;
   mjpegStopRequested = false;
 
