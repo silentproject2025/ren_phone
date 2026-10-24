@@ -76,6 +76,20 @@ jobs:
           printf '\nCONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y\n' >> "$F"
           tail -n 5 "$F"
 
+      - name: Pra-clone arduino-esp32 + debug skrip
+        env:
+          GIT_TERMINAL_PROMPT: "0"
+        run: |
+          cd "$HOME/lib-builder"
+          CORE_VER=$(cat "$RUNNER_TEMP/core-version.txt")
+          AR_BRANCH="release/v${CORE_VER%.*}.x"
+          echo "Arduino branch: $AR_BRANCH"
+          git ls-remote --exit-code --heads https://github.com/espressif/arduino-esp32.git "$AR_BRANCH"
+          git clone -b "$AR_BRANCH" https://github.com/espressif/arduino-esp32.git components/arduino
+          git -C components/arduino log -1 --oneline
+          echo "=== baris skrip yang menyebut URL/token ==="
+          grep -rnE "AR_REPO|AR_SOURCE|arduino-esp32|GITHUB_TOKEN|git clone" tools/*.sh build.sh || true
+
       - name: Build library esp32s3 (LAMA)
         env:
           AR_REPO_URL: https://github.com/espressif/arduino-esp32.git
