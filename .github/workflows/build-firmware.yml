@@ -2,7 +2,7 @@ name: Build Firmware Binaries
 
 on:
   push:
-    branches: [ "main", "master", "remote-control" ]
+    branches: [ "**" ]
   pull_request:
     branches: [ "main", "master" ]
   workflow_dispatch:
@@ -65,6 +65,28 @@ jobs:
           mv "$LIBS_ROOT/esp32s3" "$LIBS_ROOT/esp32s3.orig"
           mv /tmp/customlibs/esp32s3 "$LIBS_ROOT/esp32s3"
           echo "::notice::Library kustom (mbedTLS di PSRAM) terpasang utk core $CORE_NOW"
+
+      - name: Tentukan nama branch & cek kompatibilitas base
+        env:
+          RAW_BRANCH: ${{ github.head_ref || github.ref_name }}
+        run: |
+          RP_BRANCH="$(printf '%s' "$RAW_BRANCH" | tr -c 'A-Za-z0-9_-' '-')"
+          MY_BASE="$(grep -E '^#define RP_BASE_REV[[:space:]]+[0-9]+' ota_check_renphone.ino | grep -oE '[0-9]+' | head -1)"
+          echo "Branch=$RP_BRANCH  RP_BASE_REV=${MY_BASE:-?}"
+          if [ -z "$MY_BASE" ]; then
+            echo "::error::RP_BASE_REV tidak ditemukan di ota_check_renphone.ino"; exit 1
+          fi
+          if [ "$RP_BRANCH" != "remote-control" ]; then
+            if git fetch --depth=1 origin remote-control 2>/dev/null; then
+              REF_BASE="$(git show FETCH_HEAD:ota_check_renphone.ino 2>/dev/null | grep -E '^#define RP_BASE_REV[[:space:]]+[0-9]+' | grep -oE '[0-9]+' | head -1)"
+              if [ -n "$REF_BASE" ] && [ "$REF_BASE" != "$MY_BASE" ]; then
+                echo "::error::Basis kode branch '$RP_BRANCH' (RP_BASE_REV=$MY_BASE) BEDA dgn remote-control ($REF_BASE). Firmware-nya tidak boleh dipertukarkan -> build dibatalkan. Samakan RP_BASE_REV."
+                exit 1
+              fi
+            fi
+          fi
+          echo "RP_BRANCH=$RP_BRANCH" >> "$GITHUB_ENV"
+          echo "RP_BASE_REV=$MY_BASE" >> "$GITHUB_ENV"
 
       - name: Compile Sketch
         run: |
@@ -136,7 +158,7 @@ jobs:
 
           arduino-cli compile --fqbn esp32:esp32:esp32s3 \
             --board-options "FlashSize=16M,PSRAM=opi,PartitionScheme=app3M_fat9M_16MB" \
-            --build-property "compiler.cpp.extra_flags=-DRP_BUILD_NUM=${{ github.run_number }} -DCONFIG_MBEDTLS_DYNAMIC_BUFFER=1 -DCONFIG_MBEDTLS_ASYMMETRIC_CONTENT_LEN=1 -DCONFIG_MBEDTLS_SSL_IN_CONTENT_LEN=4096 -DCONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN=2048 -I${NOF_INCLUDE}" \
+            --build-property "compiler.cpp.extra_flags=-DRP_BUILD_NUM=${{ github.run_number }} -DRP_BRANCH=${RP_BRANCH} -DCONFIG_MBEDTLS_DYNAMIC_BUFFER=1 -DCONFIG_MBEDTLS_ASYMMETRIC_CONTENT_LEN=1 -DCONFIG_MBEDTLS_SSL_IN_CONTENT_LEN=4096 -DCONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN=2048 -I${NOF_INCLUDE}" \
             --build-property "compiler.c.extra_flags=-I${NOF_INCLUDE}" \
             build_sketch --output-dir build
 
@@ -177,6 +199,17 @@ jobs:
           cp build/build_sketch.ino.bin firmware.bin
           test -f build/build_sketch.ino.merged.bin || (echo "::error::build_sketch.ino.merged.bin tidak ada" && ls build && exit 1)
           cp build/build_sketch.ino.merged.bin ren_phone_s3_merged.bin
+          MD5="$(md5sum firmware.bin | cut -d' ' -f1)"
+          SIZE="$(stat -c%s firmware.bin)"
+          {
+            echo "branch=${RP_BRANCH}"
+            echo "build=${{ github.run_number }}"
+            echo "base=${RP_BASE_REV}"
+            echo "size=${SIZE}"
+            echo "md5=${MD5}"
+            echo "sha=${{ github.sha }}"
+          } > info.txt
+          cat info.txt
 
       - name: Publish GitHub Release
         if: github.event_name != 'pull_request'
@@ -184,13 +217,28 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG="build-${{ github.run_number }}"
+          # branch stabil = rilis biasa; branch lain = PRERELEASE (tidak dianggap "terbaru" oleh tombol versi lama)
+          case "$RP_BRANCH" in main|master|remote-control) PRE="" ;; *) PRE="--prerelease" ;; esac
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" firmware.bin ren_phone_s3_merged.bin --clobber
           else
-            gh release create "$TAG" firmware.bin ren_phone_s3_merged.bin \
+            gh release create "$TAG" firmware.bin ren_phone_s3_merged.bin $PRE \
               --target "${{ github.sha }}" \
               --title "Firmware build ${{ github.run_number }}" \
               --notes "Commit ${{ github.sha }} (${{ github.ref_name }})"
+          fi
+
+          # channel bergerak per-branch -- dibaca fitur "pilih branch" di app Update (selalu prerelease)
+          CH="channel-${RP_BRANCH}"
+          NOTES="Channel branch ${RP_BRANCH}: build ${{ github.run_number }}, commit ${{ github.sha }}"
+          if gh release view "$CH" >/dev/null 2>&1; then
+            gh release upload "$CH" firmware.bin info.txt --clobber
+            gh release edit "$CH" --prerelease --notes "$NOTES"
+          else
+            gh release create "$CH" firmware.bin info.txt --prerelease \
+              --target "${{ github.sha }}" \
+              --title "Channel ${RP_BRANCH}" \
+              --notes "$NOTES"
           fi
 
   flasher:
