@@ -12,7 +12,7 @@ on:
     inputs:
       lib_builder_branch:
         description: "Branch esp32-arduino-lib-builder (samakan dgn IDF core, mis. release/v5.5)"
-        default: "release/v5.5"
+        default: "auto"
         required: true
 
 permissions:
@@ -54,7 +54,13 @@ jobs:
 
       - name: Clone lib-builder
         run: |
-          git clone --branch "${{ inputs.lib_builder_branch }}" https://github.com/espressif/esp32-arduino-lib-builder "$HOME/lib-builder"
+          CORE_VER=$(cat "$RUNNER_TEMP/core-version.txt")
+          BRANCH="${{ inputs.lib_builder_branch }}"
+          [ "$BRANCH" = "auto" ] && BRANCH="release/v${CORE_VER%.*}.x"
+          echo "Branch: $BRANCH"
+          git ls-remote --exit-code --heads https://github.com/espressif/esp32-arduino-lib-builder "$BRANCH" \
+            || (echo "::error::branch $BRANCH tidak ada" && git ls-remote --heads https://github.com/espressif/esp32-arduino-lib-builder | grep release; exit 1)
+          git clone --depth 1 --branch "$BRANCH" https://github.com/espressif/esp32-arduino-lib-builder "$HOME/lib-builder"
 
       - name: Tambah opsi sdkconfig (mbedTLS ke PSRAM)
         run: |
