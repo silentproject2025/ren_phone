@@ -92,6 +92,7 @@ void DoomGlue_SetHooks(uint32_t (*ext)(void), int32_t (*mouse)(void), int (*type
 void DoomGlue_SetBandHook(void (*fn)(uint16_t*, int, int, int, int)); // esp_doom_core/DoomGlue.cpp
 bool DoomGlue_BandPathActive();
 void doomOvlBuild(); void doomOvlFree(); void doomDrawOverlay();
+extern volatile uint32_t DG_FrameCount, DG_DrawUsAccum; bool DG_VideoBufInternal(); bool DG_ColormapInternal();
 void doomBandHook(uint16_t* buf, int px, int py, int w, int h);
 class RenPhoneDoomInput : public IDoomInput {
 public:
@@ -145,10 +146,37 @@ static void doomTaskFunc(void* arg){
 
   DoomGlue_Begin(DOOM_WAD_PATH);
   doomPlaying = true;
+  uint32_t stT0 = millis(), stFrames0 = 0, stDraw0 = 0, stTickUs = 0, stTicks = 0;
   int ovlStatic = 3;   // tombol di strip hitam atas/bawah digambar sekali (frame tidak menyentuh strip itu)
 
   while(!doomStopRequested){
+    uint32_t tk0 = micros();
     DoomGlue_Tick();
+    stTickUs += micros() - tk0; stTicks++;
+#if DOOM_STATS
+    if(millis() - stT0 >= 1000){
+      uint32_t dt = millis() - stT0;
+      uint32_t fr = DG_FrameCount - stFrames0;
+      uint32_t dus = DG_DrawUsAccum - stDraw0;
+      uint32_t fps10 = dt ? (fr * 10000UL) / dt : 0;
+      uint32_t drawMs = fr ? (dus / fr) / 1000 : 0;
+      uint32_t tickMs = stTicks ? (stTickUs / stTicks) / 1000 : 0;
+      char l1[48], l2[48];
+      snprintf(l1, sizeof(l1), "fps %u.%u  tick %ums  kirim %ums", (unsigned)(fps10/10), (unsigned)(fps10%10), (unsigned)tickMs, (unsigned)drawMs);
+      snprintf(l2, sizeof(l2), "VB:%c CM:%c BAND:%c int %uK maks %uK",
+               DG_VideoBufInternal()?'I':'P', DG_ColormapInternal()?'I':'P', DoomGlue_BandPathActive()?'Y':'N',
+               (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL)/1024), (unsigned)(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL)/1024));
+      Serial.printf("[doom] %s | %s\n", l1, l2);
+      display.waitDMA();
+      display.startWrite();
+      display.fillRect(0, 0, 284, 19, TFT_BLACK);
+      display.setTextSize(1); display.setTextColor(TFT_YELLOW);
+      display.setCursor(2, 1);  display.print(l1);
+      display.setCursor(2, 10); display.print(l2);
+      display.endWrite();
+      stT0 = millis(); stFrames0 = DG_FrameCount; stDraw0 = DG_DrawUsAccum; stTickUs = 0; stTicks = 0;
+    }
+#endif
     // jalur cepat: tombol sudah ditempel ke tiap pita oleh doomBandHook(); jalur lama: gambar langsung
     if(ovlStatic > 0){ ovlStatic--; doomDrawOverlay(); }
     else if(!DoomGlue_BandPathActive()) doomDrawOverlay();

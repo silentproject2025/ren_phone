@@ -316,6 +316,9 @@ typedef void (*DG_BandHookFn)(uint16_t* buf, int px, int py, int w, int h);
 static DG_BandHookFn hookBand = nullptr;
 void DoomGlue_SetBandHook(DG_BandHookFn f) { hookBand = f; }
 
+#ifndef DOOM_INTERNAL_RESERVE_KB
+#define DOOM_INTERNAL_RESERVE_KB 48
+#endif
 static constexpr int kBandRows = 20;
 static uint16_t* bandBuf[2] = { nullptr, nullptr };
 static bool bandReady = false, bandTried = false;
@@ -327,7 +330,7 @@ static void AllocBands()
 {
     if (!DG_Display || !DG_Display->supportsBand()) return;
     const size_t bytes = (size_t)kOutW * kBandRows * sizeof(uint16_t);
-    if (heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA) < 2 * bytes + 70 * 1024) return;
+    if (heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA) < 2 * bytes + (size_t)DOOM_INTERNAL_RESERVE_KB * 1024) return;
     bandBuf[0] = (uint16_t*)heap_caps_aligned_alloc(4, bytes, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     bandBuf[1] = (uint16_t*)heap_caps_aligned_alloc(4, bytes, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     if (!bandBuf[0] || !bandBuf[1])
@@ -357,7 +360,7 @@ static inline void ConvRowIdent(uint16_t* d, const uint8_t* s, int n)
     for (; i < n; i++) d[i] = p[s[i]];
 }
 
-void DG_DrawFrame()
+static void DrawFrameImpl()
 {
     if (!DG_Display) return;
     if (!lutReady) BuildScaleLUT();
@@ -411,6 +414,22 @@ void DG_DrawFrame()
         DG_Display->writeRow(kPanelX0, kPanelY0 + panelRow, row, kOutW);
     }
     DG_Display->endFrame();
+}
+
+// ---- diagnostik (dibaca doom_renphone.ino) ----
+volatile uint32_t DG_FrameCount = 0;
+volatile uint32_t DG_DrawUsAccum = 0;
+extern "C" { extern unsigned char* I_VideoBuffer; extern unsigned char* colormaps; }
+static inline bool dgIsPsram(const void* p) { uintptr_t a = (uintptr_t)p; return a >= 0x3C000000u && a < 0x3E000000u; }
+bool DG_VideoBufInternal() { return I_VideoBuffer && !dgIsPsram(I_VideoBuffer); }
+bool DG_ColormapInternal() { return colormaps && !dgIsPsram(colormaps); }
+
+void DG_DrawFrame()
+{
+    uint32_t t0 = micros();
+    DrawFrameImpl();
+    DG_DrawUsAccum += micros() - t0;
+    DG_FrameCount++;
 }
 
 void DG_SleepMs(uint32_t ms) { delay(ms); }

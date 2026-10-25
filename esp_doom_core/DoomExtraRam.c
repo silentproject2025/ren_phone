@@ -39,7 +39,13 @@ void *DoomExtraRam_Alloc(size_t n)
 
 // ---- alokasi cepat (RAM internal) + pelacakan ----
 // Sisakan minimal segini di heap internal buat WiFi/lwIP/TLS/stack task lain.
-#define DXR_INTERNAL_RESERVE (80 * 1024)
+#if __has_include("hw_conf.h")
+#include "hw_conf.h"
+#endif
+#ifndef DOOM_INTERNAL_RESERVE_KB
+#define DOOM_INTERNAL_RESERVE_KB 48
+#endif
+#define DXR_INTERNAL_RESERVE (DOOM_INTERNAL_RESERVE_KB * 1024)
 #define DXR_MAX_TRACKED 64
 static void *dxrTracked[DXR_MAX_TRACKED];
 static int   dxrTrackedN = 0;

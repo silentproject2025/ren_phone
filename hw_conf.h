@@ -54,3 +54,11 @@
 // 1 = tukar kanal R/B (panel BGR + buffer mentah, sama seperti NES). Kalau warna DOOM terbalik
 // (merah jadi biru), ganti ke 0 lalu build ulang.
 #define DOOM_SWAP_RB       0
+
+// --- Diagnostik & memori ------------------------------------------------
+// DOOM_STATS 1 = tampilkan fps/ms/status RAM di strip hitam atas layar (+ Serial tiap 1 detik).
+#define DOOM_STATS         1
+// Sisa heap internal yg DIJAGA (KB) -- framebuffer/colormap/buffer DMA cuma diambil dari RAM
+// internal kalau setelah diambil masih sisa segini. Turunkan (mis. 32) kalau HUD menunjukkan
+// VB/CM/BAND jatuh ke PSRAM; naikkan kalau WiFi/web gamepad jadi tidak stabil.
+#define DOOM_INTERNAL_RESERVE_KB 48
