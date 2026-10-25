@@ -3947,6 +3947,7 @@ const float CC_ANIM_MS = 200.0f;
 #define CC_ITEMS 11 // +Bluetooth (index 9), +Tangkap layar (index 10)
 int ccCols(){ return currentOrient==ORIENT_LANDSCAPE ? 6 : 3; } // landscape 6x2, portrait 3x4 -> 11 tombol muat
 void ccActScreenshot(); // definisi di features_renphone.ino
+extern bool powerMenuOpen; void powerMenuShow(); void drawPowerMenu(LGFX_Sprite&); void powerMenuTouch(bool,int,int); // power_renphone.ino
 #define CC_COLS ccCols()
 #define CC_ROWS ((CC_ITEMS+CC_COLS-1)/CC_COLS)
 // Bluetooth (modul ESP32-CAM) -- definisi di musicbt_renphone.ino
@@ -4327,6 +4328,7 @@ void ccLongPress(int i){
     case 7:  dest=SCR_NEOPIXEL; break;
     case 9:  dest=SCR_MUSIC;    break;                   // BT: pindai & sambung perangkat ada di Musik
     case 10: dest=SCR_GALLERY;  break;                   // Tangkap -> album Screenshot
+    case 6: { vibExit(); ccOffset=0; ccAnimating=false; controlCenterOpen=false; powerMenuShow(); needRedraw=true; return; } // Kunci (tahan) -> menu Daya
     default: showToast("Tidak ada pengaturan lanjutan"); needRedraw=true; return;
   }
   Screen cur=curScreen();
@@ -7478,7 +7480,7 @@ int loadSpiOcPref(){
 // PENGATURAN ala iOS -- state layout & sentuhan (daftar scroll, tap-saat-lepas)
 // =====================================================================
 enum { SR_TITLE=0, SR_SECT, SR_BRIGHT, SR_THEME, SR_FONT, SR_ROT, SR_SPI, SR_SPIAPPLY,
-       SR_SCAN, SR_WIFI, SR_NONET, SR_SSID, SR_PASS, SR_CONNECT, SR_MPU, SR_TCAL, SR_OWNER, SR_ABOUT, SR_HOMEEDIT };
+       SR_SCAN, SR_WIFI, SR_NONET, SR_SSID, SR_PASS, SR_CONNECT, SR_MPU, SR_TCAL, SR_OWNER, SR_ABOUT, SR_POWER, SR_HOMEEDIT };
 #define SETT_MAXROWS 40
 int settRT[SETT_MAXROWS], settRG[SETT_MAXROWS], settRY[SETT_MAXROWS], settRH[SETT_MAXROWS], settRA[SETT_MAXROWS];
 const char* settRL[SETT_MAXROWS];
@@ -7538,6 +7540,7 @@ void settBuildLayout(){
 
   settAddRow(SR_SECT,0,26,0,"TENTANG",y);
   settAddRow(SR_ABOUT,g,34,0,nullptr,y); g++;
+  settAddRow(SR_POWER,g,34,0,nullptr,y); g++;
 
   y+=14; settTotalH=y;
 }
@@ -7725,6 +7728,10 @@ void drawSettings(LGFX_Sprite& s){
         s.setTextColor(T().text); s.setCursor(xl,ty); s.print("About Phone");
         settChevron(s,xr-4,ty+4,T().subtext);
         break;
+      case SR_POWER:
+        s.setTextColor(T().danger); s.setCursor(xl,ty); s.print("Daya (Matikan / Mulai Ulang)");
+        settChevron(s,xr-4,ty+4,T().subtext);
+        break;
       case SR_TCAL:
         s.setTextColor(T().danger); s.setCursor(xl,ty); s.print("Kalibrasi Layar Sentuh");
         if(millis()<settTcalArmUntil){ settTextR(s,xr,ty,"Ketuk lagi",T().danger); needRedraw=true; }
@@ -7820,6 +7827,8 @@ void settTap(int x,int y){
       navPush(SCR_OWNER); break;
     case SR_ABOUT:
       navPush(SCR_ABOUT); break;
+    case SR_POWER:
+      powerMenuShow(); needRedraw=true; break;
     case SR_MPU:
       if(mpuReady){ calibrateMPU(); needRedraw=true; }
       else showToast("Sensor MPU6050 tidak terdeteksi");
@@ -10087,6 +10096,7 @@ void renderCurrentFrame(){
     if(!homeBandMode) drawDynamicIsland(canvas); // v14: overlay di atas semua layar (kecuali lock/CC/shade/App Switcher)
     if(diMenuOpen) drawDiMenu(canvas); // v90: context menu ketuk-lama, ditumpuk di atas pil DI
   }
+  if(powerMenuOpen && !callOverlayActive()) drawPowerMenu(canvas); // menu Daya: modal di atas semuanya
 }
 
 // v106: gambar & push HANYA pita grid Home (lihat catatan homeBandMode).
@@ -17917,6 +17927,11 @@ void loop(){
   // gesture pembukanya cuma nyala selagi !locked -- lihat di bawah).
   if(callOverlayActive()){
     callOverlayTouch(newT,tx,ty);
+    if(needRedraw){ renderCurrentFrame(); push(); needRedraw=false; }
+    wasTouched=touched; delay(1); return;
+  }
+  if(powerMenuOpen){
+    powerMenuTouch(newT,tx,ty);
     if(needRedraw){ renderCurrentFrame(); push(); needRedraw=false; }
     wasTouched=touched; delay(1); return;
   }

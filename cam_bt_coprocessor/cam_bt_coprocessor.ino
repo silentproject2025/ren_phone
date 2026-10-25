@@ -35,6 +35,8 @@
 #include "AudioTools.h"
 #include "AudioTools/AudioCodecs/CodecMP3Helix.h"
 #include "BluetoothA2DPSource.h"
+#include "driver/rtc_io.h"
+#include "esp_sleep.h"
 #include "rplink.h"
 #include "ring.h"
 
@@ -371,6 +373,19 @@ static void sendScanResults() {
   rpSend(Serial2, RP_SCANDONE, nullptr, 0);
 }
 
+// Perintah matikan dari S3 (RP_POWEROFF): diproses di loop() krn butuh konteks BT stack.
+static volatile bool pwrOffReq = false;
+static void camPowerOff() {
+  Serial.println("[PWR] deep sleep atas perintah S3");
+  a2dp.set_auto_reconnect(false);
+  if (btConnected) a2dp.disconnect();
+  delay(500);
+  rtc_gpio_pullup_en(GPIO_NUM_13);               // RX dari S3 (GPIO13) idle HIGH
+  rtc_gpio_pulldown_dis(GPIO_NUM_13);
+  esp_sleep_enable_ext0_wakeup(GPIO_NUM_13, 0);  // bangun begitu S3 mulai kirim data (start-bit LOW)
+  esp_deep_sleep_start();
+}
+
 // Saklar Bluetooth dari tombol Control Center (RP_BTMODE).
 static void btSetEnabled(bool on) {
   btEnabled = on;
@@ -586,6 +601,9 @@ static void handleFrame(uint8_t type, const uint8_t* p, uint16_t len) {
     case RP_SCAN: case RP_CONNECT: case RP_TXGAIN: case RP_BTMODE:
       queueCmd(type, p, len);
       break;
+    case RP_POWEROFF:
+      pwrOffReq = true;
+      break;
     default: break;
   }
 }
@@ -706,6 +724,8 @@ void setup() {
 
 void loop() {
   static uint32_t lastStatus = 0;
+
+  if (pwrOffReq) camPowerOff();   // tidak kembali
 
   // perintah dari link (butuh konteks loop: BT stack / NVS)
   Cmd c;

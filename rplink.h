@@ -25,6 +25,7 @@
 #define RP_TXGAIN   'T'   // payload: [0..7]
 #define RP_BTMODE   'B'   // payload: [1=Bluetooth nyala, 0=mati] (tombol BT di Control Center)
 #define RP_PREFILL  'Y'   // payload: [u16 LE byte PCM sebelum mulai diputar; 0 = bawaan]. Dipakai Telepon (latensi rendah)
+#define RP_POWEROFF 'Z'   // S3 -> CAM: tidur dalam (deep sleep). Bangun lewat sinyal di RX (GPIO13)
 #ifndef RP_PING
 #define RP_PING     'G'   // keepalive S3 -> CAM, tanpa payload (CAM mengabaikannya)
 #endif
