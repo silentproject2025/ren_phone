@@ -185,11 +185,17 @@ jobs:
           grep -rq '\blog_printf\b' build_sketch/src/log.c && \
             (echo "::error::Patch rename log_printf gagal diterapkan" && exit 1)
 
+          RP_VERSION=dev
+          [ -f VERSION ] && RP_VERSION="$(tr -d ' \r\n' < VERSION)"
+          [ -n "$RP_VERSION" ] || RP_VERSION=dev
+          echo "$RP_VERSION" | grep -Eq '^(dev|[0-9]+(\.[0-9]+)*(-[A-Za-z0-9]+)?)$' || { echo "::error::isi file VERSION tidak valid: $RP_VERSION"; exit 1; }
+          echo "Versi: $RP_VERSION"
+
           NOF_INCLUDE="$(pwd)/build_sketch/src"
 
           arduino-cli compile --fqbn esp32:esp32:esp32s3 \
             --board-options "FlashSize=16M,PSRAM=opi,PartitionScheme=app3M_fat9M_16MB" \
-            --build-property "compiler.cpp.extra_flags=-DRP_BUILD_NUM=${{ github.run_number }} -DRP_BRANCH=${RP_BRANCH} -DCONFIG_MBEDTLS_DYNAMIC_BUFFER=1 -DCONFIG_MBEDTLS_ASYMMETRIC_CONTENT_LEN=1 -DCONFIG_MBEDTLS_SSL_IN_CONTENT_LEN=4096 -DCONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN=2048 -I${NOF_INCLUDE}" \
+            --build-property "compiler.cpp.extra_flags=-DRP_BUILD_NUM=${{ github.run_number }} -DRP_BRANCH=${RP_BRANCH} -DRP_VERSION=${RP_VERSION} -DCONFIG_MBEDTLS_DYNAMIC_BUFFER=1 -DCONFIG_MBEDTLS_ASYMMETRIC_CONTENT_LEN=1 -DCONFIG_MBEDTLS_SSL_IN_CONTENT_LEN=4096 -DCONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN=2048 -I${NOF_INCLUDE}" \
             --build-property "compiler.c.extra_flags=-I${NOF_INCLUDE}" \
             build_sketch --output-dir build
 
@@ -230,11 +236,13 @@ jobs:
           cp build/build_sketch.ino.bin firmware.bin
           test -f build/build_sketch.ino.merged.bin || (echo "::error::build_sketch.ino.merged.bin tidak ada" && ls build && exit 1)
           cp build/build_sketch.ino.merged.bin ren_phone_s3_merged.bin
+          VER=dev; [ -f VERSION ] && VER="$(tr -d ' \r\n' < VERSION)"; [ -n "$VER" ] || VER=dev
           MD5="$(md5sum firmware.bin | cut -d' ' -f1)"
           SIZE="$(stat -c%s firmware.bin)"
           {
             echo "branch=${RP_BRANCH}"
             echo "build=${{ github.run_number }}"
+            echo "version=${VER}"
             echo "base=${RP_BASE_REV}"
             echo "size=${SIZE}"
             echo "md5=${MD5}"
@@ -247,6 +255,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          VER=dev; [ -f VERSION ] && VER="$(tr -d ' \r\n' < VERSION)"; [ -n "$VER" ] || VER=dev
           TAG="build-${{ github.run_number }}"
           # branch stabil = rilis biasa; branch lain = PRERELEASE (tidak dianggap "terbaru" oleh tombol versi lama)
           case "$RP_BRANCH" in main|master|remote-control) PRE="" ;; *) PRE="--prerelease" ;; esac
@@ -255,7 +264,7 @@ jobs:
           else
             gh release create "$TAG" firmware.bin ren_phone_s3_merged.bin $PRE \
               --target "${{ github.sha }}" \
-              --title "Firmware build ${{ github.run_number }}" \
+              --title "Firmware v${VER} (build ${{ github.run_number }})" \
               --notes "Commit ${{ github.sha }} (${{ github.ref_name }})"
           fi
 

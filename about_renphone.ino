@@ -79,7 +79,8 @@ static void aboutRefresh() {
   aboutAdd("Perangkat", ABOUT_DEVICE_NAME);
   aboutAdd("Sistem", ABOUT_OS_NAME);
   aboutAdd("Pemilik", ownerName());
-  snprintf(a, sizeof(a), "%s", ABOUT_FW_VERSION);
+  { char vl[16]; otaVersionLabel(vl, sizeof(vl)); int bn = otaBuildNum();
+    if (bn > 0) snprintf(a, sizeof(a), "%s (build %d)", vl, bn); else snprintf(a, sizeof(a), "%s", vl); }
   aboutAdd("Versi firmware", a);
   snprintf(a, sizeof(a), "%s %s", __DATE__, __TIME__);
   aboutAdd("Waktu build", a);
@@ -227,7 +228,7 @@ void drawAbout(LGFX_Sprite& s) {
   s.setCursor(tx, cy + 32); s.print(ABOUT_OS_NAME);
   s.setTextColor(T().subtext);
   s.print("  ");
-  s.print(ABOUT_FW_VERSION);
+  { char vl[16]; otaVersionLabel(vl, sizeof(vl)); s.print(vl); }
 
   // ---- daftar info (di-clip supaya tidak menimpa judul / tombol Kembali) ----
   int top = aboutListTop(), bot = aboutListBottom();

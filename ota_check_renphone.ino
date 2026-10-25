@@ -45,6 +45,11 @@
 #ifndef RP_BRANCH
 #define RP_BRANCH local
 #endif
+// label versi utk manusia (mis. 1.0.0), disuntik workflow dari file VERSION lewat -DRP_VERSION=...
+// Beda dgn RP_BUILD_NUM: nomor build yg dipakai OTA utk membandingkan, label ini hanya tampilan.
+#ifndef RP_VERSION
+#define RP_VERSION dev
+#endif
 // versi "basis kode" -- lihat penjelasan di atas. HARUS satu baris, hanya angka.
 #define RP_BASE_REV 1
 
@@ -369,6 +374,11 @@ void otaCheckAndFill() {
 // ---- dipakai UI app Update (phone.ino). Fungsi, bukan makro, karena RP_BUILD_NUM
 //      default-nya didefinisikan di file ini yg urutannya SETELAH phone.ino ----
 int otaBuildNum()    { return (int)RP_BUILD_NUM; }
+void otaVersionLabel(char* out, int n) {   // "v1.0.0", atau "dev" utk build lokal
+  const char* v = RP_STR(RP_VERSION);
+  if (strcmp(v, "dev") == 0) snprintf(out, n, "dev");
+  else snprintf(out, n, "v%s", v);
+}
 int otaLatestBuild() { return otaLatestNum; }
 int otaState() {      // 0 belum dicek, 1 sudah terbaru, 2 ada update
   return otaCheckedOk ? otaStateVal : 0;

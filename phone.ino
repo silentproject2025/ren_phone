@@ -4835,7 +4835,7 @@ void updEnter(); void updExit();
 void drawUpdate(LGFX_Sprite&); void updTouch(int,int,bool,bool);
 // ---- ota_check_renphone.ino: channel (branch) + pengaman boot/rollback ----
 void otaGuardBoot(); void otaGuardPoll(); void otaGuardArm();
-String otaBranchName(); String otaChannelName(); void otaChannelCycle(); void otaAddBranchBegin(); void otaAddBranchPoll();
+String otaBranchName(); String otaChannelName(); void otaChannelCycle(); void otaAddBranchBegin(); void otaAddBranchPoll(); void otaVersionLabel(char* out, int n);
 bool otaRollbackReady(); void otaRollbackRefresh(); bool otaRollbackNow(bool);
 void otaHdrReset(); bool otaHdrFeed(const uint8_t*,size_t,size_t); bool otaPreInstall(const String&,int,String&); void otaApplyExpect(const String&);
 // ---- Chat MQTT: forward declarations (chat_renphone.ino) ----
@@ -9883,8 +9883,9 @@ void drawUpdate(LGFX_Sprite& s){
     if((int)(heroL.length()+hb.length()) <= maxHc) heroL += hb; }
   s.setTextColor(stCol); s.setCursor(46, UPD_HERO_Y+7); s.print(heroL.c_str());
   int bn = otaBuildNum();
-  char bl[24];
-  if(bn > 0) snprintf(bl, sizeof(bl), "Build %d", bn); else snprintf(bl, sizeof(bl), "Lokal");
+  char bl[28];
+  if(bn > 0){ char vl[16]; otaVersionLabel(vl, sizeof(vl)); snprintf(bl, sizeof(bl), "%s b%d", vl, bn); }
+  else snprintf(bl, sizeof(bl), "Lokal");
   s.setTextSize(2); s.setTextColor(T().text); s.setCursor(46, UPD_HERO_Y+18); s.print(bl);
   s.setTextSize(1);
   iosRR(s, UPD_HB_X, UPD_HB_Y, UPD_HB_W, UPD_HB_H, 8, T().accent);
