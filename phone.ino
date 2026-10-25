@@ -2919,7 +2919,12 @@ const char* (*kbMaps[3])[10]={kbL,kbU,kbN};
 
 // KB-FIX: semua baris 10 tuts, grid rata & di-tengah.
 int kbKeyW(){ return (SCR_W-8-18)/10; }
-int kbKeyH(){ return 22; }
+// accretion-v2: layar sentuh KAPASITIF (jari) + layar lebih besar -> tuts dibuat lebih tinggi.
+// 22px = ~3,3mm di 3,5" 480x320, terlalu kecil buat jari. Tinggi mengikuti SCR_H, lebar fungsi mengikuti SCR_W.
+int kbKeyH(){ return SCR_H>=440 ? 40 : (SCR_H>=300 ? 30 : 22); }
+int kbShW(){ return SCR_W>=440 ? 64 : 40; }    // tombol Shift
+int kbNmW(){ return SCR_W>=440 ? 70 : 44; }    // tombol 123/ABC
+int kbDlW(){ return SCR_W>=440 ? 110 : 84; }   // tombol hapus
 int kbY(){ return SCR_H - 4*(kbKeyH()+2) - 4; }
 int kbLeft(){ return (SCR_W - (10*kbKeyW()+18))/2; }
 int kbOffCol(int row){ (void)row; return kbLeft(); }
@@ -2941,16 +2946,16 @@ void drawKb(LGFX_Sprite& s){
       s.fillRoundRect(kx,ry,kw,kh,6,keyC);
       s.drawFastHLine(kx+6,ry+1,kw-12,blend565(keyC,0xFFFF,50));
       const char* lb=lay[r][c];
-      s.setTextSize(2); s.setTextColor(T().text);
+      int ts=(kh>=36)?3:2; s.setTextSize(ts); s.setTextColor(T().text);
       int tw=s.textWidth(lb);
-      s.setCursor(kx+(kw-tw)/2,ry+(kh-16)/2);
+      s.setCursor(kx+(kw-tw)/2,ry+(kh-ts*8)/2);
       s.print(lb);
     }
   }
   s.setTextSize(1);
   int cy=y0+3*(kh+2);
-  int shX=L, shW=40, nmX=shX+shW+4, nmW=44, spX=nmX+nmW+4;
-  int dlW=84, dlX=R-dlW;
+  int shX=L, shW=kbShW(), nmX=shX+shW+4, nmW=kbNmW(), spX=nmX+nmW+4;
+  int dlW=kbDlW(), dlX=R-dlW;
   int spW=max(40, dlX-4-spX);
   bool up = (kbMode==KB_UPPER);
   s.fillRoundRect(shX,cy+1,shW,kh,6,shC);
@@ -2989,8 +2994,8 @@ void kbTouch(int x,int y){
   int cell=kh+2;
   int cy=y0+3*cell;
   if(y>=cy){
-    int shX=L, shW=40, nmX=shX+shW+4, nmW=44, spX=nmX+nmW+4;
-    int dlX=R-84;
+    int shX=L, shW=kbShW(), nmX=shX+shW+4, nmW=kbNmW(), spX=nmX+nmW+4;
+    int dlX=R-kbDlW();
     if(x<nmX-2)                kbMode=(kbMode==KB_UPPER?KB_LOWER:KB_UPPER);
     else if(x<spX-2)           kbMode=(kbMode==KB_NUM?KB_LOWER:KB_NUM);
     else if(x<dlX-2)           *kbTarget+=" ";
