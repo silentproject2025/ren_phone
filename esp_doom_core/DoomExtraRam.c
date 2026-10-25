@@ -43,7 +43,7 @@ void *DoomExtraRam_Alloc(size_t n)
 #include "hw_conf.h"
 #endif
 #ifndef DOOM_INTERNAL_RESERVE_KB
-#define DOOM_INTERNAL_RESERVE_KB 48
+#define DOOM_INTERNAL_RESERVE_KB 80
 #endif
 #define DXR_INTERNAL_RESERVE (DOOM_INTERNAL_RESERVE_KB * 1024)
 #define DXR_MAX_TRACKED 64

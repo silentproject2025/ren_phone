@@ -61,4 +61,4 @@
 // Sisa heap internal yg DIJAGA (KB) -- framebuffer/colormap/buffer DMA cuma diambil dari RAM
 // internal kalau setelah diambil masih sisa segini. Turunkan (mis. 32) kalau HUD menunjukkan
 // VB/CM/BAND jatuh ke PSRAM; naikkan kalau WiFi/web gamepad jadi tidak stabil.
-#define DOOM_INTERNAL_RESERVE_KB 48
+#define DOOM_INTERNAL_RESERVE_KB 80

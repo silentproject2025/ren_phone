@@ -317,7 +317,7 @@ static DG_BandHookFn hookBand = nullptr;
 void DoomGlue_SetBandHook(DG_BandHookFn f) { hookBand = f; }
 
 #ifndef DOOM_INTERNAL_RESERVE_KB
-#define DOOM_INTERNAL_RESERVE_KB 48
+#define DOOM_INTERNAL_RESERVE_KB 80
 #endif
 static constexpr int kBandRows = 20;
 static uint16_t* bandBuf[2] = { nullptr, nullptr };
