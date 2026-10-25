@@ -1136,6 +1136,7 @@ Orientation currentOrient = ORIENT_LANDSCAPE;
 int SCR_W = 480, SCR_H = 320;
 bool ft6236Begin(); bool ftGetTouch(lgfx::touch_point_t* tp); // ft6236_renphone.ino
 #define STATUS_H 22   // tinggi status bar
+void dpSmartPush(); void dpInvalidate(); void dpSyncRows(int y,int h); void dpSyncAll(); // diffpush_renphone.ino
 
 // Didefinisikan penuh di bagian SENSOR (dekat setup()), di-extern di sini
 // supaya bisa dipakai oleh kode yang letaknya lebih awal di file
@@ -1195,6 +1196,7 @@ int  canvasAppHeight();
 void needRedrawNow();
 
 void applyOrientation(Orientation o, bool doSave) {
+  dpInvalidate();
   currentOrient = o;
   display.setRotation(o == ORIENT_LANDSCAPE ? 1 : 0);
   SCR_W = display.width();
@@ -2822,44 +2824,44 @@ void navDrawLower(LGFX_Sprite& spr,int sx,int edge){
   display.clearClipRect();
 }
 void playNavTransition(NavAnim anim){
-  canvas.pushSprite(&transShot,0,0); // simpan frame LAMA (canvas msh berisi layar sblm pindah)
-  renderCurrentFrame();              // gambar frame BARU ke canvas (state navigasi sudah berubah)
-
-  // Redupkan layar LAMA sekali (bukan tiap frame) -- kesan kedalaman.
-  // v109: pada BACK yg di-dim bukan transShot (itu layar yg menutup, ada di ATAS), jadi dilewati.
-  if(anim!=NAV_ANIM_BACK) transShot.fillRectAlpha(0,0,SCR_W,SCR_H,90,TFT_BLACK);
+  // accretion-v2: ILI9488 = 3 byte/piksel -> satu frame penuh ~92ms. Versi lama mengirim SELURUH layar tiap langkah
+  // (lapisan bawah ikut geser/parallax). Sekarang lapisan bawah DIAM (sudah ada di layar), yg dikirim cuma
+  // lapisan atas yg bergerak + sliver yg baru terbuka -> rata-rata separuh piksel, langkah animasi lebih banyak.
+  push();                                              // pastikan layar == layar LAMA (murah kalau sudah sinkron)
+  if(anim==NAV_ANIM_BACK) canvas.pushSprite(&transShot,0,0); // layar yg menutup = lapisan atas yg bergerak
+  renderCurrentFrame();                                // frame BARU ke canvas
 
   const int span = (anim==NAV_ANIM_HOME) ? SCR_H : SCR_W;
   const unsigned long t0 = millis();
-  int lastOff = -1;
-  display.startWrite(); // satu transaksi SPI utk semua frame (fix v17, tetap dipertahankan)
+  int lastOff = 0;
+  display.startWrite();
   for(;;){
-    uiBoostKick(); // v108: CPU 240MHz selama transisi biar gerakan setegas mungkin
+    uiBoostKick();
     unsigned long el = millis()-t0;
     bool lastFrame = el>=NAV_TRANS_MS;
     float lin = lastFrame ? 1.0f : (float)el/(float)NAV_TRANS_MS;
     int offset = (int)(span*navEase(lin)+0.5f);
     if(offset>span) offset=span;
-    if(offset!=lastOff){ // gak ada perubahan posisi = gak perlu kirim ulang ke SPI
-      lastOff=offset;
-      if(anim==NAV_ANIM_PUSH){          // layar baru masuk dari KANAN; layar lama geser pelan (parallax 1/3)
-        navDrawLower(transShot,-(offset/3),SCR_W-offset);
+    if(offset!=lastOff){
+      if(anim==NAV_ANIM_PUSH){            // layar baru masuk dari KANAN, menutupi layar lama yg diam
         navEdgeShadowV(SCR_W-offset);
         canvas.pushSprite(SCR_W-offset,0);
-      } else if(anim==NAV_ANIM_BACK){   // layar yg ditutup geser ke KANAN di atas layar sebelumnya (yg geser pelan)
-        navDrawLower(canvas,-((SCR_W-offset)/3),offset);
+      } else if(anim==NAV_ANIM_BACK){     // layar yg ditutup geser ke KANAN, membuka layar tujuan (diam)
+        int sx0 = lastOff>2 ? lastOff-2 : 0;
+        int sw  = offset-sx0;
+        if(sw>0){ display.setClipRect(sx0,0,sw,SCR_H); canvas.pushSprite(0,0); display.clearClipRect(); }
         navEdgeShadowV(offset);
         transShot.pushSprite(offset,0);
-      } else {                          // NAV_ANIM_HOME: geser TURUN
-        transShot.pushSprite(0,offset);
+      } else {                            // NAV_ANIM_HOME: layar Home turun menutupi layar lama yg diam
         canvas.pushSprite(0,-SCR_H+offset);
       }
+      lastOff = offset;
     }
     if(lastFrame) break;
-    yield(); // kasih napas ke task lain selagi nunggu frame berikutnya
+    yield();
   }
   display.endWrite();
-  push(); // pastikan frame akhir persis sama dgn 'canvas'
+  dpSyncAll();   // layar sekarang == canvas penuh -> shadow ikut sinkron, TIDAK perlu kirim ulang
 }
 
 void ownerStatsOpen(int); // Profil v2: hitung berapa kali app dibuka
@@ -3938,7 +3940,7 @@ float ccAnimFromH=0, ccAnimToH=0;
 unsigned long ccAnimStartMs=0;
 const float CC_ANIM_MS = 200.0f;
 #define CC_ITEMS 11 // +Bluetooth (index 9), +Tangkap layar (index 10)
-int ccCols(){ return currentOrient==ORIENT_LANDSCAPE ? 6 : 3; } // landscape 6x2, portrait 3x4 -> 11 tombol muat
+int ccCols(){ return currentOrient==ORIENT_LANDSCAPE ? 6 : (SCR_W>=300 ? 4 : 3); } // landscape 6x2, portrait 3x4 -> 11 tombol muat
 void ccActScreenshot(); // definisi di features_renphone.ino
 extern bool powerMenuOpen; void powerMenuShow(); void drawPowerMenu(LGFX_Sprite&); void powerMenuTouch(bool,int,int); // power_renphone.ino
 #define CC_COLS ccCols()
@@ -3981,12 +3983,12 @@ int ccGap(){ return currentOrient==ORIENT_LANDSCAPE ? 6 : 10; } // landscape 6 k
 int ccCardW(){ return (ccPanelW() - ccGap()*(CC_COLS+1))/CC_COLS; } // lebar 1 kolom/sel
 int ccCircleD(){
   int cellW = ccCardW();
-  int base = currentOrient==ORIENT_LANDSCAPE ? 36 : 44; // v108: tanpa label -> tombol boleh lebih besar (v13: 30/40)
+  int base = currentOrient==ORIENT_LANDSCAPE ? (SCR_W>=440 ? 46 : 36) : (SCR_W>=300 ? 50 : 44); // v108: tanpa label -> tombol boleh lebih besar (v13: 30/40)
   int d = min(cellW-8, base); // menyesuaikan layar: mengecil otomatis kalau kolom sempit
   if(d<24) d=24;
   return d;
 }
-int ccCardH(){ return currentOrient==ORIENT_LANDSCAPE ? 54 : 50; } // v109: TILE BESAR (ikon + label), bukan lingkaran polos lagi
+int ccCardH(){ return currentOrient==ORIENT_LANDSCAPE ? (SCR_H>=300 ? 62 : 54) : (SCR_W>=300 ? 56 : 50); } // v109: TILE BESAR (ikon + label), bukan lingkaran polos lagi
 int ccGridX(){ return ccMarginX()+ccGap(); }
 int ccGridTop(){ return STATUS_H+6; }
 int ccGridH(){ return CC_ROWS*ccCardH() + (CC_ROWS-1)*ccGap(); }
@@ -5122,8 +5124,8 @@ int appIndexForScreen(Screen s){
   for(int i=0;i<APP_COUNT;i++) if(apps[i].screen==s) return i;
   return -1;
 }
-void appOnEnter(Screen s){ int i=appIndexForScreen(s); if(i>=0 && apps[i].onEnter) apps[i].onEnter(); }
-void appOnExit(Screen s){  int i=appIndexForScreen(s); if(i>=0 && apps[i].onExit)  apps[i].onExit(); }
+void appOnEnter(Screen s){ dpInvalidate(); int i=appIndexForScreen(s); if(i>=0 && apps[i].onEnter) apps[i].onEnter(); }
+void appOnExit(Screen s){  dpInvalidate(); int i=appIndexForScreen(s); if(i>=0 && apps[i].onExit)  apps[i].onExit(); }
 
 // =============================================
 // APP MEMORY GUARD (v92) -- "batas aman RAM" spt yg diminta user: kalau
@@ -5539,7 +5541,7 @@ void homeLayoutSave(){
 }
 void homeLayoutEnsure(){ if(!homeLayoutLoaded) homeLayoutLoad(); }
 
-int homeCols(){ return currentOrient==ORIENT_LANDSCAPE ? 4 : 3; } // HOME-ICON-BULAT: dulu 3/2 kolom (kartu besar)
+int homeCols(){ int c=(SCR_W-10)/68; return c<3?3:c; } // kepadatan tetap ~68px/kolom: 240px->3, 320px->4, 480px->6 // HOME-ICON-BULAT: dulu 3/2 kolom (kartu besar)
 int homeCardW(){ int cols=homeCols(); return (SCR_W - (cols+1)*10)/cols; } // HOME-ICON-BULAT: gap 10 = sama dgn drawHome/touch
 // v71 REDESIGN: kartu app dipertinggi dikit (60->68) krn ikon diperbesar &
 // jarak ikon-ke-label dilebarin biar lebih lega/gak sumpek (lihat drawHome).
@@ -5556,11 +5558,11 @@ int homeDockY(){ return SCR_H-38-8; }
 // Landscape: jam (kiri) + baterai (kanan) di baris 1, kartu musik di baris 2.
 // Portrait : jam, kartu musik, baterai (bar) bertumpuk. Grid app mulai di bawahnya.
 bool homeIsLand(){ return currentOrient==ORIENT_LANDSCAPE; }
-HomeRect homeWClock(){ HomeRect r; r.x=10; r.y=STATUS_H+28; r.h=homeIsLand()?66:80; r.w=homeIsLand()?188:SCR_W-20; return r; }
+HomeRect homeWClock(){ HomeRect r; r.x=10; r.y=STATUS_H+28; r.h=homeIsLand()?66:80; r.w=homeIsLand()?((SCR_W-28)*188/292):SCR_W-20; return r; }
 HomeRect homeWMusic(){ HomeRect r; r.x=10; r.w=SCR_W-20; if(homeIsLand()){ r.y=STATUS_H+28+66+6; r.h=48; } else { r.y=STATUS_H+28+80+8; r.h=58; } return r; }
 HomeRect homeWBatt(){
   HomeRect r;
-  if(homeIsLand()){ r.x=206; r.y=STATUS_H+28; r.w=SCR_W-216; r.h=66; }
+  if(homeIsLand()){ r.x=10+homeWClock().w+8; r.y=STATUS_H+28; r.w=SCR_W-r.x-10; r.h=66; }
   else { r.x=10; r.y=STATUS_H+28+80+8+58+8; r.w=SCR_W-20; r.h=44; }
   return r;
 }
@@ -7456,7 +7458,7 @@ bool settShowPass=false;int settFocus=-1;
 // ~40MHz), sementara 80MHz kebetulan salah satu nilai "bersih" yg beneran
 // tercapai. Drpd nyimpen 3 pilihan PALSU yg gak ngapa2in, cuma disisain
 // 2 titik yg TERBUKTI beda nyata.
-const int SPI_OC_OPTIONS[2] = {27,40};   // ILI9488: 27 aman, 40 cepat (60+ biasanya korup)
+const int SPI_OC_OPTIONS[2] = {40,60};   // ILI9488: 40 = aman (default), 60 = overclock (kalau layar noise/korup, balik ke 40)
 int spiOcIdx = 0;        // v104: yg BENERAN aktif skrg (dimuat NVS di boot, dipakai jg oleh doomEnter/doomExit)
 int spiOcPendingIdx = 0; // v104: hasil rombak total -- pilihan yg lagi "dicoba" di layar Settings, BELUM diterapkan/direstart sampai user ketuk pil-nya sendiri. Disinkronkan ulang ke spiOcIdx tiap kali layar Settings dibuka, lihat settingsEnter().
 void saveSpiOcPref(){ Preferences p; p.begin("ui",false); p.putInt("spimhz",SPI_OC_OPTIONS[spiOcIdx]); p.end(); }
@@ -9141,6 +9143,7 @@ void mjpegDrawPauseOverlay(unsigned long startMs, unsigned long pausedAccumMs){
 // Putar 1 file mjpeg secara blocking. Ketuk singkat = pause/lanjut (posisi
 // terakhir, mm:ss, tetap sama persis). Tahan (>=600ms) = berhenti total.
 void mjpegPlayFile(const String& filename){
+  dpInvalidate();
   if(!mjpegEnsureBuffer()){
     showToast("RAM tidak cukup utk MJPEG");
     return;
@@ -9532,6 +9535,7 @@ void updScanFiles(){
 static int updLastPct = -1;
 static int updBarFill = 0;
 void updDrawProgressFast(size_t written, size_t total){
+  dpInvalidate();
   int pct = (total>0) ? (int)(((uint64_t)written*100)/total) : 0;
   if(pct > 100) pct = 100;
   if(pct == updLastPct) return;
@@ -9556,6 +9560,7 @@ void updDrawProgressFast(size_t written, size_t total){
 }
 
 void updDrawProgress(const char* title, size_t written, size_t total){
+  dpInvalidate();
   display.fillScreen(TFT_BLACK);
   display.setTextSize(1);
   display.setTextColor(0x07FF);
@@ -9572,6 +9577,7 @@ void updDrawProgress(const char* title, size_t written, size_t total){
 
 // layar tunggu (tanpa persen & tanpa peringatan): dipakai saat cek rilis / menghubungi server
 void updDrawBusy(const char* title){
+  dpInvalidate();
   display.fillScreen(TFT_BLACK);
   display.setTextSize(1);
   display.setTextColor(0x07FF);
@@ -9587,6 +9593,7 @@ void updDrawBusy(const char* title){
 // reason: alasan gagal yang ditampilkan LANGSUNG di layar (bukan cuma di Serial),
 // supaya kelihatan penyebab pastinya walau dipakai tanpa PC/serial monitor.
 void updShowResult(bool success, const String& reason){
+  dpInvalidate();
   updBusy = false;
   display.fillScreen(TFT_BLACK);
   int cx = SCR_W/2, cy = SCR_H/2-44;
@@ -10045,7 +10052,7 @@ unsigned long getPushLastUs(){ return nyxPushLastUs; }
 // justru karena push() lama synchronous 100% (jaminan "bus pasti idle
 // begitu push() selesai"). Versi async ngerusak jaminan itu -> dua
 // transfer numpuk di kabel yg sama. Balik ke synchronous biasa.
-void push(){ unsigned long t0=micros(); canvas.pushSprite(0,0); nyxPushLastUs=micros()-t0; rcFrameMark(); }
+void push(){ unsigned long t0=micros(); dpSmartPush(); nyxPushLastUs=micros()-t0; } // accretion-v2: kirim hanya kotak yg berubah (lihat diffpush_renphone.ino)
 void renderCurrentFrame(){
   // v68 FIX: font custom (Mono/Sans/Tebal/Serif) ternyata KETINGGIAN buat
   // kotak2 UI yg didesain pas-pasan buat teks 8px (tombol, status bar, grid
@@ -10104,6 +10111,7 @@ void renderHomeBandFrame(){
   display.setClipRect(0,bt,SCR_W,bh);
   canvas.pushSprite(0,0);
   display.clearClipRect();
+  dpSyncRows(bt,bh);
   rcFrameMark();
 }
 bool toastVisibleNow(){ return toastMsg.length() && millis()<=toastUntil; }

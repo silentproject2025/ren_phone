@@ -123,6 +123,7 @@ jobs:
         run: |
           mkdir -p build_sketch
           cp phone.ino build_sketch/
+          cp diffpush_renphone.ino build_sketch/
           cp ft6236_renphone.ino build_sketch/
           cp hw_ili9488.h build_sketch/
           cp MjpegClass.h build_sketch/
