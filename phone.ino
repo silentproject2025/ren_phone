@@ -7458,7 +7458,7 @@ bool settShowPass=false;int settFocus=-1;
 // ~40MHz), sementara 80MHz kebetulan salah satu nilai "bersih" yg beneran
 // tercapai. Drpd nyimpen 3 pilihan PALSU yg gak ngapa2in, cuma disisain
 // 2 titik yg TERBUKTI beda nyata.
-const int SPI_OC_OPTIONS[2] = {40,60};   // ILI9488: 40 = aman (default), 60 = overclock (kalau layar noise/korup, balik ke 40)
+const int SPI_OC_OPTIONS[3] = {40,60,80}; // ILI9488: 40 = aman (default); 60 & 80 = overclock. Kalau layar noise/garis/korup -> balik ke 40
 int spiOcIdx = 0;        // v104: yg BENERAN aktif skrg (dimuat NVS di boot, dipakai jg oleh doomEnter/doomExit)
 int spiOcPendingIdx = 0; // v104: hasil rombak total -- pilihan yg lagi "dicoba" di layar Settings, BELUM diterapkan/direstart sampai user ketuk pil-nya sendiri. Disinkronkan ulang ke spiOcIdx tiap kali layar Settings dibuka, lihat settingsEnter().
 void saveSpiOcPref(){ Preferences p; p.begin("ui",false); p.putInt("spimhz",SPI_OC_OPTIONS[spiOcIdx]); p.end(); }
@@ -7466,7 +7466,7 @@ int loadSpiOcPref(){
   Preferences p; p.begin("ui",true);
   int v = p.getInt("spimhz", SPI_OC_OPTIONS[0]); // default 60MHz kalau NVS kosong/first boot
   p.end();
-  for(int i=0;i<2;i++) if(SPI_OC_OPTIONS[i]==v) return i;
+  for(int i=0;i<3;i++) if(SPI_OC_OPTIONS[i]==v) return i;
   return 0; // fallback: kalau NVS somehow kesimpen angka yg gak ada di daftar, jangan crash -- balik ke paling aman
 }
 
@@ -7650,14 +7650,14 @@ void drawSettings(LGFX_Sprite& s){
       case SR_SPI: {
         s.setTextColor(T().text); s.setCursor(xl,ty-4); s.print("SPI Overclock");
         s.setTextColor(T().subtext); s.setCursor(xl,ty+6); s.print(spiOcPendingIdx!=spiOcIdx?"Belum diterapkan":"Kecepatan layar");
-        int sw=108, sx=xr-sw, sy=ry+(rh-22)/2;
+        int sw=138, sx=xr-sw, sy=ry+(rh-22)/2, sg=sw/3;
         s.fillRoundRect(sx,sy,sw,22,11,T().surface2);
-        int selx=sx+2+spiOcPendingIdx*(sw/2-2);
-        s.fillRoundRect(selx,sy+2,sw/2-2,18,9,T().accent);
-        for(int k=0;k<2;k++){
-          char lb[8]; sprintf(lb,"%dMHz",SPI_OC_OPTIONS[k]);
+        int selx=sx+2+spiOcPendingIdx*sg;
+        s.fillRoundRect(selx,sy+2,sg-2,18,9,T().accent);
+        for(int k=0;k<3;k++){
+          char lb[8]; sprintf(lb,"%d",SPI_OC_OPTIONS[k]);
           s.setTextColor(k==spiOcPendingIdx?(uint16_t)0xFFFF:T().subtext);
-          s.setCursor(sx+k*(sw/2)+(sw/2)/2-s.textWidth(lb)/2,sy+7); s.print(lb);
+          s.setCursor(sx+k*sg+sg/2-s.textWidth(lb)/2,sy+7); s.print(lb);
         }
         } break;
       case SR_SPIAPPLY:
@@ -7786,8 +7786,8 @@ void settTap(int x,int y){
       showToast(autoRotateEnabled?"Auto-rotate aktif":"Auto-rotate mati");
       needRedraw=true; break;
     case SR_SPI: {
-      int sw=108, sx=xr-sw;
-      if(x>=sx && x<=sx+sw){ spiOcPendingIdx=(x<sx+sw/2)?0:1; needRedraw=true; }
+      int sw=138, sx=xr-sw;
+      if(x>=sx && x<=sx+sw){ int k=(x-sx)*3/sw; if(k>2)k=2; spiOcPendingIdx=k; needRedraw=true; }
       } break;
     case SR_SPIAPPLY:
       spiOcIdx=spiOcPendingIdx; saveSpiOcPref();
