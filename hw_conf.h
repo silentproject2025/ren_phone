@@ -53,4 +53,4 @@
 // --- Warna (jalur cepat DMA) -------------------------------------------
 // 1 = tukar kanal R/B (panel BGR + buffer mentah, sama seperti NES). Kalau warna DOOM terbalik
 // (merah jadi biru), ganti ke 0 lalu build ulang.
-#define DOOM_SWAP_RB       1
+#define DOOM_SWAP_RB       0
