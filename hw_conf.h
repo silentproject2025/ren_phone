@@ -28,16 +28,16 @@
 // per sesi app, jadi ukuran panel di bawah ini HARUS konstan compile-time,
 // tidak bisa ikut berubah kalau user gonta-ganti orientasi Setting seperti
 // app lain (lihat catatan panjang soal ini di doom_renphone.ino).
-#define DOOM_PANEL_W       320
-#define DOOM_PANEL_H       240
+#define DOOM_PANEL_W       480
+#define DOOM_PANEL_H       320
 
 // DOOM asli selalu render di 320x200 (rasio 320:200 = 8:5). Cuma
 // DOOM_VIEWPORT_W yg diisi (mode FILL) -> tinggi konten otomatis mengikuti
 // rasio itu (200px), lalu DOOM_VIEWPORT_Y menaruhnya di TENGAH layar
 // 240px (240-200=40 -> 20px sisa strip hitam di atas & bawah, bukan bug).
 #define DOOM_VIEWPORT_W    320
-#define DOOM_VIEWPORT_X    0
-#define DOOM_VIEWPORT_Y    20
+#define DOOM_VIEWPORT_X    80
+#define DOOM_VIEWPORT_Y    60
 
 // --- Audio: DIMATIKAN (permintaan user, project non-audio) ------------
 #define DOOM_NO_AUDIO

@@ -1065,16 +1065,16 @@ enum KbMode { KB_LOWER, KB_UPPER, KB_NUM };
 // (bukan 75 bekas eksperimen manual) krn ini sekarang jadi DEFAULT
 // paling aman utk first-boot/abis NVS kereset -- pilihan lbh tinggi
 // jadi keputusan sadar user lewat UI, bukan hardcoded di source lagi.
-#define DISPLAY_SPI_FREQ_EXPERIMENTAL 60000000
+#define DISPLAY_SPI_FREQ_EXPERIMENTAL 40000000
 
 // =============================================
 // LGFX CONFIG
 // =============================================
+#include "hw_ili9488.h"   // ILI9488 3,5" + FT6236
 class LGFX : public lgfx::LGFX_Device {
-  lgfx::Panel_ILI9341 _panel_instance;
+  lgfx::Panel_ILI9488 _panel_instance;
   lgfx::Bus_SPI       _bus_instance;
   lgfx::Light_PWM     _light_instance;
-  lgfx::Touch_XPT2046 _touch_instance;
 public:
   LGFX(void) {
     { auto cfg = _bus_instance.config();
@@ -1096,12 +1096,12 @@ public:
       _panel_instance.setBus(&_bus_instance); }
     { auto cfg = _panel_instance.config();
       cfg.pin_cs=10; cfg.pin_rst=14; cfg.pin_busy=-1;
-      cfg.memory_width=240; cfg.memory_height=320;
-      cfg.panel_width=240;  cfg.panel_height=320;
+      cfg.memory_width=LCD_NATIVE_W; cfg.memory_height=LCD_NATIVE_H;
+      cfg.panel_width=LCD_NATIVE_W;  cfg.panel_height=LCD_NATIVE_H;
       cfg.offset_x=0; cfg.offset_y=0; cfg.offset_rotation=0;
       cfg.dummy_read_pixel=8; cfg.dummy_read_bits=1;
-      cfg.readable=true; cfg.invert=false;
-      cfg.rgb_order=false; cfg.dlen_16bit=false;
+      cfg.readable=false; cfg.invert=LCD_INVERT;   // ILI9488: MISO tidak andal
+      cfg.rgb_order=LCD_RGB_ORDER; cfg.dlen_16bit=false;
       cfg.bus_shared=false;
       _panel_instance.config(cfg); }
     { auto cfg = _light_instance.config();
@@ -1109,14 +1109,6 @@ public:
       cfg.freq=44100; cfg.pwm_channel=7;
       _light_instance.config(cfg);
       _panel_instance.setLight(&_light_instance); }
-    { auto cfg = _touch_instance.config();
-      cfg.pin_int=-1; cfg.bus_shared=false;
-      cfg.offset_rotation=0; cfg.spi_host=SPI3_HOST;
-      cfg.freq=2000000;
-      cfg.pin_sclk=6; cfg.pin_mosi=5;
-      cfg.pin_miso=4; cfg.pin_cs=9;
-      _touch_instance.config(cfg);
-      _panel_instance.setTouch(&_touch_instance); }
     setPanel(&_panel_instance);
   }
 
@@ -1141,7 +1133,8 @@ LGFX_Sprite transShot(&display);   // snapshot layar lama, dipakai animasi trans
 // ORIENTASI
 // =============================================
 Orientation currentOrient = ORIENT_LANDSCAPE;
-int SCR_W = 320, SCR_H = 240;
+int SCR_W = 480, SCR_H = 320;
+bool ft6236Begin(); bool ftGetTouch(lgfx::touch_point_t* tp); // ft6236_renphone.ino
 #define STATUS_H 22   // tinggi status bar
 
 // Didefinisikan penuh di bagian SENSOR (dekat setup()), di-extern di sini
@@ -7463,7 +7456,7 @@ bool settShowPass=false;int settFocus=-1;
 // ~40MHz), sementara 80MHz kebetulan salah satu nilai "bersih" yg beneran
 // tercapai. Drpd nyimpen 3 pilihan PALSU yg gak ngapa2in, cuma disisain
 // 2 titik yg TERBUKTI beda nyata.
-const int SPI_OC_OPTIONS[2] = {60,80};
+const int SPI_OC_OPTIONS[2] = {27,40};   // ILI9488: 27 aman, 40 cepat (60+ biasanya korup)
 int spiOcIdx = 0;        // v104: yg BENERAN aktif skrg (dimuat NVS di boot, dipakai jg oleh doomEnter/doomExit)
 int spiOcPendingIdx = 0; // v104: hasil rombak total -- pilihan yg lagi "dicoba" di layar Settings, BELUM diterapkan/direstart sampai user ketuk pil-nya sendiri. Disinkronkan ulang ke spiOcIdx tiap kali layar Settings dibuka, lihat settingsEnter().
 void saveSpiOcPref(){ Preferences p; p.begin("ui",false); p.putInt("spimhz",SPI_OC_OPTIONS[spiOcIdx]); p.end(); }
@@ -7733,7 +7726,7 @@ void drawSettings(LGFX_Sprite& s){
         settChevron(s,xr-4,ty+4,T().subtext);
         break;
       case SR_TCAL:
-        s.setTextColor(T().danger); s.setCursor(xl,ty); s.print("Kalibrasi Layar Sentuh");
+        s.setTextColor(T().danger); s.setCursor(xl,ty); s.print("Touch FT6236 (tanpa kalibrasi)");
         if(millis()<settTcalArmUntil){ settTextR(s,xr,ty,"Ketuk lagi",T().danger); needRedraw=true; }
         break;
     }
@@ -7835,10 +7828,7 @@ void settTap(int x,int y){
       break;
     case SR_TCAL:
       // aman dari salah ketuk: harus diketuk 2x dalam 2,5 detik (ini me-restart perangkat)
-      if(millis()<settTcalArmUntil){
-        Preferences p; p.begin("touch_cal",false); p.putBool("done",false); p.end();
-        ESP.restart();
-      } else { settTcalArmUntil=millis()+2500; showToast("Ketuk lagi untuk kalibrasi layar"); needRedraw=true; }
+      showToast("Touch kapasitif, tidak perlu kalibrasi"); needRedraw=true;
       break;
   }
 }
@@ -9112,7 +9102,7 @@ bool mjpegEnsureBuffer(){
 int mjpegClassifyTouch(lgfx::touch_point_t startTp){
   // Rotasi sudah dipaksa portrait (0) selama playback, jadi tinggi panel
   // native SELALU 320 -- gak perlu display.height() (yg lagi dikunci portrait).
-  bool startedNearBottom = startTp.y > 320 - 40;
+  bool startedNearBottom = startTp.y > (int)display.height() - 40;
   unsigned long t0 = millis();
   lgfx::touch_point_t tp = startTp;
   while(getInputPoint(tp)){
@@ -11841,7 +11831,7 @@ void mazeTouch(int x,int y,bool held,bool isNew){
 #define INF_MAP_W 18
 #define INF_MAP_H 16
 #define INF_MAX_ENEMIES 6
-#define INF_MAX_COLS 320 // lebar layar max (320 landscape ATAU 240 kalau portrait -- 320 aman utk keduanya)
+#define INF_MAX_COLS 480 // lebar layar max (320 landscape ATAU 240 kalau portrait -- 320 aman utk keduanya)
 
 // v74: warna dasar tema neraka -- SENGAJA hardcode (bukan lewat T()) krn
 // dunia in-game raycaster ini butuh nuansa gothic/lorong-neraka yg tetap
@@ -17577,8 +17567,8 @@ void hwmonTouch(int x,int y,bool held,bool isNew){
 // ---- filter sentuhan v2 (apply_touch_deadzone_v2.py): sementara, kaca retak -> ghost touch ----
 // TOUCH_FILTER_V2
 // Semua nilai px dihitung di koordinat layar SAAT INI (ikut portrait/landscape).
-#define TOUCH_DEAD_W   40   // kotak mati pojok kiri-bawah: lebar (px), 0 = nonaktif
-#define TOUCH_DEAD_H   40   // kotak mati pojok kiri-bawah: tinggi (px)
+#define TOUCH_DEAD_W   0   // kotak mati pojok kiri-bawah: lebar (px), 0 = nonaktif
+#define TOUCH_DEAD_H   0   // kotak mati pojok kiri-bawah: tinggi (px)
 #define TOUCH_EDGE_L   0    // strip mati tepi KIRI  (px), 0 = nonaktif
 #define TOUCH_EDGE_R   0    // strip mati tepi KANAN (px), 0 = nonaktif
 #define TOUCH_EDGE_T   0    // strip mati tepi ATAS  (px), 0 = nonaktif
@@ -17588,10 +17578,10 @@ void hwmonTouch(int x,int y,bool held,bool isNew){
 #define TOUCH_DEBUG    1    // 1 = cetak log [touch] ke Serial Monitor, 0 = diam
 // TOUCH_GHOST_RECT (apply_touch_deadzone_v3.py): kotak mati di lokasi ghost terukur,
 // koordinat LANDSCAPE (320x240), tepi kanan-tengah. Aktif cuma saat landscape.
-#define TOUCH_GHOST_X0 285
-#define TOUCH_GHOST_X1 340
-#define TOUCH_GHOST_Y0 95
-#define TOUCH_GHOST_Y1 140
+#define TOUCH_GHOST_X0 9999
+#define TOUCH_GHOST_X1 9999
+#define TOUCH_GHOST_Y0 9999
+#define TOUCH_GHOST_Y1 9999
 
 static bool touchBlocked(const lgfx::touch_point_t &t){
   int x=(int)t.x, y=(int)t.y;
@@ -17632,7 +17622,7 @@ bool getInputPoint(lgfx::touch_point_t &tp){
 
   if(latched && now-lastTouchMs>=TOUCH_LATCH_MS) latched=false;   // sudah cukup sepi
 
-  if(!display.getTouch(&tp)){ prevDown=false; return false; }
+  if(!ftGetTouch(&tp)){ prevDown=false; return false; }
   lastTouchMs=now;
 
   if(touchBlocked(tp)){ touchLog("BLOKIR", tp); latched=true; prevDown=false; return false; }
@@ -17766,7 +17756,7 @@ void setup(){
   // komentar v45 di akhir runBootSequence() utk detail akar masalahnya).
   // Sengaja DIHAPUS -- backlight baru dinyalain di UJUNG setup(), setelah
   // lock screen pertama beres digambar.
-  if(display.touch())loadOrRunCalibration(); // kalibrasi SEKARANG selalu match dgn rotasi runtime
+  ft6236Begin(); // touch kapasitif FT6236: tanpa kalibrasi
   loadTheme();
   loadFontPref();
   initAppColors();
@@ -17777,7 +17767,7 @@ void setup(){
   loadGeminiKey();
   loadWallpaper(); // v47: muat wallpaper custom kalau ada (fallback warna solid tema kalau gak ada)
   canvasApp.setPsram(true);
-  canvasApp.createSprite(320,240-STATUS_H-44);
+  canvasApp.createSprite(480,320-STATUS_H-44);
   canvasApp.fillSprite(T().bg);
   applyOrientation(savedOrient, false); // rapikan SCR_W/H, canvas & canvasApp (rotasi sudah benar dari awal)
   locked = true;
