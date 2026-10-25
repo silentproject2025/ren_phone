@@ -37,6 +37,47 @@ void *DoomExtraRam_Alloc(size_t n)
     return p;
 }
 
+// ---- alokasi cepat (RAM internal) + pelacakan ----
+// Sisakan minimal segini di heap internal buat WiFi/lwIP/TLS/stack task lain.
+#define DXR_INTERNAL_RESERVE (80 * 1024)
+#define DXR_MAX_TRACKED 64
+static void *dxrTracked[DXR_MAX_TRACKED];
+static int   dxrTrackedN = 0;
+
+static void DxrTrack(void *p)
+{
+    if (p && dxrTrackedN < DXR_MAX_TRACKED) dxrTracked[dxrTrackedN++] = p;
+}
+
+void *DoomExtraRam_AllocInternalOnly(size_t n)
+{
+    if (heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT) < n + DXR_INTERNAL_RESERVE) return NULL;
+    void *p = heap_caps_malloc(n, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (p) { memset(p, 0, n); DxrTrack(p); }
+    return p;
+}
+
+void *DoomExtraRam_AllocFast(size_t n)
+{
+    void *p = DoomExtraRam_AllocInternalOnly(n);
+    if (p) return p;
+    p = AllocPsram(n);
+    if (p) { memset(p, 0, n); DxrTrack(p); }
+    return p;
+}
+
+int DoomExtraRam_IsTracked(const void *p)
+{
+    for (int i = 0; i < dxrTrackedN; i++) if (dxrTracked[i] == p) return 1;
+    return 0;
+}
+
+void DoomExtraRam_FreeFast(void)
+{
+    for (int i = 0; i < dxrTrackedN; i++) heap_caps_free(dxrTracked[i]);
+    dxrTrackedN = 0;
+}
+
 void DoomExtraRam_Init(void)
 {
     // Tabel besar yg dulu di DRAM internal (fix "region dram0_0_seg overflowed")
@@ -44,24 +85,24 @@ void DoomExtraRam_Init(void)
     D_LoopInitPsram();        // ticdata[]              (~20.5 KB)
     R_LightTablesInitPsram(); // scalelight/zlight      (~11.5 KB)
 
-    floorclip        = (short*)   AllocPsram(SCREENWIDTH  * sizeof(short));
-    ceilingclip      = (short*)   AllocPsram(SCREENWIDTH  * sizeof(short));
-    spanstart        = (int*)     AllocPsram(SCREENHEIGHT * sizeof(int));
-    spanstop         = (int*)     AllocPsram(SCREENHEIGHT * sizeof(int));
-    yslope           = (fixed_t*) AllocPsram(SCREENHEIGHT * sizeof(fixed_t));
-    distscale        = (fixed_t*) AllocPsram(SCREENWIDTH  * sizeof(fixed_t));
-    cachedheight     = (fixed_t*) AllocPsram(SCREENHEIGHT * sizeof(fixed_t));
-    cacheddistance   = (fixed_t*) AllocPsram(SCREENHEIGHT * sizeof(fixed_t));
-    cachedxstep      = (fixed_t*) AllocPsram(SCREENHEIGHT * sizeof(fixed_t));
-    cachedystep      = (fixed_t*) AllocPsram(SCREENHEIGHT * sizeof(fixed_t));
+    floorclip        = (short*)   DoomExtraRam_AllocFast(SCREENWIDTH  * sizeof(short));
+    ceilingclip      = (short*)   DoomExtraRam_AllocFast(SCREENWIDTH  * sizeof(short));
+    spanstart        = (int*)     DoomExtraRam_AllocFast(SCREENHEIGHT * sizeof(int));
+    spanstop         = (int*)     DoomExtraRam_AllocFast(SCREENHEIGHT * sizeof(int));
+    yslope           = (fixed_t*) DoomExtraRam_AllocFast(SCREENHEIGHT * sizeof(fixed_t));
+    distscale        = (fixed_t*) DoomExtraRam_AllocFast(SCREENWIDTH  * sizeof(fixed_t));
+    cachedheight     = (fixed_t*) DoomExtraRam_AllocFast(SCREENHEIGHT * sizeof(fixed_t));
+    cacheddistance   = (fixed_t*) DoomExtraRam_AllocFast(SCREENHEIGHT * sizeof(fixed_t));
+    cachedxstep      = (fixed_t*) DoomExtraRam_AllocFast(SCREENHEIGHT * sizeof(fixed_t));
+    cachedystep      = (fixed_t*) DoomExtraRam_AllocFast(SCREENHEIGHT * sizeof(fixed_t));
 
-    columnofs        = (int*)     AllocPsram(DXR_MAXWIDTH  * sizeof(int));
-    ylookup          = (byte**)   AllocPsram(DXR_MAXHEIGHT * sizeof(byte*));
+    columnofs        = (int*)     DoomExtraRam_AllocFast(DXR_MAXWIDTH  * sizeof(int));
+    ylookup          = (byte**)   DoomExtraRam_AllocFast(DXR_MAXHEIGHT * sizeof(byte*));
 
     viewangletox     = (int*)     AllocPsram((FINEANGLES/2) * sizeof(int));
 
-    negonearray       = (short*)  AllocPsram(SCREENWIDTH * sizeof(short));
-    screenheightarray = (short*)  AllocPsram(SCREENWIDTH * sizeof(short));
-    clipbot           = (short*)  AllocPsram(SCREENWIDTH * sizeof(short));
-    cliptop            = (short*) AllocPsram(SCREENWIDTH * sizeof(short));
+    negonearray       = (short*)  DoomExtraRam_AllocFast(SCREENWIDTH * sizeof(short));
+    screenheightarray = (short*)  DoomExtraRam_AllocFast(SCREENWIDTH * sizeof(short));
+    clipbot           = (short*)  DoomExtraRam_AllocFast(SCREENWIDTH * sizeof(short));
+    cliptop            = (short*) DoomExtraRam_AllocFast(SCREENWIDTH * sizeof(short));
 }

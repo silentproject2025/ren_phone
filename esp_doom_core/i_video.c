@@ -1,3 +1,12 @@
+#pragma GCC optimize ("O3")
+#include <stddef.h>
+#include "DoomExtraRam.h"
+#if __has_include("hw_conf.h")
+#include "hw_conf.h"
+#endif
+#ifndef DOOM_SWAP_RB
+#define DOOM_SWAP_RB 1
+#endif
 #include "esp_attr.h"
 #include "esp_attr.h"
 // Emacs style mode select   -*- C++ -*- 
@@ -97,6 +106,13 @@ void I_GetEvent(void);
 // The screen buffer; this is modified to draw things to the screen
 
 byte *I_VideoBuffer = NULL;
+
+// --- v-boost: dipakai DoomGlue.cpp ---
+// Palet SIAP KIRIM: 16-bit sudah byte-swap (urutan kabel SPI), jadi DMA bisa langsung
+// ambil tanpa konversi. Diisi ulang tiap I_SetPalette (gamma + kilatan damage/pickup ikut).
+uint16_t DG_PalWire[256];
+// Sumber frame yg akan dikirim: langsung I_VideoBuffer (tanpa salin) kalau tidak di-scale.
+const unsigned char *DG_FrameSrc = NULL;
 
 // If true, game is running as a screensaver
 
@@ -289,7 +305,9 @@ void I_InitGraphics (void)
 
 
     /* Allocate screen to draw to */
-	I_VideoBuffer = (byte*)Z_Malloc (SCREENWIDTH * SCREENHEIGHT, PU_STATIC, NULL);  // For DOOM to draw on
+	I_VideoBuffer = (byte*)DoomExtraRam_AllocInternalOnly (SCREENWIDTH * SCREENHEIGHT); // RAM internal: render jauh lebih cepat drpd PSRAM
+	if (!I_VideoBuffer)
+		I_VideoBuffer = (byte*)Z_Malloc (SCREENWIDTH * SCREENHEIGHT, PU_STATIC, NULL);  // fallback: zona (PSRAM)
 
 	screenvisible = true;
 
@@ -299,7 +317,9 @@ void I_InitGraphics (void)
 
 void I_ShutdownGraphics (void)
 {
-	Z_Free (I_VideoBuffer);
+	if (!DoomExtraRam_IsTracked(I_VideoBuffer)) Z_Free (I_VideoBuffer);
+	I_VideoBuffer = NULL;
+	DG_FrameSrc = NULL;
 }
 
 void I_StartFrame (void)
@@ -325,6 +345,17 @@ void I_FinishUpdate (void)
     int y;
     int x_offset, y_offset, x_offset_end;
     unsigned char *line_in, *line_out;
+
+    /* v-boost: jalur cepat -- tanpa scaling & tanpa offset, kirim I_VideoBuffer langsung
+     * (dulu: memcpy 64KB PSRAM->PSRAM tiap frame cuma buat disalin lagi). */
+    if (fb_scaling == 1 && s_Fb.xres == SCREENWIDTH && s_Fb.yres == SCREENHEIGHT)
+    {
+        DG_FrameSrc = (const unsigned char *) I_VideoBuffer;
+        DG_DrawFrame();
+        return;
+    }
+    DG_FrameSrc = (const unsigned char *) DG_ScreenBuffer;
+
     /* Offsets in case FB is bigger than DOOM */
     /* 600 = s_Fb heigt, 200 screenheight */
     /* 600 = s_Fb heigt, 200 screenheight */
@@ -405,6 +436,18 @@ void I_SetPalette (byte* palette)
         colors[i].r = gammatable[usegamma][*palette++];
         colors[i].g = gammatable[usegamma][*palette++];
         colors[i].b = gammatable[usegamma][*palette++];
+    }
+
+    /* v-boost: palet siap-kirim (RGB565, channel R/B ditukar spt NES krn panel BGR utk buffer mentah,
+     * lalu byte-swap = urutan kabel SPI). Set DOOM_SWAP_RB 0 di hw_conf.h kalau warna terbalik. */
+    for (i = 0; i < 256; ++i) {
+        unsigned r5 = colors[i].r >> 3, g6 = colors[i].g >> 2, b5 = colors[i].b >> 3;
+#if DOOM_SWAP_RB
+        unsigned px = (b5 << 11) | (g6 << 5) | r5;
+#else
+        unsigned px = (r5 << 11) | (g6 << 5) | b5;
+#endif
+        DG_PalWire[i] = (uint16_t)(((px & 0xFF) << 8) | (px >> 8));
     }
 
 #ifdef CMAP256

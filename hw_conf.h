@@ -49,3 +49,8 @@
 // ren_phone). doomEnter() di doom_renphone.ino akan menampilkan toast error
 // yg jelas kalau file ini tidak ditemukan -- tidak bikin hang/crash.
 #define DOOM_WAD_PATH      "/doom1.wad"
+
+// --- Warna (jalur cepat DMA) -------------------------------------------
+// 1 = tukar kanal R/B (panel BGR + buffer mentah, sama seperti NES). Kalau warna DOOM terbalik
+// (merah jadi biru), ganti ke 0 lalu build ulang.
+#define DOOM_SWAP_RB       1

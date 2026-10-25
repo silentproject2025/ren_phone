@@ -17,6 +17,9 @@
 //	generation of lookups, caching, retrieval by name.
 //
 
+#include <stddef.h>
+#include <string.h>
+#include "DoomExtraRam.h"
 #include <stdio.h>
 
 #include "deh_main.h"
@@ -694,6 +697,11 @@ void R_InitColormaps (void)
     //  256 byte align tables.
     lump = W_GetNumForName(DEH_String("COLORMAP"));
     colormaps = W_CacheLumpNum(lump, PU_STATIC);
+    {   // colormap dibaca TIAP PIKSEL -> salin ke RAM internal kalau muat
+        int sz = W_LumpLength(lump);
+        byte *fast = (byte *) DoomExtraRam_AllocInternalOnly((size_t) sz);
+        if (fast) { memcpy(fast, colormaps, sz); colormaps = fast; }
+    }
 }
 
 

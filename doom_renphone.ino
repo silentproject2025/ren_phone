@@ -55,14 +55,25 @@ enum { DBTN_UP=0, DBTN_DOWN, DBTN_LEFT, DBTN_RIGHT, DBTN_FIRE, DBTN_USE, DBTN_ST
 class RenPhoneDoomDisplay : public IDoomDisplay {
 public:
   bool begin() override { return true; } // display sudah di-init phone.ino setup()
-  void beginFrame() override { display.startWrite(); }
+  // v-boost: transaksi SPI dibuka SEKALI & dibiarkan terbuka selama sesi DOOM (ditutup di close()),
+  // supaya DMA pita terakhir tetap jalan SELAGI core ini merender frame berikutnya.
+  void beginFrame() override { if(!txOpen){ display.startWrite(); txOpen=true; } }
   void writeRow(int x, int y, const uint16_t* rgb565, int count) override {
     display.setAddrWindow(x, y, count, 1);
     display.writePixels((const lgfx::rgb565_t*)rgb565, count);
   }
-  void endFrame() override { display.endWrite(); }
+  bool supportsBand() const override { return true; }
+  void writeBand(int x, int y, int w, int h, const uint16_t* wire565) override {
+    display.waitDMA();                                            // pita sebelumnya harus selesai dulu
+    display.pushImageDMA(x, y, w, h, (const lgfx::swap565_t*)wire565); // data sudah urutan kabel -> tanpa konversi
+  }
+  void flushDMA() override { display.waitDMA(); }
+  void endFrame() override { /* sengaja kosong: transaksi tetap terbuka (lihat beginFrame) */ }
+  void close() { if(txOpen){ display.waitDMA(); display.endWrite(); txOpen=false; } }
   int width()  const override { return DOOM_PANEL_W; }
   int height() const override { return DOOM_PANEL_H; }
+private:
+  bool txOpen = false;
 };
 
 // -----------------------------------------------------------------
@@ -78,6 +89,10 @@ uint32_t padExtKeys();      // 31 tombol EXTRA (strafe, run, senjata, F-keys, ..
 int32_t  padTakeMouseDX();  // geser-lihat (delta sejak panggilan lalu)
 int      padTakeTyped();    // 1 karakter ketikan (0 = kosong)
 void DoomGlue_SetHooks(uint32_t (*ext)(void), int32_t (*mouse)(void), int (*typed)(void)); // esp_doom_core/DoomGlue.cpp
+void DoomGlue_SetBandHook(void (*fn)(uint16_t*, int, int, int, int)); // esp_doom_core/DoomGlue.cpp
+bool DoomGlue_BandPathActive();
+void doomOvlBuild(); void doomOvlFree(); void doomDrawOverlay();
+void doomBandHook(uint16_t* buf, int px, int py, int w, int h);
 class RenPhoneDoomInput : public IDoomInput {
 public:
   volatile bool raw[DBTN_COUNT] = {false};
@@ -124,19 +139,26 @@ static void doomTaskFunc(void* arg){
   DG_Display = &doomDisplay;
   DG_Input   = &doomInput;
   DoomGlue_SetHooks(padExtKeys, padTakeMouseDX, padTakeTyped);
+  DoomGlue_SetBandHook(doomBandHook);
+  doomOvlBuild();
   doomInput.begin();
 
   DoomGlue_Begin(DOOM_WAD_PATH);
   doomPlaying = true;
+  int ovlStatic = 3;   // tombol di strip hitam atas/bawah digambar sekali (frame tidak menyentuh strip itu)
 
   while(!doomStopRequested){
     DoomGlue_Tick();
-    doomDrawOverlay(); // gambar tombol virtual DI ATAS frame yg baru saja ditulis DoomGlue_Tick()
+    // jalur cepat: tombol sudah ditempel ke tiap pita oleh doomBandHook(); jalur lama: gambar langsung
+    if(ovlStatic > 0){ ovlStatic--; doomDrawOverlay(); }
+    else if(!DoomGlue_BandPathActive()) doomDrawOverlay();
     padFrames++;       // HUD HW monitor di halaman /pad (gamepad_renphone.ino)
     vTaskDelay(1); // kasih jatah idle task FreeRTOS (WiFi/BT/WDT), sama alasannya dgn delay(1) di loop() utama
   }
 
   DoomGlue_Shutdown();
+  doomDisplay.close();
+  doomOvlFree();
   doomPlaying = false;
   doomTaskHandle = nullptr;
   vTaskDelete(nullptr);
@@ -238,7 +260,82 @@ static int doomOkCy(){   return SCR_H-124; }
 static int doomPauseX(){ return SCR_W-30; }
 static int doomPauseY(){ return 24; }
 
+// ---- overlay yg ditempel ke tiap pita (jalur cepat) ----
+// Tiap tombol di-render SEKALI ke sprite kecil, lalu dikonversi ke format kabel (R/B ditukar spt palet
+// DOOM). Per frame cuma menyalin piksel non-transparan -> jauh lebih murah drpd gambar lingkaran+teks.
+struct DoomOvl { int x, y, w, h; uint16_t* pix; uint16_t key; };
+static DoomOvl doomOvl[4];
+static int doomOvlN = 0;
+
+static uint16_t doomWireFixRB(uint16_t wire){
+#if DOOM_SWAP_RB
+  uint16_t v = (wire >> 8) | (wire << 8);
+  v = ((v & 0x1F) << 11) | (v & 0x07E0) | (v >> 11);
+  return (v >> 8) | (v << 8);
+#else
+  return wire;
+#endif
+}
+
+static void doomOvlPaint(LGFX_Sprite& sp, int kind, int r, const char* label, uint16_t col){
+  if(kind == 0){                       // tombol bulat
+    sp.fillCircle(r,r,r,col); sp.drawCircle(r,r,r,TFT_BLACK);
+    sp.setTextColor(TFT_WHITE); sp.setTextSize(1);
+    int tw = sp.textWidth(label); sp.setCursor(r-tw/2, r-3); sp.print(label);
+  } else {                             // tombol pause
+    sp.fillRoundRect(0,0,32,28,4,0x4208); sp.drawRoundRect(0,0,32,28,4,TFT_BLACK);
+    sp.fillRect(10,6,4,16,TFT_WHITE); sp.fillRect(18,6,4,16,TFT_WHITE);
+  }
+}
+
+static void doomOvlAdd(int x, int y, int w, int h, int kind, int r, const char* label, uint16_t col){
+  if(doomOvlN >= 4) return;
+  LGFX_Sprite spr(&display);
+  spr.setColorDepth(16);
+  spr.setPsram(false);
+  if(!spr.createSprite(w, h)) return;
+  spr.fillSprite(0x0001);
+  uint16_t* sb = (uint16_t*)spr.getBuffer();
+  uint16_t key = sb[0];
+  doomOvlPaint(spr, kind, r, label, col);
+  uint16_t* pix = (uint16_t*)heap_caps_malloc((size_t)w*h*2, MALLOC_CAP_8BIT);
+  if(!pix){ spr.deleteSprite(); return; }
+  for(int i=0;i<w*h;i++) pix[i] = (sb[i]==key) ? key : doomWireFixRB(sb[i]);
+  DoomOvl& o = doomOvl[doomOvlN++];
+  o.x=x; o.y=y; o.w=w; o.h=h; o.pix=pix; o.key=key;
+  spr.deleteSprite();
+}
+
+void doomOvlBuild(){
+  doomOvlN = 0;
+  doomOvlAdd(doomFireCx()-22, doomFireCy()-22, 45, 45, 0, 22, "F",  0xF800);
+  doomOvlAdd(doomUseCx()-16,  doomUseCy()-16,  33, 33, 0, 16, "U",  0x07E0);
+  doomOvlAdd(doomOkCx()-14,   doomOkCy()-14,   29, 29, 0, 14, "OK", 0x001F);
+  doomOvlAdd(doomPauseX()-16, doomPauseY()-14, 33, 29, 1, 0,  "",   0);
+}
+
+void doomOvlFree(){
+  for(int i=0;i<doomOvlN;i++){ if(doomOvl[i].pix) heap_caps_free(doomOvl[i].pix); doomOvl[i].pix=nullptr; }
+  doomOvlN = 0;
+}
+
+// Dipanggil DoomGlue untuk tiap pita (koordinat panel). Tempel tombol yg beririsan dgn pita ini.
+void doomBandHook(uint16_t* buf, int px, int py, int w, int h){
+  for(int k=0;k<doomOvlN;k++){
+    const DoomOvl& o = doomOvl[k];
+    int y0 = max(o.y, py), y1 = min(o.y+o.h, py+h);
+    int x0 = max(o.x, px), x1 = min(o.x+o.w, px+w);
+    if(y0>=y1 || x0>=x1) continue;
+    for(int y=y0;y<y1;y++){
+      uint16_t* d = buf + (size_t)(y-py)*w + (x0-px);
+      const uint16_t* sp = o.pix + (size_t)(y-o.y)*o.w + (x0-o.x);
+      for(int x=x0;x<x1;x++,d++,sp++) if(*sp != o.key) *d = *sp;
+    }
+  }
+}
+
 void doomDrawOverlay(){
+  display.waitDMA();   // DMA frame terakhir harus selesai sebelum gambar langsung
   display.startWrite();
   auto btn=[&](int cx,int cy,int r,const char* label,uint16_t col){
     display.fillCircle(cx,cy,r,col);

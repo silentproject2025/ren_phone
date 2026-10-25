@@ -1,3 +1,5 @@
+#pragma GCC optimize ("O3")
+#include <esp_heap_caps.h>
 #include "esp_attr.h"
 #include "esp_attr.h"
 #include <DoomGlue.h>
@@ -299,33 +301,115 @@ void DG_Init()
 {
 }
 
+// ------------------------------------------------------------------
+//  v-boost: gambar per-PITA + DMA async
+// ------------------------------------------------------------------
+//  Dulu: tiap piksel panggil DG_PaletteColor565() (fungsi), tiap baris setAddrWindow+writePixels
+//  (200x transaksi), CPU nunggu SPI selesai. Sekarang:
+//   - palet siap-kirim DG_PalWire[] (RAM internal), konversi 2 piksel/langkah
+//   - frame dipecah jadi pita kBandRows baris; pita k dikonversi CPU SELAGI pita k-1 jalan di DMA
+//   - pita terakhir tetap jalan di DMA selagi core ini langsung mulai merender frame berikutnya
+//  Kalau RAM internal/DMA tidak cukup -> otomatis pakai jalur lama (per baris).
+extern "C" { extern const unsigned char* DG_FrameSrc; extern uint16_t DG_PalWire[256]; }
+
+typedef void (*DG_BandHookFn)(uint16_t* buf, int px, int py, int w, int h);
+static DG_BandHookFn hookBand = nullptr;
+void DoomGlue_SetBandHook(DG_BandHookFn f) { hookBand = f; }
+
+static constexpr int kBandRows = 20;
+static uint16_t* bandBuf[2] = { nullptr, nullptr };
+static bool bandReady = false, bandTried = false;
+bool DoomGlue_BandPathActive() { return bandReady; }
+
+static constexpr bool kIdent = (kContentW == DOOMGENERIC_RESX && kContentH == DOOMGENERIC_RESY && !kCropX && !kCropY);
+
+static void AllocBands()
+{
+    if (!DG_Display || !DG_Display->supportsBand()) return;
+    const size_t bytes = (size_t)kOutW * kBandRows * sizeof(uint16_t);
+    if (heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA) < 2 * bytes + 70 * 1024) return;
+    bandBuf[0] = (uint16_t*)heap_caps_aligned_alloc(4, bytes, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    bandBuf[1] = (uint16_t*)heap_caps_aligned_alloc(4, bytes, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (!bandBuf[0] || !bandBuf[1])
+    {
+        if (bandBuf[0]) heap_caps_free(bandBuf[0]);
+        if (bandBuf[1]) heap_caps_free(bandBuf[1]);
+        bandBuf[0] = bandBuf[1] = nullptr;
+        return;
+    }
+    bandReady = true;
+}
+
+static inline void ConvRowIdent(uint16_t* d, const uint8_t* s, int n)
+{
+    const uint16_t* p = DG_PalWire;
+    int i = 0;
+    if ((reinterpret_cast<uintptr_t>(d) & 3) == 0)
+    {
+        for (; i + 4 <= n; i += 4)
+        {
+            uint32_t a = (uint32_t)p[s[i]] | ((uint32_t)p[s[i + 1]] << 16);
+            uint32_t b = (uint32_t)p[s[i + 2]] | ((uint32_t)p[s[i + 3]] << 16);
+            ((uint32_t*)(d + i))[0] = a;
+            ((uint32_t*)(d + i))[1] = b;
+        }
+    }
+    for (; i < n; i++) d[i] = p[s[i]];
+}
+
 void DG_DrawFrame()
 {
     if (!DG_Display) return;
+    if (!lutReady) BuildScaleLUT();
+    if (!bandTried) { bandTried = true; AllocBands(); }
 
-    if (!lutReady)
-        BuildScaleLUT();
-EXT_RAM_BSS_ATTR EXT_RAM_BSS_ATTR 
-EXT_RAM_BSS_ATTR     static uint16_t row[kOutW];
+    const uint8_t* src = DG_FrameSrc ? (const uint8_t*)DG_FrameSrc : (const uint8_t*)DG_ScreenBuffer;
+    if (!src) return;
 
+    if (bandReady)
+    {
+        static unsigned parity = 0;
+        DG_Display->beginFrame();
+        for (int y0 = 0; y0 < kOutH; y0 += kBandRows)
+        {
+            const int rows = (kOutH - y0 < kBandRows) ? (kOutH - y0) : kBandRows;
+            uint16_t* buf = bandBuf[parity++ & 1];
+
+            for (int r = 0; r < rows; r++)
+            {
+                uint16_t* d = buf + (size_t)r * kOutW;
+                const int contentRow = y0 + r + kCropY0;
+                if (kIdent)
+                {
+                    ConvRowIdent(d, src + (size_t)contentRow * DOOMGENERIC_RESX, kOutW);
+                }
+                else
+                {
+                    const uint8_t* srcRow = src + (size_t)yLUT[contentRow] * DOOMGENERIC_RESX;
+                    for (int c = 0; c < kOutW; c++) d[c] = DG_PalWire[srcRow[xLUT[c + kCropX0]]];
+                }
+            }
+            if (hookBand) hookBand(buf, kPanelX0, kPanelY0 + y0, kOutW, rows);
+            DG_Display->writeBand(kPanelX0, kPanelY0 + y0, kOutW, rows, buf);
+        }
+        DG_Display->endFrame();
+        return;
+    }
+
+    // ---- jalur lama (per baris), dipakai kalau RAM internal tidak cukup ----
+    EXT_RAM_BSS_ATTR static uint16_t row[kOutW];
     DG_Display->beginFrame();
-
-    const uint8_t* src = (const uint8_t*)DG_ScreenBuffer;
-
     for (int panelRow = 0; panelRow < kOutH; panelRow++)
     {
         int contentRow = panelRow + kCropY0;
         const uint8_t* srcRow = src + (size_t)yLUT[contentRow] * DOOMGENERIC_RESX;
-
         for (int panelCol = 0; panelCol < kOutW; panelCol++)
         {
-            int contentCol = panelCol + kCropX0;
-            row[panelCol] = DG_PaletteColor565(srcRow[xLUT[contentCol]]);
+            uint16_t w = DG_PalWire[srcRow[xLUT[panelCol + kCropX0]]];
+            row[panelCol] = (uint16_t)((w >> 8) | (w << 8));      // balikin ke urutan native utk writePixels()
         }
-
         DG_Display->writeRow(kPanelX0, kPanelY0 + panelRow, row, kOutW);
     }
-
     DG_Display->endFrame();
 }
 
@@ -386,4 +470,11 @@ void DoomGlue_Tick()
 void DoomGlue_Shutdown()
 {
     doomgeneric_Shutdown();
+
+    // v-boost: pastikan DMA terakhir selesai, lalu lepas buffer pita
+    if (DG_Display) DG_Display->flushDMA();
+    if (bandBuf[0]) heap_caps_free(bandBuf[0]);
+    if (bandBuf[1]) heap_caps_free(bandBuf[1]);
+    bandBuf[0] = bandBuf[1] = nullptr;
+    bandReady = false; bandTried = false;
 }

@@ -16,6 +16,7 @@
 #include "r_data.h"
 #include "r_things.h"
 #include "r_draw.h"
+#include "DoomExtraRam.h"
 
 pixel_t* DG_ScreenBuffer = NULL;
 
@@ -130,4 +131,6 @@ void doomgeneric_Shutdown (void)
 
 	Z_Shutdown ();
 	DG_STEP("zone");
+
+	DoomExtraRam_FreeFast();   // RAM internal (framebuffer, colormap, tabel kolom) dikembalikan
 }

@@ -40,6 +40,13 @@ public:
     // no-op, everything was already written in writeRow.
     virtual void endFrame() = 0;
 
+    // v-boost (opsional): kirim sebuah PITA (band) w x h piksel sekaligus. 'wire565' sudah dalam urutan
+    // kabel (big-endian), bisa langsung di-DMA-kan. Implementasi boleh async; DoomGlue memakai 2 buffer
+    // bergantian dan memanggil flushDMA() sebelum membebaskan buffer.
+    virtual bool supportsBand() const { return false; }
+    virtual void writeBand(int x, int y, int w, int h, const uint16_t* wire565) { (void)x;(void)y;(void)w;(void)h;(void)wire565; }
+    virtual void flushDMA() {}
+
     virtual int width() const = 0;
     virtual int height() const = 0;
 

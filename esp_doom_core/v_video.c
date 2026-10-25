@@ -1,3 +1,4 @@
+#pragma GCC optimize ("O3")
 //
 // Copyright(C) 1993-1996 Id Software, Inc.
 // Copyright(C) 1993-2008 Raven Software
