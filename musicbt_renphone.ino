@@ -41,6 +41,14 @@ struct MusReq { uint8_t t; int32_t a; char s[40]; };
 
 // ---- state task/link ----
 static bool          musStarted = false;
+
+// tombol earbuds utk telepon: play/pause = angkat, next/prev = tolak (saat panggilan masuk)
+#ifndef RP_AVRCP_CALL_KEYS
+#define RP_AVRCP_CALL_KEYS   1     // 0 = tombol earbuds hanya utk musik (perilaku lama)
+#endif
+#ifndef RP_AVRCP_CALL_HANGUP
+#define RP_AVRCP_CALL_HANGUP 0     // 1 = play/pause juga MENUTUP panggilan yang sedang aktif
+#endif
 static TaskHandle_t  musTaskHandle = nullptr;
 static StackType_t*  musTaskStack = nullptr;
 static StaticTask_t  musTaskTCB;
@@ -659,7 +667,29 @@ static void musHandleReq(uint8_t t, int32_t a, const char* s) {
 // ---- tombol earbuds (AVRCP) yang diteruskan CAM lewat RP_KEY ----
 //  kode: 1 play, 2 pause/stop, 3 next, 4 prev, 5 vol+, 6 vol-, 7 volume absolut (arg 0..127)
 static void musSetVol(int v);   // definisi di bagian UI di bawah
+bool callKeyIncoming(); bool callKeyActive();                       // definisi di call_renphone.ino
+void callKeyAnswer();   void callKeyReject();   void callKeyHangup();
 static void musOnKey(uint8_t code, uint8_t arg) {
+#if RP_AVRCP_CALL_KEYS
+  {
+    static uint32_t lastCallKeyMs = 0;
+    bool inc = callKeyIncoming();
+#if RP_AVRCP_CALL_HANGUP
+    bool act = callKeyActive();
+#else
+    bool act = false;
+#endif
+    if (inc || act) {
+      uint32_t nowMs = millis();
+      if (nowMs - lastCallKeyMs < 1000UL) return;          // abaikan tekan ganda
+      if (inc && (code == 1 || code == 2)) { lastCallKeyMs = nowMs; callKeyAnswer(); return; }
+      if (inc && (code == 3 || code == 4)) { lastCallKeyMs = nowMs; callKeyReject(); return; }
+#if RP_AVRCP_CALL_HANGUP
+      if (act && (code == 1 || code == 2)) { lastCallKeyMs = nowMs; callKeyHangup(); return; }
+#endif
+    }
+  }
+#endif
   switch (code) {
     case 1: if (!musLoaded || musPaused) musPost('u', 0, nullptr); break;   // PLAY: hanya kalau sedang berhenti/jeda
     case 2: if (musLoaded && !musPaused) musPost('u', 0, nullptr); break;   // PAUSE/STOP: hanya kalau sedang main
@@ -1001,7 +1031,11 @@ bool btCcEnabled() {
     Preferences p; p.begin("music", true);
     musBtOn = p.getBool("bton", true);
     p.end();
+#if RP_AVRCP_CALL_KEYS
+    musBegin();                 // link ke CAM hidup sejak boot supaya tombol earbuds bisa angkat telepon
+#else
     if (!musBtOn) musBegin();   // link harus hidup supaya CAM diberi tahu BT mati setelah boot
+#endif
   }
   return musBtOn;
 }

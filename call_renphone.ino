@@ -2650,6 +2650,14 @@ static void callPost(uint8_t r, const char* arg) {
   callReq = r;
 }
 
+// ---- dipakai tombol earbuds (AVRCP) dari musicbt_renphone.ino. Fungsi global bertipe sederhana
+//      (aturan auto-prototype arduino-cli), supaya tidak bergantung urutan penggabungan file ----
+bool callKeyIncoming() { return callPhase == CPH_INCOMING; }
+bool callKeyActive()   { return callPhase == CPH_ACTIVE; }
+void callKeyAnswer()   { callPost(CRQ_ANSWER, ""); }
+void callKeyReject()   { callPost(CRQ_REJECT, ""); }
+void callKeyHangup()   { callPost(CRQ_HANGUP, ""); }
+
 // =====================================================================
 //  SIKLUS HIDUP & POLL (UI thread)
 // =====================================================================
