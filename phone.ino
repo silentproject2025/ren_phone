@@ -1135,6 +1135,7 @@ LGFX_Sprite transShot(&display);   // snapshot layar lama, dipakai animasi trans
 Orientation currentOrient = ORIENT_LANDSCAPE;
 int SCR_W = 480, SCR_H = 320;
 bool ft6236Begin(); bool ftGetTouch(lgfx::touch_point_t* tp); // ft6236_renphone.ino
+bool ftPoll(); uint8_t ftFingerCount(); bool ftFinger(uint8_t slot,int* x,int* y); // ft6236_renphone.ino: multi-touch (maks 2 jari)
 #define STATUS_H 22   // tinggi status bar
 void dpSmartPush(); void dpInvalidate(); void dpSyncRows(int y,int h); void dpSyncAll(); // diffpush_renphone.ino
 
@@ -8094,6 +8095,25 @@ void canvasTouch(int x,int y,bool held,bool isNew){
   }
 }
 
+// accretion-v2: jari SEKUNDER ikut menggambar (2 goresan bersamaan, masing2 punya
+// titik terakhir sendiri). Jari primer tetap lewat canvasTouch() di atas. Jari sekunder
+// cuma menggambar di area kanvas -- toolbar/palet tetap hanya dari jari primer.
+static bool cvSecActive[2]={false,false};
+static int  cvSecLX[2]={0,0}, cvSecLY[2]={0,0};
+void canvasMultiTick(){
+  int capY=canvasCapY(), ty=canvasToolY();
+  for(int s=0;s<2;s++){
+    int x,y;
+    if(!rpFinger(s,&x,&y) || rpFingerRole(s)!=2){ cvSecActive[s]=false; continue; }
+    if(y<capY || y>=ty){ cvSecActive[s]=false; continue; }
+    int cy=y-capY;
+    if(cvSecActive[s]) canvasStampStroke(cvSecLX[s],cvSecLY[s],x,cy,brushSize,drawColor);
+    else canvasApp.fillCircle(x,cy,max(1,brushSize/2),drawColor);
+    cvSecActive[s]=true; cvSecLX[s]=x; cvSecLY[s]=cy;
+    needRedraw=true;
+  }
+}
+
 // =============================================
 // APP: AI CHAT
 // =============================================
@@ -14084,79 +14104,94 @@ void infTouch(int x,int y,bool held,bool isNew){
     }
     return;
   }
-  if(infState!=INF_PLAYING) return;
-  // Tombol TEMBAK diperiksa PALING DULU & terpisah dari joystick/look di
-  // bawah -- layar ini cuma bisa baca 1 titik sentuh, jadi titik yg
-  // jatuh di lingkaran tombol ini TIDAK ikut jadi basis joystick/look
-  // (supaya nembak & gerak/noleh gak "rebutan" satu2nya slot sentuh).
-  int fcx=SCR_W-30, fcy=SCR_H-34, fr=24;
-  int fdx=x-fcx, fdy=y-fcy;
-  if(fdx*fdx+fdy*fdy <= fr*fr){
-    if(isNew){ infFire(); return; }
-    // v85: toggle auto-fire (SETTINGS) -- selagi jari msh ditahan di
-    // lingkaran tombol ini, infFire() dipanggil tiap frame, TAPI cooldown
-    // per-senjata di dalam infFire() sendiri yg nentuin beneran nembak
-    // atau nggak, jadi amunisi tetap kesedot wajar sesuai fire rate, gak
-    // "curang" nembak lebih cepat drpd nembak manual berulang-ulang.
-    if(held && infAutoFireOn) infFire();
-    return; // v85: tombol ini SELALU "menyerap" sentuhan di areanya (tap maupun ditahan) biar gak numpuk jd basis joystick/look
-  }
-  // v78: tombol GANTI SENJATA -- diperiksa PALING DULU jg (persis pola
-  // tombol tembak di atas), spy ketukannya gak ketutup/kecampur jadi basis
-  // joystick/look.
-  int wcx=SCR_W-30, wcy=SCR_H-84, wr=17;
-  int wdx=x-wcx, wdy=y-wcy;
-  if(isNew && wdx*wdx+wdy*wdy <= wr*wr){ infCycleWeapon(); return; }
+  // accretion-v2: kontrol gameplay (joystick kiri + look kanan + tembak + ganti senjata)
+  // dipindah ke infMultiTick() di bawah supaya BISA DIPAKAI BERSAMAAN (FT6236 = 2 jari):
+  // mis. jalan dgn jempol kiri sambil noleh/nembak dgn jempol kanan. infTouch() cuma
+  // tersisa utk tombol Back (jari primer) & menu.
+}
 
-  // v75: SENTUHAN BARU -- zona ditentukan dari sisi layar TEMPAT JARI
-  // PERTAMA KALI MENYENTUH (dicek sekali di sini, bukan diulang tiap
-  // frame), spy jari yg mulai di zona joystick tetap dianggap joystick
-  // walau kegeser lewat garis tengah selagi ditahan -- kalau dicek ulang
-  // tiap frame, gerakan bakal "loncat" mode di tengah gestur & kerasa aneh.
-  if(isNew){
-    if(x < SCR_W/2){
-      infTouchIsJoy=true; infJoyActive=true; infJoyLastMs=millis();
-      infJoyAnchorX=x; infJoyAnchorY=y; infJoyCurX=x; infJoyCurY=y;
-    } else {
-      infTouchIsJoy=false; infLookActive=true;
-      infLookLastX=x; infLookLastY=y; infLastLookTouchMs=millis();
+// ---------------------------------------------------------------------
+// accretion-v2: kontrol Inferno 2 jari. Dipanggil tiap putaran loop() (lewat
+// rpMultiTouchTick) selagi layar = Inferno. Peran jari ditentukan SEKALI saat jari
+// menyentuh (jari yg mulai di zona joystick tetap joystick walau kegeser):
+//   role 1 = joystick (jangkar tetap, makin jauh makin cepat, jalan terus selagi ditahan)
+//   role 2 = look     (geser relatif, noleh)
+//   role 3 = tombol TEMBAK (auto-fire kalau diaktifkan)   role 4 = tombol GANTI SENJATA
+//   role -1 = diabaikan sampai jari lepas (mis. jari yg dipakai menekan "Main" di menu)
+// Satu joystick & satu look; jari ke-2 di zona yg sama pindah ke peran yg masih kosong.
+// ---------------------------------------------------------------------
+static int8_t   infFRole[2]  = {0,0};
+static uint32_t infFSeen[2]  = {0,0};
+static int      infFLastX[2] = {0,0}, infFLastY[2] = {0,0};
+
+void infMultiTick(){
+  if(infState!=INF_PLAYING){                       // bukan lagi main: jari yg sedang menempel diabaikan sampai lepas
+    for(int s=0;s<2;s++){
+      int fx,fy;
+      if(rpFinger(s,&fx,&fy)){ rpFingerNew(s,&infFSeen[s]); infFRole[s]=-1; }
+      else infFRole[s]=0;
     }
     return;
   }
+  const int fcx=SCR_W-30, fcy=SCR_H-34, fr=24;     // tombol TEMBAK
+  const int wcx=SCR_W-30, wcy=SCR_H-84, wr=17;     // tombol GANTI SENJATA
+  bool joyTaken=false, lookTaken=false;
+  for(int s=0;s<2;s++){ if(infFRole[s]==1) joyTaken=true; if(infFRole[s]==2) lookTaken=true; }
 
-  if(infTouchIsJoy){
-    // v75: INTI PERBAIKANNYA -- offset dihitung DARI JANGKAR (titik
-    // sentuh pertama, TETAP), BUKAN direset ke posisi jari tiap frame spt
-    // skema lama. Selama jari msh nempel & ditahan miring ke suatu arah,
-    // offset ini TETAP ADA tiap frame -> jalan terus otomatis, gak perlu
-    // swipe berulang-ulang lagi.
-    infJoyCurX=x; infJoyCurY=y; infJoyLastMs=millis();
-    float ox=(float)(x-infJoyAnchorX), oy=(float)(y-infJoyAnchorY);
-    float mag=sqrtf(ox*ox+oy*oy);
-    if(mag>INF_JOY_RADIUS){ ox*=INF_JOY_RADIUS/mag; oy*=INF_JOY_RADIUS/mag; mag=INF_JOY_RADIUS; }
-    // Deadzone kecil di tengah spy jari yg cuma nempel diam (gak niat
-    // gerak sama sekali) gak bikin karakter "merinding" jalan pelan gara2
-    // noise sentuh resistif.
-    if(mag>6.0f){
-      float nx=ox/INF_JOY_RADIUS, ny=oy/INF_JOY_RADIUS; // -1..1, analog: makin jauh ditarik makin cepat
-      float fwd=-ny, strafe=nx;                          // atas jangkar=maju, kanan jangkar=geser kanan
-      float speed=0.13f; // v85: dulu 0.085f -- lapor user "jalannya agak lambat, kurang mantap"
-      if(millis()<infSpeedUntil) speed*=INF_SPEED_MULT; // v94: Speed Boost
-      float rightX=infDirY, rightY=-infDirX; // vektor "kanan" pemain -- tegak lurus arah hadap (infDir sdh unit,
-                                              // jadi ini otomatis ikut unit; arahnya sama dgn infPlane/0.66)
-      float mx=(infDirX*fwd+rightX*strafe)*speed;
-      float my=(infDirY*fwd+rightY*strafe)*speed;
-      infTryMove(mx,my);
+  for(int s=0;s<2;s++){
+    int x,y;
+    if(!rpFinger(s,&x,&y)){ infFRole[s]=0; continue; }
+    bool fresh=rpFingerNew(s,&infFSeen[s]);
+    if(fresh) infFRole[s]=0;                       // sentuhan baru -> tentukan peran dari nol
+    if(infFRole[s]==-1) continue;
+
+    if(infFRole[s]==0){                            // belum punya peran -> tentukan
+      if(isBack(x,y)){                             // Back yg datang dari jari ke-2 (jari primer sudah ditangani infTouch)
+        infState=INF_MENU; infSaveRun(); infFRole[s]=-1; return;
+      }
+      int dx=x-fcx, dy=y-fcy;
+      if(dx*dx+dy*dy<=fr*fr){ infFire(); infFRole[s]=3; continue; }
+      dx=x-wcx; dy=y-wcy;
+      if(dx*dx+dy*dy<=wr*wr){ infCycleWeapon(); infFRole[s]=4; continue; }
+      bool wantJoy=(x<SCR_W/2);                    // zona pilihan: kiri = joystick, kanan = look
+      if(wantJoy && joyTaken)        wantJoy=false;      // zona penuh -> pindah ke peran satunya kalau masih kosong
+      else if(!wantJoy && lookTaken) wantJoy=true;
+      if((wantJoy && joyTaken) || (!wantJoy && lookTaken)){ infFRole[s]=-1; continue; }   // dua peran sudah dipakai jari lain
+      if(wantJoy){
+        infFRole[s]=1; joyTaken=true;
+        infTouchIsJoy=true; infJoyActive=true; infJoyLastMs=millis();
+        infJoyAnchorX=x; infJoyAnchorY=y; infJoyCurX=x; infJoyCurY=y;
+      } else {
+        infFRole[s]=2; lookTaken=true;
+        infLookActive=true; infFLastX[s]=x; infFLastY[s]=y; infLastLookTouchMs=millis();
+      }
+      continue;                                    // frame pertama cuma pasang jangkar (perilaku lama)
     }
-  } else if(infLookActive){
-    // Drag look kanan -- TIDAK diubah dari skema lama (basis direset tiap
-    // frame, gaya "trackpad" relatif), karena buat NOLEH ini sudah pas:
-    // orang wajar noleh 360 derajat lewat beberapa kali geser pendek, beda
-    // dgn jalan yg wajarnya "ditahan" bukan "digeser berkali-kali".
-    int dx=x-infLookLastX, dy=y-infLookLastY;
-    infRotate(dx*0.0045f);
-    infLookLastX=x; infLookLastY=y;
-    infLastLookTouchMs=millis();
+
+    if(infFRole[s]==3){                            // tombol tembak ditahan
+      if(infAutoFireOn) infFire();
+    } else if(infFRole[s]==1){                     // joystick
+      infTouchIsJoy=true;
+      infJoyCurX=x; infJoyCurY=y; infJoyLastMs=millis();
+      float ox=(float)(x-infJoyAnchorX), oy=(float)(y-infJoyAnchorY);
+      float mag=sqrtf(ox*ox+oy*oy);
+      if(mag>INF_JOY_RADIUS){ ox*=INF_JOY_RADIUS/mag; oy*=INF_JOY_RADIUS/mag; mag=INF_JOY_RADIUS; }
+      if(mag>6.0f){                                // deadzone kecil
+        float nx=ox/INF_JOY_RADIUS, ny=oy/INF_JOY_RADIUS;   // -1..1 analog
+        float fwd=-ny, strafe=nx;                  // atas jangkar=maju, kanan jangkar=geser kanan
+        float speed=0.13f;
+        if(millis()<infSpeedUntil) speed*=INF_SPEED_MULT;   // Speed Boost
+        float rightX=infDirY, rightY=-infDirX;
+        float mx=(infDirX*fwd+rightX*strafe)*speed;
+        float my=(infDirY*fwd+rightY*strafe)*speed;
+        infTryMove(mx,my);
+      }
+    } else if(infFRole[s]==2){                     // look (relatif, basis direset tiap frame)
+      int dx=x-infFLastX[s];
+      infRotate(dx*0.0045f);
+      infFLastX[s]=x; infFLastY[s]=y;
+      infLookActive=true; infLastLookTouchMs=millis();
+    }
   }
 }
 
@@ -17624,26 +17659,142 @@ static void touchLog(const char* tag, const lgfx::touch_point_t &t){
 // TOUCH_LATCH_V5 (apply_touch_deadzone_v5.py)
 #define TOUCH_LATCH_MS 150   // layar harus sepi sekian ms (sejak sentuhan terakhir) sebelum sentuhan diterima lagi setelah ghost
 
+// =====================================================================
+// MULTI-TOUCH (accretion-v2) -- FT6236/FT6336 membaca sampai 2 jari.
+//
+// Tabel jari (diisi ulang tiap getInputPoint(), 1 baca chip):
+//   slot 0/1 = slot jari dari driver (stabil selama jari menempel)
+//   peran    : 1 = PRIMER   -> jari yg ditangkap kode lama (getInputPoint())
+//              2 = SEKUNDER -> jari tambahan (jari ke-2 saat jari 1 masih nempel)
+//              0 = slot kosong
+//   Jari sekunder TIDAK pernah "naik pangkat" jadi primer, jadi kode 1-jari
+//   (scroll, tap-saat-lepas, gestur) tidak akan loncat/ketuk ganda kalau jari
+//   pertama diangkat duluan -- jari sisa diabaikan sampai ikut diangkat.
+//
+// Kode yang sadar multi-touch (game, keyboard, zoom galeri, kanvas) memakai
+// API di bawah. Semua parameter bertipe primitif (aman utk auto-prototype).
+//   rpFinger(slot,&x,&y) : true kalau slot itu sedang menempel (sudah difilter ghost)
+//   rpFingerCount()      : 0..2
+//   rpFingerRole(slot)   : 0/1/2 (lihat atas)
+//   rpFingerNew(slot,&seen): true SEKALI per sentuhan baru (simpan `seen` sendiri)
+//   rpPrimarySlotId()    : slot jari primer, -1 kalau tidak ada
+// =====================================================================
+static bool     rpFDown[2]  = {false,false};
+static int      rpFX[2]     = {0,0};
+static int      rpFY[2]     = {0,0};
+static uint32_t rpFSeq[2]   = {0,0};     // naik 1 tiap jari di slot ini BARU menempel
+static int8_t   rpFRole[2]  = {0,0};
+static int      rpPrimarySlot = -1;
+
+bool rpFinger(int slot,int* x,int* y){
+  if(slot<0||slot>1||!rpFDown[slot]) return false;
+  if(x) *x=rpFX[slot];
+  if(y) *y=rpFY[slot];
+  return true;
+}
+int  rpFingerCount(){ return (rpFDown[0]?1:0)+(rpFDown[1]?1:0); }
+int  rpFingerRole(int slot){ return (slot<0||slot>1)?0:(int)rpFRole[slot]; }
+int  rpPrimarySlotId(){ return rpPrimarySlot; }
+bool rpFingerNew(int slot,uint32_t* seen){
+  if(slot<0||slot>1||!seen) return false;
+  if(rpFSeq[slot]==*seen) return false;
+  *seen=rpFSeq[slot];
+  return rpFDown[slot];
+}
+
+// Terapkan snapshot jari baru (dn/px/py per slot) ke tabel + hitung peran & sentuhan-baru.
+static void rpFingersApply(const bool* dn,const int* px,const int* py){
+  for(int s=0;s<2;s++){
+    if(dn[s] && !rpFDown[s]){                       // jari baru menempel
+      rpFSeq[s]++;
+      if(rpPrimarySlot<0){ rpPrimarySlot=s; rpFRole[s]=1; }
+      else rpFRole[s]=2;
+    } else if(!dn[s] && rpFDown[s]){                // jari lepas
+      if(rpPrimarySlot==s) rpPrimarySlot=-1;
+      rpFRole[s]=0;
+    }
+    rpFDown[s]=dn[s];
+    if(dn[s]){ rpFX[s]=px[s]; rpFY[s]=py[s]; }
+  }
+}
+
 bool getInputPoint(lgfx::touch_point_t &tp){
   static bool prevDown=false;
   static bool latched=false;       // ghost baru saja kena blok -> tolak semua sentuhan
   static uint32_t lastTouchMs=0;   // waktu sampel sentuhan terakhir (apa pun)
   uint32_t now=millis();
 
-  { int rx=0,ry=0; // Remote Control: sentuhan dari web menang atas touchscreen fisik
-    if(rcInputPoll(&rx,&ry)){ tp.x=rx; tp.y=ry; tp.size=64; return true; } }
+  { int rx=0,ry=0; // Remote Control: sentuhan dari web menang atas touchscreen fisik (1 jari)
+    if(rcInputPoll(&rx,&ry)){
+      bool dn[2]={true,false}; int px[2]={rx,0}, py[2]={ry,0};
+      rpFingersApply(dn,px,py);
+      tp.x=rx; tp.y=ry; tp.size=64; return true; } }
 
   if(latched && now-lastTouchMs>=TOUCH_LATCH_MS) latched=false;   // sudah cukup sepi
 
-  if(!ftGetTouch(&tp)){ prevDown=false; return false; }
-  lastTouchMs=now;
+  ftPoll();                                  // 1x baca chip (maks 2 jari)
+  bool dn[2]={false,false}; int px[2]={0,0}, py[2]={0,0};
+  bool anyRaw=false, blocked=false;
+  lgfx::touch_point_t firstRaw; firstRaw.x=0; firstRaw.y=0; firstRaw.size=64; firstRaw.id=0;
+  for(int s=0;s<2;s++){
+    int fx=0,fy=0;
+    if(!ftFinger((uint8_t)s,&fx,&fy)) continue;
+    if(!anyRaw){ firstRaw.x=fx; firstRaw.y=fy; }
+    anyRaw=true;
+    lgfx::touch_point_t t; t.x=fx; t.y=fy; t.size=64; t.id=(uint8_t)s;
+    if(touchBlocked(t)){ touchLog("BLOKIR",t); blocked=true; continue; }
+    dn[s]=true; px[s]=fx; py[s]=fy;
+  }
+  if(anyRaw) lastTouchMs=now;
+  if(blocked) latched=true;
+  if(latched){                               // ghost / masih "tahan": semua jari dianggap lepas
+    if(anyRaw && !blocked) touchLog("TAHAN", firstRaw);
+    dn[0]=dn[1]=false;
+  }
+  rpFingersApply(dn,px,py);
 
-  if(touchBlocked(tp)){ touchLog("BLOKIR", tp); latched=true; prevDown=false; return false; }
-  if(latched){ touchLog("TAHAN", tp); prevDown=false; return false; }
-
-  if(!prevDown) touchLog("SENTUH", tp);   // cuma pas sentuhan baru mulai
+  if(rpPrimarySlot<0){ prevDown=false; return false; }
+  tp.x=rpFX[rpPrimarySlot]; tp.y=rpFY[rpPrimarySlot]; tp.size=64; tp.id=(uint8_t)rpPrimarySlot;
+  if(!prevDown) touchLog("SENTUH", tp);      // cuma pas sentuhan baru mulai
   prevDown=true;
   return true;
+}
+
+// Jari SEKUNDER yang baru menempel (jari ke-2 sementara jari 1 masih nempel) jadi
+// ketukan tambahan -- dipanggil tiap putaran loop() tepat sesudah getInputPoint().
+//  - keyboard virtual / keypad numerik : mengetik cepat 2 jari (rollover)
+//  - app tap-cepat (Kalkulator, Flappy, PPU Demo): ketukan jari ke-2 ikut dihitung
+// Game 2 jari (NES/DOOM/Inferno), Kanvas & zoom Galeri membaca jari sendiri lewat rpFinger().
+static bool rpScreenWantsSecondaryTap(Screen sc){
+  return sc==SCR_CALC || sc==SCR_FLAPPY || sc==SCR_PPU;
+}
+void rpSecondaryTapTick(){
+  static uint32_t seen[2]={0,0};
+  for(int s=0;s<2;s++){
+    if(rpFSeq[s]==seen[s]) continue;
+    seen[s]=rpFSeq[s];
+    if(!rpFDown[s] || rpFRole[s]!=2) continue;                  // hanya jari sekunder yg MASIH menempel
+    if(locked || callOverlayActive() || powerMenuOpen || appSwitcherOpen || controlCenterOpen
+       || notifShadeOpen || diMenuOpen || homeAodActive) continue;
+    int x=rpFX[s], y=rpFY[s];
+    if(kbVisible && kbTarget){ if(y>=kbY()-2) kbTouch(x,y); continue; }   // ketukan di luar keyboard dari jari ke-2 diabaikan (tidak menutup keyboard)
+    if(numPadVisible){ if(y>=numPadY()) numPadTouch(x,y); continue; }
+    Screen sc=curScreen();
+    if(rpScreenWantsSecondaryTap(sc)){
+      int idx=appIndexForScreen(sc);
+      if(idx>=0) apps[idx].touch(x,y,false,true);
+    }
+  }
+}
+
+// Hook game/app multi-jari -- dipanggil tiap putaran loop() SETELAH dispatch touch generik
+// ke app aktif (jadi tombol Back dari jari primer tetap ditangani handler lama).
+void rpMultiTouchTick(){
+  switch(curScreen()){
+    case SCR_INF:    infMultiTick();    break;   // joystick + look + tembak bersamaan
+    case SCR_CANVAS: canvasMultiTick(); break;   // 2 goresan sekaligus
+    default: break;
+  }
 }
 
 void setup(){
@@ -17897,6 +18048,7 @@ void loop(){
   bool touched=getInputPoint(tp); // touchscreen fisik (lihat getInputPoint())
   int tx=touched?(int)tp.x:0,ty=touched?(int)tp.y:0;
   bool newT=touched&&!wasTouched;
+  rpSecondaryTapTick(); // multi-touch: ketukan jari ke-2 (keyboard, keypad, app tap-cepat)
 
   if(ccAnimating){
     uiBoostKick(); // v108
@@ -18359,6 +18511,7 @@ void loop(){
         else if(touched && held) apps[idx].touch(tx,ty,true,false);
       }
     }
+    rpMultiTouchTick(); // multi-touch: game 2 jari (Inferno) & Kanvas -- NES/DOOM baca 2 jari langsung di handler-nya
     if(curScreen()==SCR_CLOCK && millis()-lastClk>500){ needRedraw=true; lastClk=millis(); }
     if(curScreen()==SCR_SENSOR && millis()-lastSen>50){ needRedraw=true; lastSen=millis(); }
     // v27: meteran mic di-poll ~30x/detik selagi app-nya kebuka (dipakai

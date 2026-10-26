@@ -537,3 +537,21 @@ Riwayat perubahan ditulis sebagai komentar langsung di kode: gejala, akar masala
 $ nyxos --status
 all systems nominal. phone-call: untested. godspeed.
 ```
+
+## Multi-touch (2 jari) — FT6236/FT6336
+
+Layar sentuh kapasitif FT6236 melaporkan sampai 2 jari; firmware sekarang membacanya.
+
+| Tempat | Perilaku |
+|---|---|
+| Keyboard virtual & keypad numerik | Mengetik cepat dengan 2 jari (jari ke-2 menekan tuts walau jari 1 belum lepas) |
+| Kalkulator, Flappy, PPU Demo | Ketukan jari ke-2 ikut dihitung |
+| Inferno | Joystick kiri + geser-lihat kanan + tombol Tembak/Senjata bersamaan |
+| DOOM | Maju/mundur + noleh + Tembak/Use bersamaan |
+| NES | D-pad + A + B (mis. A+B bareng) bersamaan |
+| Kanvas | 2 goresan sekaligus |
+| Galeri (viewer foto) | Cubit 2 jari = zoom 1x–4x, 1 jari = geser, ketuk = kembali pas layar |
+
+UI lain (scroll, gestur sistem, tap-saat-lepas) tetap 1 jari: jari pertama = "primer", jari tambahan = "sekunder"
+dan tidak pernah mengambil alih, jadi tidak ada loncatan/ketukan ganda. Modul dengan ghost touch di jari ke-2:
+set `TP_MULTITOUCH 0` di `hw_ili9488.h`. API untuk kode baru ada di `phone.ino` (`rpFinger`, `rpFingerNew`, `rpFingerRole`).

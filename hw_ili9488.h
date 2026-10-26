@@ -33,4 +33,5 @@
 #define TP_FLIP_Y      0
 
 #define TP_POLL_MS     5       // jeda minimum antar pembacaan I2C
+#define TP_MULTITOUCH  1       // 1 = baca 2 jari (FT6236/FT6336). 0 = hanya 1 jari (kalau modulmu sering ada ghost touch jari ke-2)
 #define TP_DEBUG_RAW   0       // 1 = cetak koordinat mentah ke Serial

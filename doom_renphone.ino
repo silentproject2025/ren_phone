@@ -12,7 +12,7 @@
 //      - RenPhoneDoomDisplay bungkus objek global `display` (LGFX) yg
 //        udah di-init di setup() phone.ino. Tidak bikin bus SPI baru.
 //      - RenPhoneDoomInput itu 8 tombol digital yg diisi dari SATU
-//        titik sentuh XPT2046 lewat doomTouch() -- kontrolnya kombinasi
+//        titik sentuh FT6236 (2 jari) lewat doomTouch() -- kontrolnya kombinasi
 //        d-pad (kiri, maju/mundur) + drag-turn (kanan, noleh),
 //        + 4 tombol bulat tetap (Pause/OK/Use/Fire), gaya PERSIS sama
 //        dgn skema 2-zona game "Inferno" yg sudah ada duluan.
@@ -265,53 +265,64 @@ void doomDrawOverlay(){
 // yg sama dipakai semua app lain). Skema & gaya persis reuse dari
 // infTouch() (game "Inferno") yg sudah ada duluan di phone.ino.
 // -----------------------------------------------------------------
-static bool doomZoneIsLeft=false;
-static int  doomAnchorX=0, doomAnchorY=0;
 #define DOOM_JOY_RADIUS 46
 
 static void doomReleaseAll(){
   for(int i=0;i<DBTN_COUNT;i++) doomInput.raw[i]=false;
 }
 
+// accretion-v2: 2 JARI (FT6236). Peran jari ditentukan saat jari MENYENTUH:
+//   tombol bulat (tembak/use/OK/pause) -> level selagi ditahan
+//   zona kiri  -> maju/mundur (offset vertikal dari jangkar)
+//   zona kanan -> noleh       (offset horizontal dari jangkar)
+// Jadi bisa jalan + noleh + TEMBAK sekaligus. Semua jari digabung (OR) tiap frame,
+// lalu hasilnya ditulis ke doomInput.raw[] -- jari diangkat = tombol otomatis lepas.
+static int      doomFRole[2]  = {0,0};   // 0 baru/bebas, 1 gerak(kiri), 2 putar(kanan), 3 di tombol bulat
+static int      doomFAx[2]    = {0,0}, doomFAy[2] = {0,0};
+static uint32_t doomFSeen[2]  = {0,0};
+
 void doomTouch(int x,int y,bool held,bool isNew){
-  if(!held && !isNew){ doomReleaseAll(); return; }
+  (void)held;
+  if(isNew && isBack(x,y)){ doomReleaseAll(); navBack(); return; } // keluar app -> doomExit() lewat appOnExit()
 
-  if(isNew && isBack(x,y)){ navBack(); return; } // keluar app -> doomExit() lewat appOnExit()
-
-  // Tombol bulat tetap diperiksa DULU (pola sama persis dgn tombol
-  // tembak/ganti-senjata Inferno) supaya ketukan di areanya TIDAK ikut
-  // jadi basis d-pad/turn di bawah.
-  int dx,dy;
-  dx=x-doomFireCx(); dy=y-doomFireCy();
-  if(dx*dx+dy*dy <= 22*22){ doomInput.raw[DBTN_FIRE] = true; return; }
-  dx=x-doomUseCx(); dy=y-doomUseCy();
-  if(dx*dx+dy*dy <= 16*16){ if(isNew) doomInput.raw[DBTN_USE]=true; return; }
-  dx=x-doomOkCx(); dy=y-doomOkCy();
-  if(dx*dx+dy*dy <= 14*14){ if(isNew) doomInput.raw[DBTN_START]=true; return; }
-  if(x>=doomPauseX()-16 && x<=doomPauseX()+16 && y>=doomPauseY()-14 && y<=doomPauseY()+14){
-    if(isNew) doomInput.raw[DBTN_SELECT]=true; return;
-  }
-
-  if(isNew){
-    doomZoneIsLeft = (x < SCR_W/2);
-    doomAnchorX=x; doomAnchorY=y;
-    return;
-  }
-
-  int ox=x-doomAnchorX, oy=y-doomAnchorY;
+  bool want[DBTN_COUNT]; for(int i=0;i<DBTN_COUNT;i++) want[i]=false;
   const int DEAD=10;
-  if(doomZoneIsLeft){
-    // Kiri: maju/mundur dari offset VERTIKAL jangkar (spt Snake/Inferno --
-    // ditahan miring, bukan digeser berkali-kali, biar jalan terus).
-    doomInput.raw[DBTN_UP]   = (oy < -DEAD);
-    doomInput.raw[DBTN_DOWN] = (oy >  DEAD);
-    doomInput.raw[DBTN_LEFT] = false; doomInput.raw[DBTN_RIGHT] = false;
-  } else {
-    // Kanan: noleh dari offset HORIZONTAL jangkar.
-    doomInput.raw[DBTN_LEFT]  = (ox < -DEAD);
-    doomInput.raw[DBTN_RIGHT] = (ox >  DEAD);
-    doomInput.raw[DBTN_UP] = false; doomInput.raw[DBTN_DOWN] = false;
+  for(int sl=0;sl<2;sl++){
+    int fx,fy;
+    if(!rpFinger(sl,&fx,&fy)){ doomFRole[sl]=0; continue; }
+    bool fresh=rpFingerNew(sl,&doomFSeen[sl]);
+    if(fresh) doomFRole[sl]=0;
+
+    // Tombol bulat diperiksa DULU (ketukan di areanya TIDAK ikut jadi basis gerak/putar).
+    int dx,dy;
+    dx=fx-doomFireCx(); dy=fy-doomFireCy();
+    if(dx*dx+dy*dy <= 22*22){ want[DBTN_FIRE]=true; doomFRole[sl]=3; continue; }
+    dx=fx-doomUseCx(); dy=fy-doomUseCy();
+    if(dx*dx+dy*dy <= 16*16){ want[DBTN_USE]=true; doomFRole[sl]=3; continue; }
+    dx=fx-doomOkCx(); dy=fy-doomOkCy();
+    if(dx*dx+dy*dy <= 14*14){ want[DBTN_START]=true; doomFRole[sl]=3; continue; }
+    if(fx>=doomPauseX()-16 && fx<=doomPauseX()+16 && fy>=doomPauseY()-14 && fy<=doomPauseY()+14){
+      want[DBTN_SELECT]=true; doomFRole[sl]=3; continue;
+    }
+
+    if(doomFRole[sl]==0 || doomFRole[sl]==3){      // jari baru / baru keluar dari tombol -> pasang jangkar
+      doomFRole[sl]=(fx < SCR_W/2) ? 1 : 2;
+      doomFAx[sl]=fx; doomFAy[sl]=fy;
+      continue;
+    }
+
+    int ox=fx-doomFAx[sl], oy=fy-doomFAy[sl];
+    if(doomFRole[sl]==1){
+      // Kiri: maju/mundur dari offset VERTIKAL jangkar (ditahan miring -> jalan terus).
+      if(oy < -DEAD) want[DBTN_UP]=true;
+      if(oy >  DEAD) want[DBTN_DOWN]=true;
+    } else {
+      // Kanan: noleh dari offset HORIZONTAL jangkar.
+      if(ox < -DEAD) want[DBTN_LEFT]=true;
+      if(ox >  DEAD) want[DBTN_RIGHT]=true;
+    }
   }
+  for(int i=0;i<DBTN_COUNT;i++) doomInput.raw[i]=want[i];
 }
 
 // -----------------------------------------------------------------

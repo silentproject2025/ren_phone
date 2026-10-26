@@ -120,6 +120,22 @@ static LGFX_Sprite galView(&display);
 static bool      galViewReady = false, galViewPending = false, galViewOverlay = true, galViewFail = false;
 static int       galViewIdx = -1, galViewW = 0, galViewH = 0;
 
+// ---- accretion-v2: zoom 2 jari (pinch) + geser saat diperbesar ----
+// Zoom DIGITAL dari sprite foto yg sudah ter-decode (tanpa decode ulang), 1x..4x.
+static float     galZoom = 1.0f, galPanX = 0.0f, galPanY = 0.0f;
+static bool      galPinching = false;          // sedang mencubit (2 jari)
+static bool      galPinchHold = false;         // pinch selesai tapi masih ada jari sisa -> abaikan sampai semua lepas
+static float     galPinchD0 = 1.0f, galPinchZ0 = 1.0f, galPinchPX0 = 0.0f, galPinchPY0 = 0.0f, galPinchMX0 = 0.0f, galPinchMY0 = 0.0f;
+#define GAL_ZOOM_MAX 4.0f
+static void galZoomReset() { galZoom = 1.0f; galPanX = 0.0f; galPanY = 0.0f; galPinching = false; }
+static void galClampPan() {
+  float mx = (galZoom - 1.0f) * SCR_W * 0.5f, my = (galZoom - 1.0f) * SCR_H * 0.5f;
+  if (galPanX >  mx) galPanX =  mx;
+  if (galPanX < -mx) galPanX = -mx;
+  if (galPanY >  my) galPanY =  my;
+  if (galPanY < -my) galPanY = -my;
+}
+
 // ---- state decode (callback JPEGDEC tidak bisa bawa parameter) ----
 static PsramJpeg galJpeg;                      // objek JPEGDEC lazy di PSRAM (lihat PsramJpeg di phone.ino)
 static uint16_t* galGenBuf = nullptr;
@@ -196,6 +212,7 @@ static void galMemFree() {
 }
 
 static void galViewFree() {
+  galZoom = 1.0f; galPanX = 0.0f; galPanY = 0.0f; galPinching = false; galPinchHold = false;   // (deklarasi galZoom di atas)
   galView.deleteSprite();
   galViewReady = false; galViewPending = false; galViewFail = false;
 }
@@ -843,6 +860,7 @@ static bool galDecodeBmpView(const char* path) {
 
 static void galDecodeCurrent() {
   galViewPending = false; galViewReady = false; galViewFail = false;
+  galZoom = 1.0f; galPanX = 0.0f; galPanY = 0.0f; galPinching = false;   // foto baru -> ukuran pas layar
   if (galViewIdx < 0 || galViewIdx >= galItemCount) { galViewFail = true; return; }
   if (galView.width() != SCR_W || galView.height() != SCR_H) {
     galView.deleteSprite();
@@ -1081,7 +1099,10 @@ static void galDrawViewer(LGFX_Sprite& s) {
     galSnap.pushSprite(&s, 0, 0);                  // layar lama tetap tampil selagi foto didecode
   } else {
     s.fillSprite(0x0000);
-    if (galViewReady) galView.pushSprite(&s, 0, 0);
+    if (galViewReady) {
+      if (galZoom > 1.01f) galView.pushRotateZoom(&s, SCR_W / 2.0f + galPanX, SCR_H / 2.0f + galPanY, 0.0f, galZoom, galZoom);
+      else galView.pushSprite(&s, 0, 0);
+    }
   }
   s.setTextSize(1);
   if (galViewFail) {
@@ -1331,6 +1352,58 @@ static void galGridPointer(bool touched, bool wasT, int tx, int ty, float dt) {
 }
 
 static void galViewPointer(bool touched, bool wasT, int tx, int ty) {
+  // ---- accretion-v2: cubit 2 jari = zoom (1x..4x) di sekitar titik tengah kedua jari ----
+  int ax = 0, ay = 0, bx = 0, by = 0;
+  bool two = rpFinger(0, &ax, &ay) && rpFinger(1, &bx, &by);
+  if (two && galViewReady && !galViewPending) {
+    float dx = (float)(bx - ax), dy = (float)(by - ay);
+    float d = sqrtf(dx * dx + dy * dy); if (d < 1.0f) d = 1.0f;
+    float mx = (ax + bx) * 0.5f, my = (ay + by) * 0.5f;
+    if (!galPinching) {
+      galPinching = true; galPinchHold = true;
+      galPinchD0 = d; galPinchZ0 = galZoom; galPinchPX0 = galPanX; galPinchPY0 = galPanY;
+      galPinchMX0 = mx; galPinchMY0 = my;
+      galPtrDown = false; galPtrDrag = false;              // batalkan gestur 1 jari yg sempat mulai
+    } else {
+      float z = galPinchZ0 * d / galPinchD0;
+      if (z < 1.0f) z = 1.0f;
+      if (z > GAL_ZOOM_MAX) z = GAL_ZOOM_MAX;
+      float cx = SCR_W * 0.5f, cy = SCR_H * 0.5f;
+      // titik foto yg tadi di bawah titik tengah awal tetap menempel ke titik tengah sekarang
+      galPanX = mx - cx - z * (galPinchMX0 - cx - galPinchPX0) / galPinchZ0;
+      galPanY = my - cy - z * (galPinchMY0 - cy - galPinchPY0) / galPinchZ0;
+      galZoom = z;
+      if (galZoom < 1.02f) { galZoom = 1.0f; galPanX = 0.0f; galPanY = 0.0f; }
+      galClampPan();
+      needRedraw = true;
+    }
+    return;
+  }
+  if (galPinching) galPinching = false;                   // salah satu jari lepas -> akhiri cubitan
+  if (galPinchHold) {                                      // jari sisa dari cubitan: abaikan sampai SEMUA jari lepas
+    if (rpFingerCount() == 0 && !touched) galPinchHold = false;
+    else { galPtrDown = false; return; }
+  }
+
+  // ---- diperbesar: 1 jari = geser foto, ketuk = kembali ke ukuran pas layar ----
+  if (galZoom > 1.02f) {
+    if (touched) {
+      if (!wasT) { galPtrDown = true; galPtrSx = tx; galPtrSy = ty; galPtrLx = tx; galPtrLy = ty; galPtrDrag = false; }
+      else if (galPtrDown) {
+        if (abs(tx - galPtrSx) > 10 || abs(ty - galPtrSy) > 10) galPtrDrag = true;
+        if (galPtrDrag) { galPanX += (float)(tx - galPtrLx); galPanY += (float)(ty - galPtrLy); galClampPan(); needRedraw = true; }
+        galPtrLx = tx; galPtrLy = ty;
+      }
+    } else if (wasT && galPtrDown) {
+      galPtrDown = false;
+      if (!galPtrDrag) { galZoomReset(); needRedraw = true; }
+    } else {
+      galPtrDown = false;
+    }
+    return;
+  }
+
+  // ---- ukuran normal: perilaku lama (geser = foto berikut/sebelumnya, ketuk = overlay/tombol) ----
   if (touched) {
     if (!wasT) {
       galPtrDown = true; galPtrSx = tx; galPtrSy = ty; galPtrLx = tx; galPtrLy = ty; galPtrDrag = false;

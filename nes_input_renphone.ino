@@ -69,21 +69,25 @@ void nesFpsReset(){
 // zona, tombol otomatis "lepas" -- gak perlu deteksi touch-up manual.
 // -----------------------------------------------------------------
 void nesInput_touch(int tx, int ty, bool held, bool newT) {
+  (void)tx; (void)ty; (void)held; (void)newT;   // accretion-v2: baca KEDUA jari langsung (FT6236 = 2 jari)
   uint8_t s = 0;
-  bool touching = held || newT;
 
-  if (touching) {
+  // Tiap jari (slot 0/1) dievaluasi sendiri-sendiri lalu bitmask-nya di-OR, jadi
+  // D-pad + A + B (mis. lompat sambil lari / A+B bareng) bisa ditekan BERSAMAAN.
+  for (int f = 0; f < 2; f++) {
+    int fx, fy;
+    if (!rpFinger(f, &fx, &fy)) continue;
     // D-pad: cek jarak ke titik tengah dulu (deadzone tengah kecil),
     // lalu tentukan arah dominan (atas/bawah/kiri/kanan) dari sudut.
-    int dx = tx - DPAD_CX, dy = ty - DPAD_CY;
+    int dx = fx - DPAD_CX, dy = fy - DPAD_CY;
     if ((dx*dx + dy*dy) <= (DPAD_R*DPAD_R) && (dx*dx+dy*dy) > 25) {
       if (abs(dx) > abs(dy)) s |= (dx > 0) ? NB_RIGHT : NB_LEFT;
       else                   s |= (dy > 0) ? NB_DOWN  : NB_UP;
     }
-    if (inCircle(tx,ty,BTN_A_CX,BTN_A_CY,BTN_A_R)) s |= NB_A;
-    if (inCircle(tx,ty,BTN_B_CX,BTN_B_CY,BTN_B_R)) s |= NB_B;
-    if (inCircle(tx,ty,BTN_START_CX,BTN_START_CY,BTN_R_SMALL)) s |= NB_START;
-    if (inCircle(tx,ty,BTN_SELECT_CX,BTN_SELECT_CY,BTN_R_SMALL)) s |= NB_SELECT;
+    if (inCircle(fx,fy,BTN_A_CX,BTN_A_CY,BTN_A_R)) s |= NB_A;
+    if (inCircle(fx,fy,BTN_B_CX,BTN_B_CY,BTN_B_R)) s |= NB_B;
+    if (inCircle(fx,fy,BTN_START_CX,BTN_START_CY,BTN_R_SMALL)) s |= NB_START;
+    if (inCircle(fx,fy,BTN_SELECT_CX,BTN_SELECT_CY,BTN_R_SMALL)) s |= NB_SELECT;
   }
   nesBtnState = s;
 }
