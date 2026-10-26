@@ -1597,7 +1597,7 @@ void saveCanvas(){
 // WEB SERVER (FILE MANAGER & INLINE TEXT EDITOR)
 // =============================================
 WebServer webServer(80);
-void rcLoopPoll(); void rcRegisterRoutes(); bool rcApIsUp(); bool rcInputPoll(int*,int*); void rcFrameMark();
+void rcLoopPoll(); void rcRegisterRoutes(); bool rcApIsUp(); bool rcInputPoll(int*,int*); bool rcInputPoll2(int*,int*); void rcFrameMark();
 bool webServerRunning = false;
 File uploadFile;
 
@@ -2621,78 +2621,14 @@ void checkAiWatchdog() {
 }
 
 // =============================================
-// TOUCH CALIBRATION
+// TOUCH (FT6236 kapasitif -- tanpa kalibrasi)
 // =============================================
-// v46-fix: forward declare `brightness` -- definisi globalnya (`int
-// brightness=200;`) ada DI BAWAH fungsi ini (lihat state global &
-// LIFECYCLE), sedangkan sejak v45 fungsi ini butuh nilainya duluan utk
-// nyalain backlight pas kalibrasi pertama kali. Build gagal (error
-// "'brightness' was not declared in this scope") krn di C++ variabel
-// harus sudah dikenal SEBELUM dipakai, walau baru didefinisikan
-// belakangan di file yg sama.
-// apply_touch_ghostcal.py: deteksi ghost touch saat boot
-static bool touchGhostAtBoot(){
-  delay(200);
-  int hit = 0;
-  lgfx::touch_point_t tp;
-  for(int i=0;i<10;i++){ if(display.getTouch(&tp)) hit++; delay(30); }
-  return hit >= 7;
-}
-
-// TOUCH_CAL_V4 (apply_touch_deadzone_v4.py)
-#define TOUCH_FORCE_DEFAULT_CAL 0   // 1 = selalu pakai TOUCH_CAL_VALUES, lewati wizard & data NVS
-#define TOUCH_CAL_VALUES { 239, 3926, 233, 265, 3856, 3897, 3714, 308 }
+// accretion-v2: wizard kalibrasi XPT2046 (loadOrRunCalibration, touchGhostAtBoot,
+// TOUCH_CAL_VALUES, data NVS "touch_cal") DIHAPUS -- tidak pernah dipanggil lagi sejak
+// touch resistif diganti FT6236 yg koordinatnya sudah dalam piksel. Pembacaan touch:
+// ft6236_renphone.ino + getInputPoint() di bawah.
+// `brightness` tetap di-forward-declare di sini karena dipakai kode lain di atas definisinya.
 extern int brightness;
-void loadOrRunCalibration(){
-  Preferences p; p.begin("touch_cal",false);
-  bool done=p.getBool("done",false);
-  if(done){
-    uint16_t dn[8]; p.getBytes("data",dn,sizeof(dn));
-    Serial.printf("[touch] kalibrasi NVS: %u,%u,%u,%u,%u,%u,%u,%u\n",
-                  dn[0],dn[1],dn[2],dn[3],dn[4],dn[5],dn[6],dn[7]);
-  } else {
-    Serial.println("[touch] belum ada kalibrasi tersimpan di NVS");
-  }
-#if TOUCH_FORCE_DEFAULT_CAL
-  {
-    uint16_t dd[8] = TOUCH_CAL_VALUES;
-    display.setTouchCalibrate(dd);
-    Serial.println("[touch] TOUCH_FORCE_DEFAULT_CAL=1 -> kalibrasi default dipakai, wizard dilewati");
-    p.end();
-    return;
-  }
-#endif
-  if(done){
-    uint16_t d[8]; p.getBytes("data",d,sizeof(d));
-    display.setTouchCalibrate(d);
-  } else if(touchGhostAtBoot()){
-    // ghost touch: lewati kalibrasi, pakai default (tidak disimpan ke NVS)
-    static const uint16_t defCal[8] = { 239, 3926, 233, 265, 3856, 3897, 3714, 308 };
-    uint16_t d[8]; memcpy(d, defCal, sizeof(d));
-    display.setTouchCalibrate(d);
-    Serial.println("[touch] ghost terdeteksi saat boot -> kalibrasi default");
-  } else {
-    // v45: kalibrasi pertama kali gambar LANGSUNG ke display (bukan lewat
-    // canvas+push spt layar lain), jadi backlight-nya harus dinyalain
-    // manual di sini -- sejak v45 backlight SENGAJA dibiarkan mati sampai
-    // lock screen pertama beres digambar di akhir setup() (lihat komentar
-    // v45 di runBootSequence()/setup()), jadi tanpa baris ini layar
-    // kalibrasi bakal gak kelihatan sama sekali pas first boot.
-    display.setBrightness((uint8_t)brightness);
-    display.fillScreen(TFT_BLACK);
-    display.setTextColor(TFT_WHITE); display.setTextSize(2);
-    display.setCursor(20,100); display.println("Kalibrasi Touch");
-    display.setTextSize(1);
-    display.setCursor(20,130); display.println("Sentuh tanda di setiap sudut");
-    uint16_t d[8];
-    display.calibrateTouch(d,TFT_WHITE,TFT_BLACK,15);
-    p.putBytes("data",d,sizeof(d));
-    p.putBool("done",true);
-    display.fillScreen(TFT_BLACK);
-    delay(200);
-  }
-  p.end();
-}
 
 // =============================================
 // STATE GLOBAL / LIFECYCLE
@@ -2926,6 +2862,7 @@ int kbKeyH(){ return SCR_H>=440 ? 40 : (SCR_H>=300 ? 30 : 22); }
 int kbShW(){ return SCR_W>=440 ? 64 : 40; }    // tombol Shift
 int kbNmW(){ return SCR_W>=440 ? 70 : 44; }    // tombol 123/ABC
 int kbDlW(){ return SCR_W>=440 ? 110 : 84; }   // tombol hapus
+int kbEnW(){ return SCR_W>=440 ? 64 : 44; }    // tombol Enter (accretion-v2)
 int kbY(){ return SCR_H - 4*(kbKeyH()+2) - 4; }
 int kbLeft(){ return (SCR_W - (10*kbKeyW()+18))/2; }
 int kbOffCol(int row){ (void)row; return kbLeft(); }
@@ -2957,7 +2894,8 @@ void drawKb(LGFX_Sprite& s){
   int cy=y0+3*(kh+2);
   int shX=L, shW=kbShW(), nmX=shX+shW+4, nmW=kbNmW(), spX=nmX+nmW+4;
   int dlW=kbDlW(), dlX=R-dlW;
-  int spW=max(40, dlX-4-spX);
+  int enW=kbEnW(), enX=dlX-4-enW;
+  int spW=max(40, enX-4-spX);
   bool up = (kbMode==KB_UPPER);
   s.fillRoundRect(shX,cy+1,shW,kh,6,shC);
   s.fillRoundRect(shX,cy,shW,kh,6, up?(uint16_t)0xFFFF:fnC);
@@ -2978,6 +2916,15 @@ void drawKb(LGFX_Sprite& s){
   s.fillRoundRect(spX,cy,spW,kh,6,keyC);
   s.setTextColor(T().text);
   s.setCursor(spX+(spW-s.textWidth("spasi"))/2,cy+kh/2-4); s.print("spasi");
+  // accretion-v2: tombol Enter -- Notepad: baris baru; kolom lain: tutup keyboard (selesai)
+  s.fillRoundRect(enX,cy+1,enW,kh,6,shC);
+  s.fillRoundRect(enX,cy,enW,kh,6,fnC);
+  {
+    int acx=enX+enW/2, acy=cy+kh/2;
+    s.drawFastHLine(acx-8,acy,15,0xFFFF); s.drawFastHLine(acx-8,acy+1,15,0xFFFF);
+    s.fillTriangle(acx-9,acy, acx-3,acy-5, acx-3,acy+6, 0xFFFF);
+    s.drawFastVLine(acx+6,acy-7,8,0xFFFF); s.drawFastVLine(acx+7,acy-7,8,0xFFFF);
+  }
   s.fillRoundRect(dlX,cy+1,dlW,kh,6,shC);
   s.fillRoundRect(dlX,cy,dlW,kh,6,fnC);
   {
@@ -2997,9 +2944,14 @@ void kbTouch(int x,int y){
   if(y>=cy){
     int shX=L, shW=kbShW(), nmX=shX+shW+4, nmW=kbNmW(), spX=nmX+nmW+4;
     int dlX=R-kbDlW();
+    int enX=dlX-4-kbEnW();
     if(x<nmX-2)                kbMode=(kbMode==KB_UPPER?KB_LOWER:KB_UPPER);
     else if(x<spX-2)           kbMode=(kbMode==KB_NUM?KB_LOWER:KB_NUM);
-    else if(x<dlX-2)           *kbTarget+=" ";
+    else if(x<enX-2)           *kbTarget+=" ";
+    else if(x<dlX-2){
+      if(kbTarget==&noteText) *kbTarget+="\n";                 // Notepad: baris baru
+      else { kbVisible=false; kbTarget=nullptr; }               // kolom 1 baris: selesai -> tutup keyboard
+    }
     else if(kbTarget->length()>0)
       *kbTarget=kbTarget->substring(0,kbTarget->length()-1);
     needRedraw=true;
@@ -3013,6 +2965,29 @@ void kbTouch(int x,int y){
   *kbTarget+=lay[r][c];
   if(kbMode==KB_UPPER)kbMode=KB_LOWER;
   needRedraw=true;
+}
+
+// accretion-v2: tahan tombol hapus = hapus berulang (tunda 450 ms, lalu 70 ms/karakter,
+// makin cepat setelah 1,5 dtk). Ketukan pertama tetap dihapus lewat kbTouch().
+// Dipanggil tiap putaran loop(); membaca KEDUA jari (jari ke-2 juga bisa menahan hapus).
+void kbHoldTick(){
+  static uint32_t holdStart=0, lastRep=0;
+  if(!kbVisible||!kbTarget){ holdStart=0; return; }
+  int kh=kbKeyH(), cy=kbY()+3*(kh+2);
+  int dlX=SCR_W-kbLeft()-kbDlW();
+  bool on=false;
+  for(int sl=0;sl<2;sl++){
+    int fx,fy;
+    if(rpFinger(sl,&fx,&fy) && fy>=cy && fy<cy+kh+2 && fx>=dlX-2) on=true;
+  }
+  uint32_t now=millis();
+  if(!on){ holdStart=0; return; }
+  if(holdStart==0){ holdStart=now; lastRep=now; return; }
+  uint32_t el=now-holdStart;
+  if(el>450 && now-lastRep>=(el>1500?35u:70u)){
+    lastRep=now;
+    if(kbTarget->length()>0){ *kbTarget=kbTarget->substring(0,kbTarget->length()-1); needRedraw=true; }
+  }
 }
 
 // =============================================
@@ -4947,7 +4922,7 @@ void homeEditPointerTick(bool,bool,int,int);
 // ---- remote_renphone.ino: Remote Control (AP + web server) ----
 void remoteEnter(); void remoteExit(); void drawRemote(LGFX_Sprite&); void remoteTouch(int,int,bool,bool);
 void remotePointerTick(bool,bool,int,int);
-void rcLoopPoll(); void rcRegisterRoutes(); bool rcApIsUp(); bool rcInputPoll(int*,int*); void rcFrameMark();
+void rcLoopPoll(); void rcRegisterRoutes(); bool rcApIsUp(); bool rcInputPoll(int*,int*); bool rcInputPoll2(int*,int*); void rcFrameMark();
 
 AppDef apps[41] = {
   { "Jam",        'J', 0, clockEnter,    clockExit,    drawClock,        clockTouch,    SCR_CLOCK },
@@ -7366,7 +7341,8 @@ void draw3DPhoneBox(LGFX_Sprite& s,int cx,int cy,float rollDeg,float pitchDeg,fl
   for(int i=0;i<8;i++) s.fillCircle((int)px[i],(int)py[i],2, T().accent2);
 }
 
-void sensorEnter(){} void sensorExit(){}
+float sensorPinchScale=1.0f; // accretion-v2: skala hasil cubit 2 jari (lihat sensorMultiTick)
+void sensorEnter(){ sensorPinchScale=1.0f; } void sensorExit(){}
 
 void drawSensor(LGFX_Sprite& s){
   iosBackdrop(s); drawStatusBar(s);
@@ -7396,7 +7372,7 @@ void drawSensor(LGFX_Sprite& s){
   int boxAreaH = (int)(avail*0.60f);
   int cx = SCR_W/2;
   int cy = top + boxAreaH/2 + 6;
-  float boxScale = constrain(boxAreaH/170.0f, 0.5f, 1.15f);
+  float boxScale = constrain(boxAreaH/170.0f, 0.5f, 1.15f) * sensorPinchScale; // accretion-v2: cubit 2 jari
 
   draw3DPhoneBox(s, cx, cy, smoothRoll, smoothPitch, boxScale);
 
@@ -7734,8 +7710,9 @@ void drawSettings(LGFX_Sprite& s){
         settChevron(s,xr-4,ty+4,T().subtext);
         break;
       case SR_TCAL:
-        s.setTextColor(T().danger); s.setCursor(xl,ty); s.print("Touch FT6236 (tanpa kalibrasi)");
-        if(millis()<settTcalArmUntil){ settTextR(s,xr,ty,"Ketuk lagi",T().danger); needRedraw=true; }
+        { static const char* sensName[3]={"Normal","Tinggi","Rendah"};   // accretion-v2: sensitivitas sentuh (ambang chip FT6236)
+          s.setTextColor(T().text); s.setCursor(xl,ty); s.print("Sensitivitas Sentuh");
+          settTextR(s,xr,ty,sensName[ftSensGet()>2?0:ftSensGet()],T().accent); }
         break;
     }
   }
@@ -7836,7 +7813,9 @@ void settTap(int x,int y){
       break;
     case SR_TCAL:
       // aman dari salah ketuk: harus diketuk 2x dalam 2,5 detik (ini me-restart perangkat)
-      showToast("Touch kapasitif, tidak perlu kalibrasi"); needRedraw=true;
+      { uint8_t ni=(uint8_t)((ftSensGet()+1)%3); ftSensSet(ni);
+        static const char* sensToast[3]={"Sensitivitas: Normal","Sensitivitas: Tinggi","Sensitivitas: Rendah"};
+        showToast(sensToast[ni]); needRedraw=true; }
       break;
   }
 }
@@ -17724,11 +17703,14 @@ bool getInputPoint(lgfx::touch_point_t &tp){
   static uint32_t lastTouchMs=0;   // waktu sampel sentuhan terakhir (apa pun)
   uint32_t now=millis();
 
-  { int rx=0,ry=0; // Remote Control: sentuhan dari web menang atas touchscreen fisik (1 jari)
-    if(rcInputPoll(&rx,&ry)){
-      bool dn[2]={true,false}; int px[2]={rx,0}, py[2]={ry,0};
+  { int rx=0,ry=0,rx2=0,ry2=0; // Remote Control: sentuhan dari web menang atas touchscreen fisik (maks 2 jari)
+    bool r1=rcInputPoll(&rx,&ry);
+    bool r2=rcInputPoll2(&rx2,&ry2);
+    if(r1||r2){
+      bool dn[2]={r1,r2}; int px[2]={rx,rx2}, py[2]={ry,ry2};
       rpFingersApply(dn,px,py);
-      tp.x=rx; tp.y=ry; tp.size=64; return true; } }
+      if(rpPrimarySlot<0) return false;
+      tp.x=rpFX[rpPrimarySlot]; tp.y=rpFY[rpPrimarySlot]; tp.size=64; tp.id=(uint8_t)rpPrimarySlot; return true; } }
 
   if(latched && now-lastTouchMs>=TOUCH_LATCH_MS) latched=false;   // sudah cukup sepi
 
@@ -17765,17 +17747,30 @@ bool getInputPoint(lgfx::touch_point_t &tp){
 //  - keyboard virtual / keypad numerik : mengetik cepat 2 jari (rollover)
 //  - app tap-cepat (Kalkulator, Flappy, PPU Demo): ketukan jari ke-2 ikut dihitung
 // Game 2 jari (NES/DOOM/Inferno), Kanvas & zoom Galeri membaca jari sendiri lewat rpFinger().
+static bool rpEdgeBackAllowed(Screen sc){
+  switch(sc){
+    case SCR_HOME: case SCR_INF: case SCR_NES: case SCR_DOOM: case SCR_SNAKE: case SCR_FLAPPY:
+    case SCR_BREAKOUT: case SCR_MAZE: case SCR_2048: case SCR_PPU: case SCR_CANVAS:
+    case SCR_GALLERY: case SCR_MJPEG:
+      return false;
+    default: return true;
+  }
+}
 static bool rpScreenWantsSecondaryTap(Screen sc){
   return sc==SCR_CALC || sc==SCR_FLAPPY || sc==SCR_PPU;
 }
+static bool rpModalActive(){
+  return locked || callOverlayActive() || powerMenuOpen || appSwitcherOpen || controlCenterOpen
+      || notifShadeOpen || diMenuOpen || homeAodActive;
+}
 void rpSecondaryTapTick(){
+  if(!rpModalActive()) kbHoldTick();   // hapus-tahan-ulang (keyboard)
   static uint32_t seen[2]={0,0};
   for(int s=0;s<2;s++){
     if(rpFSeq[s]==seen[s]) continue;
     seen[s]=rpFSeq[s];
     if(!rpFDown[s] || rpFRole[s]!=2) continue;                  // hanya jari sekunder yg MASIH menempel
-    if(locked || callOverlayActive() || powerMenuOpen || appSwitcherOpen || controlCenterOpen
-       || notifShadeOpen || diMenuOpen || homeAodActive) continue;
+    if(rpModalActive()) continue;
     int x=rpFX[s], y=rpFY[s];
     if(kbVisible && kbTarget){ if(y>=kbY()-2) kbTouch(x,y); continue; }   // ketukan di luar keyboard dari jari ke-2 diabaikan (tidak menutup keyboard)
     if(numPadVisible){ if(y>=numPadY()) numPadTouch(x,y); continue; }
@@ -17787,13 +17782,49 @@ void rpSecondaryTapTick(){
   }
 }
 
+// Gestur 2 jari global (app biasa): geser 2 jari ke BAWAH bersamaan = screenshot.
+// Tidak aktif di game/Kanvas/Galeri/Orientasi3D (2 jari dipakai fungsi lain di sana).
+static void rpTwoFingerGestureTick(){
+  static bool armed=false, fired=false;
+  static int y0[2]={0,0}; static float d0=0; static uint32_t t0=0;
+  int ax,ay,bx,by;
+  if(!(rpFinger(0,&ax,&ay) && rpFinger(1,&bx,&by))){ armed=false; fired=false; return; }
+  float dx=(float)(bx-ax), dy=(float)(by-ay); float d=sqrtf(dx*dx+dy*dy);
+  uint32_t now=millis();
+  if(!armed){ armed=true; fired=false; y0[0]=ay; y0[1]=by; d0=d; t0=now; return; }
+  if(fired || now-t0>1500) return;
+  int m0=ay-y0[0], m1=by-y0[1];
+  if(m0>70 && m1>70 && abs(m0-m1)<60 && fabsf(d-d0)<40.0f){
+    fired=true;
+    ccActScreenshot();     // features_renphone.ino -- sama dgn tile Screenshot di Control Center
+  }
+}
+
+// Cubit di Orientasi3D: skala kotak 3D 0,5x..2,5x (variabel sensorPinchScale ada di dekat sensorEnter)
+static void sensorMultiTick(){
+  static bool pin=false; static float d0=1, s0=1;
+  int ax,ay,bx,by;
+  if(!(rpFinger(0,&ax,&ay) && rpFinger(1,&bx,&by))){ pin=false; return; }
+  float dx=(float)(bx-ax), dy=(float)(by-ay); float d=sqrtf(dx*dx+dy*dy); if(d<1) d=1;
+  if(!pin){ pin=true; d0=d; s0=sensorPinchScale; return; }
+  sensorPinchScale=constrain(s0*d/d0,0.5f,2.5f);
+  needRedraw=true;
+}
+
 // Hook game/app multi-jari -- dipanggil tiap putaran loop() SETELAH dispatch touch generik
 // ke app aktif (jadi tombol Back dari jari primer tetap ditangani handler lama).
 void rpMultiTouchTick(){
-  switch(curScreen()){
+  Screen sc=curScreen();
+  switch(sc){
     case SCR_INF:    infMultiTick();    break;   // joystick + look + tembak bersamaan
     case SCR_CANVAS: canvasMultiTick(); break;   // 2 goresan sekaligus
-    default: break;
+    case SCR_SENSOR: sensorMultiTick(); break;   // cubit = zoom kotak 3D
+    case SCR_GALLERY: case SCR_NES: case SCR_DOOM: case SCR_SNAKE: case SCR_FLAPPY:
+    case SCR_BREAKOUT: case SCR_MAZE: case SCR_2048: case SCR_PPU: case SCR_MJPEG:
+      break;                                     // 2 jari dipakai app itu sendiri / game
+    default:
+      if(!kbVisible && !rpModalActive()) rpTwoFingerGestureTick();
+      break;
   }
 }
 
@@ -18236,6 +18267,16 @@ void loop(){
       exitArmed=true;
       // blm lewat ambang tahan -- JANGAN gGestureDone dulu, terus dilacak
       // frame berikutnya (atau kena blok rilis di bawah kalau jari diangkat)
+    }
+    // accretion-v2: geser dari TEPI KIRI ke kanan = Kembali (layar sentuh kapasitif, tepi bisa
+    // dijangkau jempol). Diteruskan sbg ketukan pada tombol Back app itu supaya aturan "kembali"
+    // internal tiap app (mis. dari sub-halaman) tetap berlaku. Tidak aktif di Home, game,
+    // Kanvas, Galeri & pemutar video (geser dari tepi dipakai fungsi lain di sana) dan hanya 1 jari.
+    if(gStartX<14 && dx>56 && abs(dx)>abs(dy)*2 && rpFingerCount()==1 && curScreen()!=SCR_HOME && rpEdgeBackAllowed(curScreen())){
+      gGestureDone=true;
+      int bi=appIndexForScreen(curScreen());
+      if(bi>=0) apps[bi].touch(backX()+BACK_W/2, backY()+BACK_H/2, false, true);
+      wasTouched=touched; delay(1); return;
     }
   }
   if(!touched && wasTouched && exitArmed){

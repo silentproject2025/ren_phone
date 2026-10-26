@@ -40,6 +40,21 @@ static bool ftRead(uint8_t reg, uint8_t* buf, uint8_t n) {
   return true;
 }
 
+// ---- sensitivitas (ambang sentuh chip, reg 0x80) ----
+static uint8_t ftSensIdx = 0;                    // 0 Normal, 1 Tinggi, 2 Rendah
+static void ftApplyThreshold() {
+  static const uint8_t lv[3] = { TP_THR_NORMAL, TP_THR_HIGH, TP_THR_LOW };
+  Wire.beginTransmission((uint8_t)TP_I2C_ADDR); Wire.write(0x80); Wire.write(lv[ftSensIdx > 2 ? 0 : ftSensIdx]); Wire.endTransmission();
+}
+uint8_t ftSensGet() { return ftSensIdx; }
+void ftSensSet(uint8_t idx) {
+  if (idx > 2) idx = 0;
+  ftSensIdx = idx;
+  if (ftOk) ftApplyThreshold();
+  Preferences p;
+  if (p.begin("touch", false)) { p.putUChar("sens", idx); p.end(); }
+}
+
 bool ft6236Begin() {
 #if TP_RST_PIN >= 0
   pinMode(TP_RST_PIN, OUTPUT);
@@ -60,8 +75,10 @@ bool ft6236Begin() {
   Serial.printf("[touch] FT6236 %s (chip=0x%02X vendor=0x%02X, SDA=%d SCL=%d)\n",
                 ftOk ? "terdeteksi" : "TIDAK terdeteksi", id, vendor, TP_SDA_PIN, TP_SCL_PIN);
   if (ftOk) {
-    uint8_t thr = 22;                  // ambang sentuh (bawaan 22; naikkan kalau ada ghost touch)
-    Wire.beginTransmission((uint8_t)TP_I2C_ADDR); Wire.write(0x80); Wire.write(thr); Wire.endTransmission();
+    Preferences p;                     // level sensitivitas tersimpan (Pengaturan -> Sensitivitas Sentuh)
+    if (p.begin("touch", true)) { ftSensIdx = p.getUChar("sens", 0); p.end(); }
+    if (ftSensIdx > 2) ftSensIdx = 0;
+    ftApplyThreshold();
   }
   return ftOk;
 }
@@ -101,6 +118,9 @@ bool ftPoll() {
   uint32_t now = millis();
   if (now - ftLastPollMs < TP_POLL_MS) return ftFDown[0] || ftFDown[1];
   ftLastPollMs = now;
+#if TP_INT_SKIP && (TP_INT_PIN >= 0)
+  if (!ftFDown[0] && !ftFDown[1] && digitalRead(TP_INT_PIN)) return false;   // tidak ada jari & INT HIGH -> tidak perlu baca
+#endif
 
   // 0x02 TD_STATUS | 0x03..0x06 titik1 (XH,XL,YH,YL) | 0x07 weight | 0x08 misc
   // | 0x09..0x0C titik2 (XH,XL,YH,YL)  -> 11 byte dlm 1 transaksi

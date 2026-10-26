@@ -9,11 +9,11 @@
 // - Pin LCD/SD/tombol fisik yg biasanya didefinisikan di sini (DOOM_PIN_*)
 //   SENGAJA TIDAK dipakai: ren_phone sudah punya objek `display` (LGFX)
 //   sendiri yg dikonfigurasi & di-init di phone.ino (SPI2_HOST, pin sclk=12
-//   mosi=11 miso=13 dc=2 cs=10 rst=14). doom_renphone.ino membungkus objek
+//   mosi=11 miso=13 dc=2 cs=10 rst=14; panel ILI9488). doom_renphone.ino membungkus objek
 //   `display` itu langsung (bukan bikin bus SPI baru), jadi DOOM_PIN_LCD_*
 //   tidak relevan sama sekali di sini.
 // - Input juga BUKAN 8 tombol fisik (SimpleButtons) spt contoh resmi --
-//   ren_phone cuma punya 1 titik sentuh (XPT2046), jadi input DOOM
+//   ren_phone memakai layar sentuh kapasitif FT6236 (maks 2 jari), jadi input DOOM
 //   diimplementasikan sbg kontrol virtual (joystick kiri + drag-look kanan +
 //   tombol TEMBAK/USE/PAUSE/KELUAR) di doom_renphone.ino, pola SAMA PERSIS
 //   dgn skema layar-sentuh game "Inferno" yg sudah ada di phone.ino.
@@ -22,7 +22,7 @@
 //   tetap ikut ke-copy di folder src/, tapi tidak akan pernah dipanggil.
 
 // --- Panel & viewport -------------------------------------------------
-// ILI9341 320x240 fisik. DOOM dipaksa jalan di ORIENTASI LANDSCAPE selagi
+// ILI9488 480x320 (landscape). DOOM dipaksa jalan di ORIENTASI LANDSCAPE selagi
 // app ini aktif (doomEnter() menyimpan orientasi lama & memaksa landscape,
 // doomExit() mengembalikannya) -- doomgeneric_Create() cuma dipanggil SEKALI
 // per sesi app, jadi ukuran panel di bawah ini HARUS konstan compile-time,
@@ -34,7 +34,7 @@
 // DOOM asli selalu render di 320x200 (rasio 320:200 = 8:5). Cuma
 // DOOM_VIEWPORT_W yg diisi (mode FILL) -> tinggi konten otomatis mengikuti
 // rasio itu (200px), lalu DOOM_VIEWPORT_Y menaruhnya di TENGAH layar
-// 240px (240-200=40 -> 20px sisa strip hitam di atas & bawah, bukan bug).
+// 320px (320-200=120 -> 60px strip hitam di atas & bawah, bukan bug).
 #define DOOM_VIEWPORT_W    320
 #define DOOM_VIEWPORT_X    80
 #define DOOM_VIEWPORT_Y    60

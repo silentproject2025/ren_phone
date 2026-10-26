@@ -24,11 +24,25 @@ extern "C" {
 
 // --- Titik tengah & radius tiap zona (sesuaikan kalau tangan kamu
 //     lebih nyaman geser posisinya) ---
-static const int DPAD_CX = 55,  DPAD_CY = 175, DPAD_R = 45;
-static const int BTN_A_CX = 275, BTN_A_CY = 185, BTN_A_R = 24;
-static const int BTN_B_CX = 235, BTN_B_CY = 155, BTN_B_R = 24;
-static const int BTN_START_CX = 175, BTN_START_CY = 20, BTN_R_SMALL = 14;
-static const int BTN_SELECT_CX = 145, BTN_SELECT_CY = 20;
+// accretion-v2: layout mengikuti ukuran layar. Di 480x320 gambar NES (256x224) ada di TENGAH
+// (x 112..368, y 48..272), jadi kontrol ditaruh di MARGIN hitam kiri/kanan & atas supaya
+// tidak menutupi gambar: D-pad kiri-bawah, A/B kanan-bawah, Start/Select di tengah-atas.
+// Layar kecil (<= 320 lebar) tetap pakai posisi lama.
+#define NES_BIG (SCR_W >= 440)
+#define DPAD_CX        (NES_BIG ? 58 : 55)
+#define DPAD_CY        (NES_BIG ? (SCR_H - 92) : 175)
+#define DPAD_R         45
+#define BTN_A_CX       (NES_BIG ? (SCR_W - 40) : 275)
+#define BTN_A_CY       (NES_BIG ? (SCR_H - 88) : 185)
+#define BTN_A_R        (NES_BIG ? 26 : 24)
+#define BTN_B_CX       (NES_BIG ? (SCR_W - 84) : 235)
+#define BTN_B_CY       (NES_BIG ? (SCR_H - 140) : 155)
+#define BTN_B_R        (NES_BIG ? 26 : 24)
+#define BTN_START_CX   (NES_BIG ? (SCR_W / 2 + 36) : 175)
+#define BTN_START_CY   (NES_BIG ? 26 : 20)
+#define BTN_R_SMALL    (NES_BIG ? 18 : 14)
+#define BTN_SELECT_CX  (NES_BIG ? (SCR_W / 2 - 36) : 145)
+#define BTN_SELECT_CY  (NES_BIG ? 26 : 20)
 
 // Bitmask status tombol NES saat ini (di-update tiap ada event touch).
 static volatile uint8_t nesBtnState = 0;

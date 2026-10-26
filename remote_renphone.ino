@@ -99,6 +99,8 @@ static int16_t  rcEvX[RC_EV_MAX], rcEvY[RC_EV_MAX];
 static int      rcEvHead = 0, rcEvTail = 0;
 static bool     rcDown = false;
 static int      rcX = 0, rcY = 0;
+static bool     rcDown2 = false;               // accretion-v2: jari ke-2 dari browser (layar sentuh HP/tablet)
+static int      rcX2 = 0, rcY2 = 0;
 static unsigned long rcNextEvMs = 0, rcLastEvMs = 0;
 
 // ---- antrean aksi tombol (dieksekusi di rcLoopPoll) ----
@@ -219,7 +221,7 @@ static void rcApStop() {
   WiFi.softAPdisconnect(true);
   rcApUp = false;
   rcLastViewMs = 0; rcClientId[0] = 0; rcWasViewing = false;
-  rcEvHead = rcEvTail = 0; rcDown = false;
+  rcEvHead = rcEvTail = 0; rcDown = false; rcDown2 = false;
   rcFreeBuffers();
   Serial.printf("[remote] AP mati | freeInternal=%u largestBlock=%u\n",
                 heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
@@ -252,11 +254,12 @@ static void rcEvPush(uint8_t t, int x, int y) {
 }
 
 // Format: "d120,80;m121,82;u"  (d=jari turun, m=geser, u=angkat)
+// accretion-v2: huruf KAPITAL = jari ke-2 ("D200,100;M205,101;U") -> multi-touch dari browser.
 static void rcParseEvents(const String& e) {
   int n = e.length(), i = 0, cnt = 0;
   while (i < n && cnt < 48) {
     char t = e[i];
-    if (t == 'd' || t == 'm') {
+    if (t == 'd' || t == 'm' || t == 'D' || t == 'M') {
       i++;
       int x = 0, y = 0;
       while (i < n && e[i] >= '0' && e[i] <= '9') { x = x * 10 + (e[i] - '0'); i++; }
@@ -266,9 +269,9 @@ static void rcParseEvents(const String& e) {
       if (y >= SCR_H) y = SCR_H - 1;
       rcEvPush((uint8_t)t, x, y);
       cnt++;
-    } else if (t == 'u') {
+    } else if (t == 'u' || t == 'U') {
       i++;
-      rcEvPush('u', 0, 0);
+      rcEvPush((uint8_t)t, 0, 0);
       cnt++;
     } else {
       i++;
@@ -282,20 +285,27 @@ static void rcParseEvents(const String& e) {
 // (tap cepat d+u dalam satu paket tidak hilang).
 bool rcInputPoll(int* ox, int* oy) {
   unsigned long now = millis();
-  if (rcDown && (now - rcLastEvMs) > 5000UL) rcDown = false;   // klien hilang saat menekan
+  if ((rcDown || rcDown2) && (now - rcLastEvMs) > 5000UL) { rcDown = false; rcDown2 = false; }   // klien hilang saat menekan
   if (rcEvHead != rcEvTail && now >= rcNextEvMs) {
     uint8_t t = rcEvT[rcEvHead]; int x = rcEvX[rcEvHead], y = rcEvY[rcEvHead];
     rcEvHead = (rcEvHead + 1) % RC_EV_MAX;
-    if (t == 'm') {
-      while (rcEvHead != rcEvTail && rcEvT[rcEvHead] == 'm') {   // gabung geseran berturut-turut
+    if (t == 'm' || t == 'M') {
+      while (rcEvHead != rcEvTail && rcEvT[rcEvHead] == t) {   // gabung geseran berturut-turut (jari yg sama)
         x = rcEvX[rcEvHead]; y = rcEvY[rcEvHead];
         rcEvHead = (rcEvHead + 1) % RC_EV_MAX;
       }
-      if (rcDown) { rcX = x; rcY = y; }
+      if (t == 'm') { if (rcDown)  { rcX = x;  rcY = y;  } }
+      else          { if (rcDown2) { rcX2 = x; rcY2 = y; } }
       rcNextEvMs = now;
     } else if (t == 'd') {
       rcDown = true; rcX = x; rcY = y;
       rcNextEvMs = now + 35;
+    } else if (t == 'D') {
+      rcDown2 = true; rcX2 = x; rcY2 = y;
+      rcNextEvMs = now + 35;
+    } else if (t == 'U') {
+      rcDown2 = false;
+      rcNextEvMs = now + 25;
     } else {
       rcDown = false;
       rcNextEvMs = now + 25;
@@ -304,6 +314,13 @@ bool rcInputPoll(int* ox, int* oy) {
   }
   if (!rcDown) return false;
   *ox = rcX; *oy = rcY;
+  return true;
+}
+
+// accretion-v2: jari ke-2 dari browser. Hanya MEMBACA status (event diproses oleh rcInputPoll()).
+bool rcInputPoll2(int* ox, int* oy) {
+  if (!rcDown2) return false;
+  *ox = rcX2; *oy = rcY2;
   return true;
 }
 
@@ -861,7 +878,7 @@ input[type=range]{width:100%}
 <div id="toast"></div>
 <script>
 const $=s=>document.querySelector(s),cv=$('#scr'),ctx=cv.getContext('2d');
-let W=320,H=240,img=ctx.createImageData(W,H),seq=65535,lite=false,need=true,take=false,q=[],down=false,wk=null,ST={};
+let W=320,H=240,img=ctx.createImageData(W,H),seq=65535,lite=false,need=true,take=false,q=[],down=false,wk=null,ST={},pid2=null,lastM2=0;
 const cid=Math.random().toString(36).slice(2,10);
 const R3=[0,36,73,109,146,182,219,255],B2=[0,85,170,255];
 const nap=ms=>new Promise(r=>{wk=r;setTimeout(r,ms)}),wake=()=>{if(wk){wk();wk=null}};
@@ -917,9 +934,14 @@ let hb=0;
 cv.addEventListener('pointerdown',e=>{if(!e.isPrimary)return;e.preventDefault();cv.setPointerCapture(e.pointerId);down=true;const[x,y]=pos(e);q.push('d'+x+','+y);dot(e);wake();clearInterval(hb);hb=setInterval(()=>{if(down)q.push('m'+pos(lastE).join(','))},1500)});
 let lastE=null,lastM=0;
 cv.addEventListener('pointermove',e=>{if(!down||!e.isPrimary)return;lastE=e;dot(e);const t=performance.now();if(t-lastM<28)return;lastM=t;const[x,y]=pos(e);const m='m'+x+','+y;if(q.length&&q[q.length-1][0]=='m')q[q.length-1]=m;else q.push(m);wake()});
-function up(e){if(!down||!e.isPrimary)return;down=false;clearInterval(hb);const[x,y]=pos(e);if(q.length&&q[q.length-1][0]=='m')q[q.length-1]='m'+x+','+y;else q.push('m'+x+','+y);q.push('u');fd.style.display='none';wake()}
+function up(e){if(!down||!e.isPrimary)return;down=false;clearInterval(hb);if(pid2!==null){pid2=null;q.push('U')}const[x,y]=pos(e);if(q.length&&q[q.length-1][0]=='m')q[q.length-1]='m'+x+','+y;else q.push('m'+x+','+y);q.push('u');fd.style.display='none';wake()}
 cv.addEventListener('pointerup',up);cv.addEventListener('pointercancel',up);
 cv.addEventListener('pointerdown',e=>{lastE=e});
+/* accretion-v2: jari ke-2 (layar sentuh HP/tablet) -> D/M/U kapital = multi-touch di perangkat */
+cv.addEventListener('pointerdown',e=>{if(e.isPrimary||!down||pid2!==null)return;e.preventDefault();pid2=e.pointerId;try{cv.setPointerCapture(e.pointerId)}catch(_){}const[x,y]=pos(e);q.push('D'+x+','+y);wake()});
+cv.addEventListener('pointermove',e=>{if(e.pointerId!==pid2)return;const t=performance.now();if(t-lastM2<28)return;lastM2=t;const[x,y]=pos(e);const m='M'+x+','+y;if(q.length&&q[q.length-1][0]=='M')q[q.length-1]=m;else q.push(m);wake()});
+function up2(e){if(e.pointerId!==pid2)return;pid2=null;const[x,y]=pos(e);q.push('M'+x+','+y);q.push('U');wake()}
+cv.addEventListener('pointerup',up2);cv.addEventListener('pointercancel',up2);
 cv.addEventListener('contextmenu',e=>e.preventDefault());
 async function act(k,v){try{const r=await fetch('/rc/a?k='+k+(v!==undefined?'&v='+encodeURIComponent(v):''));const t=await r.text();
   if(t=='view')toast('Mode lihat-saja (aktifkan "Izinkan sentuh")');else if(t=='nokb')toast('Tidak ada kolom teks yang fokus di HP');wake()}catch(e){toast('Gagal kirim')}}

@@ -35,3 +35,13 @@
 #define TP_POLL_MS     5       // jeda minimum antar pembacaan I2C
 #define TP_MULTITOUCH  1       // 1 = baca 2 jari (FT6236/FT6336). 0 = hanya 1 jari (kalau modulmu sering ada ghost touch jari ke-2)
 #define TP_DEBUG_RAW   0       // 1 = cetak koordinat mentah ke Serial
+
+// ---- accretion-v2 ----
+// Ambang sentuh bawaan chip (reg 0x80): makin KECIL makin sensitif. Level bisa diganti dari
+// Pengaturan (baris "Sensitivitas Sentuh": Normal / Tinggi / Rendah) & tersimpan di NVS.
+#define TP_THR_NORMAL  22
+#define TP_THR_HIGH    16      // sensitif (mis. pakai pelindung layar tebal / jari kering)
+#define TP_THR_LOW     32      // kurang sensitif (ghost touch / tetesan air)
+// 1 = lewati baca I2C selagi tidak ada jari DAN pin T_INT (TP_INT_PIN) HIGH. Hemat bus I2C & CPU,
+// tapi HANYA aktifkan kalau T_INT benar-benar tersambung ke ESP32 (kalau tidak, sentuhan tidak terbaca!).
+#define TP_INT_SKIP    0

@@ -1417,7 +1417,23 @@ static void galViewPointer(bool touched, bool wasT, int tx, int ty) {
     if (galPtrDrag) {
       if (abs(dx) >= 40 && abs(dx) > abs(dy)) galViewStep(dx < 0 ? +1 : -1);
     } else {
-      galViewTap(galPtrSx, galPtrSy);
+      // accretion-v2: ketuk-dua-kali di area gambar (bukan tombol/panah) = zoom 2,5x di titik itu
+      static uint32_t lastTapMs = 0; static int lastTapX = 0, lastTapY = 0; static bool overlayBefore = true;
+      uint32_t nowT = millis();
+      bool center = galViewReady && !galViewPending && galPtrSy < backY() - 2
+                    && !(galItemCount > 1 && (galPtrSx < 36 || galPtrSx >= SCR_W - 36));
+      if (center && lastTapMs && nowT - lastTapMs < 320 && abs(galPtrSx - lastTapX) < 30 && abs(galPtrSy - lastTapY) < 30) {
+        galViewOverlay = overlayBefore;                      // batalkan toggle overlay dari ketukan pertama
+        galZoom = 2.5f;
+        galPanX = (galPtrSx - SCR_W * 0.5f) * (1.0f - galZoom);
+        galPanY = (galPtrSy - SCR_H * 0.5f) * (1.0f - galZoom);
+        galClampPan();
+        lastTapMs = 0; needRedraw = true;
+      } else {
+        overlayBefore = galViewOverlay;
+        galViewTap(galPtrSx, galPtrSy);
+        if (center) { lastTapMs = nowT; lastTapX = galPtrSx; lastTapY = galPtrSy; } else lastTapMs = 0;
+      }
     }
   } else {
     galPtrDown = false;
