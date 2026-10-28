@@ -20,6 +20,13 @@ Tidak ada library tambahan (driver kamera sudah bawaan core ESP32).
 - **Deteksi gerak**: decode JPEG skala 1/8 (hanya DC) + kompensasi cahaya global; simpan `GERAK_*.jpg` otomatis, getar + toast, jeda 6 dtk.
 - **Kontrol sensor**: kecerahan, kontras, saturasi, ketajaman, white balance, efek (negatif/abu/sepia/RGB), eksposur, mode malam, koreksi lensa, mirror, flip, garis bantu, kualitas preview.
 
+## Deteksi sensor otomatis
+Saat kamera dinyalakan, driver mengenali sensor lewat bus SCCB dan CAM melaporkannya ke S3 (toast "OV3660 - foto maks 2048x1536"; juga tampil di Atur > Sistem).
+- **OV2640**: foto sampai 1600x1200.
+- **OV3660 / OV5640**: foto sampai 2048x1536 (buffer foto S3 otomatis diperbesar). OV3660 dikoreksi otomatis (vflip bawaan, saturasi/kecerahan awal) agar tidak terbalik/terlalu jenuh; tombol Mirror/Flip tetap bekerja relatif terhadap koreksi itu. Autofokus OV5640 tidak diaktifkan.
+- Pesan jelas bila **sensor tidak terdeteksi** (kabel flat/pemasangan) atau **sensor tanpa JPEG** (mis. OV7670/OV7725).
+- Yang tidak otomatis: peta pin board lain. Kode memakai pin AI-Thinker; board klon dengan pin berbeda perlu mengubah `CAM_PIN_*` di `cam_module.h`.
+
 ## Yang dipacu
 | Bagian | Cara |
 |---|---|

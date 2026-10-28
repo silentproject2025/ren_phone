@@ -64,6 +64,7 @@
 #define RPR_HD    7   // 1280x720
 #define RPR_SXGA  8   // 1280x1024
 #define RPR_UXGA  9   // 1600x1200
+#define RPR_QXGA  10  // 2048x1536 (hanya sensor 3MP: OV3660/OV5640)
 
 // id untuk RP_CAM_SET
 #define RPC_BRIGHT   0    // -2..2

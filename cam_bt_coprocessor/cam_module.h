@@ -23,11 +23,11 @@
 
 // Kode resolusi di protokol (RPR_*) dipetakan ke enum library. Kalau versi library mengubah
 // nama, build GAGAL keras di sini -- lebih baik daripada resolusi salah diam-diam.
-static const framesize_t CAM_FS_MAP[10] = {
+static const framesize_t CAM_FS_MAP[11] = {
   FRAMESIZE_QQVGA, FRAMESIZE_QVGA, FRAMESIZE_CIF, FRAMESIZE_HVGA, FRAMESIZE_VGA,
-  FRAMESIZE_SVGA,  FRAMESIZE_XGA,  FRAMESIZE_HD,  FRAMESIZE_SXGA, FRAMESIZE_UXGA
+  FRAMESIZE_SVGA,  FRAMESIZE_XGA,  FRAMESIZE_HD,  FRAMESIZE_SXGA, FRAMESIZE_UXGA, FRAMESIZE_QXGA
 };
-static inline framesize_t camFs(uint8_t code) { return CAM_FS_MAP[code > 9 ? 1 : code]; }
+static inline framesize_t camFs(uint8_t code) { return CAM_FS_MAP[code > 10 ? 1 : code]; }
 
 #define CAM_PIN_PWDN   32
 #define CAM_PIN_RESET  -1
@@ -69,6 +69,8 @@ static bool                camCfgSet[RPC_COUNT];
 static uint8_t             camPrvRes = RPR_QVGA, camPrvQ = 14, camXclk = 20;
 static volatile uint8_t    camErr = 0, camErrCode = 0;   // camErr: 1 tanpa PSRAM, 2 RAM kurang, 3 init gagal, 5 kamera belum nyala, 6 foto gagal
 static uint16_t            camPid = 0;
+static uint8_t             camMaxRes = RPR_UXGA;                 // resolusi maks sensor yang terdeteksi (RPR_*)
+static int8_t              camVflipQuirk = 0, camSatQuirk = 0, camBrightQuirk = 0;   // koreksi bawaan per sensor
 static uint8_t             camFlashLvl = 0;
 static uint32_t            camFlashOnAt = 0;
 static bool                camFlashInited = false;
@@ -103,7 +105,8 @@ static int8_t camCfgOr(uint8_t id, int8_t def) { return (id < RPC_COUNT && camCf
 // ---------------- STATUS ke S3 (12 byte) ----------------
 //  [0] flags: b0 kamera nyala, b1 streaming, b2 baud tinggi, b3 flash nyala, b4 sedang foto
 //  [1] kode error  [2] kode esp_err (byte rendah)  [3..4] PID sensor (u16 LE; 0x26 = OV2640)
-//  [5] heap bebas KB  [6] blok terbesar KB  [7..8] fps x10 (u16 LE)  [9] res preview  [10] kualitas preview  [11] cadangan
+//  [5] heap bebas KB  [6] blok terbesar KB  [7..8] fps x10 (u16 LE)  [9] res preview  [10] kualitas preview  [11] resolusi maks sensor (RPR_*)
+//  kode error [1]: 1 tanpa PSRAM, 2 RAM kurang, 3 init gagal, 4 sensor tak mendukung JPEG, 5 kamera belum nyala, 6 foto gagal, 7 sensor tidak terdeteksi
 static void camSendStat() {
   uint32_t now = millis();
   if (now - camHeapAt >= 1000) { camHeapAt = now; camHeapKb = ESP.getFreeHeap() / 1024; camBlkKb = ESP.getMaxAllocHeap() / 1024; }
@@ -114,7 +117,7 @@ static void camSendStat() {
   b[5] = camHeapKb > 255 ? 255 : (uint8_t)camHeapKb;
   b[6] = camBlkKb > 255 ? 255 : (uint8_t)camBlkKb;
   uint32_t f = camFps10; b[7] = f & 0xFF; b[8] = (f >> 8) & 0xFF;
-  b[9] = camPrvRes; b[10] = camPrvQ; b[11] = 0;
+  b[9] = camPrvRes; b[10] = camPrvQ; b[11] = camMaxRes;
   rpSend(Serial2, RP_CAM_STAT, b, sizeof(b));
   camStatAt = now;
 }
@@ -134,17 +137,28 @@ static bool camDoOpen() {
   c.pin_pwdn = CAM_PIN_PWDN; c.pin_reset = CAM_PIN_RESET;
   c.xclk_freq_hz = (int)camXclk * 1000000;
   c.pixel_format = PIXFORMAT_JPEG;
-  c.frame_size = FRAMESIZE_UXGA;           // buffer dialokasikan utk ukuran maksimum -> foto UXGA tetap muat
+  c.frame_size = FRAMESIZE_QXGA;           // library otomatis menurunkan ke ukuran maks sensor (OV2640 -> UXGA, OV3660 -> QXGA); buffer dialokasikan utk ukuran itu
   c.jpeg_quality = camPrvQ;
   c.fb_count = 2;
   c.fb_location = CAMERA_FB_IN_PSRAM;
   c.grab_mode = CAMERA_GRAB_LATEST;        // selalu frame terbaru, bukan antrean basi
   uint32_t h0 = ESP.getFreeHeap();
   esp_err_t e = esp_camera_init(&c);
-  if (e != ESP_OK) { camErr = 3; camErrCode = (uint8_t)(e & 0xFF); Serial.printf("[CAM] init gagal 0x%x\n", (unsigned)e); return false; }
+  if (e != ESP_OK) {
+    camErr = (e == ESP_ERR_NOT_FOUND) ? 7 : (e == ESP_ERR_NOT_SUPPORTED ? 4 : 3);   // 7: sensor tak terdeteksi (kabel flat/modul), 4: sensor tanpa JPEG
+    camErrCode = (uint8_t)(e & 0xFF);
+    Serial.printf("[CAM] init gagal 0x%x\n", (unsigned)e); return false;
+  }
   sensor_t* s = esp_camera_sensor_get();
   if (!s) { camErr = 3; camErrCode = 0xFE; esp_camera_deinit(); return false; }
   camPid = s->id.PID;
+  // deteksi sensor: resolusi maks + koreksi bawaan (OV3660 pada modul umum tampil terbalik & terlalu jenuh)
+  bool is3m = (camPid == OV3660_PID || camPid == OV5640_PID);
+  camMaxRes = is3m ? RPR_QXGA : RPR_UXGA;
+  camVflipQuirk = (camPid == OV3660_PID) ? 1 : 0;
+  camSatQuirk = (camPid == OV3660_PID) ? -2 : 0;
+  camBrightQuirk = (camPid == OV3660_PID) ? 1 : 0;
+  s->set_vflip(s, camVflipQuirk);
   s->set_framesize(s, camFs(camPrvRes));
   s->set_quality(s, camPrvQ);
   camOpen = true;
@@ -161,6 +175,8 @@ static void camDoClose() {
   Serial.printf("[CAM] kamera mati. heap=%u blokMax=%u\n", (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap());
 }
 
+static int camClampI(int v, int lo, int hi) { return v < lo ? lo : (v > hi ? hi : v); }
+
 static void camApplySet(uint8_t id, int8_t v) {
   if (id >= RPC_COUNT) return;
   camCfg[id] = v; camCfgSet[id] = true;
@@ -170,14 +186,14 @@ static void camApplySet(uint8_t id, int8_t v) {
   sensor_t* s = esp_camera_sensor_get();
   if (!s) return;
   switch (id) {
-    case RPC_BRIGHT:   s->set_brightness(s, v); break;
+    case RPC_BRIGHT:   s->set_brightness(s, camClampI(v + camBrightQuirk, -2, 2)); break;
     case RPC_CONTRAST: s->set_contrast(s, v); break;
-    case RPC_SATUR:    s->set_saturation(s, v); break;
+    case RPC_SATUR:    s->set_saturation(s, camClampI(v + camSatQuirk, -2, 2)); break;
     case RPC_SHARP:    s->set_sharpness(s, v); break;
     case RPC_WBMODE:   s->set_whitebal(s, 1); s->set_awb_gain(s, 1); s->set_wb_mode(s, v); break;
     case RPC_EFFECT:   s->set_special_effect(s, v); break;
     case RPC_HMIRROR:  s->set_hmirror(s, v ? 1 : 0); break;
-    case RPC_VFLIP:    s->set_vflip(s, v ? 1 : 0); break;
+    case RPC_VFLIP:    s->set_vflip(s, (v ? 1 : 0) ^ camVflipQuirk); break;
     case RPC_NIGHT:
       s->set_aec2(s, v ? 1 : 0);
       s->set_gainceiling(s, v ? GAINCEILING_128X : GAINCEILING_8X);
@@ -196,6 +212,7 @@ static bool camAbortFn() { return !camOpen || camCloseReq; }
 
 static void camDoShot(uint8_t res, uint8_t q, uint8_t flash, uint8_t flags) {
   (void)flags;
+  if (res > camMaxRes) res = camMaxRes;
   if (!camOpen) { camErr = 5; camSendStat(); return; }
   sensor_t* s = esp_camera_sensor_get();
   if (!s) { camErr = 6; camSendStat(); return; }
@@ -244,7 +261,7 @@ static void camHandleCmd(const CamCmd& c) {
     }
     case RP_CAM_CLOSE: camCloseReq = true; camDoClose(); camCloseReq = false; camSendStat(); break;
     case RP_CAM_SET:   if (c.len >= 2) camApplySet(c.d[0], (int8_t)c.d[1]); break;
-    case RP_CAM_SHOT:  if (c.len >= 3) camDoShot(c.d[0] > 9 ? RPR_SVGA : c.d[0], c.d[1] < 4 ? 4 : c.d[1], c.d[2], c.len >= 4 ? c.d[3] : 0); break;
+    case RP_CAM_SHOT:  if (c.len >= 3) camDoShot(c.d[0] > RPR_QXGA ? RPR_SVGA : c.d[0], c.d[1] < 4 ? 4 : c.d[1], c.d[2], c.len >= 4 ? c.d[3] : 0); break;
     case RP_CAM_FLASH: if (c.len >= 1) camFlashSet(c.d[0]); camSendStat(); break;
     case RP_CAM_BAUD: {
       if (c.len < 4) break;

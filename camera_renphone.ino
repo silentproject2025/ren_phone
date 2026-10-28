@@ -24,6 +24,7 @@
 #define CAM_UART_RXBUF   6144            // dipakai musicbt (setRxBufferSize); 2048 asli terlalu kecil di 2-3 Mbaud
 #define CAM_SLOT_SZ      (96 * 1024)
 #define CAM_STILL_SZ     (448 * 1024)
+#define CAM_STILL_SZ_BIG (768 * 1024)    // sensor 3MP (OV3660/OV5640): foto sampai 2048x1536
 #define CAM_AVI_MAXFR    20000
 #define CAM_DIR          "/Kamera"
 #define CAM_MOT_MAX      4800            // 80x60 sel (VGA / 8)
@@ -31,9 +32,9 @@
 portMUX_TYPE camRxMux = portMUX_INITIALIZER_UNLOCKED;
 
 // ---------------- tabel ----------------
-static const char*    const CAM_RES_NAME[10] = {"160x120", "320x240", "400x296", "480x320", "640x480", "800x600", "1024x768", "1280x720", "1280x1024", "1600x1200"};
-static const uint16_t       CAM_RES_W[10]    = {160, 320, 400, 480, 640, 800, 1024, 1280, 1280, 1600};
-static const uint16_t       CAM_RES_H[10]    = {120, 240, 296, 320, 480, 600, 768, 720, 1024, 1200};
+static const char*    const CAM_RES_NAME[11] = {"160x120", "320x240", "400x296", "480x320", "640x480", "800x600", "1024x768", "1280x720", "1280x1024", "1600x1200", "2048x1536"};
+static const uint16_t       CAM_RES_W[11]    = {160, 320, 400, 480, 640, 800, 1024, 1280, 1280, 1600, 2048};
+static const uint16_t       CAM_RES_H[11]    = {120, 240, 296, 320, 480, 600, 768, 720, 1024, 1200, 1536};
 static const uint8_t        CAM_PRV_CODE[3]  = {RPR_QQVGA, RPR_QVGA, RPR_VGA};
 static const char*    const CAM_PRV_NAME[3]  = {"160x120 (2x)", "320x240", "640x480 (1/2)"};
 static const uint8_t        CAM_TIMER_S[3]   = {0, 3, 10};
@@ -142,6 +143,21 @@ static uint32_t  camMotCool = 0;
 // ---------------- util ----------------
 static inline uint8_t camPrvCode() { return CAM_PRV_CODE[camCfg.prv < 0 ? 0 : (camCfg.prv > 2 ? 2 : camCfg.prv)]; }
 
+// ---- deteksi sensor (dilaporkan CAM lewat RP_CAM_STAT) ----
+static const char* camSensorName(unsigned pid) {
+  switch (pid) {
+    case 0x26: return "OV2640";   case 0x3660: return "OV3660"; case 0x5640: return "OV5640";
+    case 0x96: return "OV9650";   case 0x77: return "OV7725";   case 0x76: return "OV7670";
+    default: return "sensor ?";
+  }
+}
+static int camMaxRes() {      // resolusi foto maksimum sensor yang terpasang (RPR_*)
+  uint8_t m = camStat[11];
+  return (camStatSeen && (camStat[0] & 1) && m >= RPR_UXGA && m <= RPR_QXGA) ? m : RPR_UXGA;
+}
+static int camEffRes() { int m = camMaxRes(); return camCfg.shotRes > m ? m : camCfg.shotRes; }
+static unsigned camPidNow() { return (unsigned)camStat[3] | ((unsigned)camStat[4] << 8); }
+
 static void camU32(uint8_t* o, uint32_t v) { o[0] = v; o[1] = v >> 8; o[2] = v >> 16; o[3] = v >> 24; }
 
 static void camSendSet(uint8_t id, int8_t v) {
@@ -220,6 +236,19 @@ static bool camAllocBuffers() {
   camRx.attachStill(camStillBuf, camStillBuf ? CAM_STILL_SZ : 0);
   camBuffersOk = true;
   return true;
+}
+
+// sensor 3MP butuh buffer foto lebih besar: tukar buffer saat idle (tidak sedang menerima foto)
+static void camEnsureStill() {
+  uint32_t want = (camMaxRes() >= RPR_QXGA) ? CAM_STILL_SZ_BIG : CAM_STILL_SZ;
+  if (!camBuffersOk || camShotPending || camRx.stillState == CAMRX_STILL_RECV || camRx.stillCap >= want) return;
+  uint8_t* nb = (uint8_t*)heap_caps_malloc(want, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  if (!nb) return;
+  camRx.attachStill(nullptr, 0);
+  uint8_t* old = camStillBuf;
+  camStillBuf = nb;
+  camRx.attachStill(nb, want);
+  if (old) heap_caps_free(old);
 }
 
 // ---------------- SD ----------------
@@ -359,7 +388,7 @@ static void camShootNow() {
   if (camShotPending) return;
   camFreezeUntil = 0;
   camRx.armStill();
-  uint8_t pl[4] = {(uint8_t)camCfg.shotRes, (uint8_t)camCfg.shotQ, (uint8_t)(camCfg.flash == 3 ? 255 : 0), 0};
+  uint8_t pl[4] = {(uint8_t)camEffRes(), (uint8_t)camCfg.shotQ, (uint8_t)(camCfg.flash == 3 ? 255 : 0), 0};
   rpSend(Serial1, RP_CAM_SHOT, pl, 4);
   camShotPending = true;
   camShotDeadline = millis() + 15000;
@@ -410,7 +439,12 @@ static void camLinkTick(uint32_t now) {
 }
 static void camOpenTick(uint32_t now) {
   bool open = camStatSeen && (camStat[0] & 1);
-  if (open && !camOpened) { camOpened = true; camPushAll(); camFpsT0 = now; camFpsN = 0; camNeedDraw = true; }
+  if (open && !camOpened) {
+    camOpened = true; camPushAll(); camFpsT0 = now; camFpsN = 0; camNeedDraw = true;
+    camEnsureStill();
+    char m[48]; snprintf(m, sizeof(m), "%s - foto maks %s", camSensorName(camPidNow()), CAM_RES_NAME[camMaxRes()]);
+    showToast(m, 2200);
+  }
   if (!open && camOpened && camStatSeen && now - camStatMs < 1000) camOpened = false;     // CAM menutup kamera sendiri
   if (camOpened) return;
   if (camStatSeen && camStat[1] && camStat[1] != 6 && camStat[1] != 5) return;           // error permanen: biarkan pesan tampil
@@ -529,6 +563,8 @@ static void camStatusMsg(char* o, size_t cap) {
   else if (!camStatSeen) snprintf(o, cap, "Menghubungi ESP32-CAM...");
   else if (e == 1) snprintf(o, cap, "ESP32-CAM tanpa PSRAM.");
   else if (e == 2) snprintf(o, cap, "RAM CAM kurang.\nMatikan Bluetooth/musik lalu coba lagi.");
+  else if (e == 7) snprintf(o, cap, "Sensor kamera tidak terdeteksi.\nCek kabel flat & pemasangan modul.");
+  else if (e == 4) snprintf(o, cap, "Sensor ini tidak mendukung JPEG.\n(Dukungan: OV2640/OV3660/OV5640)");
   else if (e == 3) snprintf(o, cap, "Kamera gagal init (0x%02X).\nCek modul kamera & daya 5V.", camStat[2]);
   else snprintf(o, cap, "Menyalakan kamera...");
 }
@@ -612,7 +648,7 @@ static const char* const CAM_ROW_LABEL[25] = {
 };
 static void camRowValue(int r, char* o, size_t cap) {
   switch (r) {
-    case 0: snprintf(o, cap, "%s", CAM_RES_NAME[camCfg.shotRes]); break;
+    case 0: snprintf(o, cap, "%s", CAM_RES_NAME[camEffRes()]); break;
     case 1: snprintf(o, cap, "Q%d%s", camCfg.shotQ, camCfg.shotQ <= 8 ? " tinggi" : (camCfg.shotQ >= 16 ? " hemat" : "")); break;
     case 2: if (CAM_TIMER_S[camCfg.timer]) snprintf(o, cap, "%d dtk", CAM_TIMER_S[camCfg.timer]); else snprintf(o, cap, "Mati"); break;
     case 3: snprintf(o, cap, "%dx", CAM_BURST_N[camCfg.burst]); break;
@@ -651,7 +687,7 @@ static void camReopen() {                         // dipakai saat clock sensor b
 }
 static void camAdj(int r, int dir) {
   switch (r) {
-    case 0: camCfg.shotRes = camStepv(camCfg.shotRes, dir, RPR_QVGA, RPR_UXGA, 1, true); break;
+    case 0: camCfg.shotRes = camStepv(camEffRes(), dir, RPR_QVGA, camMaxRes(), 1, true); break;
     case 1: camCfg.shotQ = camStepv(camCfg.shotQ, dir, 4, 30, 2, false); break;
     case 2: camCfg.timer = camStepv(camCfg.timer, dir, 0, 2, 1, true); break;
     case 3: camCfg.burst = camStepv(camCfg.burst, dir, 0, 2, 1, true); break;
@@ -713,8 +749,7 @@ static void camDrawSettings(LGFX_Sprite& s) {
   if (camTab == 3) {
     int iy = y + 4; s.setTextColor(T().subtext);
     char l[80];
-    unsigned pid = camStat[3] | (camStat[4] << 8);
-    snprintf(l, sizeof(l), "Sensor 0x%X  heap CAM %uK (blok %uK)", pid, camStat[5], camStat[6]); s.setCursor(12, iy); s.print(l); iy += 11;
+    snprintf(l, sizeof(l), "%s  heap CAM %uK (blok %uK)", camSensorName(camPidNow()), camStat[5], camStat[6]); s.setCursor(12, iy); s.print(l); iy += 11;
     snprintf(l, sizeof(l), "CAM %u.%u fps  rx %lu drop %lu rusak %lu", (camStat[7] | (camStat[8] << 8)) / 10, (camStat[7] | (camStat[8] << 8)) % 10,
              (unsigned long)camRx.frames, (unsigned long)camRx.dropped, (unsigned long)(camRx.bad + camRx.oversize)); s.setCursor(12, iy); s.print(l); iy += 11;
     snprintf(l, sizeof(l), "Link %lu baud%s", (unsigned long)camBaudCur, camLinkFailed ? " (cepat gagal)" : ""); s.setCursor(12, iy); s.print(l);
