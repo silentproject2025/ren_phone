@@ -70,6 +70,7 @@ struct RcCfg {
   bool hidden;      // SSID disembunyikan
   uint8_t fpsCap;   // 4..30
   uint8_t quality;  // 0 = penuh (RGB565), 1 = hemat (RGB332)
+  bool noView;      // true = JANGAN kirim gambar ke web (sentuh/tombol tetap jalan) -> CPU HP utuh utk layar sendiri
   uint8_t channel;  // 1..11 (diabaikan radio kalau STA sedang tersambung)
   char ssid[33];
   char pass[33];
@@ -138,6 +139,7 @@ static void rcSaveCfg() {
   p.putBool("hid", rcCfg.hidden);
   p.putUChar("fps", rcCfg.fpsCap);
   p.putUChar("q", rcCfg.quality);
+  p.putBool("nv", rcCfg.noView);
   p.putUChar("ch", rcCfg.channel);
   p.putString("ssid", rcCfg.ssid);
   p.putString("pass3", rcCfg.pass);
@@ -156,6 +158,7 @@ static void rcLoadCfg() {
   rcCfg.hidden    = p.getBool("hid", false);
   rcCfg.fpsCap    = p.getUChar("fps", 12);
   rcCfg.quality   = p.getUChar("q", 0);
+  rcCfg.noView    = p.getBool("nv", false);
   rcCfg.channel   = p.getUChar("ch", 6);
   String s = p.getString("ssid", "Accretion-Phone");
   String w = p.getString("pass3", "");
@@ -457,6 +460,19 @@ static void rcSendEmpty(bool lite, bool direct) {
   rcSendBin(h, 12);
 }
 
+// Mode "Tanpa preview": cukup header 12 byte (flag bit3 = preview dimatikan) yang memuat ukuran layar,
+// supaya sentuh di halaman web tetap terpetakan benar. Tidak ada snapshot/diff/kirim frame.
+static void rcSendNoView() {
+  int w = canvas.width(), h = canvas.height();
+  uint8_t hd[12];
+  hd[0] = 'R'; hd[1] = 'C'; hd[2] = 1; hd[3] = 8;
+  hd[4] = (uint8_t)(w & 0xFF); hd[5] = (uint8_t)(w >> 8);
+  hd[6] = (uint8_t)(h & 0xFF); hd[7] = (uint8_t)(h >> 8);
+  hd[8] = (uint8_t)(rcSeq & 0xFF); hd[9] = (uint8_t)(rcSeq >> 8);
+  hd[10] = 0; hd[11] = 0;
+  rcSendBin(hd, 12);
+}
+
 // GET /rc/f?c=<id>&a=<seq terakhir>&full=1&tk=1&e=<event sentuh>
 static void rcHandleFrame() {
   if (!rcAllowed()) { webServer.send(403, "text/plain", "403"); return; }
@@ -477,6 +493,7 @@ static void rcHandleFrame() {
 
   if (rcCfg.inputOn && webServer.hasArg("e")) rcParseEvents(webServer.arg("e"));
 
+  if (rcCfg.noView) { rcSendNoView(); return; }      // tanpa preview: jangan alokasi buffer, jangan snapshot
   int w = canvas.width(), h = canvas.height();
   if (!rcEnsureBuffers(w, h)) { webServer.send(503, "text/plain", "ram"); return; }
   bool lite = (rcCfg.quality == 1);
@@ -653,6 +670,7 @@ static void rcHandleStatus() {
   j += ",\"as\":"; j += rcCfg.autoStart ? 1 : 0;
   j += ",\"hid\":"; j += rcCfg.hidden ? 1 : 0;
   j += ",\"q\":"; j += (int)rcCfg.quality;
+  j += ",\"nv\":"; j += rcCfg.noView ? 1 : 0;
   j += ",\"fps\":"; j += (int)rcCfg.fpsCap;
   j += ",\"ch\":"; j += (int)rcCfg.channel;
   j += ",\"b\":"; j += brightness;
@@ -700,6 +718,7 @@ static void rcHandleSet() {
   if (webServer.hasArg("as"))  rcCfg.autoStart = webServer.arg("as")  == "1";
   if (webServer.hasArg("fps")) rcCfg.fpsCap    = (uint8_t)constrain(webServer.arg("fps").toInt(), 4, 30);
   if (webServer.hasArg("q"))   { uint8_t q = webServer.arg("q").toInt() ? 1 : 0; if (q != rcCfg.quality) { rcCfg.quality = q; rcForceFull = true; } }
+  if (webServer.hasArg("nv"))  { bool nv = webServer.arg("nv") == "1"; if (nv != rcCfg.noView) { rcCfg.noView = nv; rcFreeBuffers(); rcForceFull = true; } }
   if (webServer.hasArg("hid")) { bool hh = webServer.arg("hid") == "1"; if (hh != rcCfg.hidden) { rcCfg.hidden = hh; credChg = true; } }
   if (webServer.hasArg("ch"))  { uint8_t c = (uint8_t)constrain(webServer.arg("ch").toInt(), 1, 11); if (c != rcCfg.channel) { rcCfg.channel = c; credChg = true; } }
   if (webServer.hasArg("ssid")) {
@@ -827,6 +846,7 @@ input[type=range]{width:100%}
 <button id="bfull" style="padding:6px 10px">⛶</button></header>
 <div id="wrap"><canvas id="scr" width="320" height="240"></canvas><div id="fd"></div>
 <div id="ov"><div class="tag" id="busy" hidden>Sedang dipakai perangkat lain · <a href="#" id="take" style="color:#8b7bff">ambil alih</a></div>
+<div class="tag" id="nvtag" hidden>Preview web dimatikan · layar hanya di HP · sentuh &amp; tombol tetap jalan</div>
 <div class="tag" id="direct" hidden>Layar ini digambar langsung ke panel (NES/DOOM/video) – tampilan beku, sentuh tetap jalan</div></div></div>
 <div class="row">
 <button data-a="back">◀ Back</button><button data-a="home" class="p">⌂ Home</button><button data-a="rec">▭ Recents</button><button data-a="shot">📷 Foto</button>
@@ -841,6 +861,7 @@ input[type=range]{width:100%}
 <label class="sw">Mulai otomatis saat HP boot<input type="checkbox" id="s_as"></label>
 <label class="sw">Izinkan lewat WiFi rumah<input type="checkbox" id="s_lan"></label>
 <label class="sw">Titik sentuh (di layar web ini)<input type="checkbox" id="s_cu" checked></label>
+<label class="sw">Tanpa preview (hemat CPU HP, untuk ukur FPS)<input type="checkbox" id="s_nv"></label>
 <div class="sm" id="lanip" style="padding:8px 0"></div>
 <div class="two"><div><div class="sm">Kualitas gambar</div><select id="s_q"><option value="0">Penuh (RGB565)</option><option value="1">Hemat (RGB332)</option></select></div>
 <div><div class="sm">Batas FPS</div><select id="s_fps"><option>6</option><option>8</option><option>12</option><option>20</option><option>30</option></select></div></div></div>
@@ -876,7 +897,7 @@ function apply(b){
   if(b.length<12||b[0]!=82||b[1]!=67)return false;
   const dv=new DataView(b.buffer,b.byteOffset,b.byteLength);
   const fl=b[3],w=dv.getUint16(4,true),h=dv.getUint16(6,true),n=dv.getUint16(10,true);
-  seq=dv.getUint16(8,true);lite=!!(fl&2);$('#direct').hidden=!(fl&4);
+  seq=dv.getUint16(8,true);lite=!!(fl&2);$('#direct').hidden=!(fl&4);nvOn=!!(fl&8);$('#nvtag').hidden=!nvOn;
   if(w!=W||h!=H)setSize(w,h);
   const d=img.data,tx=Math.ceil(W/16),t=new Uint8ClampedArray(4);let p=12;
   for(let k=0;k<n;k++){
@@ -888,7 +909,7 @@ function apply(b){
   }
   if(n>0)ctx.putImageData(img,0,0);
   return n>0}
-let frames=0,tf=performance.now();
+let nvOn=false,frames=0,tf=performance.now();
 function setOn(on,t){$('#dot').className='dot'+(on?' on':'');if(t)$('#info').textContent=t}
 async function loop(){
   let fails=0,idle=0;
@@ -904,8 +925,8 @@ async function loop(){
       $('#busy').hidden=true;
       const ch=apply(new Uint8Array(await r.arrayBuffer()));
       fails=0;if(ch){frames++;idle=0}else idle++;
-      const t=performance.now();if(t-tf>1000){setOn(true,Math.round(frames*1000/(t-tf))+' fps · '+W+'×'+H+(lite?' · hemat':''));frames=0;tf=t}
-      if(!ch&&!q.length)await nap(idle>3?160:30);
+      const t=performance.now();if(t-tf>1000){setOn(true,nvOn?('tanpa preview · '+W+'×'+H):Math.round(frames*1000/(t-tf))+' fps · '+W+'×'+H+(lite?' · hemat':''));frames=0;tf=t}
+      if(!ch&&!q.length)await nap(nvOn?400:(idle>3?160:30));
     }catch(e){fails++;setOn(false,'terputus…');need=true;if(down)q.push('u');await nap(Math.min(2000,300*fails))}
   }}
 $('#take').onclick=e=>{e.preventDefault();take=true;wake()};
@@ -935,6 +956,7 @@ const bind={s_in:'in',s_ka:'ka',s_as:'as',s_lan:'lan'};
 for(const id in bind)$('#'+id).onchange=e=>set({[bind[id]]:e.target.checked?1:0});
 $('#s_q').onchange=e=>{set({q:e.target.value});need=true};
 $('#s_fps').onchange=e=>set({fps:e.target.value});
+$('#s_nv').onchange=async e=>{await set({nv:e.target.checked?1:0});need=true;wake()};
 $('#sap').onclick=async()=>{const o={ssid:$('#s_ssid').value};const pw=$('#s_pass').value;if(pw)o.pass=pw;if(await set(o))$('#s_pass').value=''};
 const wsleep=ms=>new Promise(r=>setTimeout(r,ms));
 async function wscan(){
@@ -964,7 +986,7 @@ $('#wgo').onclick=async()=>{
 async function init(){
   try{ST=await (await fetch('/rc/st')).json();
     $('#s_in').checked=!!ST.in;$('#s_ka').checked=!!ST.ka;$('#s_as').checked=!!ST.as;$('#s_lan').checked=!!ST.lan;
-    $('#s_q').value=ST.q;$('#s_fps').value=ST.fps;$('#s_ssid').value=ST.ssid;$('#br').value=ST.b;$('#ver').textContent='NyxOS Remote '+ST.v;$('#lanip').textContent=ST.sip?('Alamat via WiFi rumah: http://'+ST.sip+'/remote'):'WiFi rumah: belum tersambung';
+    $('#s_nv').checked=!!ST.nv;$('#s_q').value=ST.q;$('#s_fps').value=ST.fps;$('#s_ssid').value=ST.ssid;$('#br').value=ST.b;$('#ver').textContent='NyxOS Remote '+ST.v;$('#lanip').textContent=ST.sip?('Alamat via WiFi rumah: http://'+ST.sip+'/remote'):'WiFi rumah: belum tersambung';
     const a=await (await fetch('/rc/apps')).json(),g=$('#apps');
     a.forEach(([i,n])=>{const b=document.createElement('button');b.textContent=n;b.onclick=()=>act('app',i);g.appendChild(b)})}catch(e){setTimeout(init,1500)}}
 init();loop();
@@ -1087,7 +1109,7 @@ void rcLoopPoll() {
 // APP "REMOTE" DI LAYAR HP (SCR_REMOTE)
 // =====================================================================
 #define RCU_ROW_H 26
-#define RCU_N     13
+#define RCU_N     14
 
 static float rcuScroll = 0;
 static bool  rcuReveal = false;
@@ -1112,7 +1134,7 @@ void remoteExit()  { rcuDown = false; rcuReveal = false; }
 static const char* const RCU_LBL[RCU_N] = {
   "Status", "Access Point", "Nama WiFi", "Sandi", "Alamat", "Buat sandi baru",
   "Mulai otomatis", "Izinkan sentuh dari web", "Layar tetap nyala", "Izinkan via WiFi rumah",
-  "Kualitas gambar", "Batas FPS", "IP WiFi rumah"
+  "Kualitas gambar", "Batas FPS", "IP WiFi rumah", "Tanpa preview web"
 };
 
 void drawRemote(LGFX_Sprite& s) {
@@ -1138,7 +1160,7 @@ void drawRemote(LGFX_Sprite& s) {
     switch (i) {
       case 0: {
         if (!rcApUp) { s.setTextColor(T().danger); snprintf(buf, sizeof(buf), "AP mati"); }
-        else if (rcWasViewing) { s.setTextColor(T().good); snprintf(buf, sizeof(buf), "Terhubung %ufps", (unsigned)rcFpsNow); }
+        else if (rcWasViewing) { s.setTextColor(T().good); if (rcCfg.noView) snprintf(buf, sizeof(buf), "Terhubung, tanpa preview"); else snprintf(buf, sizeof(buf), "Terhubung %ufps", (unsigned)rcFpsNow); }
         else { s.setTextColor(T().good); snprintf(buf, sizeof(buf), "AP aktif"); }
         s.setCursor(valX, ty); s.print(buf);
         break;
@@ -1182,6 +1204,7 @@ void drawRemote(LGFX_Sprite& s) {
         s.setCursor(valX, ty); s.print(buf);
         break;
       }
+      case 13: iosSwitch(s, xr - 34, y + 3, rcCfg.noView); break;
       case 12: {
         s.setTextColor(T().subtext);
         if (wifiConnected) {
@@ -1238,6 +1261,7 @@ static void rcuRowTap(int i) {
     case 8: rcCfg.keepAwake = !rcCfg.keepAwake; rcSaveCfg(); break;
     case 9: rcCfg.allowLan = !rcCfg.allowLan; rcSaveCfg(); break;
     case 10: rcCfg.quality = rcCfg.quality ? 0 : 1; rcForceFull = true; rcSaveCfg(); break;
+    case 13: rcCfg.noView = !rcCfg.noView; rcFreeBuffers(); rcForceFull = true; rcSaveCfg(); break;
     case 11: {
       static const uint8_t F[5] = {6, 8, 12, 20, 30};
       int k = 0;
