@@ -15,7 +15,7 @@ NyxOS tidak berbasis Android maupun Linux. Peluncur aplikasi (launcher), pusat n
 > **Catatan mengenai status pengujian.** Sebagian besar fitur telah diuji langsung oleh pembuatnya pada perangkat fisik. Terdapat tiga pengecualian yang perlu diketahui sejak awal:
 >
 > - **Telepon** baru teruji sebagian: berhasil dengan akun `sip2sip.info` (SIP melalui TCP), sedangkan penyedia SIP lain, mode LAN, dan TURN belum terkonfirmasi.
-> - **Kamera** sudah ditulis lengkap, tetapi menurut dokumentasinya belum pernah dijalankan pada perangkat.
+> - **Kamera** teruji sebagian: preview berjalan lancar pada link 3 Mbaud dengan kualitas JPEG 10, sedangkan fitur lainnya (foto, video, timelapse, deteksi gerak) belum terkonfirmasi.
 > - **NyxPPU** masih berupa eksperimen (fase 1), dan **SPI Overclock** bergantung pada kualitas kabel.
 >
 > Penjelasan lengkap tiap fitur tersedia pada [bagian 5](#5-fitur-secara-rinci) dan [bagian 6](#6-fitur-eksperimental-dan-catatan-perangkat-keras).
@@ -70,7 +70,7 @@ NyxOS tidak berbasis Android maupun Linux. Peluncur aplikasi (launcher), pusat n
 | Gamepad web untuk NES dan DOOM | `OK` | |
 | Baterai (INA219), Galeri, HWmonitor, Profil, dan lainnya | `OK` | |
 | **Telepon (SIP dan LAN)** | `SEBAGIAN` | Teruji dengan `sip2sip.info` melalui TCP. Penyedia lain, mode LAN, dan TURN belum terkonfirmasi. |
-| **Kamera (OV2640 pada ESP32-CAM)** | `BETA` | Belum dijalankan pada perangkat. Lihat [`KAMERA.md`](./KAMERA.md). |
+| **Kamera (OV2640 pada ESP32-CAM)** | `SEBAGIAN` | Lancar pada link 3 Mbaud dengan kualitas JPEG 10. Fitur lain belum terkonfirmasi. Lihat [`KAMERA.md`](./KAMERA.md). |
 | SPI Overclock layar | `HW` | Hasil bergantung pada batas fisik kabel. |
 | NyxPPU (mesin piksel) | `EXP` | Fase 1; hanya tersedia pada aplikasi PPU Demo. |
 
@@ -454,11 +454,11 @@ Audio **wajib MP3 44,1 kHz**, sebaiknya CBR agar seek akurat. Untuk video potret
 
 Album adalah **folder pada kartu SD** (maksimal 2 tingkat), seperti galeri ponsel pada umumnya. Thumbnail 72×72 dibuat satu kali dan disimpan pada `/.thumbs/`, sehingga CPU tidak perlu men-decode gambar penuh setiap kali dibuka. Nama cache berupa hash dari path, ukuran, dan waktu ubah, sehingga gambar yang diganti dibuat ulang secara otomatis. Format yang didukung: **JPG dan PNG**.
 
-#### 5.4.4 Kamera (OV2640 pada ESP32-CAM) `BETA`
+#### 5.4.4 Kamera (OV2640 pada ESP32-CAM) `SEBAGIAN`
 
 Kamera berada pada modul ESP32-CAM, bukan pada S3. Gambar JPEG dikirim melalui link UART yang sama dengan audio Bluetooth. Dokumentasi lengkap tersedia di [`KAMERA.md`](./KAMERA.md).
 
-> **Status.** Menurut `KAMERA.md`, fitur ini belum dikompilasi dengan toolchain ESP32 dan belum dijalankan pada perangkat. Sintaks diperiksa dengan *mock API*; protokol (pemecahan dan penyusunan frame, frame rusak, slot, foto versus preview) serta penulis AVI diuji di komputer melalui `tests_kamera/`, dan AVI yang dihasilkan berhasil di-decode oleh ffmpeg.
+> **Status.** Pemilik telah menguji Kamera pada perangkat: dengan link UART **3 Mbaud** dan **kualitas JPEG 10**, kamera berjalan lancar. Fitur lain (foto beresolusi tinggi, video, timelapse, deteksi gerak, kontrol sensor) belum dikonfirmasi. Sebelum pengujian pada perangkat, sintaks diperiksa dengan *mock API*; protokol (pemecahan dan penyusunan frame, frame rusak, slot, foto versus preview) serta penulis AVI diuji di komputer melalui `tests_kamera/`, dan AVI yang dihasilkan berhasil di-decode oleh ffmpeg.
 
 | Fitur | Keterangan |
 |---|---|
@@ -493,7 +493,7 @@ Kamera berada pada modul ESP32-CAM, bukan pada S3. Gambar JPEG dikirim melalui l
 
 1. **RAM internal CAM:** kamera, A2DP, dan MP3 sekaligus sangat ketat. Jika muncul pesan "RAM CAM kurang", matikan Bluetooth atau musik terlebih dahulu. Ambang pada `CAM_MIN_BLOCK` (`cam_module.h`).
 2. **Daya:** ESP32-CAM mudah *brownout*. Gunakan pin 5V dengan catu yang kuat.
-3. **Kabel UART 3 Mbaud** dapat tidak stabil bila panjang; sistem kembali otomatis ke 921k, atau pilih 2M/921k secara manual.
+3. **Kabel UART 3 Mbaud** dapat tidak stabil bila panjang; sistem kembali otomatis ke 921k, atau pilih 2M/921k secara manual. Pada unit pemilik, 3 Mbaud berjalan lancar.
 4. Musik dapat tersendat sebentar saat aplikasi dibuka atau ditutup (momen pergantian baud).
 5. Galeri hanya mengenali foto; video AVI diputar melalui tombol "Putar" atau aplikasi Files.
 6. Orientasi kamera pada papan dapat terputar: gunakan Mirror/Flip pada Atur → Layar.
@@ -745,7 +745,7 @@ Proyek ini ditujukan sebagai perangkat pribadi dan eksperimental. Pertimbangkan 
 
 **Kamera**
 
-- Belum dijalankan pada perangkat; lihat risiko yang diuraikan pada [bagian 5.4.4](#544-kamera-ov2640-pada-esp32-cam-beta).
+- Baru teruji sebagian (preview pada 3 Mbaud, kualitas JPEG 10); fitur lain belum terkonfirmasi. Lihat risiko yang diuraikan pada [bagian 5.4.4](#544-kamera-ov2640-pada-esp32-cam-sebagian).
 
 **Fitur lain**
 
@@ -793,7 +793,7 @@ Kontribusi berupa hasil uji pada perangkat nyata sangat membantu, terutama untuk
 1. **Telepon, mode LAN** antara dua perangkat NyxOS (variabel paling sedikit).
 2. **Telepon, mode SIP** ke penyedia selain `sip2sip.info` (misalnya akun Linphone lain).
 3. **Telepon dengan TURN** pada jaringan CGNAT atau NAT ketat.
-4. **Kamera** pada perangkat: kompilasi, preview, foto, video, dan stabilitas daya.
+4. **Kamera**: foto beresolusi tinggi, video, timelapse, deteksi gerak, sensor selain OV2640, dan stabilitas daya. Preview pada 3 Mbaud sudah terkonfirmasi lancar.
 
 Untuk pengujian Telepon, catat apakah dering muncul, apakah suara dua arah, seberapa jernih, dan apakah ada restart.
 
