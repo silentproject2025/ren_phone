@@ -785,7 +785,15 @@ void camTouch(int x, int y, bool held, bool isNew) {
     if (camIn(x, y, SCR_W - 56, 2, 54, 26)) { camSettings = false; camCfgSave(); vibTap(); needRedraw = true; return; }
     if (y >= 28 && y < 46) { int t = (x - 8) / 76; if (t >= 0 && t < 4) { camTab = t; vibTap(); needRedraw = true; } return; }
     int i = (y - CAM_SET_Y0) / CAM_SET_RH;
-    if (y >= CAM_SET_Y0 && i >= 0 && i < 8 && CAM_TAB_ROWS[camTab][i] >= 0) { camAdj(CAM_TAB_ROWS[camTab][i], x < SCR_W / 2 ? -1 : 1); vibTap(); needRedraw = true; }
+    if (y >= CAM_SET_Y0 && i >= 0 && i < 8 && CAM_TAB_ROWS[camTab][i] >= 0) {
+      int r = CAM_TAB_ROWS[camTab][i];
+      // Panah "<" dan ">" digambar di kiri/kanan NILAI (dekat tepi kanan), jadi batas turun/naik = tengah nilai,
+      // bukan tengah layar (dulu tap "<" malah dianggap "+", jadi Q30 tidak bisa diturunkan lewat panahnya).
+      char cv[28]; camRowValue(r, cv, sizeof(cv));
+      int cw = (int)strlen(cv) * 6;
+      camAdj(r, (r != 24 && x < SCR_W - 30 - cw / 2) ? -1 : 1);
+      vibTap(); needRedraw = true;
+    }
     return;
   }
   if (camIn(x, y, 0, 0, 40, 30)) { navBack(); return; }
