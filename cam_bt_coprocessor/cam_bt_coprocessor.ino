@@ -39,6 +39,7 @@
 #include "esp_sleep.h"
 #include "rplink.h"
 #include "ring.h"
+#include "cam_module.h"   // kamera OV2640 (RP_CAM_*)
 
 // ----------------------------------------------------------
 // KONFIGURASI
@@ -377,6 +378,7 @@ static void sendScanResults() {
 static volatile bool pwrOffReq = false;
 static void camPowerOff() {
   Serial.println("[PWR] deep sleep atas perintah S3");
+  camModShutdown();
   a2dp.set_auto_reconnect(false);
   if (btConnected) a2dp.disconnect();
   delay(500);
@@ -604,7 +606,7 @@ static void handleFrame(uint8_t type, const uint8_t* p, uint16_t len) {
     case RP_POWEROFF:
       pwrOffReq = true;
       break;
-    default: break;
+    default: camModHandle(type, p, len); break;   // RP_CAM_*
   }
 }
 
@@ -616,7 +618,7 @@ static void linkRxTask(void* param) {
     if (n > (int)sizeof(tmp)) n = sizeof(tmp);
     n = Serial2.readBytes(tmp, n);
     for (int i = 0; i < n; i++)
-      if (parser.feed(tmp[i])) handleFrame(parser.type, parser.payload, parser.len);
+      if (parser.feed(tmp[i])) { camModNoteRx(); handleFrame(parser.type, parser.payload, parser.len); }
   }
 }
 
@@ -758,6 +760,7 @@ void loop() {
   if (volDirty) { volDirty = false; volumeNow = pendingVol; a2dp.set_volume(volumeNow); }
 
   if (scanDone) { scanDone = false; sendScanResults(); }
+  camModTick();   // status kamera, fallback baud, senter otomatis mati
 
   if (trackEnded && !endedSent && !decErr) {
     endedSent = true;

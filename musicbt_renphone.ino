@@ -712,13 +712,19 @@ static void musTask(void* arg) {
 
   for (;;) {
     // ---- 1. terima dari CAM ----
+    // v-kamera: baca per BLOK (bukan per byte) -- di 2-3 Mbaud, Serial1.read() per byte menghabiskan CPU
+    static uint8_t rxb[256];
     int avail = Serial1.available();
-    while (avail-- > 0) {
-      int c = Serial1.read();
-      if (c < 0) break;
+    while (avail > 0) {
+     int got = Serial1.readBytes(rxb, avail > 256 ? 256 : avail);
+     if (got <= 0) break;
+     avail -= got;
+     for (int bi = 0; bi < got; bi++) {
+      int c = rxb[bi];
       musRxBytes++;
       if (!P.feed((uint8_t)c)) { musRxErr = P.errors; continue; }
       musRxFrames++;
+      camNoteRx();   // frame valid dari CAM (dipakai verifikasi baud tinggi app Kamera)
       switch (P.type) {
         case RP_STATUS:
           if (P.len >= 13) {
@@ -789,8 +795,9 @@ static void musTask(void* arg) {
           }
           musHello = true; break;
         case RP_KEY:      if (P.len >= 1) musOnKey(P.payload[0], P.len >= 2 ? P.payload[1] : 0); break;
-        default: break;
+        default: camRxFrame(P.type, P.payload, P.len); break;   // RP_CAM_* -> camera_renphone.ino
       }
+     }
     }
     if (musCamAlive && millis() - musLastStatusMs > 1500) musCamAlive = false;
     {   // keepalive ke CAM (utk LED diagnosa CAM)
@@ -915,7 +922,7 @@ static void musTask(void* arg) {
         continue;
       }
     }
-    vTaskDelay(pdMS_TO_TICKS(5));
+    vTaskDelay(camLinkBusy() ? 1 : pdMS_TO_TICKS(5));   // app Kamera terbuka: kuras buffer UART lebih sering
   }
 }
 
@@ -937,7 +944,7 @@ static void musBegin() {
     musCur = p.getInt("cur", 0);
     p.end();
   }
-  Serial1.setRxBufferSize(2048);
+  Serial1.setRxBufferSize(CAM_UART_RXBUF);   // 6144 (didefinisikan di camera_renphone.ino); 2048 terlalu kecil utk video di 2-3 Mbaud
   Serial1.begin(RP_BAUD, SERIAL_8N1, MUS_UART_RX, MUS_UART_TX);
 
   const uint32_t stackBytes = 12288;

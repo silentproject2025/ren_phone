@@ -39,6 +39,50 @@
 #define RP_KEY      'K'   // tombol earbuds (AVRCP). payload: [kode][arg]
                           //   kode: 1 play, 2 pause/stop, 3 next, 4 prev, 5 vol+, 6 vol-, 7 volume absolut (arg 0..127)
 
+// ---- Kamera OV2640 di ESP32-CAM (app "Kamera": camera_renphone.ino <-> cam_module.h) ----
+// S3 -> CAM
+#define RP_CAM_OPEN   'J'   // payload: [xclk MHz][res RPR_*][quality][flags b0=langsung stream]. Nyalakan kamera
+#define RP_CAM_CLOSE  'j'   // matikan kamera & lepas RAM
+#define RP_CAM_SET    'k'   // payload: [id RPC_*][nilai int8]
+#define RP_CAM_SHOT   'O'   // payload: [res RPR_*][quality][flash 0..255][flags]. Foto 1x resolusi tinggi
+#define RP_CAM_ACK    'Q'   // payload: [seq]. S3 sudah mengambil 1 frame preview (kredit +1)
+#define RP_CAM_FLASH  'N'   // payload: [0..255] LED flash GPIO4 (PWM)
+#define RP_CAM_BAUD   'H'   // payload: [u32 LE baud]. CAM menjawab RP_CAM_BAUDOK lalu pindah kecepatan
+// CAM -> S3
+#define RP_CAM_FRAME  'M'   // payload: [seq][flags b0 awal b1 akhir b2 foto][u32 LE offset][data...]
+#define RP_CAM_STAT   'm'   // 12 byte (lihat camSendStat di cam_module.h)
+#define RP_CAM_BAUDOK 'h'   // payload: [u32 LE baud]
+
+// kode resolusi (stabil; CAM memetakannya ke framesize_t milik library kamera)
+#define RPR_QQVGA 0   // 160x120
+#define RPR_QVGA  1   // 320x240
+#define RPR_CIF   2   // 400x296
+#define RPR_HVGA  3   // 480x320
+#define RPR_VGA   4   // 640x480
+#define RPR_SVGA  5   // 800x600
+#define RPR_XGA   6   // 1024x768
+#define RPR_HD    7   // 1280x720
+#define RPR_SXGA  8   // 1280x1024
+#define RPR_UXGA  9   // 1600x1200
+
+// id untuk RP_CAM_SET
+#define RPC_BRIGHT   0    // -2..2
+#define RPC_CONTRAST 1    // -2..2
+#define RPC_SATUR    2    // -2..2
+#define RPC_SHARP    3    // -2..2
+#define RPC_WBMODE   4    // 0 auto, 1 cerah, 2 mendung, 3 kantor, 4 rumah
+#define RPC_EFFECT   5    // 0 normal, 1 negatif, 2 abu-abu, 3 merah, 4 hijau, 5 biru, 6 sepia
+#define RPC_HMIRROR  6    // 0/1
+#define RPC_VFLIP    7    // 0/1
+#define RPC_NIGHT    8    // 0/1 mode malam (AEC2 + gain tinggi)
+#define RPC_LENC     9    // 0/1 koreksi lensa
+#define RPC_AELEVEL  10   // -2..2
+#define RPC_PRVRES   11   // resolusi preview (RPR_*)
+#define RPC_PRVQ     12   // kualitas JPEG preview (4..63, makin kecil makin bagus)
+#define RPC_FPSCAP   13   // 0 = secepat mungkin, selain itu batas fps
+#define RPC_COLORBAR 14   // 0/1 pola uji
+#define RPC_COUNT    32
+
 struct RpParser {
   uint8_t  st = 0;
   uint8_t  type = 0;

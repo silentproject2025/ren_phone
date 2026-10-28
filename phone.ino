@@ -636,7 +636,9 @@ enum Screen { SCR_HOME, SCR_CLOCK, SCR_CALC, SCR_SENSOR,
               // Chat MQTT -- lihat chat_renphone.ino
               SCR_CHAT,
               // Telepon SIP/LAN -- lihat call_renphone.ino
-              SCR_CALL };
+              SCR_CALL,
+              // Kamera OV2640 (ESP32-CAM) -- lihat camera_renphone.ino
+              SCR_CAMERA };
 enum Orientation { ORIENT_LANDSCAPE = 0, ORIENT_PORTRAIT = 1 };
 
 // Dipindah ke atas — alasan sama dengan AiLine & Vec3f: arduino-cli men-generate
@@ -4734,6 +4736,14 @@ void drawAppIcon(LGFX_Sprite& s, char sym, int cx, int cy, int r, uint16_t bgCir
       s.fillTriangle(cx-2,cy+w-5,cx+w/3+1,cy+1,cx+w-2,cy+w-5,ic);
       break;
     }
+    case 'k': { // Kamera: badan + tonjolan atas + lensa
+      int bw=max(14,r+4), bh=max(10,r-2);
+      s.fillRoundRect(cx-bw/2,cy-bh/2+2,bw,bh,3,ic);
+      s.fillRoundRect(cx-bw/6,cy-bh/2-1,bw/3,4,1,ic);
+      s.fillCircle(cx,cy+2,max(3,bh/3),bgCircle);
+      s.drawCircle(cx,cy+2,max(2,bh/5),ic);
+      break;
+    }
     case 'p': { // Telepon: gagang telepon
       int rr=max(8,r-6);
       s.fillRoundRect(cx-rr,cy-rr/3,rr*2,rr*2/3,rr/3,ic);
@@ -4845,6 +4855,8 @@ void chatEnter(); void chatExit(); void drawChat(LGFX_Sprite&); void chatTouch(i
 // ---- Telepon SIP/LAN: forward declarations (call_renphone.ino) ----
 void callEnter(); void callExit(); void drawCall(LGFX_Sprite&); void callTouch(int,int,bool,bool); void callLoopPoll();
 bool callOverlayActive(); void drawCallOverlay(LGFX_Sprite&); void callOverlayTouch(bool,int,int);
+// ---- Kamera: forward declarations (camera_renphone.ino) ----
+void camEnter(); void camExit(); void drawCamera(LGFX_Sprite&); void camTouch(int,int,bool,bool); void camLoopPoll();
 // ---- BATERAI: forward declarations (BARU di v8) ----
 void battEnter(); void battExit();
 void drawBatteryApp(LGFX_Sprite&); void battTouch(int,int,bool,bool);
@@ -4948,7 +4960,7 @@ void remoteEnter(); void remoteExit(); void drawRemote(LGFX_Sprite&); void remot
 void remotePointerTick(bool,bool,int,int);
 void rcLoopPoll(); void rcRegisterRoutes(); bool rcApIsUp(); bool rcInputPoll(int*,int*); void rcFrameMark();
 
-AppDef apps[41] = {
+AppDef apps[42] = {
   { "Jam",        'J', 0, clockEnter,    clockExit,    drawClock,        clockTouch,    SCR_CLOCK },
   { "Kalkulator", '+', 0, calcEnter,     calcExit,     drawCalc,         calcTouch,     SCR_CALC },
   { "Orientasi3D", '3', 0, sensorEnter,   sensorExit,   drawSensor,       sensorTouch,   SCR_SENSOR },
@@ -5009,8 +5021,9 @@ AppDef apps[41] = {
   { "Remote", 'r', 0, remoteEnter, remoteExit, drawRemote, remoteTouch, SCR_REMOTE },
   { "Chat",   'c', 0, chatEnter,   chatExit,   drawChat,   chatTouch,   SCR_CHAT   },
   { "Telepon", 'p', 0, callEnter,   callExit,   drawCall,   callTouch,   SCR_CALL   },
+  { "Kamera",  'k', 0, camEnter,    camExit,    drawCamera, camTouch,    SCR_CAMERA },
 };
-#define APP_COUNT 41
+#define APP_COUNT 42
 
 // =============================================
 // NOTIFIKASI BADGE (BARU) -- angka kecil merah di pojok ikon app, mirip
@@ -5123,6 +5136,7 @@ void initAppColors(){
   apps[38].color=0x2DFA; // Remote - cyan
   apps[39].color=0x34DF; // Chat - biru lembut
   apps[40].color=0x2E8B; // Telepon - hijau
+  apps[41].color=0xF9A0; // Kamera - oranye
 }
 
 int appIndexForScreen(Screen s){
@@ -17878,6 +17892,7 @@ void loop(){
   }
   chatLoopPoll(); // Chat: redraw kalau ada pesan/status baru dari task MQTT
   callLoopPoll(); // Telepon: panggilan masuk, dering, notifikasi, siaga (no-op kalau belum dipakai)
+  camLoopPoll();  // Kamera: ambil frame dari CAM, foto/rekam/gerak (no-op kalau app tertutup)
   otaGuardPoll(); // OTA guard: tandai firmware sehat setelah hidup 30 dtk (+ toast kalau barusan di-rollback)
   rcLoopPoll(); // Remote Control: aksi tombol, status penonton, keep-awake
 
