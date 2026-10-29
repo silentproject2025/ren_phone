@@ -2932,6 +2932,7 @@ bool navZoomArmed=false;
 unsigned long navZoomArmMs=0;
 int navZoomCloseApp=-1;     // v118: index app utk tujuan animasi TUTUP (-1 = pakai asal buka). Diisi utk buka dari Switcher / jalur lain
 bool homeIconGeom(int idx,float sc,int& ox,int& oy,int& ow,int& oh,int& orad); // definisi dekat homeArmZoom()
+void navZoomAppOrigin(int ai,int& ox,int& oy,int& ow,int& oh,int& orad);         // v120: asal/tujuan zoom mengikuti kolom ikon app
 void navZoomFallbackArm(Screen s);                                              // definisi dekat homeArmZoom()
 extern float homeScrollY;
 int navZoomX=0,navZoomY=0,navZoomW=0,navZoomH=0,navZoomR=0;
@@ -3004,8 +3005,7 @@ void navPlayZoomClose(){
   renderCurrentFrame();   // canvas = Home; panel masih menampilkan layar app (frame terakhir)
   int ox=navZoomSX, oy=navZoomSY, ow=navZoomSW, oh=navZoomSH, orad=navZoomSR;
   if(navZoomCloseApp>=0){   // v118: app dibuka dari Switcher/notif/dll -> menyusut ke ikonnya di Home (kalau kelihatan)
-    int a,b,c,d,e;
-    if(homeIconGeom(navZoomCloseApp,homeScrollY,a,b,c,d,e) && a>=0 && b>=0 && a+c<=SCR_W && b+d<=SCR_H){ ox=a; oy=b; ow=c; oh=d; orad=e; }
+    navZoomAppOrigin(navZoomCloseApp,ox,oy,ow,oh,orad);   // v120: ikon di luar layar -> tempel ke tepi bawah di kolom yg sama
   }
   const uint16_t col=navZoomSCol, dst=T().bg;
   const unsigned long t0=millis();
@@ -6260,11 +6260,23 @@ bool homeIconGeom(int idx,float sc,int& ox,int& oy,int& ow,int& oh,int& orad){
 // v118: app dibuka TANPA arm dari Home (notifikasi, remote, wake-word, Control Center, dll):
 // dulu jatuh ke animasi geser. Sekarang tetap zoom: balok warna app membesar dari tengah layar,
 // dan saat ditutup menyusut ke ikon app di Home.
+// v120: posisi zoom buka/tutup utk app ai di grid Home. Ikon kelihatan -> persis di ikon.
+// Ikon di luar layar (scroll) -> tetap di kolomnya (kiri/tengah/kanan) tapi ditempel ke tepi
+// bawah (atau atas kalau ada di atas). App tak ada di grid -> bawah-tengah.
+void navZoomAppOrigin(int ai,int& ox,int& oy,int& ow,int& oh,int& orad){
+  if(!(ai>=0 && homeIconGeom(ai,homeScrollY,ox,oy,ow,oh,orad))){
+    ow=oh=40; orad=22; ox=(SCR_W-ow)/2; oy=SCR_H-oh-8; return;
+  }
+  if(ox<0) ox=0; if(ox+ow>SCR_W) ox=SCR_W-ow;
+  if(oy+oh>SCR_H) oy=SCR_H-oh-8;
+  if(oy<STATUS_H) oy=(oy+oh<=STATUS_H) ? SCR_H-oh-8 : STATUS_H+2;   // hilang total di atas -> bawah; separuh kelihatan -> tepi atas
+}
 void navZoomFallbackArm(Screen s){
   int ai=appIndexForScreen(s);
   uint16_t col = (ai>=0) ? apps[ai].color : T().surface2;
-  int sz=44;
-  navZoomArm(SCR_W/2-sz/2, SCR_H/2-sz/2, sz, sz, (sz*11)/20, col);
+  int ox,oy,ow,oh,orad;
+  navZoomAppOrigin(ai,ox,oy,ow,oh,orad);
+  navZoomArm(ox,oy,ow,oh,orad,col);
   navZoomCloseApp=ai;
 }
 void homeArmZoom(int idx,int tx,int ty,float sc){
