@@ -166,8 +166,14 @@ jobs:
 
       - name: Compile Sketch
         env:
-          LOOP_OPT: ${{ (inputs.loop_core == '0' || inputs.loop_core == '1') && format(',LoopCore={0}', inputs.loop_core) || '' }}
+          LOOP_CORE_IN: ${{ inputs.loop_core }}
         run: |
+          # Pencocokan di shell (persis), BUKAN ekspresi Actions: di ekspresi, '' == '0' bernilai
+          # true (keduanya dikonversi jadi angka 0), sehingga build dari push ikut memakai opsi kosong.
+          case "$LOOP_CORE_IN" in
+            0|1) LOOP_OPT=",LoopCore=$LOOP_CORE_IN" ;;
+            *)   LOOP_OPT="" ;;
+          esac
           mkdir -p build_sketch
           cp phone.ino build_sketch/
           cp MjpegClass.h build_sketch/
