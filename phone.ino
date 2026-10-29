@@ -2930,6 +2930,10 @@ void navDrawLower(LGFX_Sprite& spr,int sx,int edge){
 #endif
 bool navZoomArmed=false;
 unsigned long navZoomArmMs=0;
+int navZoomCloseApp=-1;     // v118: index app utk tujuan animasi TUTUP (-1 = pakai asal buka). Diisi utk buka dari Switcher / jalur lain
+bool homeIconGeom(int idx,float sc,int& ox,int& oy,int& ow,int& oh,int& orad); // definisi dekat homeArmZoom()
+void navZoomFallbackArm(Screen s);                                              // definisi dekat homeArmZoom()
+extern float homeScrollY;
 int navZoomX=0,navZoomY=0,navZoomW=0,navZoomH=0,navZoomR=0;
 uint16_t navZoomCol=0;
 // UI-POLISH-V3: salinan asal zoom utk animasi TUTUP (disimpan saat app dibuka dari Home)
@@ -2938,6 +2942,7 @@ int navZoomSX=0,navZoomSY=0,navZoomSW=0,navZoomSH=0,navZoomSR=0,navZoomScr=0;
 uint16_t navZoomSCol=0;
 void navZoomArm(int x,int y,int w,int h,int r,uint16_t col){
   navZoomX=x; navZoomY=y; navZoomW=w; navZoomH=h; navZoomR=r; navZoomCol=col;
+  navZoomCloseApp=-1;
   navZoomArmed=true; navZoomArmMs=millis();
 }
 // Fase 1: balok berwarna ikon membesar (sudut membulat -> persegi), warnanya pelan2 menyatu ke warna latar app.
@@ -2997,7 +3002,11 @@ void navZoomPushHome(int x,int y,int w,int h){   // tempel potongan Home (canvas
 }
 void navPlayZoomClose(){
   renderCurrentFrame();   // canvas = Home; panel masih menampilkan layar app (frame terakhir)
-  const int ox=navZoomSX, oy=navZoomSY, ow=navZoomSW, oh=navZoomSH, orad=navZoomSR;
+  int ox=navZoomSX, oy=navZoomSY, ow=navZoomSW, oh=navZoomSH, orad=navZoomSR;
+  if(navZoomCloseApp>=0){   // v118: app dibuka dari Switcher/notif/dll -> menyusut ke ikonnya di Home (kalau kelihatan)
+    int a,b,c,d,e;
+    if(homeIconGeom(navZoomCloseApp,homeScrollY,a,b,c,d,e) && a>=0 && b>=0 && a+c<=SCR_W && b+d<=SCR_H){ ox=a; oy=b; ow=c; oh=d; orad=e; }
+  }
   const uint16_t col=navZoomSCol, dst=T().bg;
   const unsigned long t0=millis();
   int px0=0,py0=0,px1=SCR_W,py1=SCR_H;            // rect frame sebelumnya (selalu mengandung rect baru)
@@ -3100,7 +3109,7 @@ void navPush(Screen s){
   // duluan pas jari nyentuh tombol yg memicu navPush ini, jd manggil vibNav()
   // lagi di sini bikin efek "getar dobel" yg kerasa berlebihan (keluhan
   // user). Getaran khusus navigasi cukup dari vibTap() yg sudah ada.
-  if(navDepth==1 && !navZoomArmed) navZoomSaved=false; // UI-POLISH-V3
+  if(navDepth==1 && !navZoomArmed) navZoomFallbackArm(s); // v118: buka app dari jalur manapun (notif, remote, suara, CC...) tetap zoom, bukan geser
   playNavTransition(NAV_ANIM_PUSH);
   needRedraw=false; // frame akhir sudah ke-push oleh playNavTransition
 }
@@ -5672,6 +5681,9 @@ void switcherTouch(bool touched, bool newT, int tx, int ty){
     if(switcherDragIdx>=0){
       int ai=switcherIdx[switcherDragIdx];
       closeAppSwitcherNow(); // v107: HARUS instan -- navPush() langsung render layar app & transisinya sendiri
+      { int cby=SWITCHER_ROW_TOP+switcherDragIdx*(SWITCHER_ROW_H+SWITCHER_ROW_GAP);   // v118: kartu yg diketuk membesar jadi layar app
+        navZoomArm(16,cby,SCR_W-32,SWITCHER_ROW_H,12,apps[ai].color);
+        navZoomCloseApp=ai; }
       navPush(apps[ai].screen);
     } else {
       closeAppSwitcher(); // tap area kosong = tutup switcher, gak jadi pindah app
@@ -6228,21 +6240,39 @@ int homeIndexAt(int x,int y,float sc){
 
 // UI-POLISH-V2: hitung asal animasi zoom (ikon grid / ikon dock / kartu widget) lalu arm navZoomArm().
 // Geometri disalin dari drawHome()/homeCheck() -- kalau layout Home diubah, ubah di sini juga.
+// v118: geometri ikon grid Home (dipakai arm zoom buka + tujuan animasi tutup)
+bool homeIconGeom(int idx,float sc,int& ox,int& oy,int& ow,int& oh,int& orad){
+  if(idx<0) return false;
+  int scPx=homeScrollPx(sc);
+  int cols=homeCols(), cw=homeCardW(), ch=homeCardH(), gap=10;
+  int iconR=min(cw,ch-16)/2-2; if(iconR>24) iconR=24; if(iconR<14) iconR=14;
+  bool srch=homeSearchActive(); int k=-1;
+  if(srch){ for(int q=0;q<homeFilteredCount;q++) if(homeFilteredIdx[q]==idx){ k=q; break; } }
+  else { homeLayoutEnsure(); for(int q=0;q<homeVisN;q++) if(homeVis[q]==idx){ k=q; break; } }
+  if(k<0) return false;
+  int col=k%cols, row=k/cols;
+  int x=gap+col*(cw+gap);
+  int y= srch ? homeResultsTop()+row*(ch+gap) : homeGridTop()+row*(ch+gap)-scPx;
+  int cx=x+cw/2, cy=y+(ch-16)/2;
+  ox=cx-iconR; oy=cy-iconR; ow=iconR*2; oh=iconR*2; orad=(iconR*11)/20;
+  return true;
+}
+// v118: app dibuka TANPA arm dari Home (notifikasi, remote, wake-word, Control Center, dll):
+// dulu jatuh ke animasi geser. Sekarang tetap zoom: balok warna app membesar dari tengah layar,
+// dan saat ditutup menyusut ke ikon app di Home.
+void navZoomFallbackArm(Screen s){
+  int ai=appIndexForScreen(s);
+  uint16_t col = (ai>=0) ? apps[ai].color : T().surface2;
+  int sz=44;
+  navZoomArm(SCR_W/2-sz/2, SCR_H/2-sz/2, sz, sz, (sz*11)/20, col);
+  navZoomCloseApp=ai;
+}
 void homeArmZoom(int idx,int tx,int ty,float sc){
   int scPx=homeScrollPx(sc);
   int dockY=homeDockY(), dockH=38;
   if(idx>=0){
-    int cols=homeCols(), cw=homeCardW(), ch=homeCardH(), gap=10;
-    int iconR=min(cw,ch-16)/2-2; if(iconR>24) iconR=24; if(iconR<14) iconR=14;
-    bool srch=homeSearchActive(); int k=-1;
-    if(srch){ for(int q=0;q<homeFilteredCount;q++) if(homeFilteredIdx[q]==idx){ k=q; break; } }
-    else { homeLayoutEnsure(); for(int q=0;q<homeVisN;q++) if(homeVis[q]==idx){ k=q; break; } }
-    if(k<0) return;
-    int col=k%cols, row=k/cols;
-    int x=gap+col*(cw+gap);
-    int y= srch ? homeResultsTop()+row*(ch+gap) : homeGridTop()+row*(ch+gap)-scPx;
-    int cx=x+cw/2, cy=y+(ch-16)/2;
-    navZoomArm(cx-iconR,cy-iconR,iconR*2,iconR*2,(iconR*11)/20,apps[idx].color);
+    int ox,oy,ow,oh,orad;
+    if(homeIconGeom(idx,sc,ox,oy,ow,oh,orad)) navZoomArm(ox,oy,ow,oh,orad,apps[idx].color);
     return;
   }
   if(ty>=dockY && ty<=dockY+dockH){
@@ -10848,32 +10878,70 @@ void bootStageEventHorizon(int w,int h){
   }
 }
 
-// ---- Tahap 3: titik -> garis cahaya horizontal -> garis turun jadi garis
-// bawah, "NyxOS" muncul dgn jarak huruf merapat ----
+// ---- Tahap 3 (v118): titik -> dua sapuan cahaya vertikal membelah keluar dari tengah,
+// menyingkap "NyxOS" (huruf merapat), disusul cincin kejut tipis & garis bawah tumbuh.
+// Dulu: titik -> garis horizontal -> garis turun (kerasa patah/kurang halus). Sekarang
+// SATU gerakan kontinu dari titik runtuh tahap 2: titik membelah jadi 2 bar cahaya,
+// bar menyapu ke kiri & kanan, teks tersingkap di belakangnya. Frame terakhir persis
+// sama dgn frame pertama tahap 4 (tagline), jadi gak ada loncatan.
 void bootStageHorizonReveal(int w,int h){
   const int cx=w/2, cy=h/2-16;
-  int lineMax=(w-30<200)?(w-30):200;
-  int halfMax=lineMax/2;
-  const unsigned long DUR=900;
+  const unsigned long DUR=1150;
+  const int tyTop=cy-20, tyH=40;                       // area teks (textSize 3 = tinggi 24)
+  const uint16_t WARM=bootRGB(255,238,214);
+  float maxR=(float)(w/2-6); if(maxR>104.0f) maxR=104.0f;
   unsigned long t0=millis();
   for(;;){
     float lp=(float)(millis()-t0)/DUR; if(lp>1.0f) lp=1.0f;
-    float lineP=lp/0.35f; if(lineP>1.0f) lineP=1.0f; lineP=navEase(lineP);
-    float tp=(lp-0.25f)/0.75f; if(tp<0.0f) tp=0.0f; tp=navEase(tp);
+    float coreP=lp/0.30f;            if(coreP>1.0f) coreP=1.0f; coreP=navEase(coreP);
+    float ringP=(lp-0.05f)/0.60f;    if(ringP<0.0f) ringP=0.0f; if(ringP>1.0f) ringP=1.0f;
+    float rv=(lp-0.10f)/0.62f;       if(rv<0.0f) rv=0.0f;       if(rv>1.0f) rv=1.0f;  rv=navEase(rv);
+    float tp=(lp-0.18f)/0.58f;       if(tp<0.0f) tp=0.0f;       if(tp>1.0f) tp=1.0f;  tp=navEase(tp);
+    float lineP=(lp-0.70f)/0.30f;    if(lineP<0.0f) lineP=0.0f; if(lineP>1.0f) lineP=1.0f; lineP=navEase(lineP);
 
     canvas.fillSprite(0x0000);
 
-    float coreA=1.0f-lineP;
+    // inti: titik terang meredup (sambungan dari titik runtuh di tahap 2)
+    float coreA=1.0f-coreP;
     if(coreA>0.05f){
-      canvas.fillCircle(cx,cy,(int)(3+5*coreA),lerpColor565(0x0000,bootRGB(255,238,214),0.40f*coreA));
+      canvas.fillCircle(cx,cy,(int)(3+5*coreA),lerpColor565(0x0000,WARM,0.40f*coreA));
       canvas.fillCircle(cx,cy,(int)(1+2*coreA),lerpColor565(0x0000,0xFFFF,coreA));
     }
 
-    int halfW=(int)(halfMax*lineP*(1.0f-0.4f*tp));
-    int lineY=cy+(int)(17.0f*tp);
-    bootDrawHorizonLine(cx,lineY,halfW,lineP*(1.0f-0.3f*tp));
+    // cincin kejut tipis: hangat -> abu-abu, memudar sambil melebar
+    if(ringP>0.0f && ringP<1.0f){
+      float e=navEase(ringP);
+      int rr=(int)(4.0f+e*(maxR-4.0f));
+      float a=1.0f-ringP; a=a*a*0.75f;
+      uint16_t rc=lerpColor565(bootRGB(255,190,130),bootRGB(150,150,166),ringP);
+      canvas.drawCircle(cx,cy,rr,  lerpColor565(0x0000,rc,a));
+      canvas.drawCircle(cx,cy,rr+1,lerpColor565(0x0000,rc,a*0.35f));
+    }
 
-    if(tp>0.01f) bootDrawNyxText(cx,cy,(int)((1.0f-tp)*18.0f),tp);
+    // teks tersingkap oleh jendela yg melebar dari tengah (clip), huruf merapat saat muncul
+    int gap=(int)((1.0f-tp)*10.0f);
+    int totalW=5*18+4*gap;
+    int hr=(int)(rv*(float)(totalW/2+10));
+    if(hr>1){
+      canvas.setClipRect(cx-hr,tyTop,hr*2,tyH);
+      bootDrawNyxText(cx,cy,gap,0.35f+0.65f*tp);
+      canvas.clearClipRect();
+    }
+
+    // dua bar cahaya vertikal di tepi jendela (hilang begitu jendela penuh)
+    float ea=1.0f-rv;
+    if(rv>0.0f && ea>0.04f){
+      for(int sd=-1; sd<=1; sd+=2){
+        int bx=cx+sd*hr;
+        canvas.fillRect(bx-3,tyTop+7, 6,tyH-14,lerpColor565(0x0000,WARM,0.16f*ea));
+        canvas.fillRect(bx-2,tyTop+4, 4,tyH-8, lerpColor565(0x0000,WARM,0.34f*ea));
+        canvas.fillRect(bx-1,tyTop+2, 2,tyH-4, lerpColor565(0x0000,0xFFFF,ea));
+      }
+    }
+
+    // garis bawah tumbuh dari tengah di akhir (posisi/alpha akhir = tahap 4)
+    int lh=(int)(60.0f*lineP);
+    if(lh>=2) bootDrawHorizonLine(cx,cy+17,lh,0.70f*lineP);
 
     push();
     if(lp>=1.0f) break;
@@ -10881,7 +10949,7 @@ void bootStageHorizonReveal(int w,int h){
     if(wifiConnected && webServerRunning) webServer.handleClient();
     yield();
   }
-  delay(120);
+  delay(80);
 }
 
 // ---- Tahap 4: tagline fade-in halus, terakhir. ----
