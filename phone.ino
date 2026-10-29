@@ -2911,7 +2911,66 @@ void navDrawLower(LGFX_Sprite& spr,int sx,int edge){
   spr.pushSprite(sx,0);
   display.clearClipRect();
 }
+// UI-POLISH-V2: transisi BUKA APP -- ikon/kartu di Home membesar memenuhi layar (bukan sekadar slide).
+// Home memanggil navZoomArm() sesaat sebelum navPush(); playNavTransition(PUSH) memakainya SEKALI.
+// Kalau tidak di-arm (buka dari App Switcher, notifikasi, dll) -> tetap animasi geser lama.
+#ifndef NAV_ZOOM_MS
+#define NAV_ZOOM_MS 300UL
+#endif
+bool navZoomArmed=false;
+unsigned long navZoomArmMs=0;
+int navZoomX=0,navZoomY=0,navZoomW=0,navZoomH=0,navZoomR=0;
+uint16_t navZoomCol=0;
+void navZoomArm(int x,int y,int w,int h,int r,uint16_t col){
+  navZoomX=x; navZoomY=y; navZoomW=w; navZoomH=h; navZoomR=r; navZoomCol=col;
+  navZoomArmed=true; navZoomArmMs=millis();
+}
+// Fase 1: balok berwarna ikon membesar (sudut membulat -> persegi), warnanya pelan2 menyatu ke warna latar app.
+// Fase 2: layar baru "terbuka" di jendela yg terus membesar. Rect hanya TUMBUH, jadi tiap piksel ditulis tanpa sisa.
+void navPlayZoomOpen(){
+  renderCurrentFrame();   // canvas = layar BARU; panel masih menampilkan Home (frame terakhir)
+  const int ox=navZoomX, oy=navZoomY, ow=navZoomW, oh=navZoomH, orad=navZoomR;
+  const uint16_t col=navZoomCol, dst=T().bg;
+  const unsigned long t0=millis();
+  int lx0=-1,ly0=-1,lx1=-1,ly1=-1;
+  display.startWrite();
+  for(;;){
+    uiBoostKick();
+    unsigned long el=millis()-t0;
+    bool lastFrame = el>=NAV_ZOOM_MS;
+    float lin = lastFrame ? 1.0f : (float)el/(float)NAV_ZOOM_MS;
+    float inv=1.0f-lin;
+    float ez=1.0f-inv*inv*inv;                            // ease-out cubic: cepat di awal, mendarat halus
+    int x0=(int)lroundf(ox*(1.0f-ez));
+    int y0=(int)lroundf(oy*(1.0f-ez));
+    int x1=(int)lroundf((ox+ow)*(1.0f-ez)+SCR_W*ez);
+    int y1=(int)lroundf((oy+oh)*(1.0f-ez)+SCR_H*ez);
+    if(x0<0) x0=0; if(y0<0) y0=0; if(x1>SCR_W) x1=SCR_W; if(y1>SCR_H) y1=SCR_H;
+    if(x1>x0 && y1>y0 && (x0!=lx0||y0!=ly0||x1!=lx1||y1!=ly1)){
+      lx0=x0; ly0=y0; lx1=x1; ly1=y1;
+      int w=x1-x0, h=y1-y0;
+      if(ez<0.5f){
+        float cr=ez*1.6f; if(cr>1.0f) cr=1.0f;
+        int rr=(int)lroundf(orad*(1.0f-cr));
+        if(rr>w/2) rr=w/2; if(rr>h/2) rr=h/2; if(rr<0) rr=0;
+        display.fillRoundRect(x0,y0,w,h,rr,blend565(col,dst,(uint8_t)(ez*2.0f*190.0f)));
+      } else {
+        display.setClipRect(x0,y0,w,h);
+        canvas.pushSprite(0,0);
+        display.clearClipRect();
+      }
+    }
+    if(lastFrame) break;
+    yield();
+  }
+  display.endWrite();
+  push();                  // frame akhir persis sama dgn 'canvas'
+}
 void playNavTransition(NavAnim anim){
+  if(anim==NAV_ANIM_PUSH && navZoomArmed){   // UI-POLISH-V2
+    navZoomArmed=false;
+    if(millis()-navZoomArmMs<1500UL){ navPlayZoomOpen(); return; }
+  }
   canvas.pushSprite(&transShot,0,0); // simpan frame LAMA (canvas msh berisi layar sblm pindah)
   renderCurrentFrame();              // gambar frame BARU ke canvas (state navigasi sudah berubah)
 
@@ -2989,7 +3048,7 @@ void navBack(){
 }
 
 // =============================================
-// VIRTUAL KEYBOARD
+// VIRTUAL KEYBOARD  (UI-POLISH-V2: datar + efek tekan)
 // =============================================
 const char* kbL[3][10]={
   {"q","w","e","r","t","y","u","i","o","p"},
@@ -3012,26 +3071,34 @@ int kbY(){ return SCR_H - 4*(kbKeyH()+2) - 4; }
 int kbLeft(){ return (SCR_W - (10*kbKeyW()+18))/2; }
 int kbOffCol(int row){ (void)row; return kbLeft(); }
 
+// UI-POLISH-V2: keyboard datar. Kode tuts utk efek tekan: baris*10+kolom, 100=shift, 101=123/ABC, 102=spasi, 103=hapus
+int kbPressKey=-1;
+unsigned long kbPressUntil=0;
+#define KB_PRESS_MS 130
 void drawKb(LGFX_Sprite& s){
   int y0=kbY();
+  bool pressing = (kbPressKey>=0 && millis()<kbPressUntil);
+  if(pressing) needRedraw=true; else kbPressKey=-1;   // frame berikutnya menggambar ulang tuts normal
   s.fillRect(0,y0-3,SCR_W,SCR_H-y0+3,blend565(T().bg,T().surface,175));
   s.drawFastHLine(0,y0-3,SCR_W,T().divider);
   auto* lay=kbMaps[(int)kbMode];
   int kw=kbKeyW(), kh=kbKeyH(), L=kbLeft(), R=SCR_W-L;
-  const uint16_t keyC = blend565(T().surface2,0xFFFF,40);
-  const uint16_t fnC  = T().surface2;
-  const uint16_t shC  = blend565(T().bg,0x0000,140);
+  const int kr=9;                                              // radius tuts (dulu 6)
+  const uint16_t keyC = blend565(T().surface2,0xFFFF,40);      // tuts huruf/angka (datar, tanpa bayangan)
+  const uint16_t fnC  = blend565(T().surface2,T().accent,70);  // tuts fungsi: tonal (abu + rona aksen)
+  const uint16_t keyP = blend565(keyC,T().accent,110);         // tuts huruf saat ditekan
+  const uint16_t fnP  = blend565(fnC,0xFFFF,70);               // tuts fungsi saat ditekan
   for(int r=0;r<3;r++){
     int ry=y0+r*(kh+2), ox=kbOffCol(r);
     for(int c=0;c<10;c++){
       int kx=ox+c*(kw+2);
-      s.fillRoundRect(kx,ry+1,kw,kh,6,shC);
-      s.fillRoundRect(kx,ry,kw,kh,6,keyC);
-      s.drawFastHLine(kx+6,ry+1,kw-12,blend565(keyC,0xFFFF,50));
+      bool pr=(kbPressKey==r*10+c);
+      int in=pr?1:0;                                           // ditekan: mengecil 1px tiap sisi
+      s.fillRoundRect(kx+in,ry+in,kw-2*in,kh-2*in,kr,pr?keyP:keyC);
       const char* lb=lay[r][c];
       s.setTextSize(2); s.setTextColor(T().text);
       int tw=s.textWidth(lb);
-      s.setCursor(kx+(kw-tw)/2,ry+(kh-16)/2);
+      s.setCursor(kx+(kw-tw)/2,ry+(kh-16)/2+in);
       s.print(lb);
     }
   }
@@ -3041,31 +3108,35 @@ void drawKb(LGFX_Sprite& s){
   int dlW=84, dlX=R-dlW;
   int spW=max(40, dlX-4-spX);
   bool up = (kbMode==KB_UPPER);
-  s.fillRoundRect(shX,cy+1,shW,kh,6,shC);
-  s.fillRoundRect(shX,cy,shW,kh,6, up?(uint16_t)0xFFFF:fnC);
-  {
-    uint16_t ic = up? (uint16_t)0x0000 : (uint16_t)0xFFFF;
+  uint16_t inkAcc = appIconInk(T().accent);
+  { // shift: aksen penuh saat aktif, tonal saat mati
+    bool pr=(kbPressKey==100); int in=pr?1:0;
+    uint16_t bg = up ? T().accent : (pr?fnP:fnC);
+    uint16_t ic = up ? inkAcc : T().text;
+    s.fillRoundRect(shX+in,cy+in,shW-2*in,kh-2*in,kr,bg);
     int acx=shX+shW/2, acy=cy+kh/2;
     s.fillTriangle(acx,acy-6, acx-6,acy+2, acx+6,acy+2, ic);
     s.fillRect(acx-3,acy+2,6,4,ic);
   }
-  s.fillRoundRect(nmX,cy+1,nmW,kh,6,shC);
-  s.fillRoundRect(nmX,cy,nmW,kh,6,fnC);
-  {
+  { // 123 / ABC
+    bool pr=(kbPressKey==101); int in=pr?1:0;
+    s.fillRoundRect(nmX+in,cy+in,nmW-2*in,kh-2*in,kr,pr?fnP:fnC);
     const char* nl=(kbMode==KB_NUM)?"ABC":"123";
     s.setTextColor(T().text);
-    s.setCursor(nmX+(nmW-s.textWidth(nl))/2,cy+kh/2-4); s.print(nl);
+    s.setCursor(nmX+(nmW-s.textWidth(nl))/2,cy+kh/2-4+in); s.print(nl);
   }
-  s.fillRoundRect(spX,cy+1,spW,kh,6,shC);
-  s.fillRoundRect(spX,cy,spW,kh,6,keyC);
-  s.setTextColor(T().text);
-  s.setCursor(spX+(spW-s.textWidth("spasi"))/2,cy+kh/2-4); s.print("spasi");
-  s.fillRoundRect(dlX,cy+1,dlW,kh,6,shC);
-  s.fillRoundRect(dlX,cy,dlW,kh,6,fnC);
-  {
+  { // spasi (tuts huruf)
+    bool pr=(kbPressKey==102); int in=pr?1:0;
+    s.fillRoundRect(spX+in,cy+in,spW-2*in,kh-2*in,kr,pr?keyP:keyC);
+    s.setTextColor(T().text);
+    s.setCursor(spX+(spW-s.textWidth("spasi"))/2,cy+kh/2-4+in); s.print("spasi");
+  }
+  { // hapus
+    bool pr=(kbPressKey==103); int in=pr?1:0;
+    s.fillRoundRect(dlX+in,cy+in,dlW-2*in,kh-2*in,kr,pr?fnP:fnC);
     int acx=dlX+dlW/2-4, acy=cy+kh/2;
-    s.fillTriangle(acx-8,acy, acx,acy-6, acx,acy+6, 0xFFFF);
-    s.fillRect(acx,acy-3,10,6,0xFFFF);
+    s.fillTriangle(acx-8,acy, acx,acy-6, acx,acy+6, T().text);
+    s.fillRect(acx,acy-3,10,6,T().text);
   }
 }
 
@@ -3079,11 +3150,14 @@ void kbTouch(int x,int y){
   if(y>=cy){
     int shX=L, shW=40, nmX=shX+shW+4, nmW=44, spX=nmX+nmW+4;
     int dlX=R-84;
-    if(x<nmX-2)                kbMode=(kbMode==KB_UPPER?KB_LOWER:KB_UPPER);
-    else if(x<spX-2)           kbMode=(kbMode==KB_NUM?KB_LOWER:KB_NUM);
-    else if(x<dlX-2)           *kbTarget+=" ";
-    else if(kbTarget->length()>0)
-      *kbTarget=kbTarget->substring(0,kbTarget->length()-1);
+    if(x<nmX-2){            kbMode=(kbMode==KB_UPPER?KB_LOWER:KB_UPPER); kbPressKey=100; }
+    else if(x<spX-2){       kbMode=(kbMode==KB_NUM?KB_LOWER:KB_NUM);     kbPressKey=101; }
+    else if(x<dlX-2){       *kbTarget+=" ";                              kbPressKey=102; }
+    else {
+      if(kbTarget->length()>0) *kbTarget=kbTarget->substring(0,kbTarget->length()-1);
+      kbPressKey=103;
+    }
+    kbPressUntil=millis()+KB_PRESS_MS;
     needRedraw=true;
     return;
   }
@@ -3093,6 +3167,7 @@ void kbTouch(int x,int y){
   if(x<L||c<0||c>9) return;
   auto* lay=kbMaps[(int)kbMode];
   *kbTarget+=lay[r][c];
+  kbPressKey=r*10+c; kbPressUntil=millis()+KB_PRESS_MS;
   if(kbMode==KB_UPPER)kbMode=KB_LOWER;
   needRedraw=true;
 }
@@ -3102,23 +3177,44 @@ void kbTouch(int x,int y){
 // =============================================
 String toastMsg="";
 unsigned long toastUntil=0;
+// UI-POLISH-V2: toast beranimasi. toastUntil = akhir TAMPIL + animasi keluar, jadi toastVisibleNow() & pemanggil lain tetap valid.
+#define TOAST_IN_MS  240
+#define TOAST_OUT_MS 200
+unsigned long toastStartMs=0;
 void showToast(const char* msg,int ms){
   if(dndMode) return;
-  toastMsg=msg; toastUntil=millis()+ms;
+  toastMsg=msg; toastStartMs=millis(); toastUntil=toastStartMs+(unsigned long)ms+TOAST_OUT_MS;
 }
 void drawToast(LGFX_Sprite& s){
-  if(!toastMsg.length()||millis()>toastUntil) return;
-  // v72 REDESIGN (permintaan user: notifikasi jadi pill kaca melayang, gaya
-  // iOS): dulu kotak solid warna T().accent2 dgn teks kontras -- sekarang
-  // pill kaca gelap (drawGlassPanel, radius = tinggi/2 = full pill) senada
-  // gaya dock/Control Center/Lock Screen, teks polos warna T().text.
-  int th=24;
-  int tw=s.textWidth(toastMsg.c_str())+28; // padding sedikit dilebarin (16->28) biar gak sumpek nempel tepi pill kaca
+  unsigned long now=millis();
+  if(!toastMsg.length()||now>toastUntil) return;
+  unsigned long holdEnd=toastUntil-TOAST_OUT_MS;
+  float pin=(float)(now-toastStartMs)/(float)TOAST_IN_MS; if(pin>1.0f) pin=1.0f;
+  float pout=(now>holdEnd)?(float)(now-holdEnd)/(float)TOAST_OUT_MS:0.0f; if(pout>1.0f) pout=1.0f;
+  float ein=easeOutBackSoft(pin);                // 0 -> ~1.03 -> 1 (memantul tipis)
+  float vis=pin*(1.0f-pout*pout); if(vis>1.0f) vis=1.0f;
+  needRedraw=true;                               // animasi + penanda waktu keluar
+  if(vis<0.12f) return;
+  s.setTextSize(1);
+  char buf[64]; strncpy(buf,toastMsg.c_str(),sizeof(buf)-1); buf[sizeof(buf)-1]=0;
+  int maxTw=SCR_W-16-40; int n=(int)strlen(buf);
+  while(n>3 && s.textWidth(buf)>maxTw) buf[--n]=0;
+  const int th=26;
+  int textW=s.textWidth(buf);
+  int fullW=textW+40;                            // titik(26) + teks + padding kanan(14)
+  float sc=0.90f+0.10f*ein; sc*=(1.0f-0.06f*pout);
+  int tw=(int)(fullW*sc); if(tw<th) tw=th;
   int tx=SCR_W/2-tw/2;
-  int ty=SCR_H-36;
-  drawGlassPanel(s, tx,ty,tw,th,th/2, T().surface, 195);
-  s.setTextColor(T().text);s.setTextSize(1);
-  s.setCursor(tx+14,ty+8);s.print(toastMsg.c_str());
+  int ty=SCR_H-40+(int)((1.0f-ein)*14.0f)+(int)(pout*pout*10.0f);
+  uint8_t ta=(uint8_t)(205.0f*vis);
+  drawGlassPanel(s, tx,ty,tw,th,th/2, T().surface, ta);
+  s.drawRoundRect(tx,ty,tw,th,th/2,blend565(T().surface,0xFFFF,60));   // rim tipis
+  if(tx+26+textW <= tx+tw-4){                    // teks hanya digambar kalau muat di dalam pil
+    uint8_t va=(uint8_t)(255.0f*vis);
+    s.fillCircle(tx+14,ty+th/2,3,blend565(T().surface,T().accent,va));
+    s.setTextColor(blend565(T().surface,T().text,va)); s.setTextSize(1);
+    s.setCursor(tx+26,ty+th/2-4); s.print(buf);
+  }
 }
 
 // =============================================
@@ -3219,18 +3315,22 @@ bool btCcEnabled(); bool btCcConnected(); // v109: dipakai drawStatusBar (defini
 // Posisi tombol play & next di kartu musik (dipakai gambar DAN hit-test)
 void homeMusBtnPos(int x,int w,int& playCx,int& nextCx){ nextCx=x+w-26; playCx=nextCx-34; }
 
+// UI-POLISH-V2 "bento": tiap kartu punya rona tonal sendiri, sudut besar, tipografi lebih tegas
+uint16_t bentoTint(uint16_t c,uint8_t a){ return blend565(T().surface,c,a); }
+int bentoR(int h,int want){ int r=want; if(r>h/2) r=h/2; return r; }
+
 // Kartu musik: cover piringan, judul, status, progres, (opsional) tombol kontrol
 void drawMusicMini(LGFX_Sprite& s,int x,int y,int w,int h,bool ctrl){
-  drawGlassCard(s,x,y,w,h,16,T().surface,150);
+  drawGlassCard(s,x,y,w,h,bentoR(h,22),bentoTint(T().accent2,70),185);
   int cy=y+h/2;
   bool started=homeMusStarted(), loaded=homeMusLoaded(), playing=homeMusPlaying();
-  int cr=(h>=50)?18:14, ccx=x+12+cr;
+  int cr=(h>=50)?19:15, ccx=x+14+cr;
   uint16_t disc=T().accent2;
   s.fillCircle(ccx,cy,cr,disc);
   s.drawCircle(ccx,cy,cr-4,blend565(disc,0x0000,90));
   s.fillCircle(ccx,cy,cr/3+1,blend565(disc,0xFFFF,130));
   s.fillCircle(ccx,cy,2,blend565(disc,0x0000,170));
-  int tx=ccx+cr+10;
+  int tx=ccx+cr+12;
   int pc,nc; homeMusBtnPos(x,w,pc,nc);
   int maxX=(ctrl&&started)?(pc-20):(x+w-34);
   char title[56];
@@ -3240,23 +3340,23 @@ void drawMusicMini(LGFX_Sprite& s,int x,int y,int w,int h,bool ctrl){
   int n=(int)strlen(title); bool cut=false;
   while(n>3 && s.textWidth(title)>(maxX-tx)){ title[--n]=0; cut=true; }
   if(cut && n>=2){ title[n-1]='.'; title[n-2]='.'; }
-  int ty1=(h>=50)?y+10:y+8, ty2=(h>=50)?y+23:y+20;
+  int ty1=(h>=50)?y+10:y+8, ty2=(h>=50)?y+24:y+20;
   uiText(s,tx,ty1,title,T().text,false,true);
-  s.setTextColor(T().subtext); s.setCursor(tx,ty2); s.print(sub);
+  s.setTextColor(blend565(T().subtext,T().accent2,70)); s.setCursor(tx,ty2); s.print(sub);
   if(started&&loaded){ // progres tipis
-    int bx=tx, bw=maxX-tx, by=y+h-11;
+    int bx=tx, bw=maxX-tx, by=y+h-12;
     if(bw>10){
-      s.fillRoundRect(bx,by,bw,3,1,blend565(T().surface,0xFFFF,60));
+      s.fillRoundRect(bx,by,bw,4,2,blend565(T().surface,0xFFFF,60));
       int fw=(int)(bw*homeMusProgress());
-      if(fw>0) s.fillRoundRect(bx,by,fw,3,1,T().accent);
+      if(fw>0) s.fillRoundRect(bx,by,max(fw,4),4,2,T().accent);
     }
   }
   uint16_t ink=appIconInk(T().accent);
   if(ctrl&&started){
-    s.fillCircle(pc,cy,14,T().accent);
+    s.fillCircle(pc,cy,15,T().accent);
     if(playing){ s.fillRect(pc-5,cy-6,4,12,ink); s.fillRect(pc+1,cy-6,4,12,ink); }
     else s.fillTriangle(pc-4,cy-7,pc-4,cy+7,pc+6,cy,ink);
-    s.fillCircle(nc,cy,11,blend565(T().surface2,0xFFFF,40));
+    s.fillCircle(nc,cy,12,blend565(T().surface2,0xFFFF,40));
     s.fillTriangle(nc-5,cy-5,nc-5,cy+5,nc+3,cy,T().text);
     s.fillRect(nc+4,cy-5,2,10,T().text);
   } else if(!ctrl && started && loaded){
@@ -3266,41 +3366,40 @@ void drawMusicMini(LGFX_Sprite& s,int x,int y,int w,int h,bool ctrl){
   }
 }
 
-// Kartu jam: sapaan, jam besar (font sans tebal), tanggal
+// Kartu jam: sapaan (kiri-atas) + tanggal (kanan-atas), jam besar tebal di bawah
 void drawClockCard(LGFX_Sprite& s,int x,int y,int w,int h){
-  drawGlassCard(s,x,y,w,h,18,T().surface,150);
+  drawGlassCard(s,x,y,w,h,bentoR(h,24),bentoTint(T().accent,80),185);
   struct tm t; bool ok=ntpSynced&&getLocalTime(&t);
   char tb[6]; if(ok) sprintf(tb,"%02d:%02d",t.tm_hour,t.tm_min); else strcpy(tb,"--:--");
   s.setTextSize(1);
-  uiText(s,x+14,y+8,ok?homeGreeting(t.tm_hour):"Halo",T().accent,false,true);
-  s.setFont(&lgfx::fonts::FreeSansBold9pt7b);
-  // ukuran angka dihitung dari TINGGI kartu (sisakan ruang sapaan di atas & tanggal di bawah),
-  // lalu dikecilkan sampai muat lebar. Tinggi angka ~14px per satuan ukuran.
-  float sz=(float)(h-38)/14.0f; if(sz>4.0f) sz=4.0f; sz=floorf(sz*4.0f)/4.0f; if(sz<1.5f) sz=1.5f;
-  s.setTextSize(sz);
-  while(sz>1.5f && s.textWidth(tb)>w-28){ sz-=0.25f; s.setTextSize(sz); }
-  s.setTextColor(T().text);
-  s.setTextDatum(lgfx::textdatum_t::baseline_left); // dipatok ke garis dasar angka, bukan perkiraan metrik font
-  s.drawString(tb,x+14,y+h-18);
-  s.setTextDatum(lgfx::textdatum_t::top_left);
-  s.setFont(&lgfx::fonts::Font0); // Home selalu Font0 (lihat renderCurrentFrame)
-  s.setTextSize(1);
+  uiText(s,x+16,y+10,ok?homeGreeting(t.tm_hour):"Halo",T().accent,false,true);
   if(ok){
     const char* days[]={"Min","Sen","Sel","Rab","Kam","Jum","Sab"};
     const char* mons[]={"Jan","Feb","Mar","Apr","Mei","Jun","Jul","Agu","Sep","Okt","Nov","Des"};
     char db[24]; snprintf(db,sizeof(db),"%s, %d %s",days[t.tm_wday],t.tm_mday,mons[t.tm_mon]);
-    s.setTextColor(T().subtext); s.setCursor(x+14,y+h-14); s.print(db);
+    s.setTextColor(T().subtext); s.setCursor(x+w-16-s.textWidth(db),y+10); s.print(db);
   }
+  s.setFont(&lgfx::fonts::FreeSansBold9pt7b);
+  // angka jam: tinggi dari tinggi kartu (ruang atas utk sapaan/tanggal), lalu dikecilkan sampai muat lebar
+  float sz=(float)(h-34)/14.0f; if(sz>4.5f) sz=4.5f; sz=floorf(sz*4.0f)/4.0f; if(sz<1.5f) sz=1.5f;
+  s.setTextSize(sz);
+  while(sz>1.5f && s.textWidth(tb)>w-32){ sz-=0.25f; s.setTextSize(sz); }
+  s.setTextColor(T().text);
+  s.setTextDatum(lgfx::textdatum_t::baseline_left);
+  s.drawString(tb,x+16,y+h-12);
+  s.setTextDatum(lgfx::textdatum_t::top_left);
+  s.setFont(&lgfx::fonts::Font0); // Home selalu Font0 (lihat renderCurrentFrame)
+  s.setTextSize(1);
 }
 
-// Kartu baterai: cincin (kartu tinggi) atau bar horizontal (kartu pendek)
+// Kartu baterai: cincin (kartu tinggi) atau bar horizontal (kartu pendek); rona kartu ikut level baterai
 void drawBattWidget(LGFX_Sprite& s,int x,int y,int w,int h){
-  drawGlassCard(s,x,y,w,h,18,T().surface,150);
   uint16_t bc=battColor();
+  drawGlassCard(s,x,y,w,h,bentoR(h,22),bentoTint(bc,70),185);
   char pb[8]; sprintf(pb,"%d",battPercent);
   if(h>=60){
     int cx=x+w/2, cy=y+h/2;
-    int ro=min(h/2-6,w/2-6), ri=ro-6;
+    int ro=min(h/2-6,w/2-6), ri=ro-7;
     uint16_t track=blend565(T().surface,0xFFFF,50);
     s.fillArc(cx,cy,ri,ro,0.0f,180.0f,track);
     s.fillArc(cx,cy,ri,ro,180.0f,360.0f,track);
@@ -3311,18 +3410,18 @@ void drawBattWidget(LGFX_Sprite& s,int x,int y,int w,int h){
     }
     s.setTextSize(battPercent>=100?1:2);
     int tw=s.textWidth(pb), th=(battPercent>=100)?8:16;
-    s.setTextColor(T().text); s.setCursor(cx-tw/2,cy-th/2); s.print(pb);
+    uiText(s,cx-tw/2,cy-th/2,pb,T().text,false,true);
     s.setTextSize(1);
   } else {
     s.setTextSize(1);
-    s.setTextColor(T().subtext); s.setCursor(x+14,y+9); s.print("Baterai");
+    uiText(s,x+16,y+9,"Baterai",T().text,false,true);
     char pf[8]; sprintf(pf,"%d%%",battPercent);
     int tw=s.textWidth(pf);
-    s.setTextColor(bc); s.setCursor(x+w-14-tw,y+9); s.print(pf);
-    int bx=x+14, bw=w-28, by=y+h-14;
-    s.fillRoundRect(bx,by,bw,7,3,blend565(T().surface,0xFFFF,50));
+    uiText(s,x+w-16-tw,y+9,pf,bc,false,true);
+    int bx=x+16, bw=w-32, by=y+h-15;
+    s.fillRoundRect(bx,by,bw,8,4,blend565(T().surface,0xFFFF,50));
     int fw=(bw*battPercent)/100;
-    if(fw>0) s.fillRoundRect(bx,by,max(fw,6),7,3,bc);
+    if(fw>0) s.fillRoundRect(bx,by,max(fw,8),8,4,bc);
   }
 }
 
@@ -3449,7 +3548,7 @@ DIState diState = DI_IDLE, diTargetState = DI_IDLE;
 unsigned long diAnimStartMs = 0;
 float diAnimFromW = 0, diAnimFromH = 0;
 float diCurW = 0, diCurH = 0;
-const float DI_ANIM_MS = 380.0f; // lbh lama dr transisi nav (12 langkah x ~6ms) -- morph perlu "napas" biar kenyal
+const float DI_ANIM_MS = 420.0f; // UI-POLISH-V2: 380->420, morph lebih lega // lbh lama dr transisi nav (12 langkah x ~6ms) -- morph perlu "napas" biar kenyal
 
 char     diIcon = 0;
 String   diTitle = "", diBadge = ""; // v17: diSubtitle dihapus -- cuma 1 baris teks skrg
@@ -3475,7 +3574,7 @@ int           diPressX = 0, diPressY = 0;
 // ease "back": dikit overshoot lalu balik pas ke target -- beda dr navEase
 // yg datar simetris; overshoot inilah yg bikin morph kerasa kenyal/hidup.
 float diSpringEase(float p){
-  const float c1=1.70158f, c3=c1+1.0f;
+  const float c1=0.85f, c3=c1+1.0f; // UI-POLISH-V2: 1.70158 -> 0.85 (mantul tipis, bukan membal)
   float x=p-1.0f;
   return 1.0f + c3*x*x*x + c1*x*x;
 }
@@ -3640,9 +3739,17 @@ void diUpdate(){
 
 void drawDynamicIsland(LGFX_Sprite& s){
   float t=(millis()-diAnimStartMs)/DI_ANIM_MS; if(t>1.0f)t=1.0f;
-  float e=diSpringEase(t);
+  // UI-POLISH-V2: membesar = pegas lembut (tinggi sedikit mendahului lebar); mengecil = ease-in-out tanpa mantul.
+  const bool growing = (diTargetW()+diTargetH()) >= (int)(diAnimFromW+diAnimFromH);
+  float tH=t*1.15f; if(tH>1.0f) tH=1.0f;
+  float e  = growing ? diSpringEase(t)  : navEase(t);
+  float eh = growing ? diSpringEase(tH) : navEase(t);
+  float ca = growing ? (t-0.30f)/0.45f : 1.0f-t/0.35f;   // transparansi isi (ikon+teks)
+  if(ca<0.0f) ca=0.0f; if(ca>1.0f) ca=1.0f;
+  if(t>=1.0f) ca=1.0f;
   float tw=diAnimFromW+(diTargetW()-diAnimFromW)*e;
-  float th=diAnimFromH+(diTargetH()-diAnimFromH)*e;
+  float th=diAnimFromH+(diTargetH()-diAnimFromH)*eh;
+  if(th<0.0f) th=0.0f; if(tw<0.0f) tw=0.0f;
   if(t>=1.0f){ diState=diTargetState; tw=(float)diTargetW(); th=(float)diTargetH(); }
   diCurW=tw; diCurH=th;
   if(tw<1||th<1){ diCurX=SCR_W/2; diCurY=2; return; }
@@ -3661,11 +3768,10 @@ void drawDynamicIsland(LGFX_Sprite& s){
   // gak ada auto-forward-declare sama sekali. Makanya nilainya ditulis
   // literal langsung (0xFE05), HARUS disamain manual kalau INF_ACHV_GOLD
   // diubah nanti.
-  s.fillRoundRect(x,y,w,h,h/2, isAchv?blend565(0x0000,0xFE05,18):0x0000); // pil hitam pekat (dikit rona emas kalau banner achievement), senada notch HP asli
-  // v72: garis sheen SANGAT tipis di sisi atas -- sentuhan kaca konsisten
-  // dgn dock/CC/Toast, tapi dibikin nyaris gak keliatan (blend cuma 30/255
-  // ke putih) spy TIDAK ngerusak kesan "notch hitam pekat" asli yg sudah
-  // otentik -- cuma nambah sedikit "kilau" di reflection line-nya.
+  uint16_t pillC = isAchv?blend565(0x0000,0xFE05,18):0x0000; // UI-POLISH-V2
+  if(h>=20) shadowSoft(s,x,y,w,h,h/2);                       // bayangan lembut: pil terasa melayang
+  s.fillRoundRect(x,y,w,h,h/2,pillC);
+  if(h>=14) s.drawRoundRect(x,y,w,h,h/2,blend565(0x0000,0xFFFF,26)); // rim halus
   if(w>h){
     uint16_t sheen = blend565(0x0000, 0xFFFF, 30);
     s.drawFastHLine(x+h/2, y+1, max(0,w-h), sheen);
@@ -3710,8 +3816,9 @@ void drawDynamicIsland(LGFX_Sprite& s){
   } else if(h>=22){
     int iconR = max(6,(h-6)/2);
     int iconCx=x+8+iconR, iconCy=y+h/2;
-    drawAppIcon(s, diIcon, iconCx, iconCy, iconR, diColor);
-    s.setTextColor(0xFFFF); s.setTextSize(1);
+    uint16_t icCol = blend565(pillC, diColor, (uint8_t)(255.0f*ca)); // UI-POLISH-V2: isi memudar masuk/keluar
+    drawAppIcon(s, diIcon, iconCx, iconCy, iconR, icCol);
+    s.setTextColor(blend565(pillC, 0xFFFF, (uint8_t)(255.0f*ca))); s.setTextSize(1);
     int textX = iconCx+iconR+6;
     // v17: cuma SATU baris title -- subtitle dihapus total (lihat catatan
     // v17 di atas struct DIState utk alasan lengkapnya).
@@ -5660,7 +5767,7 @@ int homeDockY(){ return SCR_H-38-8; }
 // Portrait : jam, kartu musik, baterai (bar) bertumpuk. Grid app mulai di bawahnya.
 bool homeIsLand(){ return currentOrient==ORIENT_LANDSCAPE; }
 HomeRect homeWClock(){ HomeRect r; r.x=10; r.y=STATUS_H+28; r.h=homeIsLand()?66:80; r.w=homeIsLand()?188:SCR_W-20; return r; }
-HomeRect homeWMusic(){ HomeRect r; r.x=10; r.w=SCR_W-20; if(homeIsLand()){ r.y=STATUS_H+28+66+6; r.h=48; } else { r.y=STATUS_H+28+80+8; r.h=58; } return r; }
+HomeRect homeWMusic(){ HomeRect r; r.x=10; r.w=SCR_W-20; if(homeIsLand()){ r.y=STATUS_H+28+66+8; r.h=48; } else { r.y=STATUS_H+28+80+8; r.h=58; } return r; }
 HomeRect homeWBatt(){
   HomeRect r;
   if(homeIsLand()){ r.x=206; r.y=STATUS_H+28; r.w=SCR_W-216; r.h=66; }
@@ -5671,7 +5778,7 @@ HomeRect homeWBatt(){
 // krn homeGridTop() memakai homeWidgetsEnd()). Data & gambar di features_renphone.ino.
 HomeRect homeWWeather(){
   HomeRect b=homeWBatt(), m=homeWMusic(); HomeRect r;
-  r.x=10; r.w=SCR_W-20; r.y=max(b.y+b.h,m.y+m.h)+6; r.h=homeIsLand()?40:48; return r;
+  r.x=10; r.w=SCR_W-20; r.y=max(b.y+b.h,m.y+m.h)+8; r.h=homeIsLand()?40:48; return r;
 }
 int homeWidgetsEnd(){ HomeRect b=homeWBatt(), m=homeWMusic(), w=homeWWeather(); return max(max(b.y+b.h,m.y+m.h),w.y+w.h); }
 int homeGridTop(){ return homeWidgetsEnd()+30; } // UI-OVERHAUL: grid di bawah blok widget (+ ruang utk judul "Semua App")
@@ -6034,6 +6141,43 @@ int homeIndexAt(int x,int y,float sc){
     if(x>=ax&&x<=ax+cw&&y>=ay&&y<=ay+ch) return homeVis[k];
   }
   return -1;
+}
+
+// UI-POLISH-V2: hitung asal animasi zoom (ikon grid / ikon dock / kartu widget) lalu arm navZoomArm().
+// Geometri disalin dari drawHome()/homeCheck() -- kalau layout Home diubah, ubah di sini juga.
+void homeArmZoom(int idx,int tx,int ty,float sc){
+  int scPx=homeScrollPx(sc);
+  int dockY=homeDockY(), dockH=38;
+  if(idx>=0){
+    int cols=homeCols(), cw=homeCardW(), ch=homeCardH(), gap=10;
+    int iconR=min(cw,ch-16)/2-2; if(iconR>24) iconR=24; if(iconR<14) iconR=14;
+    bool srch=homeSearchActive(); int k=-1;
+    if(srch){ for(int q=0;q<homeFilteredCount;q++) if(homeFilteredIdx[q]==idx){ k=q; break; } }
+    else { homeLayoutEnsure(); for(int q=0;q<homeVisN;q++) if(homeVis[q]==idx){ k=q; break; } }
+    if(k<0) return;
+    int col=k%cols, row=k/cols;
+    int x=gap+col*(cw+gap);
+    int y= srch ? homeResultsTop()+row*(ch+gap) : homeGridTop()+row*(ch+gap)-scPx;
+    int cx=x+cw/2, cy=y+(ch-16)/2;
+    navZoomArm(cx-iconR,cy-iconR,iconR*2,iconR*2,(iconR*11)/20,apps[idx].color);
+    return;
+  }
+  if(ty>=dockY && ty<=dockY+dockH){
+    int dockIdx[4]={0,4,6,7}; int dw=(SCR_W-12)/4;
+    for(int i=0;i<4;i++){
+      int cx=6+i*dw+dw/2;
+      if(abs(tx-cx)<dw/2){ int r=14; navZoomArm(cx-r,dockY+dockH/2-r,r*2,r*2,(r*11)/20,apps[dockIdx[i]].color); return; }
+    }
+    return;
+  }
+  if(homeSearchActive() || ty<homeGridClipTop() || ty>=dockY-4) return;
+  int yc=ty+scPx;
+  HomeRect rm=homeWMusic(), rc=homeWClock(), rb=homeWBatt();
+  const HomeRect* hit=nullptr;
+  if(tx>=rm.x&&tx<=rm.x+rm.w&&yc>=rm.y&&yc<=rm.y+rm.h) hit=&rm;
+  else if(tx>=rc.x&&tx<=rc.x+rc.w&&yc>=rc.y&&yc<=rc.y+rc.h) hit=&rc;
+  else if(tx>=rb.x&&tx<=rb.x+rb.w&&yc>=rb.y&&yc<=rb.y+rb.h) hit=&rb;
+  if(hit) navZoomArm(hit->x,hit->y-scPx,hit->w,hit->h,22,T().surface2);
 }
 
 // =============================================
@@ -7653,6 +7797,102 @@ void settChevron(LGFX_Sprite& s,int cx,int cy,uint16_t col){ // ">" tipis
   s.drawLine(cx-2,cy-4,cx+2,cy,col); s.drawLine(cx+2,cy,cx-2,cy+4,col);
 }
 
+// UI-POLISH-V2 -------- chip ikon berwarna ala iOS Settings (22x22, sudut 6) + glyph putih kecil
+#define CHIP_BLUE   0x0C3F
+#define CHIP_GREEN  0x362B
+#define CHIP_ORANGE 0xFCA0
+#define CHIP_RED    0xFA27
+#define CHIP_PURPLE 0xAA9B
+#define CHIP_INDIGO 0x5ABA
+#define CHIP_GRAY   0x8C72
+#define CHIP_TEAL   0x357C
+#define CHIP_PINK   0xF96A
+bool settHasChip(int t){
+  switch(t){
+    case SR_BRIGHT: case SR_THEME: case SR_FONT: case SR_ROT: case SR_HOMEEDIT: case SR_SPI:
+    case SR_SCAN: case SR_SSID: case SR_PASS: case SR_MPU: case SR_TCAL: case SR_ABOUT: case SR_POWER:
+      return true;
+  }
+  return false;
+}
+void settChip(LGFX_Sprite& s,int type,int x,int y){ // x,y = pojok kiri-atas chip
+  uint16_t col=CHIP_GRAY;
+  switch(type){
+    case SR_BRIGHT:   col=CHIP_BLUE;   break;
+    case SR_THEME:    col=CHIP_PINK;   break;
+    case SR_FONT:     col=CHIP_INDIGO; break;
+    case SR_ROT:      col=CHIP_GREEN;  break;
+    case SR_HOMEEDIT: col=CHIP_PURPLE; break;
+    case SR_SPI:      col=CHIP_ORANGE; break;
+    case SR_SCAN:     col=CHIP_BLUE;   break;
+    case SR_SSID:     col=CHIP_TEAL;   break;
+    case SR_PASS:     col=CHIP_GRAY;   break;
+    case SR_MPU:      col=CHIP_INDIGO; break;
+    case SR_TCAL:     col=CHIP_RED;    break;
+    case SR_ABOUT:    col=CHIP_GRAY;   break;
+    case SR_POWER:    col=CHIP_RED;    break;
+    default: return;
+  }
+  const uint16_t W=0xFFFF;
+  int cx=x+11, cy=y+11;
+  s.fillRoundRect(x,y+1,22,22,6,blend565(col,0x0000,70));   // tepi bawah tipis
+  s.fillRoundRect(x,y,22,22,6,col);
+  s.drawFastHLine(x+6,y+1,10,blend565(col,0xFFFF,70));      // kilap atas
+  switch(type){
+    case SR_BRIGHT: {  // matahari
+      s.fillCircle(cx,cy,3,W);
+      static const int dxs[8]={0,1,1,1,0,-1,-1,-1}, dys[8]={-1,-1,0,1,1,1,0,-1};
+      for(int i=0;i<8;i++){ int r1=(i&1)?6:7; s.drawLine(cx+dxs[i]*5,cy+dys[i]*5,cx+dxs[i]*r1,cy+dys[i]*r1,W); }
+      } break;
+    case SR_THEME:     // palet
+      s.fillCircle(cx,cy,7,W);
+      s.fillCircle(cx-3,cy-2,1,col); s.fillCircle(cx+1,cy-4,1,col); s.fillCircle(cx+3,cy,1,col); s.fillCircle(cx-1,cy+3,1,col);
+      break;
+    case SR_FONT:      // "Aa"
+      s.setTextSize(1); s.setTextColor(W); s.setCursor(cx-6,cy-4); s.print("Aa");
+      break;
+    case SR_ROT:       // panah putar
+      s.fillArc(cx,cy,4,6,40.0f,320.0f,W);
+      s.fillTriangle(cx+2,cy-9,cx+2,cy-3,cx+8,cy-6,W);
+      break;
+    case SR_HOMEEDIT:  // kisi 2x2
+      s.fillRoundRect(cx-6,cy-6,5,5,1,W); s.fillRoundRect(cx+1,cy-6,5,5,1,W);
+      s.fillRoundRect(cx-6,cy+1,5,5,1,W); s.fillRoundRect(cx+1,cy+1,5,5,1,W);
+      break;
+    case SR_SPI:       // petir
+      s.fillTriangle(cx+2,cy-8,cx-4,cy+1,cx+1,cy+1,W);
+      s.fillTriangle(cx-1,cy-1,cx+4,cy-1,cx-2,cy+8,W);
+      break;
+    case SR_SCAN:      // wifi
+      s.fillCircle(cx,cy+6,1,W);
+      s.drawArc(cx,cy+6,5,4,210,330,W); s.drawArc(cx,cy+6,8,7,210,330,W); s.drawArc(cx,cy+6,11,10,210,330,W);
+      break;
+    case SR_SSID:      // globe
+      s.drawCircle(cx,cy,7,W); s.drawFastHLine(cx-7,cy,15,W); s.drawFastVLine(cx,cy-7,15,W); s.drawCircle(cx,cy,3,W);
+      break;
+    case SR_PASS:      // gembok
+      s.fillRoundRect(cx-5,cy-1,11,8,2,W);
+      s.drawFastVLine(cx-3,cy-6,5,W); s.drawFastVLine(cx+3,cy-6,5,W); s.drawFastHLine(cx-3,cy-7,7,W);
+      s.fillCircle(cx,cy+3,1,col);
+      break;
+    case SR_MPU:       // bidik
+      s.drawCircle(cx,cy,5,W); s.fillCircle(cx,cy,1,W);
+      s.drawFastHLine(cx-8,cy,4,W); s.drawFastHLine(cx+5,cy,4,W);
+      s.drawFastVLine(cx,cy-8,4,W); s.drawFastVLine(cx,cy+5,4,W);
+      break;
+    case SR_TCAL:      // riak sentuh
+      s.fillCircle(cx,cy,2,W); s.drawCircle(cx,cy,5,W); s.drawCircle(cx,cy,8,W);
+      break;
+    case SR_ABOUT:     // "i"
+      s.fillCircle(cx,cy-5,2,W); s.fillRect(cx-1,cy-1,3,8,W);
+      break;
+    case SR_POWER:     // tombol daya
+      s.fillArc(cx,cy+1,5,7,300.0f,360.0f,W); s.fillArc(cx,cy+1,5,7,0.0f,240.0f,W);
+      s.fillRect(cx-1,cy-8,3,8,W);
+      break;
+  }
+}
+
 void drawSettings(LGFX_Sprite& s){
   checkWifiScanComplete();
   settBuildLayout();
@@ -7688,10 +7928,10 @@ void drawSettings(LGFX_Sprite& s){
     int j=i; while(j+1<settRowN && settRG[j+1]==g) j++;
     int gy=oy+settRY[i], gh=settRY[j]+settRH[j]-settRY[i];
     if(gy+gh>top && gy<bot){
-      drawGlassCard(s,cx,gy,cw,gh,12,T().surface,215);
+      drawGlassCard(s,cx,gy,cw,gh,14,T().surface,215);
       for(int k=i;k<j;k++){
         int ly=oy+settRY[k]+settRH[k];
-        if(ly>top && ly<bot) s.drawFastHLine(cx+14,ly,cw-14,T().divider);
+        if(ly>top && ly<bot){ int lx=settHasChip(settRT[k])?cx+44:cx+14; s.drawFastHLine(lx,ly,cx+cw-lx,T().divider); } // UI-POLISH-V2
       }
     }
     i=j+1;
@@ -7703,17 +7943,21 @@ void drawSettings(LGFX_Sprite& s){
     if(ry+rh<=top || ry>=bot) continue;
     int ty=ry+rh/2-4;
     int xl=cx+14, xr=cx+cw-14;
+    if(settHasChip(settRT[i])){ // UI-POLISH-V2: chip ikon di kiri, teks bergeser
+      xl=cx+44; settChip(s,settRT[i],cx+12,(settRT[i]==SR_THEME)?ry+8:ry+(rh-22)/2);
+    }
     s.setTextSize(1);
     switch(settRT[i]){
       case SR_TITLE:
         s.setTextSize(2); uiText(s,cx+2,ry+10,settRL[i],T().text,false,true); s.setTextSize(1);
         break;
-      case SR_SECT:
-        s.setTextColor(T().subtext); s.setCursor(cx+14,ry+rh-13); s.print(settRL[i]);
+      case SR_SECT: // UI-POLISH-V2: batang aksen + teks tebal
+        s.fillRoundRect(cx+2,ry+rh-14,3,10,1,T().accent);
+        uiText(s,cx+11,ry+rh-13,settRL[i],blend565(T().subtext,T().text,110),false,true);
         break;
       case SR_BRIGHT: {
         s.setTextColor(T().text); s.setCursor(xl,ty); s.print("Kecerahan");
-        int x0=cx+92, x1=cx+cw-50, my=ry+rh/2;
+        int x0=cx+110, x1=cx+cw-50, my=ry+rh/2;
         s.fillRoundRect(x0,my-2,x1-x0,4,2,blend565(T().surface2,0xFFFF,60));
         int kx=x0+(constrain((int)brightness,10,255)-10)*(x1-x0)/245;
         if(kx>x0) s.fillRoundRect(x0,my-2,kx-x0,4,2,T().accent);
@@ -7724,7 +7968,7 @@ void drawSettings(LGFX_Sprite& s){
         } break;
       case SR_THEME: {
         s.setTextColor(T().text); s.setCursor(xl,ry+14); s.print("Tema");
-        int x0=cx+64, step=(cw-76)/THEME_COUNT;
+        int x0=cx+72, step=(cw-84)/THEME_COUNT;
         for(int t=0;t<THEME_COUNT;t++){
           int tcx=x0+step*t+step/2, tcy=ry+19;
           s.fillCircle(tcx,tcy,7,themes[t].bg);   // UI-MODERN: 8 tema -> lingkaran 9->7, cincin 12->9
@@ -7789,7 +8033,7 @@ void drawSettings(LGFX_Sprite& s){
       case SR_SSID: {
         s.setTextColor(T().text); s.setCursor(xl,ty); s.print("SSID");
         bool has=settSSID.length()>0;
-        String v=settFit(s,has?settSSID:String("Ketuk untuk isi"),cw-28-50);
+        String v=settFit(s,has?settSSID:String("Ketuk untuk isi"),cw-28-50-30);
         settTextR(s,xr,ty,v.c_str(),(kbVisible&&settFocus==0)?T().accent:(has?T().subtext:T().divider));
         } break;
       case SR_PASS: {
@@ -7798,7 +8042,7 @@ void drawSettings(LGFX_Sprite& s){
         if(settPass.length()==0) v="Ketuk untuk isi";
         else if(settShowPass) v=settPass.substring(0,18);
         else { for(int k=0;k<(int)settPass.length()&&k<18;k++) v+="*"; }
-        v=settFit(s,v,cw-28-50-44);
+        v=settFit(s,v,cw-28-50-44-30);
         settTextR(s,xr-46,ty,v.c_str(),(kbVisible&&settFocus==1)?T().accent:(settPass.length()?T().subtext:T().divider));
         settTextR(s,xr,ty,settShowPass?"Tutup":"Lihat",T().accent);
         } break;
@@ -7857,7 +8101,7 @@ int settRowAt(int y){
   return -1;
 }
 void settSetBrightnessFromX(int x){
-  int cx=10, cw=SCR_W-20; int x0=cx+92, x1=cx+cw-50;
+  int cx=10, cw=SCR_W-20; int x0=cx+110, x1=cx+cw-50;
   brightness=(uint8_t)constrain(map(constrain(x,x0,x1),x0,x1,10,255),10,255);
   display.setBrightness(brightness);
   needRedraw=true;
@@ -7869,7 +8113,7 @@ void settTap(int x,int y){
   const int cx=10, cw=SCR_W-20, xr=cx+cw-14;
   switch(settRT[r]){
     case SR_THEME: {
-      int x0=cx+64, step=(cw-76)/THEME_COUNT;
+      int x0=cx+72, step=(cw-84)/THEME_COUNT;
       int t=(x-x0)/step;
       if(x>=x0 && t>=0 && t<THEME_COUNT){
         themeIdx=t; saveTheme(); initAppColors();
@@ -18321,6 +18565,7 @@ void loop(){
         // sentuhan yg blm tentu jadi tap.
         if(nx!=SCR_HOME){
           homePressAnim=0.0f; homePressAnimIdx=-1; // v105: reset animasi tekan, balik ke Home nanti gak nyisain ikon mengecil
+          homeArmZoom(idx,touchStartX,touchStartY,homeScrollY); // UI-POLISH-V2: ikon membesar jadi layar app
           navPush(nx); // v96: getar tap navigasi dicabut
         }
       }

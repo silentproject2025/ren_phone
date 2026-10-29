@@ -954,7 +954,7 @@ static void wxIcon(LGFX_Sprite& s, int cx, int cy, int r, int code, bool day) {
 }
 
 void drawWeatherWidget(LGFX_Sprite& s, int x, int y, int w, int h) {
-  drawGlassCard(s, x, y, w, h, 18, T().surface, 150);
+  drawGlassCard(s, x, y, w, h, bentoR(h, 22), bentoTint((uint16_t)0x357C, 70), 185); // UI-POLISH-V2 bento: rona langit
   int cy = y + h / 2;
   s.setTextSize(1);
   if (!wxValid) {
@@ -970,14 +970,14 @@ void drawWeatherWidget(LGFX_Sprite& s, int x, int y, int w, int h) {
   int tx = x + 14 + r * 2 + 12;
   s.setTextSize(2); s.setTextColor(T().text);
   s.setCursor(tx, cy - 8); s.print(tb);
+  s.setCursor(tx + 1, cy - 8); s.print(tb);   // UI-POLISH-V2: suhu tebal
   int tw = s.textWidth(tb);
   s.setTextSize(1);
   s.drawCircle(tx + tw + 4, cy - 6, 2, T().text);          // tanda derajat (font ASCII tidak punya)
   s.setCursor(tx + tw + 9, cy - 8); s.print("C");
 
   int dx = tx + tw + 9 + 6 + 14;
-  s.setTextColor(T().text);
-  s.setCursor(dx, cy - 11); s.print(wxDesc(wxCode));
+  uiText(s, dx, cy - 11, wxDesc(wxCode), T().text, false, true);   // UI-POLISH-V2: deskripsi tebal
   char dl[48];
   snprintf(dl, sizeof(dl), "%d/%d C  Hujan %d%%  RH %d%%", (int)lroundf(wxMax), (int)lroundf(wxMin), wxRain, wxHum);
   s.setTextColor(T().subtext);
