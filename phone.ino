@@ -10890,73 +10890,99 @@ void bootStageEventHorizon(int w,int h){
   }
 }
 
-// ---- Tahap 3 (v118): titik -> dua sapuan cahaya vertikal membelah keluar dari tengah,
-// menyingkap "NyxOS" (huruf merapat), disusul cincin kejut tipis & garis bawah tumbuh.
-// Dulu: titik -> garis horizontal -> garis turun (kerasa patah/kurang halus). Sekarang
-// SATU gerakan kontinu dari titik runtuh tahap 2: titik membelah jadi 2 bar cahaya,
-// bar menyapu ke kiri & kanan, teks tersingkap di belakangnya. Frame terakhir persis
-// sama dgn frame pertama tahap 4 (tagline), jadi gak ada loncatan.
+// ---- Tahap 3 (v121): ledakan dari titik runtuh -> huruf "NyxOS" TERLEMPAR keluar dari pusat ----
+// Titik runtuh tahap 2 "memuntahkan" materi: bola cahaya lokal + 2 cincin kejut, lalu kelima huruf
+// meluncur dari tengah ke posisinya (urutan dari tengah ke luar: x, lalu y & O, lalu N & S), dgn
+// jejak cahaya di belakang tiap huruf dan sedikit overshoot sebelum mendarat. Garis bawah tumbuh
+// di akhir. Frame terakhir identik dgn frame pertama tahap 4 (tagline).
+float bootOutBack(float t){
+  if(t<=0.0f) return 0.0f; if(t>=1.0f) return 1.0f;
+  const float c1=1.70158f, c3=c1+1.0f; float u=t-1.0f;
+  return 1.0f+c3*u*u*u+c1*u*u;
+}
+void bootDrawNyxLetter(int i,int px,int ty,float tp){
+  const char* osName="NyxOS";
+  char one[2]={osName[i],0};
+  canvas.setTextSize(3);
+  canvas.setTextColor(lerpColor565(0x0000,bootRGB(80,80,88),0.55f*tp)); canvas.setCursor(px+1,ty+1); canvas.print(one);
+  canvas.setTextColor(lerpColor565(0x0000,0xFFFF,tp));                  canvas.setCursor(px,ty);     canvas.print(one);
+}
 void bootStageHorizonReveal(int w,int h){
   const int cx=w/2, cy=h/2-16;
-  const unsigned long DUR=1150;
-  const int tyTop=cy-20, tyH=40;                       // area teks (textSize 3 = tinggi 24)
+  const unsigned long DUR=1500;
+  const int cw=18, n=5, ty=cy-14;
+  const int x0=cx-(n*cw)/2, sx=cx-cw/2;                 // sx = titik awal huruf (tengah)
   const uint16_t WARM=bootRGB(255,238,214);
-  float maxR=(float)(w/2-6); if(maxR>104.0f) maxR=104.0f;
+  float maxR=(float)(w/2-6); if(maxR>110.0f) maxR=110.0f;
   unsigned long t0=millis();
   for(;;){
     float lp=(float)(millis()-t0)/DUR; if(lp>1.0f) lp=1.0f;
-    float coreP=lp/0.30f;            if(coreP>1.0f) coreP=1.0f; coreP=navEase(coreP);
-    float ringP=(lp-0.05f)/0.60f;    if(ringP<0.0f) ringP=0.0f; if(ringP>1.0f) ringP=1.0f;
-    float rv=(lp-0.10f)/0.62f;       if(rv<0.0f) rv=0.0f;       if(rv>1.0f) rv=1.0f;  rv=navEase(rv);
-    float tp=(lp-0.18f)/0.58f;       if(tp<0.0f) tp=0.0f;       if(tp>1.0f) tp=1.0f;  tp=navEase(tp);
-    float lineP=(lp-0.70f)/0.30f;    if(lineP<0.0f) lineP=0.0f; if(lineP>1.0f) lineP=1.0f; lineP=navEase(lineP);
-
     canvas.fillSprite(0x0000);
 
-    // inti: titik terang meredup (sambungan dari titik runtuh di tahap 2)
-    float coreA=1.0f-coreP;
+    if(lp>=1.0f){                                       // frame akhir = persis awal tahap 4
+      bootDrawNyxText(cx,cy,0,1.0f);
+      bootDrawHorizonLine(cx,cy+17,60,0.70f);
+      push();
+      break;
+    }
+
+    // pendar lembut di belakang teks: naik lalu padam
+    float gl=sinf(lp*3.14159f);
+    if(gl>0.05f){
+      int gr=(int)(30.0f+34.0f*lp); uint16_t gc=bootRGB(120,125,150);
+      canvas.fillCircle(cx,cy,gr,            lerpColor565(0x0000,gc,0.05f*gl));
+      canvas.fillCircle(cx,cy,(int)(gr*0.7f),lerpColor565(0x0000,gc,0.09f*gl));
+      canvas.fillCircle(cx,cy,(int)(gr*0.42f),lerpColor565(0x0000,gc,0.14f*gl));
+    }
+
+    // inti: sambungan dari titik runtuh, lalu bola cahaya ledakan (lokal, bukan flash layar)
+    float coreP=lp/0.16f; if(coreP>1.0f) coreP=1.0f; float coreA=1.0f-navEase(coreP);
     if(coreA>0.05f){
       canvas.fillCircle(cx,cy,(int)(3+5*coreA),lerpColor565(0x0000,WARM,0.40f*coreA));
       canvas.fillCircle(cx,cy,(int)(1+2*coreA),lerpColor565(0x0000,0xFFFF,coreA));
     }
+    float bp=(lp-0.10f)/0.28f;
+    if(bp>0.0f && bp<1.0f){
+      float a=1.0f-bp; a=a*sqrtf(a);
+      int br=(int)(6.0f+26.0f*navEase(bp));
+      canvas.fillCircle(cx,cy,br,            lerpColor565(0x0000,WARM,0.22f*a));
+      canvas.fillCircle(cx,cy,(int)(br*0.55f),lerpColor565(0x0000,WARM,0.55f*a));
+      canvas.fillCircle(cx,cy,2,             lerpColor565(0x0000,0xFFFF,a));
+    }
 
-    // cincin kejut tipis: hangat -> abu-abu, memudar sambil melebar
-    if(ringP>0.0f && ringP<1.0f){
-      float e=navEase(ringP);
-      int rr=(int)(4.0f+e*(maxR-4.0f));
-      float a=1.0f-ringP; a=a*a*0.75f;
-      uint16_t rc=lerpColor565(bootRGB(255,190,130),bootRGB(150,150,166),ringP);
+    // 2 cincin kejut
+    for(int k=0;k<2;k++){
+      float rp=(lp-(0.10f+0.12f*k))/0.55f; if(rp<=0.0f||rp>=1.0f) continue;
+      int rr=(int)(4.0f+navEase(rp)*(maxR-4.0f));
+      float a=1.0f-rp; a=a*a*(k==0?0.75f:0.45f);
+      uint16_t rc=lerpColor565(bootRGB(255,190,130),bootRGB(150,150,166),rp);
       canvas.drawCircle(cx,cy,rr,  lerpColor565(0x0000,rc,a));
       canvas.drawCircle(cx,cy,rr+1,lerpColor565(0x0000,rc,a*0.35f));
     }
 
-    // teks tersingkap oleh jendela yg melebar dari tengah (clip), huruf merapat saat muncul
-    int gap=(int)((1.0f-tp)*10.0f);
-    int totalW=5*18+4*gap;
-    int hr=(int)(rv*(float)(totalW/2+10));
-    if(hr>1){
-      canvas.setClipRect(cx-hr,tyTop,hr*2,tyH);
-      bootDrawNyxText(cx,cy,gap,0.35f+0.65f*tp);
-      canvas.clearClipRect();
-    }
-
-    // dua bar cahaya vertikal di tepi jendela (hilang begitu jendela penuh)
-    float ea=1.0f-rv;
-    if(rv>0.0f && ea>0.04f){
-      for(int sd=-1; sd<=1; sd+=2){
-        int bx=cx+sd*hr;
-        canvas.fillRect(bx-3,tyTop+7, 6,tyH-14,lerpColor565(0x0000,WARM,0.16f*ea));
-        canvas.fillRect(bx-2,tyTop+4, 4,tyH-8, lerpColor565(0x0000,WARM,0.34f*ea));
-        canvas.fillRect(bx-1,tyTop+2, 2,tyH-4, lerpColor565(0x0000,0xFFFF,ea));
+    // huruf terlempar dari pusat: urutan dari tengah ke luar, tiap huruf punya jejak
+    for(int i=0;i<n;i++){
+      int d=(i>2)?(i-2):(2-i);
+      float pr=(lp-(0.14f+0.09f*d))/0.42f; if(pr<=0.0f) continue; if(pr>1.0f) pr=1.0f;
+      int fx=x0+i*cw;
+      float al=pr*2.2f; if(al>1.0f) al=1.0f; al=0.30f+0.70f*navEase(al);
+      if(pr<1.0f && d>0){
+        for(int k=3;k>=1;k--){
+          float pk=pr-0.07f*k; if(pk<=0.0f) continue;
+          int gx=sx+(int)((float)(fx-sx)*bootOutBack(pk));
+          bootDrawNyxLetter(i,gx,ty,al*(0.30f-0.08f*k));
+        }
       }
+      int px=sx+(int)((float)(fx-sx)*bootOutBack(pr));
+      bootDrawNyxLetter(i,px,ty,al);
     }
 
-    // garis bawah tumbuh dari tengah di akhir (posisi/alpha akhir = tahap 4)
+    // garis bawah tumbuh di akhir
+    float lineP=(lp-0.78f)/0.22f; if(lineP<0.0f) lineP=0.0f; if(lineP>1.0f) lineP=1.0f; lineP=navEase(lineP);
     int lh=(int)(60.0f*lineP);
     if(lh>=2) bootDrawHorizonLine(cx,cy+17,lh,0.70f*lineP);
 
     push();
-    if(lp>=1.0f) break;
     delay(1);
     if(wifiConnected && webServerRunning) webServer.handleClient();
     yield();
