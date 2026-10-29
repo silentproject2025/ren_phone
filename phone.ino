@@ -3122,6 +3122,20 @@ void navGoHome(){
   needRedraw=false;
   homeAodWake(); // v99: reset timer idle AOD Home tiap kali BENERAN nyampe Home -- jgn langsung dianggap "udah lama idle"
 }
+// v124: UNLOCK -- Home membesar (zoom) dari bawah-tengah di atas lock screen, bukan geser turun.
+void unlockZoomHome(){
+  if(notepadNeedsConfirm()){ navGoHome(); return; }    // ada konfirmasi tertunda: pakai jalur lama
+  appOnExit(curScreen());
+  navDepth=0;
+  kbVisible=false; kbTarget=nullptr;
+  navZoomSaved=false;
+  const int sz=44;
+  navZoomArm(SCR_W/2-sz/2, SCR_H-sz-30, sz, sz, (sz*11)/20, T().surface2);
+  navPlayZoomOpen();                                   // renderCurrentFrame() sudah Home (locked=false)
+  navZoomSaved=false; navZoomArmed=false;
+  needRedraw=false;
+  homeAodWake();
+}
 void navBack(){
   if(notepadNeedsConfirm()){ notepadRequestConfirm(1); return; }
   appOnExit(curScreen());
@@ -4203,7 +4217,7 @@ void lockScreenInput(bool touched,bool newT,int tx,int ty){
   } else if(!touched && lockDragging){
     lockDragging=false;
     if(lockDragY>50){
-      locked=false; navGoHome();
+      locked=false; unlockZoomHome();   // v124: zoom, bukan geser
       diNotify('D', "Terbuka", T().accent, 1100, false); // v95: event DI baru -- pil singkat pas layar dibuka
       lockDragY=0;
     }
@@ -10726,6 +10740,40 @@ void bootDot(int x,int y,int sz,uint16_t col){
   canvas.fillRect(x,y,2,2,col);
 }
 
+// v124: latar bintang redup -- posisinya DIBELOKKAN lubang hitam (lensing): bayangan bintang
+// yg dekat lubang bergeser menjauh + sedikit goresan tangensial. Cuma BOOT_STAR_N titik 1px
+// per frame, jadi murah utk ESP32.
+#define BOOT_STAR_N 30
+struct BootStar{ int16_t x,y; uint8_t b,ph; };
+BootStar bootStars[BOOT_STAR_N];
+void bootStarsInit(int w,int h){
+  for(int i=0;i<BOOT_STAR_N;i++){
+    bootStars[i].x=(int16_t)random(4,max(5,w-4));
+    bootStars[i].y=(int16_t)random(4,max(5,h-4));
+    bootStars[i].b=(uint8_t)random(90,230);
+    bootStars[i].ph=(uint8_t)random(0,64);
+  }
+}
+void bootDrawStars(int w,int h,int cx,int cy,float R,float a,float tSec){
+  if(a<=0.02f) return;
+  for(int i=0;i<BOOT_STAR_N;i++){
+    float dx=(float)(bootStars[i].x-cx), dy=(float)(bootStars[i].y-cy);
+    float r=sqrtf(dx*dx+dy*dy); if(r<2.0f) continue;
+    if(r<R*1.15f) continue;                         // tertelan lubang hitam
+    float k=1.0f+(R*R*1.6f)/(r*r);                  // lensing: geser keluar
+    int px=cx+(int)(dx*k), py=cy+(int)(dy*k);
+    if(px<0||py<0||px>=w||py>=h) continue;
+    float tw=0.65f+0.35f*sinf(tSec*2.2f+bootStars[i].ph*0.4f);
+    float br=a*tw*((float)bootStars[i].b/255.0f)*0.75f;
+    uint16_t c=lerpColor565(0x0000,bootRGB(190,200,230),br);
+    canvas.drawPixel(px,py,c);
+    if(R>6.0f && r<R*3.2f){                         // dekat lubang: goresan melengkung
+      int tx=(int)lroundf(-dy/r), ty=(int)lroundf(dx/r);
+      canvas.drawPixel(px+tx,py+ty,lerpColor565(0x0000,c,0.6f));
+    }
+  }
+}
+
 // Glow oranye lembut di belakang lubang hitam (3 lingkaran berlapis)
 void bootDrawAmbientGlow(int cx,int cy,int r,float a){
   if(a<=0.02f || r<4) return;
@@ -10791,6 +10839,7 @@ void bootStageEventHorizon(int w,int h){
   float rOut=(float)(w/2-10); if(rOut>112.0f) rOut=112.0f;
   const float TILT=0.26f;         // kemiringan piringan (tinggi/lebar)
   bootDiskInit(rIn,rOut);
+  bootStarsInit(w,h);                // v124: bintang latar
 
   const unsigned long SEED=350, IGN=1000, ORB=1100, COL=650;
   const unsigned long TOTAL=SEED+IGN+ORB+COL;
@@ -10815,6 +10864,7 @@ void bootStageEventHorizon(int w,int h){
 
     canvas.fillSprite(0x0000);
 
+    bootDrawStars(w,h,cx,cy,curR,seedP*(1.0f-colP),tSec);   // v124: bintang dibelokkan lubang hitam
     // singularitas: titik cahaya yg lenyap begitu lubang hitam tumbuh
     float pointA=seedP*(1.0f-holeP);
     if(pointA>0.03f){
@@ -10924,6 +10974,7 @@ void bootStageHorizonReveal(int w,int h){
       break;
     }
 
+    { float sa=1.0f-lp*1.6f; if(sa>0.0f) bootDrawStars(w,h,cx,cy,0.0f,sa,3.1f+lp*1.5f); }   // v124: bintang meredup
     // pendar lembut di belakang teks: naik lalu padam
     float gl=sinf(lp*3.14159f);
     if(gl>0.05f){
@@ -11022,8 +11073,8 @@ void runBootSequence(){
   bootStageHorizonReveal(w,h);        // 3) garis cahaya -> "NyxOS" muncul
   bootStageHorizonTagline(w,h);       // 4) tagline fade-in
 
-  bootFade(255,0,7,5);
-  delay(60);
+  // v124: layar TIDAK difade hitam lagi di sini. Frame boot dibiarkan tampil; transisi ke lock
+  // screen dilakukan bootToLockReveal() di ujung setup() (teks mengecil naik -> lock screen membuka).
   // v45: FIX "kedipan"/hard-cut sesaat sebelum masuk ke tampilan utama --
   // keluhan user: abis animasi boot, layar sempat nyala nampilin boot
   // screen dulu, lalu TIBA-TIBA "meloncat" ganti ke lock screen.
@@ -11039,6 +11090,120 @@ void runBootSequence(){
   // dijalankan SETELAH lock screen pertama selesai digambar ke canvas --
   // jadi begitu backlight nyala, yg muncul memang lock screen asli lewat
   // fade halus, bukan boot screen yg lalu diganti paksa.
+}
+
+
+// v124: transisi boot -> lock screen. Fase 1: "NyxOS" mengecil (size 3->2->1) & naik ke atas sambil
+// meredup, tagline hilang. Fase 2: lock screen (canvas) membuka sbg jendela yg tumbuh dari posisi teks
+// kecil itu sampai penuh; brightness turun dari 255 ke nilai user. Tiap piksel ditulis sekali (rect cuma tumbuh).
+void bootToLockReveal(){
+  const int cx=SCR_W/2, cy=SCR_H/2-16;
+  const int yEnd=STATUS_H+12;
+  const unsigned long P1=300, P2=420;
+  const char* nm="NyxOS"; const char* tag="Beyond the Event Horizon";
+  const int twTag=(int)strlen(tag)*6;
+  display.setBrightness(255);
+  transShot.setFont(&lgfx::fonts::Font0); transShot.setTextWrap(false);
+  unsigned long t0=millis();
+  for(;;){
+    float u=(float)(millis()-t0)/P1; if(u>1.0f) u=1.0f;
+    float e=navEase(u);
+    int sz=(u<0.34f)?3:(u<0.68f)?2:1;
+    int yc=(cy-2)+(int)((float)(yEnd-(cy-2))*e);
+    float a=1.0f-0.55f*e;
+    transShot.fillSprite(0x0000);
+    transShot.setTextSize(sz);
+    transShot.setTextColor(lerpColor565(0x0000,0xFFFF,a));
+    transShot.setCursor(cx-(5*6*sz)/2,yc-4*sz); transShot.print(nm);
+    float ta=1.0f-u*3.0f;
+    if(ta>0.02f){
+      transShot.setTextSize(1);
+      transShot.setTextColor(lerpColor565(0x0000,bootRGB(150,150,165),ta));
+      transShot.setCursor(cx-twTag/2,cy+26); transShot.print(tag);
+    }
+    transShot.pushSprite(0,0);
+    if(u>=1.0f) break;
+    delay(1); yield();
+  }
+  const int ox=cx-27, oy=yEnd-9, ow=54, oh=18;
+  int lx0=-1,ly0=-1,lx1=-1,ly1=-1;
+  t0=millis();
+  display.startWrite();
+  for(;;){
+    float u=(float)(millis()-t0)/P2; if(u>1.0f) u=1.0f;
+    float inv=1.0f-u; float ez=1.0f-inv*inv*inv;
+    int x0=(int)lroundf(ox*(1.0f-ez)), y0=(int)lroundf(oy*(1.0f-ez));
+    int x1=(int)lroundf((ox+ow)*(1.0f-ez)+SCR_W*ez), y1=(int)lroundf((oy+oh)*(1.0f-ez)+SCR_H*ez);
+    if(x0<0) x0=0; if(y0<0) y0=0; if(x1>SCR_W) x1=SCR_W; if(y1>SCR_H) y1=SCR_H;
+    if(x1>x0 && y1>y0 && (x0!=lx0||y0!=ly0||x1!=lx1||y1!=ly1)){
+      lx0=x0; ly0=y0; lx1=x1; ly1=y1;
+      display.setClipRect(x0,y0,x1-x0,y1-y0);
+      canvas.pushSprite(0,0);
+      display.clearClipRect();
+    }
+    int b=255+(int)((float)(brightness-255)*ez); if(b<0) b=0; if(b>255) b=255;
+    display.setBrightness((uint8_t)b);
+    if(u>=1.0f) break;
+    yield();
+  }
+  display.endWrite();
+  push();
+  display.setBrightness((uint8_t)brightness);
+}
+
+// v124: animasi MATI / RESTART -- kebalikan boot: cincin menyempit, huruf NyxOS tersedot ke tengah
+// (dari luar ke dalam) dgn jejak cahaya, jadi satu titik yg membesar sesaat lalu padam.
+void bootPowerOffAnim(bool restart){
+  (void)restart;
+  int w=display.width(), h=display.height();
+  display.setBrightness((uint8_t)brightness);
+  const int cx=w/2, cy=h/2-16, cw=18, n=5, ty=cy-14;
+  const int x0=cx-(n*cw)/2, sx=cx-cw/2;
+  const uint16_t WARM=bootRGB(255,238,214);
+  float maxR=(float)(w/2-6); if(maxR>110.0f) maxR=110.0f;
+  const unsigned long DUR=1000;
+  unsigned long t0=millis();
+  for(;;){
+    float lp=(float)(millis()-t0)/DUR; if(lp>1.0f) lp=1.0f;
+    canvas.fillSprite(0x0000);
+    for(int k=0;k<2;k++){                                   // cincin menyempit
+      float rp=(lp-0.05f-0.10f*k)/0.50f; if(rp<=0.0f||rp>=1.0f) continue;
+      int rr=(int)(maxR-(maxR-4.0f)*navEase(rp));
+      float a=sinf(rp*3.14159f)*(k==0?0.70f:0.45f);
+      uint16_t rc=lerpColor565(bootRGB(150,150,166),bootRGB(255,190,130),rp);
+      canvas.drawCircle(cx,cy,rr,  lerpColor565(0x0000,rc,a));
+      canvas.drawCircle(cx,cy,rr+1,lerpColor565(0x0000,rc,a*0.35f));
+    }
+    float fin=lp/0.08f; if(fin>1.0f) fin=1.0f;              // huruf muncul halus di awal
+    for(int i=0;i<n;i++){
+      int d=(i>2)?(i-2):(2-i);
+      float pr=(lp-(0.04f+0.09f*(2-d)))/0.36f; if(pr<=0.0f) pr=0.0f; if(pr>=1.0f) continue;   // sudah masuk ke titik
+      int fx=x0+i*cw;
+      float e=pr*pr;
+      float al=fin*(1.0f-0.45f*pr);
+      if(pr>0.0f){
+        for(int k=3;k>=1;k--){
+          float pk=pr-0.07f*k; if(pk<=0.0f) continue;
+          bootDrawNyxLetter(i,fx+(int)((float)(sx-fx)*pk*pk),ty,al*(0.30f-0.08f*k));
+        }
+      }
+      bootDrawNyxLetter(i,fx+(int)((float)(sx-fx)*e),ty,al);
+    }
+    if(lp>0.22f){                                           // titik: tumbuh sesaat lalu padam
+      float gp=(lp-0.22f)/0.56f; if(gp>1.0f) gp=1.0f;
+      float dotA=(lp<0.78f)?1.0f:(1.0f-(lp-0.78f)/0.22f); if(dotA<0.0f) dotA=0.0f;
+      int dr=(int)(2.0f+6.0f*sinf(gp*3.14159f));
+      canvas.fillCircle(cx,cy,dr+4,lerpColor565(0x0000,WARM,0.18f*dotA));
+      canvas.fillCircle(cx,cy,dr+1,lerpColor565(0x0000,WARM,0.45f*dotA));
+      canvas.fillCircle(cx,cy,(dr>3)?2:1,lerpColor565(0x0000,0xFFFF,dotA));
+    }
+    push();
+    if(lp>=1.0f) break;
+    delay(1); yield();
+  }
+  canvas.fillSprite(0x0000);
+  push();
+  delay(60);
 }
 
 // =============================================
@@ -18341,10 +18506,9 @@ void setup(){
   // Hasilnya: begitu backlight mulai nyala, yang kelihatan sejak awal
   // memang lock screen asli via fade halus (persis gaya bootFade yg
   // dipakai animasi boot), bukan lagi boot screen yg ganti mendadak.
-  renderCurrentFrame();
-  push();
+  renderCurrentFrame();          // canvas = lock screen; panel masih menampilkan frame boot
+  bootToLockReveal();            // v124: NyxOS mengecil ke atas -> lock screen membuka dari situ
   needRedraw = false;
-  bootFade(0, brightness, 10, 6);
 
   // v46-fix: connectWifi() DIPINDAH ke SINI, SETELAH backlight nyala.
   // AKAR MASALAH keluhan "backlight mati abis nampilin NyxOS, baru
@@ -18371,6 +18535,145 @@ void setup(){
   loadWifiCreds();
   connectWifi();
   wakeBegin(); // v115: siapin wake word (alokasi PSRAM, load template, jalanin task kalau user sempat ngaktifin)
+}
+
+// =================================================================
+// v124: TUTUP APP MENGIKUTI JARI (swipe naik dari tepi bawah) + ikon memantul saat mendarat.
+// Jendela app mengecil sesuai jarak jari, Home terlihat di sekelilingnya. Lepas:
+//  - jari cepat / sudah cukup jauh -> lanjut menyusut ke ikon, lalu ikon memantul kecil
+//  - jari berhenti diam sebentar   -> App Switcher (seperti sebelumnya, tapi dihitung dari diamnya jari)
+//  - terlalu pendek & pelan        -> jendela membesar balik, app tetap terbuka
+// Layar yg digambar langsung ke panel (game/kamera/video/dll) tetap pakai gestur lama.
+// =================================================================
+bool  dragCloseActive=false;
+float dragCloseP=0.0f, dragLastP=-1.0f;
+int   dragOX=0,dragOY=0,dragOW=0,dragOH=0,dragOR=0, dragMaxDy=0, dragLastTy=0, dragApp=-1;
+uint16_t dragCol=0;
+unsigned long dragLastMoveMs=0;
+
+bool dragCloseAllowed(){
+  Screen sc=curScreen();
+  if(sc==SCR_HOME||sc==SCR_NES||sc==SCR_DOOM||sc==SCR_CAMERA||sc==SCR_MJPEG||sc==SCR_CALL||sc==SCR_PPU) return false;
+  if(gameModeActive||nesIsPlaying()) return false;
+  if(navDepth<1) return false;
+  if(notepadNeedsConfirm()) return false;
+  if(appSwitcherOpen||controlCenterOpen||notifShadeOpen||locked||diMenuOpen) return false;
+  return true;
+}
+void dragCloseBegin(){
+  canvas.pushSprite(&transShot,0,0);                         // salinan layar app
+  int sd=navDepth; navDepth=0; renderCurrentFrame(); navDepth=sd;   // canvas = Home
+  dragApp=appIndexForScreen(navStack[0]);
+  if(navZoomSaved && navZoomScr==SCR_W*1000+SCR_H){
+    dragOX=navZoomSX; dragOY=navZoomSY; dragOW=navZoomSW; dragOH=navZoomSH; dragOR=navZoomSR; dragCol=navZoomSCol;
+    if(navZoomCloseApp>=0) navZoomAppOrigin(navZoomCloseApp,dragOX,dragOY,dragOW,dragOH,dragOR);
+  } else {
+    navZoomAppOrigin(dragApp,dragOX,dragOY,dragOW,dragOH,dragOR);
+    dragCol=(dragApp>=0)?apps[dragApp].color:T().surface2;
+  }
+  dragCloseActive=true; dragCloseP=0.0f; dragLastP=-1.0f; dragMaxDy=0;
+  dragLastTy=gStartY; dragLastMoveMs=millis();
+}
+// gambar 1 frame: p=0 layar penuh, p=1 sebesar ikon. Home di luar jendela, app (transShot) di dalam.
+void dragCloseDraw(float p){
+  float ez=1.0f-p;
+  int x0=(int)lroundf(dragOX*(1.0f-ez)), y0=(int)lroundf(dragOY*(1.0f-ez));
+  int x1=(int)lroundf((dragOX+dragOW)*(1.0f-ez)+SCR_W*ez), y1=(int)lroundf((dragOY+dragOH)*(1.0f-ez)+SCR_H*ez);
+  if(x0<0) x0=0; if(y0<0) y0=0; if(x1>SCR_W) x1=SCR_W; if(y1>SCR_H) y1=SCR_H;
+  if(x1<=x0||y1<=y0) return;
+  int w=x1-x0, h=y1-y0;
+  display.startWrite();
+  navZoomPushHome(0,0,SCR_W,y0);
+  navZoomPushHome(0,y1,SCR_W,SCR_H-y1);
+  navZoomPushHome(0,y0,x0,h);
+  navZoomPushHome(x1,y0,SCR_W-x1,h);
+  if(ez>=0.5f){
+    display.setClipRect(x0,y0,w,h); transShot.pushSprite(0,0); display.clearClipRect();
+  } else {
+    float cr=ez*1.6f; if(cr>1.0f) cr=1.0f;
+    int rr=(int)lroundf(dragOR*(1.0f-cr)); if(rr>w/2) rr=w/2; if(rr>h/2) rr=h/2; if(rr<0) rr=0;
+    if(rr>0){ navZoomPushHome(x0,y0,rr,rr); navZoomPushHome(x1-rr,y0,rr,rr); navZoomPushHome(x0,y1-rr,rr,rr); navZoomPushHome(x1-rr,y1-rr,rr,rr); }
+    float qq=ez*2.0f;
+    display.fillRoundRect(x0,y0,w,h,rr,blend565(dragCol,T().bg,(uint8_t)(190.0f*qq*qq)));
+  }
+  display.endWrite();
+}
+// ikon Home memantul kecil (membesar ~16% lalu kembali) -- dipanggil setelah Home penuh tampil
+void dragCloseBounce(){
+  int ox,oy,ow,oh,orad;
+  if(dragApp<0 || !homeIconGeom(dragApp,homeScrollY,ox,oy,ow,oh,orad)) return;
+  if(ox<0||oy<0||ox+ow>SCR_W||oy+oh>SCR_H) return;
+  const int iconR=ow/2, cx=ox+iconR, cy=oy+iconR;
+  const int rm=iconR+iconR/4+3;
+  int rx=cx-rm, ry=cy-rm, rw=rm*2, rh=rm*2+14;            // +14: label di bawah ikon ikut dipulihkan
+  if(rx<0) rx=0; if(ry<0) ry=0; if(rx+rw>SCR_W) rw=SCR_W-rx; if(ry+rh>SCR_H) rh=SCR_H-ry;
+  canvas.pushSprite(&transShot,0,0);                       // salinan Home bersih
+  const unsigned long MS=180; unsigned long t0=millis();
+  for(;;){
+    float u=(float)(millis()-t0)/MS; if(u>1.0f) u=1.0f;
+    float sc=1.0f+0.16f*sinf(u*3.14159f);
+    canvas.setClipRect(rx,ry,rw,rh);
+    transShot.pushSprite(&canvas,0,0);
+    if(u<1.0f) drawAppIcon(canvas,apps[dragApp].sym,cx,cy,(int)lroundf(iconR*sc),apps[dragApp].color);
+    canvas.clearClipRect();
+    display.setClipRect(rx,ry,rw,rh); canvas.pushSprite(0,0); display.clearClipRect();
+    if(u>=1.0f) break;
+    uiBoostKick(); yield();
+  }
+}
+void dragCloseFinish(float p0){
+  vibExit();
+  unsigned long MS=(unsigned long)(90.0f+200.0f*(1.0f-p0));
+  unsigned long t0=millis();
+  for(;;){
+    float u=(float)(millis()-t0)/MS; if(u>1.0f) u=1.0f;
+    float e=1.0f-(1.0f-u)*(1.0f-u);
+    dragCloseDraw(p0+(1.0f-p0)*e);
+    if(u>=1.0f) break;
+    uiBoostKick(); yield();
+  }
+  appOnExit(curScreen());
+  navDepth=0; kbVisible=false; kbTarget=nullptr; navZoomSaved=false;
+  dragCloseActive=false;
+  renderCurrentFrame(); push(); needRedraw=false;
+  homeAodWake();
+  dragCloseBounce();
+}
+void dragCloseCancel(float p0){
+  unsigned long MS=(unsigned long)(110.0f+120.0f*p0);
+  unsigned long t0=millis();
+  for(;;){
+    float u=(float)(millis()-t0)/MS; if(u>1.0f) u=1.0f;
+    float e=1.0f-(1.0f-u)*(1.0f-u);
+    dragCloseDraw(p0*(1.0f-e));
+    if(u>=1.0f) break;
+    uiBoostKick(); yield();
+  }
+  dragCloseActive=false;
+  transShot.pushSprite(&canvas,0,0);                        // canvas = layar app lagi
+  push(); needRedraw=true;
+}
+// dipanggil tiap frame selagi dragCloseActive; selalu mengembalikan true (frame sudah ditangani)
+bool dragCloseHandle(bool touched,int tx,int ty){
+  (void)tx;
+  if(touched){
+    float p=(float)(gStartY-ty)/((float)SCR_H*0.55f); if(p<0.0f) p=0.0f; if(p>1.0f) p=1.0f;
+    if(gStartY-ty>dragMaxDy) dragMaxDy=gStartY-ty;
+    if(abs(ty-dragLastTy)>=2){ dragLastTy=ty; dragLastMoveMs=millis(); }
+    dragCloseP=p;
+    if(fabsf(p-dragLastP)>0.004f){ dragCloseDraw(p); dragLastP=p; }
+    if(p>=0.18f && millis()-dragLastMoveMs>=APPSWITCH_HOLD_MS){   // ditahan diam -> App Switcher
+      vibExit();
+      transShot.pushSprite(&canvas,0,0);
+      dragCloseActive=false;
+      openAppSwitcher(); gGestureDone=true;
+    }
+    return true;
+  }
+  unsigned long el=millis()-gTouchStartMs;
+  if(dragMaxDy>=28 && (dragCloseP>=0.30f || el<APPSWITCH_HOLD_MS)) dragCloseFinish(dragCloseP);
+  else dragCloseCancel(dragCloseP);
+  return true;
 }
 
 // =============================================
@@ -18547,6 +18850,7 @@ void loop(){
   // blok getar generik di bawah (v93) buat nolak buzz drag/scroll/gestur.
   if(touched && abs(tx-gStartX)>GENERIC_TAP_MOVE_PX) gMovedTooFarForTap=true;
   if(touched && abs(ty-gStartY)>GENERIC_TAP_MOVE_PX) gMovedTooFarForTap=true;
+  if(dragCloseActive){ dragCloseHandle(touched,tx,ty); wasTouched=touched; delay(1); return; }   // v124: tutup app mengikuti jari
   if(touched && !gGestureDone && !kbVisible){
     int dy=ty-gStartY, dx=tx-gStartX;
     // FIX v89 (bug: ESP32-S3 nyangkut/gak bisa nampilin apa2 lagi kalau
@@ -18570,6 +18874,11 @@ void loop(){
     if(gStartY<STATUS_H+6 && dy>28 && abs(dy)>abs(dx) && !nesBlocksCC){
       if(gStartX < SCR_W/2) openNotifShade(); else openControlCenter();
       gGestureDone=true;
+      wasTouched=touched; delay(1); return;
+    }
+    if(gStartY>SCR_H-16 && dy<-8 && abs(dy)>abs(dx) && dragCloseAllowed()){   // v124: mulai tutup-mengikuti-jari
+      dragCloseBegin(); gGestureDone=true; exitArmed=false;
+      dragCloseHandle(true,tx,ty);
       wasTouched=touched; delay(1); return;
     }
     if(gStartY>SCR_H-16 && dy<-28 && abs(dy)>abs(dx) && curScreen()==SCR_HOME){

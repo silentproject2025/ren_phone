@@ -94,9 +94,10 @@ static void pwrSaveAll() {
   if (ffatReady) FFat.end();
 }
 
+void bootPowerOffAnim(bool restart);   // phone.ino (v124)
 void powerRestartNow() {
   vibExit();
-  pwrScreenMsg("Memulai ulang...");
+  bootPowerOffAnim(true);    // v124: animasi NyxOS tersedot jadi titik
   pwrSaveAll();
   delay(400);
   ESP.restart();
@@ -104,7 +105,7 @@ void powerRestartNow() {
 
 void powerShutdownNow() {
   vibExit();
-  pwrScreenMsg("Mematikan...");
+  bootPowerOffAnim(false);   // v124
   npxOff();
   pwrSaveAll();
 
