@@ -2280,19 +2280,30 @@ static StaticTask_t  geminiTaskTCB;
 // buffer yg di-akses tiap scanline render kayak framebuffer).
 // TCB (StaticTask_t) TETAP di RAM internal (persyaratan FreeRTOS/ESP-IDF,
 // cuma stack yg boleh di PSRAM) -- makanya cuma *stackPtr yg dialokasi PSRAM.
-static BaseType_t createTaskPsramStack(TaskFunction_t taskFunc, const char* name,
-                                        uint32_t stackBytes, void* param,
-                                        StackType_t** stackPtr, StaticTask_t* tcb,
-                                        TaskHandle_t* outHandle, BaseType_t core){
+// v117: versi dgn prioritas eksplisit. Task yg sensitif jitter (audio UART, RTP, mic I2S)
+// perlu prioritas > loopTask (1) supaya tidak ikut time-slice dgn task HTTP/UI. Task yg
+// memblok lama (HTTP, decode) tetap di 1. Sengaja BUKAN argumen default: prototipe otomatis
+// arduino-cli menyalin default argument dan menyebabkan error redefinisi.
+static BaseType_t createTaskPsramStackPrio(TaskFunction_t taskFunc, const char* name,
+                                           uint32_t stackBytes, void* param,
+                                           StackType_t** stackPtr, StaticTask_t* tcb,
+                                           TaskHandle_t* outHandle, BaseType_t core,
+                                           UBaseType_t prio){
   if(!*stackPtr){
     *stackPtr = (StackType_t*)heap_caps_aligned_alloc(16, stackBytes, MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT);
   }
   if(*stackPtr){
-    *outHandle = xTaskCreateStaticPinnedToCore(taskFunc, name, stackBytes, param, 1, *stackPtr, tcb, core);
+    *outHandle = xTaskCreateStaticPinnedToCore(taskFunc, name, stackBytes, param, prio, *stackPtr, tcb, core);
     return *outHandle ? pdPASS : pdFAIL;
   }
   // PSRAM kebetulan penuh/gagal -- fallback ke stack internal drpd task gagal total.
-  return xTaskCreatePinnedToCore(taskFunc, name, stackBytes, param, 1, outHandle, core);
+  return xTaskCreatePinnedToCore(taskFunc, name, stackBytes, param, prio, outHandle, core);
+}
+static BaseType_t createTaskPsramStack(TaskFunction_t taskFunc, const char* name,
+                                        uint32_t stackBytes, void* param,
+                                        StackType_t** stackPtr, StaticTask_t* tcb,
+                                        TaskHandle_t* outHandle, BaseType_t core){
+  return createTaskPsramStackPrio(taskFunc, name, stackBytes, param, stackPtr, tcb, outHandle, core, 1);
 }
 const unsigned long AI_HARD_TIMEOUT_MS = 30000; // 30s -> paksa hapus task
 volatile bool aiSoftStopTriggered = false;
@@ -17574,7 +17585,7 @@ void micStartRecording(){
   if(WiFi.status()!=WL_CONNECTED){ showToast("WiFi belum terhubung"); vibWarn(); return; }
   wakeYieldMic(2500); // v115: task wake word lg dengerin di micI2S yg SAMA -- minta dia lepas dulu (maks ~0.45 dtk), baru rekam
   micRecording=true;
-  BaseType_t res=createTaskPsramStack(micRecordTaskFunc,"micTask",16384,NULL,&micTaskStack,&micTaskTCB,&micTaskHandle,1);
+  BaseType_t res=createTaskPsramStackPrio(micRecordTaskFunc,"micTask",16384,NULL,&micTaskStack,&micTaskTCB,&micTaskHandle,1,2);
   if(res!=pdPASS){
     micRecording=false; micTaskHandle=NULL;
     showToast("Gagal mulai merekam"); vibError();
@@ -18057,6 +18068,11 @@ bool getInputPoint(lgfx::touch_point_t &tp){
 
 void setup(){
   Serial.begin(115200);
+  // v117: catat core tempat setup()/loop() (loopTask Arduino) berjalan. README lama menyebut
+  // Core 0, tetapi default Arduino-ESP32 adalah Core 1 (CONFIG_ARDUINO_RUNNING_CORE). Task berat
+  // (DOOM, NES, Telepon) dipin ke Core 1, jadi kalau loop() juga di Core 1 mereka berbagi CPU
+  // dgn UI. Lihat log ini di Serial Monitor sebelum memindahkan task antar core.
+  Serial.printf("[CORE] setup/loop berjalan di core %d (task DOOM/NES/Telepon dipin ke core 1, musTask ke core 0)\n", (int)xPortGetCoreID());
   otaGuardBoot(); // PALING AWAL: pengaman update -- rollback otomatis kalau firmware baru tak kunjung sehat
 
   // v29 FIX: proyek ini SAMA SEKALI gak pakai Bluetooth/BLE (sudah dicek

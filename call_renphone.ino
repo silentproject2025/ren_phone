@@ -2636,9 +2636,9 @@ static bool callEnsureInit() {
   if (heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL) < 24000) return false;
   const uint32_t SZ = 20480;
   if (!callStack) callStack = (StackType_t*)heap_caps_aligned_alloc(16, SZ, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-  if (callStack) callTask = xTaskCreateStaticPinnedToCore(callTaskFunc, "callTask", SZ, NULL, 2, callStack, &callTCB, 1);
+  if (callStack) callTask = xTaskCreateStaticPinnedToCore(callTaskFunc, "callTask", SZ, NULL, 3, callStack, &callTCB, 1);
   else {
-    BaseType_t r = xTaskCreatePinnedToCore(callTaskFunc, "callTask", SZ, NULL, 2, &callTask, 1);
+    BaseType_t r = xTaskCreatePinnedToCore(callTaskFunc, "callTask", SZ, NULL, 3, &callTask, 1);
     if (r != pdPASS) callTask = nullptr;
   }
   return callTask != nullptr;

@@ -14,6 +14,10 @@ on:
         description: "Branch esp32-arduino-lib-builder (samakan dgn IDF core, mis. release/v5.5)"
         default: "auto"
         required: true
+      wifi_lwip_psram:
+        description: "Taruh buffer WiFi/lwIP di PSRAM (hemat RAM internal, throughput WiFi bisa sedikit turun)"
+        type: boolean
+        default: true
 
 permissions:
   contents: write
@@ -73,8 +77,29 @@ jobs:
             exit 1
           fi
           echo "File: $F"
+          # Opsi WAJIB (build digagalkan kalau tidak masuk ke sdkconfig hasil build)
           printf '\nCONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y\n' >> "$F"
-          tail -n 5 "$F"
+          # Opsi tambahan (hanya diperingatkan kalau gagal masuk; lihat langkah "Cek hasil"):
+          #  - DYNAMIC_BUFFER + DYNAMIC_FREE_CONFIG_DATA: buffer TLS dialokasi per-koneksi dan
+          #    data konfigurasi dibuang setelah handshake. Ini pengganti -DCONFIG_MBEDTLS_* di
+          #    build-firmware.yml yg TIDAK berefek (libmbedtls.a sudah jadi, flag -D cuma
+          #    memengaruhi kode sketch).
+          #  - ASYMMETRIC_CONTENT_LEN sengaja TIDAK diaktifkan: server yg tidak mendukung
+          #    max-fragment-length bisa mengirim record 16 KB -> handshake gagal. Buffer
+          #    sudah di PSRAM, jadi tidak perlu dikecilkan.
+          #  - FREERTOS_TASK_CREATE_ALLOW_EXT_MEM: wajib utk xTaskCreateStaticPinnedToCore()
+          #    dgn stack di PSRAM (dipakai createTaskPsramStack, DOOM, NES, Musik, Telepon).
+          #  - SPIRAM_TRY_ALLOCATE_WIFI_LWIP: buffer WiFi/lwIP diutamakan di PSRAM (RAM
+          #    internal lebih lega). Bisa dimatikan lewat input wifi_lwip_psram=false.
+          {
+            echo 'CONFIG_MBEDTLS_DYNAMIC_BUFFER=y'
+            echo 'CONFIG_MBEDTLS_DYNAMIC_FREE_CONFIG_DATA=y'
+            echo 'CONFIG_FREERTOS_TASK_CREATE_ALLOW_EXT_MEM=y'
+            if [ "${{ inputs.wifi_lwip_psram }}" = "true" ]; then
+              echo 'CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y'
+            fi
+          } >> "$F"
+          tail -n 10 "$F"
 
       - name: Pra-clone arduino-esp32 + debug skrip
         env:
@@ -109,6 +134,9 @@ jobs:
           test -n "$OUT" || (echo "::error::folder hasil esp32s3 tidak ketemu" && find "$PWD" -maxdepth 4 -type d | head -50 && exit 1)
           echo "Hasil: $OUT"
           grep -q '^CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y' "$OUT/sdkconfig" || (echo "::error::opsi tidak masuk ke sdkconfig hasil build" && exit 1)
+          for OPT in CONFIG_MBEDTLS_DYNAMIC_BUFFER CONFIG_MBEDTLS_DYNAMIC_FREE_CONFIG_DATA CONFIG_FREERTOS_TASK_CREATE_ALLOW_EXT_MEM CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP; do
+            if grep -q "^$OPT=y" "$OUT/sdkconfig"; then echo "OK   $OPT=y"; else echo "::warning::$OPT tidak aktif di sdkconfig hasil build (dependensi Kconfig tidak terpenuhi atau dimatikan lewat input)"; fi
+          done
           mkdir -p "$HOME/pkg"
           tar -czf "$HOME/pkg/esp32s3-libs.tar.gz" -C "$(dirname "$OUT")" esp32s3
           cp "$RUNNER_TEMP/core-version.txt" "$HOME/pkg/core-version.txt"

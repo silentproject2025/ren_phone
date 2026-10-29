@@ -951,10 +951,10 @@ static void musBegin() {
   if (!musTaskStack)
     musTaskStack = (StackType_t*)heap_caps_aligned_alloc(16, stackBytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
   if (musTaskStack) {
-    musTaskHandle = xTaskCreateStaticPinnedToCore(musTask, "musTask", stackBytes, NULL, 1,
+    musTaskHandle = xTaskCreateStaticPinnedToCore(musTask, "musTask", stackBytes, NULL, 3,
                                                   musTaskStack, &musTaskTCB, 0);
   } else {
-    xTaskCreatePinnedToCore(musTask, "musTask", stackBytes, NULL, 1, &musTaskHandle, 0);
+    xTaskCreatePinnedToCore(musTask, "musTask", stackBytes, NULL, 3, &musTaskHandle, 0);
   }
 }
 

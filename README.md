@@ -228,6 +228,19 @@ Komponen ini bersifat **opsional**, tetapi digunakan oleh build CI.
 1. **Build Arduino Libs (mbedTLS di PSRAM)**: dijalankan manual, **sekali per versi core**. Workflow ini memakai `esp32-arduino-lib-builder` dan mengunggah hasilnya ke Release *prerelease* `arduino-libs-custom` (`esp32s3-libs.tar.gz` dan `core-version.txt`). Prosesnya lama dan dapat memakan waktu berjam-jam.
 2. **Build firmware**: pada setiap build, workflow mengunduh paket tersebut, menimpanya ke `~/.arduino15/packages/esp32/tools/esp32s3-libs/<versi core>/`, lalu meng-compile sketch.
 
+**Opsi sdkconfig yang dipasang** (dijalankan ulang workflow *Build Arduino Libs* agar berlaku):
+
+| Opsi | Fungsi |
+|---|---|
+| `CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y` | Buffer mbedTLS di PSRAM (**wajib**). |
+| `CONFIG_MBEDTLS_DYNAMIC_BUFFER=y`, `..._DYNAMIC_FREE_CONFIG_DATA=y` | Buffer TLS dialokasi per koneksi dan data konfigurasi dilepas setelah handshake. |
+| `CONFIG_FREERTOS_TASK_CREATE_ALLOW_EXT_MEM=y` | Syarat stack task di PSRAM (`xTaskCreateStaticPinnedToCore`). |
+| `CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y` | Buffer WiFi/lwIP diutamakan di PSRAM. Throughput WiFi bisa sedikit turun; matikan lewat input `wifi_lwip_psram=false`. |
+
+Flag `-DCONFIG_MBEDTLS_*` yang dulu ada di `build-firmware.yml` dihapus karena tidak memengaruhi `libmbedtls.a` yang sudah jadi. Opsi tambahan hanya memunculkan *warning* bila gagal masuk; hanya `EXTERNAL_MEM_ALLOC` yang menggagalkan build.
+
+Inti emulator dan DOOM (`nofrendo_core/`, `esp_doom_core/`) dikompilasi dengan `-O2` (pragma per berkas di CI); sisa sketch tetap `-Os` agar partisi app 3 MB tidak penuh.
+
 **Mekanisme pengaman.** Paket hanya dipasang jika Release-nya ada, versi core sama dengan `core-version.txt`, dan `sdkconfig` di dalam paket memuat opsi yang dibutuhkan. Jika salah satu syarat gagal, build **tetap berjalan dengan library bawaan** dan hanya mengeluarkan *notice* atau *warning*. Dengan demikian, **build yang berstatus hijau belum tentu memakai library kustom**. Periksa log berikut:
 
 | Langkah di log | Hasil yang diharapkan |
@@ -671,12 +684,26 @@ RAM internal hanya **±162 KB**, sedangkan satu koneksi HTTPS membutuhkan blok *
 ```
 Core 0                              Core 1
 ──────────────────────              ──────────────────────
-loop()  → UI, input, redraw         doomTask   (DOOM)
-musTask → UART ke ESP32-CAM         NES task   (stack 48 KB di PSRAM)
-Gemini / Chat / Wake Word           callTask   (Telepon)
+musTask (prio 3, UART ke CAM)       doomTask   (DOOM, prio 1)
+Gemini / Chat / Wake Word           NES task   (stack 48 KB di PSRAM)
+WiFi / lwIP (milik ESP-IDF)         callTask   (Telepon, prio 3)
 ```
 
+`loop()` (UI, input, redraw) berjalan di core yang ditetapkan `CONFIG_ARDUINO_RUNNING_CORE`; default Arduino-ESP32 adalah **Core 1**. Firmware mencetak `[CORE] setup/loop berjalan di core N` saat boot, jadi periksa Serial Monitor. Bila `loop()` ternyata di Core 1, DOOM/NES/Telepon berbagi CPU dengan UI.
+
+**Prioritas task** (angka lebih besar = lebih diutamakan; `loopTask` = 1):
+
+| Task | Prioritas | Alasan |
+|---|---|---|
+| `musTask`, `callTask` | 3 | Aliran audio UART/RTP sensitif jitter. |
+| `wakeTask`, `memoRec`, `micTask` | 2 | Pembacaan mikrofon I2S via DMA tidak boleh kehabisan giliran. |
+| Task HTTP/decode/emulator lainnya | 1 | Memblok lama atau selalu `vTaskDelay`. |
+
+Gunakan `createTaskPsramStackPrio()` bila perlu prioritas selain 1.
+
 Antarmuka tetap berada di `loop()` agar urutan penggambaran deterministik. Pekerjaan yang memblokir (HTTP, decode, emulator) dipindahkan ke task terpisah, dan antarmuka hanya membaca statusnya.
+
+> Jangan menulis NVS/`Preferences` atau OTA dari task ber-stack PSRAM: saat cache flash dimatikan sesaat, hal itu bisa membuat perangkat crash.
 
 ### 8.3 Render
 

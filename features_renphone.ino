@@ -597,7 +597,7 @@ static void memoRecStart() {
   wakeYieldMic(2500);                                // lepas mic dari task wake word dulu
   memoStopReq = false; memoRecBytes = 0; memoLevel = 0; memoRecFail = false;
   memoRec = true;
-  BaseType_t res = createTaskPsramStack(memoRecTask, "memoRec", 12288, NULL, &memoTaskStack, &memoTaskTCB, &micTaskHandle, 1);
+  BaseType_t res = createTaskPsramStackPrio(memoRecTask, "memoRec", 12288, NULL, &memoTaskStack, &memoTaskTCB, &micTaskHandle, 1, 2);
   if (res != pdPASS) {
     memoRec = false; micTaskHandle = NULL;
     showToast("Gagal mulai merekam"); vibError(); return;

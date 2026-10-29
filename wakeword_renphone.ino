@@ -496,7 +496,7 @@ static void wakeLoadTemplates(){
 // ---------------------------------------------------------------------
 static void wakeEnsureTask(){
   if(wkTaskHandle||!wwB||!wkTplMem||!wkUtt) return;
-  BaseType_t res=createTaskPsramStack(wakeTaskFunc,"wakeTask",12288,NULL,&wkTaskStack,&wkTaskTCB,&wkTaskHandle,0);
+  BaseType_t res=createTaskPsramStackPrio(wakeTaskFunc,"wakeTask",12288,NULL,&wkTaskStack,&wkTaskTCB,&wkTaskHandle,0,2);
   if(res!=pdPASS){ wkTaskHandle=NULL; showToast("Gagal mulai wake word"); vibError(); }
 }
 

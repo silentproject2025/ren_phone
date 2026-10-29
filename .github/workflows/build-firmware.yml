@@ -105,7 +105,7 @@ jobs:
           DEST=$(find "$HOME/.arduino15/packages/esp32/tools/esp32s3-libs" -mindepth 1 -maxdepth 1 -type d | head -n1)
           echo "Target: $DEST"
           echo "=== sdkconfig (harus EXTERNAL=y) ==="
-          grep -nE "MBEDTLS_(EXTERNAL|INTERNAL)_MEM_ALLOC" "$DEST/sdkconfig" || true
+          grep -nE "MBEDTLS_(EXTERNAL|INTERNAL)_MEM_ALLOC|MBEDTLS_DYNAMIC_(BUFFER|FREE_CONFIG_DATA)|FREERTOS_TASK_CREATE_ALLOW_EXT_MEM|SPIRAM_TRY_ALLOCATE_WIFI_LWIP" "$DEST/sdkconfig" || true
           echo "=== sdkconfig.h ==="
           find "$DEST" -name sdkconfig.h | head -5 | while read f; do
             echo "$f"; grep -nE "MBEDTLS_(EXTERNAL|INTERNAL)_MEM_ALLOC" "$f" || true
@@ -169,6 +169,14 @@ jobs:
           find esp_doom_core \( -name "*.c" -o -name "*.cpp" -o -name "*.h" \) \
             -exec cp {} build_sketch/src/ \;
 
+          # Percepat inti emulator/DOOM: -O2 per-file lewat pragma (sisa sketch tetap -Os
+          # supaya partisi app 3 MB tidak penuh). Hanya mengubah salinan di build_sketch/.
+          for f in build_sketch/src/*.c build_sketch/src/*.cpp; do
+            [ -f "$f" ] || continue
+            grep -q 'GCC optimize' "$f" && continue
+            sed -i '1i #pragma GCC optimize ("O2")' "$f"
+          done
+
           grep -q "DoomGlue_Begin" build_sketch/src/DoomGlue.cpp || \
             (echo "::error::esp_doom_core tidak lengkap -- DoomGlue.cpp tidak ketemu di build_sketch/src" && exit 1)
 
@@ -199,7 +207,7 @@ jobs:
 
           arduino-cli compile --fqbn esp32:esp32:esp32s3 \
             --board-options "FlashSize=16M,PSRAM=opi,PartitionScheme=app3M_fat9M_16MB" \
-            --build-property "compiler.cpp.extra_flags=-DRP_BUILD_NUM=${{ github.run_number }} -DRP_BRANCH=${RP_BRANCH} -DRP_VERSION=${RP_VERSION} -DCONFIG_MBEDTLS_DYNAMIC_BUFFER=1 -DCONFIG_MBEDTLS_ASYMMETRIC_CONTENT_LEN=1 -DCONFIG_MBEDTLS_SSL_IN_CONTENT_LEN=4096 -DCONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN=2048 -I${NOF_INCLUDE}" \
+            --build-property "compiler.cpp.extra_flags=-DRP_BUILD_NUM=${{ github.run_number }} -DRP_BRANCH=${RP_BRANCH} -DRP_VERSION=${RP_VERSION} -I${NOF_INCLUDE}" \
             --build-property "compiler.c.extra_flags=-I${NOF_INCLUDE}" \
             build_sketch --output-dir build
 
