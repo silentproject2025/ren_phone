@@ -46,6 +46,7 @@ void nesOverlay_afterFrame();
 // minta ganti palet (biasanya cuma sekali di awal permainan).
 // -----------------------------------------------------------------
 static uint16_t nesPalette[256];
+static uint16_t nesPalWire[256];   // v117: sama dgn nesPalette tapi byte-swap = urutan kabel SPI (utk jalur DMA berpita)
 
 extern "C" void vid_setpalette(rgb_t *pal) {
   for (int i = 0; i < 256; i++) {
@@ -57,6 +58,7 @@ extern "C" void vid_setpalette(rgb_t *pal) {
     nesPalette[i] = ((pal[i].b & 0xF8) << 8) |
                     ((pal[i].g & 0xFC) << 3) |
                     ((pal[i].r) >> 3);
+    nesPalWire[i] = (uint16_t)((nesPalette[i] << 8) | (nesPalette[i] >> 8));
   }
 }
 
@@ -94,15 +96,50 @@ static int nesOffsetY = 0;
 // dialokasikan tiap frame -- penting utk RAM & kecepatan).
 static uint16_t lineBuf[NES_SCREEN_WIDTH];
 
+// v117: PITA DMA. Dulu tiap scanline = 1 transaksi SPI (setAddrWindow + 256 piksel, ~224x per frame,
+// CPU menunggu tiap kali). Sekarang scanline dikumpulkan jadi pita NES_BAND_ROWS baris di 2 buffer
+// RAM internal (DMA), lalu dikirim lewat DMA selagi emulator mengisi pita berikutnya -- pola sama
+// dgn jalur pita DOOM. Kalau RAM internal/DMA tidak cukup -> otomatis pakai jalur lama (per baris).
+#define NES_BAND_ROWS 8                 // 224 habis dibagi 8
+#define NES_BAND_RESERVE_KB 48          // sisa RAM internal minimum yg harus tetap ada setelah alokasi
+static uint16_t* nesBand[2] = { nullptr, nullptr };
+static int nesBandIdx = 0, nesBandRow0 = 0, nesBandFill = 0;
+
+static void nesBandFlush() {
+  if (nesBandFill <= 0) return;
+  display.waitDMA();                                   // pita sebelumnya harus selesai dulu
+  display.pushImageDMA(nesOffsetX, nesOffsetY + nesBandRow0, NES_SCREEN_WIDTH, nesBandFill,
+                       (const lgfx::swap565_t*)nesBand[nesBandIdx]);   // data sudah urutan kabel
+  nesBandIdx ^= 1;                                     // isi buffer satunya selagi DMA berjalan
+  nesBandFill = 0;
+}
+
 void nesVideo_begin() {
   nesOffsetX = (SCR_W - NES_SCREEN_WIDTH)  / 2;
   nesOffsetY = (SCR_H - NES_VISIBLE_HEIGHT) / 2;
+  nesBandIdx = 0; nesBandFill = 0; nesBandRow0 = 0;
+  if (!nesBand[0]) {
+    const size_t bytes = (size_t)NES_SCREEN_WIDTH * NES_BAND_ROWS * sizeof(uint16_t);
+    if (heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA) >= 2 * bytes + (size_t)NES_BAND_RESERVE_KB * 1024) {
+      nesBand[0] = (uint16_t*)heap_caps_aligned_alloc(4, bytes, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+      nesBand[1] = (uint16_t*)heap_caps_aligned_alloc(4, bytes, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+      if (!nesBand[0] || !nesBand[1]) {
+        if (nesBand[0]) heap_caps_free(nesBand[0]);
+        if (nesBand[1]) heap_caps_free(nesBand[1]);
+        nesBand[0] = nesBand[1] = nullptr;
+      }
+    }
+  }
+  Serial.printf("[NES] jalur video: %s\n", nesBand[0] ? "pita DMA 8 baris" : "per baris (RAM internal kurang)");
   display.startWrite();     // buka transaksi SPI SEKALI (bukan per-scanline)
   display.fillScreen(TFT_BLACK);
 }
 
 void nesVideo_end() {
+  display.waitDMA();        // DMA pita terakhir harus selesai sebelum transaksi ditutup
   display.endWrite();       // tutup transaksi SPI saat keluar dari app NES
+  if (nesBand[0]) { heap_caps_free(nesBand[0]); heap_caps_free(nesBand[1]); nesBand[0] = nesBand[1] = nullptr; }
+  nesBandFill = 0;
 }
 
 // -----------------------------------------------------------------
@@ -121,20 +158,30 @@ extern "C" void ppu_scanline_blit(uint8_t *bmp, int scanline, bool draw_flag) {
 
   bmp += 8; // sama seperti fork referensi: 8 pixel pertama border, dibuang
 
-  for (int x = 0; x < NES_SCREEN_WIDTH; x++) {
-    lineBuf[x] = nesPalette[bmp[x]];
+  if (nesBand[0]) {
+    // jalur pita DMA (v117). Frame-skip membuat nomor baris melompat -> kirim pita yg sedang terisi dulu.
+    if (nesBandFill > 0 && scanline != nesBandRow0 + nesBandFill) nesBandFlush();
+    if (nesBandFill == 0) nesBandRow0 = scanline;
+    uint16_t* d = nesBand[nesBandIdx] + (size_t)nesBandFill * NES_SCREEN_WIDTH;
+    for (int x = 0; x < NES_SCREEN_WIDTH; x++) d[x] = nesPalWire[bmp[x]];
+    nesBandFill++;
+    if (nesBandFill >= NES_BAND_ROWS || scanline == NES_VISIBLE_HEIGHT - 1) nesBandFlush();
+  } else {
+    for (int x = 0; x < NES_SCREEN_WIDTH; x++) {
+      lineBuf[x] = nesPalette[bmp[x]];
+    }
+    // pushImage 1 baris tinggi -- transaksi SPI SUDAH dibuka di nesVideo_begin(),
+    // jadi ini cuma nge-stream data, gak buka/tutup transaksi tiap panggilan.
+    display.pushImage(nesOffsetX, nesOffsetY + scanline,
+                       NES_SCREEN_WIDTH, 1, lineBuf);
   }
-
-  // pushImage 1 baris tinggi -- transaksi SPI SUDAH dibuka di nesVideo_begin(),
-  // jadi ini cuma nge-stream data, gak buka/tutup transaksi tiap panggilan.
-  display.pushImage(nesOffsetX, nesOffsetY + scanline,
-                     NES_SCREEN_WIDTH, 1, lineBuf);
 
   // Scanline terakhir yg visible -> frame ini selesai di-push semua.
   // Gambar ulang overlay dpad/tombol touch di sini, SEKALI per frame
   // (bukan tiap scanline), supaya overlay gak "kemakan" render NES tapi
   // juga gak nambah overhead di 223 baris lainnya.
   if (scanline == NES_VISIBLE_HEIGHT - 1) {
+    display.waitDMA();   // v117: DMA pita terakhir harus selesai sebelum overlay digambar langsung
     nesOverlay_afterFrame();
     // FIX crash: main_loop() nofrendo gak pernah vTaskDelay/yield --
     // kalau dibiarin, idle task core 1 gak kebagian jatah CPU sama

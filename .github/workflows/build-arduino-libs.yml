@@ -14,6 +14,10 @@ on:
         description: "Branch esp32-arduino-lib-builder (samakan dgn IDF core, mis. release/v5.5)"
         default: "auto"
         required: true
+      psram_cache_line_64b:
+        description: "EKSPERIMEN: cache data line 64B (bisa mempercepat akses PSRAM: DOOM/sprite). Default mati; uji A/B"
+        type: boolean
+        default: false
       wifi_lwip_psram:
         description: "Taruh buffer WiFi/lwIP di PSRAM (hemat RAM internal, throughput WiFi bisa sedikit turun)"
         type: boolean
@@ -95,6 +99,9 @@ jobs:
             echo 'CONFIG_MBEDTLS_DYNAMIC_BUFFER=y'
             echo 'CONFIG_MBEDTLS_DYNAMIC_FREE_CONFIG_DATA=y'
             echo 'CONFIG_FREERTOS_TASK_CREATE_ALLOW_EXT_MEM=y'
+            if [ "${{ inputs.psram_cache_line_64b }}" = "true" ]; then
+              echo 'CONFIG_ESP32S3_DATA_CACHE_LINE_64B=y'
+            fi
             if [ "${{ inputs.wifi_lwip_psram }}" = "true" ]; then
               echo 'CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y'
             fi

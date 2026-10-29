@@ -11,6 +11,11 @@ on:
         description: "Pasang library kustom (mbedTLS di PSRAM)? false = pakai bawaan (untuk tes A/B)"
         type: boolean
         default: true
+      loop_core:
+        description: "Core tempat loop()/UI berjalan (untuk tes A/B performa game). default = bawaan core Arduino"
+        type: choice
+        options: [ "default", "0", "1" ]
+        default: "default"
 
 permissions:
   contents: write
@@ -25,6 +30,19 @@ jobs:
 
       - name: Setup Arduino CLI
         uses: arduino/setup-arduino-cli@v2
+
+      # Cache 1: arsip unduhan core/toolchain saja (~/.arduino15/staging), BUKAN folder
+      # packages. Folder packages dihindari karena library kustom ditimpa ke sana; kalau
+      # ikut di-cache, tes A/B (use_custom_libs=false) akan memakai library kustom.
+      - name: Kunci cache unduhan (per bulan)
+        id: dlkey
+        run: echo "month=$(date +%Y-%m)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache unduhan Arduino (core & toolchain)
+        uses: actions/cache@v4
+        with:
+          path: ~/.arduino15/staging
+          key: arduino-dl-${{ runner.os }}-${{ steps.dlkey.outputs.month }}
 
       - name: Update Board Manager and Install Core & Libraries
         run: |
@@ -78,6 +96,33 @@ jobs:
           cp -a /tmp/customlibs/esp32s3/. "$DEST"/
           echo "::notice::Library kustom (mbedTLS di PSRAM) terpasang utk core $CORE_NOW"
 
+      # Cache 2: cache build arduino-cli (core.a dan objek library yg sudah dikompilasi).
+      # Key memuat versi core, identitas paket library kustom, dan flag use_custom_libs,
+      # sehingga core.a lama tidak pernah dipakai dgn sdkconfig.h yg berbeda.
+      # restore-keys sengaja hanya mencocokkan awalan yg SAMA (core + libs sama).
+      - name: Hitung kunci cache compile
+        id: bckey
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          CORE_NOW=$(arduino-cli core list | awk '$1=="esp32:esp32"{print $2}')
+          LIBS_ID=none
+          if [ "${{ inputs.use_custom_libs }}" != "false" ]; then
+            LIBS_ID=$(gh release view arduino-libs-custom --repo "$GITHUB_REPOSITORY" \
+              --json assets -q '.assets[] | select(.name=="esp32s3-libs.tar.gz") | "\(.size)-\(.updatedAt)"' 2>/dev/null | tr -c 'A-Za-z0-9._-' '_' || true)
+            [ -n "$LIBS_ID" ] || LIBS_ID=none
+          fi
+          echo "prefix=arduino-build-${{ runner.os }}-core${CORE_NOW}-libs${LIBS_ID}" >> "$GITHUB_OUTPUT"
+          echo "Kunci cache compile: core=${CORE_NOW} libs=${LIBS_ID}"
+
+      - name: Cache compile Arduino
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/arduino
+          key: ${{ steps.bckey.outputs.prefix }}-${{ github.run_id }}
+          restore-keys: |
+            ${{ steps.bckey.outputs.prefix }}-
+
       - name: Tentukan nama branch & cek kompatibilitas base
         env:
           RAW_BRANCH: ${{ github.head_ref || github.ref_name }}
@@ -120,6 +165,8 @@ jobs:
           fi
 
       - name: Compile Sketch
+        env:
+          LOOP_OPT: ${{ (inputs.loop_core == '0' || inputs.loop_core == '1') && format(',LoopCore={0}', inputs.loop_core) || '' }}
         run: |
           mkdir -p build_sketch
           cp phone.ino build_sketch/
@@ -205,8 +252,9 @@ jobs:
 
           NOF_INCLUDE="$(pwd)/build_sketch/src"
 
+          echo "Opsi board tambahan: '${LOOP_OPT}' (kosong = bawaan)"
           arduino-cli compile --fqbn esp32:esp32:esp32s3 \
-            --board-options "FlashSize=16M,PSRAM=opi,PartitionScheme=app3M_fat9M_16MB" \
+            --board-options "FlashSize=16M,PSRAM=opi,PartitionScheme=app3M_fat9M_16MB${LOOP_OPT}" \
             --build-property "compiler.cpp.extra_flags=-DRP_BUILD_NUM=${{ github.run_number }} -DRP_BRANCH=${RP_BRANCH} -DRP_VERSION=${RP_VERSION} -I${NOF_INCLUDE}" \
             --build-property "compiler.c.extra_flags=-I${NOF_INCLUDE}" \
             build_sketch --output-dir build
