@@ -836,8 +836,11 @@ Theme themes[] = {
   // Tema "Dark"/"AMOLED" lama pakai aksen 0xFD40 (oranye-kuning) -> itu yg bikin UI keliatan kekuningan.
   // Surface #121212/#1E1E1E, divider #2A2A2A, text #F2F2F2, subtext #8E8E8E, aksen #5AA9FF/#A78BFA.
   { "Full Dark", 0x0000,0x1082,0x18E3,0x5D5F,0xA45F,0xF79E,0x8C71,0x2945,0x3EB1,0xFAEB },
+  // UI-MODERN: "Nyx" -- hitam kebiruan-ungu (#0A0A12) + kartu #14151F/#1E2030 + aksen violet #8F7CFF
+  // + aksen2 teal #3FD0C4. Senada nama NyxOS; dirancang utk latar aurora (iosBackdrop) & ikon squircle.
+  { "Nyx",      0x0842,0x10A3,0x1906,0x8BFF,0x3E98,0xF7BF,0x8C94,0x2147,0x3EF2,0xFAEF },
 };
-#define THEME_COUNT 7
+#define THEME_COUNT 8
 int themeIdx = 0;
 Theme& T() { return themes[themeIdx]; }
 
@@ -1009,11 +1012,89 @@ void drawGlassCircle(LGFX_Sprite& s, int cx,int cy,int r, uint16_t tint, uint8_t
   s.drawArc(cx,cy,r-3,r-3,215,325,hi2);
 }
 
+// =====================================================================
+// UI-MODERN "Nyx Modern" -- helper bersama (ikon squircle, latar aurora)
+// Sengaja cuma pakai tipe primitif + LGFX_Sprite & TANPA default-parameter,
+// supaya prototype otomatis arduino-cli gak bermasalah (pelajaran v57/v62).
+// =====================================================================
+// Dasar ikon app: squircle + bayangan lembut + rim + kilap tepi atas.
+// Glyph ikon (digambar SESUDAH ini di drawAppIcon) tetap pakai `col` sbg warna
+// "lubang", jadi dasarnya sengaja FLAT -- efek kedalaman cuma di tepi (3px)
+// yg gak pernah disentuh glyph.
+void modernIconBase(LGFX_Sprite& s,int cx,int cy,int r,uint16_t col){
+  int rr=(r*11)/20; if(rr<3) rr=3;   // radius sudut ~0.55*r  (squircle)
+  int x=cx-r, y=cy-r, d=r*2;
+  if(r>=12){
+    // bayangan: 1 sampel warna latar di bawah ikon (murah, ikut wallpaper)
+    int sx=cx, sy=cy+r+2;
+    if(sx<0) sx=0;
+    if(sx>=s.width()) sx=s.width()-1;
+    if(sy<0) sy=0;
+    if(sy>=s.height()) sy=s.height()-1;
+    uint16_t base=s.readPixel(sx,sy);
+    s.fillRoundRect(x+1,y+3,d-2,d,rr,blend565(base,0x0000,70));
+  }
+  s.fillRoundRect(x,y,d,d,rr,col);
+  if(r>=12){
+    s.drawRoundRect(x,y,d,d,rr,blend565(col,0xFFFF,34));
+    int hx=x+rr, hw=d-2*rr;
+    if(hw>0){
+      s.drawFastHLine(hx,y+1,hw,blend565(col,0xFFFF,95));    // kilap atas
+      s.drawFastHLine(hx,y+2,hw,blend565(col,0xFFFF,34));
+      s.drawFastHLine(hx,y+d-2,hw,blend565(col,0x0000,55));  // tepi bawah sedikit gelap
+    }
+  }
+}
+
+// Cahaya radial lembut: lingkaran konsentris dari besar ke kecil, tiap
+// lingkaran = campuran absolut bg+warna (alpha naik ke pusat). Ringan:
+// ~8 fillCircle, sebagian besar di luar layar (diklip otomatis).
+void modernGlow(LGFX_Sprite& s,int cx,int cy,int rad,uint16_t col,int maxAlpha){
+  const int N=8;
+  for(int i=0;i<N;i++){
+    int rr=(rad*(N-i))/N;
+    int a=(maxAlpha*(i+1))/N;
+    if(a<2) continue;
+    s.fillCircle(cx,cy,rr,blend565(T().bg,col,(uint8_t)a));
+  }
+}
+
+// Lembutkan warna neon (cyan/magenta/kuning murni) jadi nada "modern": saturasi
+// x0.80, kecerahan x0.93 (HSV). Dipakai di akhir initAppColors().
+uint16_t modernTone(uint16_t c){
+  float r=(float)(((c>>11)&0x1F)*255/31)/255.0f;
+  float g=(float)(((c>>5)&0x3F)*255/63)/255.0f;
+  float b=(float)((c&0x1F)*255/31)/255.0f;
+  float mx=r>g?(r>b?r:b):(g>b?g:b);
+  float mn=r<g?(r<b?r:b):(g<b?g:b);
+  float d=mx-mn;
+  if(d<0.04f) return c;               // abu/putih/hitam: biarkan apa adanya
+  float h;
+  if(mx==r)      h=(g-b)/d+(g<b?6.0f:0.0f);
+  else if(mx==g) h=(b-r)/d+2.0f;
+  else           h=(r-g)/d+4.0f;
+  float sat=(d/mx)*0.80f, val=mx*0.93f;
+  int hi=(int)h; float f=h-(float)hi;
+  float p=val*(1.0f-sat), q=val*(1.0f-sat*f), t=val*(1.0f-sat*(1.0f-f));
+  float rr,gg,bb;
+  switch(hi%6){
+    case 0: rr=val; gg=t;   bb=p;   break;
+    case 1: rr=q;   gg=val; bb=p;   break;
+    case 2: rr=p;   gg=val; bb=t;   break;
+    case 3: rr=p;   gg=q;   bb=val; break;
+    case 4: rr=t;   gg=p;   bb=val; break;
+    default: rr=val; gg=p;  bb=q;   break;
+  }
+  int R=(int)(rr*255.0f+0.5f), G=(int)(gg*255.0f+0.5f), B=(int)(bb*255.0f+0.5f);
+  return (uint16_t)(((R>>3)<<11)|((G>>2)<<5)|(B>>3));
+}
+
 void saveTheme(){ Preferences p; p.begin("ui",false); p.putInt("theme",themeIdx); p.end(); }
 void loadTheme(){
   Preferences p; p.begin("ui",false);
   themeIdx = p.getInt("theme",0);
   if(p.getInt("thv",0)<2){ themeIdx=5; p.putInt("theme",themeIdx); p.putInt("thv",2); } // tema iOS jadi default SEKALI; bisa diganti lagi di Pengaturan
+  if(p.getInt("thv",0)<3){ themeIdx=7; p.putInt("theme",themeIdx); p.putInt("thv",3); } // UI-MODERN: tema "Nyx" jadi default SEKALI; bisa diganti lagi di Pengaturan
   p.end();
   if(themeIdx<0||themeIdx>=THEME_COUNT) themeIdx=0;
 }
@@ -3122,14 +3203,14 @@ void iosTitle(LGFX_Sprite& s,int x,int y,const char* t){
   s.setTextSize(1);
   uiText(s,x,y,t,T().text,false,true);
 }
-// Latar ala iOS: gradasi halus (glow aksen di atas memudar ke warna dasar) -- gantiin fillSprite polos
+// UI-MODERN: latar "aurora" -- dua cahaya radial lembut (aksen kiri-atas, aksen2
+// kanan-bawah) di atas warna dasar. Jari-jari dipatok ke sisi PENDEK layar
+// supaya dua cahaya gak pernah saling timpa (portrait maupun landscape).
 void iosBackdrop(LGFX_Sprite& s){
   s.fillSprite(T().bg);
-  int span=SCR_H*7/10; if(span<1) span=1;
-  for(int y=0;y<span;y+=6){
-    int a=(int)(46*(span-y)/span); if(a<2) break;
-    s.fillRect(0,y,SCR_W,6,blend565(T().bg,T().accent,(uint8_t)a));
-  }
+  int m = SCR_W<SCR_H ? SCR_W : SCR_H;
+  modernGlow(s, m/10,        -m/20,       (m*95)/100, T().accent,  44);
+  modernGlow(s, SCR_W,       SCR_H,       (m*60)/100, T().accent2, 30);
 }
 
 uint16_t battColor(){ return (battPercent<=15)?T().danger:(battPercent<=35)?(uint16_t)0xFD20:T().good; } // v109: ambar tetap, bukan aksen tema (di tema Full Dark aksen = biru)
@@ -3671,8 +3752,8 @@ void drawBack(LGFX_Sprite& s){
   iosChevron(s,bx+11,cy,T().accent);
   s.setTextColor(T().accent); s.setTextSize(1);
   s.setCursor(bx+21,by+8); s.print("Kembali");
-  int hiW=84, hiX=SCR_W/2-hiW/2;
-  if(hiX>bx+BACK_W+6) s.fillRoundRect(hiX,SCR_H-5,hiW,3,1,blend565(T().bg,T().text,150));
+  int hiW=96, hiX=SCR_W/2-hiW/2; // UI-MODERN: lebih lebar & tebal (4px)
+  if(hiX>bx+BACK_W+6) s.fillRoundRect(hiX,SCR_H-6,hiW,4,2,blend565(T().bg,T().text,170));
 }
 
 bool isBack(int x,int y){
@@ -4291,19 +4372,19 @@ void drawControlCenter(LGFX_Sprite& s){
   float sp=(openP-0.55f)/0.45f; if(sp>1.0f) sp=1.0f;
   if(sp>0.0f){
     int tw=(int)(sw*sp);
-    // UI-OVERHAUL: track tebal 8px, isi aksen + highlight, knob berbayang
-    s.fillRoundRect(sx,sy-2,tw,8,4,blend565(T().surface,0xFFFF,45));
+    // UI-MODERN: track tebal 12px (pil penuh), isi aksen + kilap, grip pil putih di ujung isi
+    int trY = sy-4, trH = 12;
+    s.fillRoundRect(sx,trY,tw,trH,6,blend565(T().surface,0xFFFF,38));
     int fillW = map(brightness,0,255,0,sw);
     if(fillW>tw) fillW=tw;
     if(fillW>0){
-      s.fillRoundRect(sx,sy-2,max(fillW,8),8,4,T().accent);
-      if(fillW>12) s.drawFastHLine(sx+4,sy-1,fillW-8,blend565(T().accent,0xFFFF,100));
+      int fw2 = max(fillW,trH);
+      s.fillRoundRect(sx,trY,fw2,trH,6,T().accent);
+      s.drawFastHLine(sx+6,trY+1,max(0,fw2-12),blend565(T().accent,0xFFFF,110));
     }
-    if(sp>=1.0f){
-      int kr = ccSliderDrag ? 9 : 7; // knob membesar dikit selagi di-drag
-      s.fillCircle(sx+fillW,sy+3,kr+1,blend565(T().surface,0x0000,120));
-      s.fillCircle(sx+fillW,sy+2,kr,0xFFFF);
-      s.fillCircle(sx+fillW,sy+2,kr-4,T().accent);
+    if(sp>=1.0f && fillW>trH){
+      int gh = ccSliderDrag ? 10 : 6;       // grip memanjang sedikit selagi di-drag
+      s.fillRoundRect(sx+fillW-7,trY+(trH-gh)/2,3,gh,1,0xFFFF);
     }
   }
   s.clearClipRect();
@@ -4394,7 +4475,7 @@ uint16_t appIconInk(uint16_t c){
   return lum>=120 ? (uint16_t)0x1082 : (uint16_t)0xFFFF;
 }
 void drawAppIcon(LGFX_Sprite& s, char sym, int cx, int cy, int r, uint16_t bgCircle){
-  s.fillCircle(cx,cy,r,bgCircle);
+  modernIconBase(s,cx,cy,r,bgCircle); // UI-MODERN: squircle (dulu s.fillCircle)
   uint16_t ic = appIconInk(bgCircle); // warna vektor ikon (kontras dgn lingkaran berwarna)
   switch(sym){
     case 'J': { // Jam: wajah jam + jarum
@@ -5044,7 +5125,7 @@ void notifClear(Screen s){
 }
 void drawNotifBadge(LGFX_Sprite& s, int cx,int cy,int iconR,int count){
   if(count<=0) return;
-  int bx=cx+(int)(iconR*0.72f), by=cy-(int)(iconR*0.72f);
+  int bx=cx+iconR-2, by=cy-iconR+2; // UI-MODERN: sudut kanan-atas squircle (dulu 0.72*r utk lingkaran)
   int br = count>9? 8 : 6;
   s.fillCircle(bx,by,br,T().danger);
   s.drawCircle(bx,by,br,T().bg); // cincin tipis warna bg -- pisahin badge dr ikon di baliknya
@@ -5137,6 +5218,7 @@ void initAppColors(){
   apps[39].color=0x34DF; // Chat - biru lembut
   apps[40].color=0x2E8B; // Telepon - hijau
   apps[41].color=0xF9A0; // Kamera - oranye
+  for(int i=0;i<APP_COUNT;i++) apps[i].color=modernTone(apps[i].color); // UI-MODERN: lembutkan warna neon
 }
 
 int appIndexForScreen(Screen s){
@@ -7645,10 +7727,10 @@ void drawSettings(LGFX_Sprite& s){
         int x0=cx+64, step=(cw-76)/THEME_COUNT;
         for(int t=0;t<THEME_COUNT;t++){
           int tcx=x0+step*t+step/2, tcy=ry+19;
-          s.fillCircle(tcx,tcy,9,themes[t].bg);
-          s.drawCircle(tcx,tcy,9,blend565(themes[t].bg,0xFFFF,110));
-          s.fillCircle(tcx,tcy,4,themes[t].accent);
-          if(t==themeIdx){ s.drawCircle(tcx,tcy,12,T().accent); s.drawCircle(tcx,tcy,11,T().accent); }
+          s.fillCircle(tcx,tcy,7,themes[t].bg);   // UI-MODERN: 8 tema -> lingkaran 9->7, cincin 12->9
+          s.drawCircle(tcx,tcy,7,blend565(themes[t].bg,0xFFFF,110));
+          s.fillCircle(tcx,tcy,3,themes[t].accent);
+          if(t==themeIdx){ s.drawCircle(tcx,tcy,9,T().accent); s.drawCircle(tcx,tcy,10,T().accent); }
         }
         const char* nm=themes[themeIdx].name;
         s.setTextColor(T().subtext); s.setCursor(x0+(step*THEME_COUNT)/2-s.textWidth(nm)/2,ry+37); s.print(nm);
