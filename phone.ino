@@ -10893,8 +10893,7 @@ void bootStageEventHorizon(int w,int h){
 // ---- Tahap 3 (v121): ledakan dari titik runtuh -> huruf "NyxOS" TERLEMPAR keluar dari pusat ----
 // Titik runtuh tahap 2 "memuntahkan" materi: bola cahaya lokal + 2 cincin kejut, lalu kelima huruf
 // meluncur dari tengah ke posisinya (urutan dari tengah ke luar: x, lalu y & O, lalu N & S), dgn
-// jejak cahaya di belakang tiap huruf dan sedikit overshoot sebelum mendarat. Garis bawah tumbuh
-// di akhir. Frame terakhir identik dgn frame pertama tahap 4 (tagline).
+// jejak cahaya di belakang tiap huruf dan sedikit overshoot sebelum mendarat. Frame terakhir identik dgn frame pertama tahap 4 (tagline). (v122: tanpa garis bawah)
 float bootOutBack(float t){
   if(t<=0.0f) return 0.0f; if(t>=1.0f) return 1.0f;
   const float c1=1.70158f, c3=c1+1.0f; float u=t-1.0f;
@@ -10921,7 +10920,6 @@ void bootStageHorizonReveal(int w,int h){
 
     if(lp>=1.0f){                                       // frame akhir = persis awal tahap 4
       bootDrawNyxText(cx,cy,0,1.0f);
-      bootDrawHorizonLine(cx,cy+17,60,0.70f);
       push();
       break;
     }
@@ -10977,11 +10975,6 @@ void bootStageHorizonReveal(int w,int h){
       bootDrawNyxLetter(i,px,ty,al);
     }
 
-    // garis bawah tumbuh di akhir
-    float lineP=(lp-0.78f)/0.22f; if(lineP<0.0f) lineP=0.0f; if(lineP>1.0f) lineP=1.0f; lineP=navEase(lineP);
-    int lh=(int)(60.0f*lineP);
-    if(lh>=2) bootDrawHorizonLine(cx,cy+17,lh,0.70f*lineP);
-
     push();
     delay(1);
     if(wifiConnected && webServerRunning) webServer.handleClient();
@@ -11001,12 +10994,11 @@ void bootStageHorizonTagline(int w,int h){
     float p=navEase(lp);
 
     canvas.fillSprite(0x0000);
-    bootDrawNyxText(cx,cy,0,1.0f);
-    bootDrawHorizonLine(cx,cy+17,60,0.70f);
+    bootDrawNyxText(cx,cy,0,1.0f);   // v122: garis putih di bawah teks dihapus
 
     canvas.setTextSize(1);
     canvas.setTextColor(lerpColor565(0x0000,bootRGB(150,150,165),p));
-    canvas.setCursor(cx-twTag/2,cy+30); canvas.print(tag);
+    canvas.setCursor(cx-twTag/2,cy+26); canvas.print(tag);
 
     push();
     if(lp>=1.0f) break;
