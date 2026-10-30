@@ -3515,6 +3515,11 @@ void drawBattWidget(LGFX_Sprite& s,int x,int y,int w,int h){
     if(battPercent>0){
       if(a1<=360.0f) s.fillArc(cx,cy,ri,ro,270.0f,a1,bc);
       else { s.fillArc(cx,cy,ri,ro,270.0f,360.0f,bc); s.fillArc(cx,cy,ri,ro,0.0f,a1-360.0f,bc); }
+      if(battPercent<100){                                   // v129: ujung arc membulat
+        int cr=(ro-ri)/2, rm=(ri+ro)/2; float er=a1*0.0174532925f;
+        s.fillCircle(cx,cy-rm,cr,bc);
+        s.fillCircle(cx+(int)lroundf(cosf(er)*rm),cy+(int)lroundf(sinf(er)*rm),cr,bc);
+      }
     }
     s.setTextSize(battPercent>=100?1:2);
     int tw=s.textWidth(pb), th=(battPercent>=100)?8:16;
@@ -12208,15 +12213,39 @@ void drawTriviaSetup(LGFX_Sprite& s){
   s.print(lbl);
 }
 
+// v129: loading ring seragam -- panjang busur "bernapas" (memanjang-memendek dgn smoothstep), ekor
+// memudar ke arah belakang, titik di kepala, teks berdenyut halus. Semua murni fungsi waktu (tanpa state).
+void lrArc(LGFX_Sprite& s,int cx,int cy,int ri,int ro,float a0,float len,uint16_t col){
+  if(len<=0.5f) return;
+  a0=fmodf(a0,360.0f); if(a0<0.0f) a0+=360.0f;
+  float a1=a0+len;
+  if(a1<=360.0f) s.fillArc(cx,cy,ri,ro,a0,a1,col);
+  else { s.fillArc(cx,cy,ri,ro,a0,360.0f,col); s.fillArc(cx,cy,ri,ro,0.0f,a1-360.0f,col); }
+}
+void drawLoadingRing(LGFX_Sprite& s,int cx,int cy,const char* label){
+  const unsigned long ms=millis();
+  float t=fmodf((float)ms,1600.0f)/1600.0f;
+  float k=(t<0.5f)?t*2.0f:(2.0f-t*2.0f);
+  k=k*k*(3.0f-2.0f*k);                                         // smoothstep 0..1..0
+  float sweep=50.0f+220.0f*k;
+  float head=fmodf((float)ms,1000.0f)/1000.0f*360.0f+sweep*0.5f;
+  float st=head-sweep;
+  const int ri=20, ro=26;
+  uint16_t acc=T().accent2, trk=T().divider;
+  lrArc(s,cx,cy,ri,ro,0.0f,360.0f,trk);                        // cincin dasar
+  lrArc(s,cx,cy,ri,ro,st,sweep*0.5f,blend565(trk,acc,110));    // ekor paling redup
+  lrArc(s,cx,cy,ri,ro,st+sweep*0.5f,sweep*0.3f,blend565(trk,acc,190));
+  lrArc(s,cx,cy,ri,ro,st+sweep*0.8f,sweep*0.2f,acc);           // kepala terang
+  float hr=head*0.0174532925f;
+  s.fillCircle(cx+(int)lroundf(cosf(hr)*23.0f),cy+(int)lroundf(sinf(hr)*23.0f),3,acc);
+  uint8_t pa=(uint8_t)(110.0f+110.0f*sinf((float)ms*0.004f)); // teks berdenyut halus
+  s.setTextColor(blend565(T().subtext,T().text,pa)); s.setTextSize(1);
+  int tw=s.textWidth(label);
+  s.setCursor(cx-tw/2,cy+40); s.print(label);
+}
+
 void drawTriviaLoading(LGFX_Sprite& s){
-  int cx=SCR_W/2, cy=SCR_H/2-6;
-  float ang = fmodf((float)millis(),1200.0f)/1200.0f*360.0f;
-  s.drawArc(cx,cy,26,20,0,360,T().divider);       // cincin dasar redup
-  s.drawArc(cx,cy,26,20,ang,ang+260,T().accent2); // arc terang yg muter di atasnya
-  s.setTextColor(T().subtext); s.setTextSize(1);
-  const char* lbl="Mengambil soal dari server...";
-  int tw=s.textWidth(lbl);
-  s.setCursor(cx-tw/2, cy+40); s.print(lbl);
+  drawLoadingRing(s,SCR_W/2,SCR_H/2-6,"Mengambil soal dari server...");
 }
 
 void drawTriviaQuestion(LGFX_Sprite& s){
@@ -16441,14 +16470,7 @@ int apodSearchRightX(){ return SCR_W-4; }
 int apodSearchTopY(){ return apodImgTop()+4; }
 
 void drawApodLoading(LGFX_Sprite& s){
-  int cx=SCR_W/2, cy=SCR_H/2-6;
-  float ang = fmodf((float)millis(),1200.0f)/1200.0f*360.0f;
-  s.drawArc(cx,cy,26,20,0,360,T().divider);
-  s.drawArc(cx,cy,26,20,ang,ang+260,T().accent2);
-  s.setTextColor(T().subtext); s.setTextSize(1);
-  const char* lbl="Mengambil data APOD dari NASA...";
-  int tw=s.textWidth(lbl);
-  s.setCursor(cx-tw/2,cy+40); s.print(lbl);
+  drawLoadingRing(s,SCR_W/2,SCR_H/2-6,"Mengambil data APOD dari NASA...");
 }
 void drawApodError(LGFX_Sprite& s){
   s.setTextColor(T().danger); s.setTextSize(1);
@@ -16693,13 +16715,7 @@ String nasaOuterArrayBody(const String& full){
 // drawApodError yg SUDAH ADA, cuma dibikin generik nerima label/pesan
 // beda2 per app drpd nulis ulang 4x). ----
 void drawNasaLoading(LGFX_Sprite& s, const char* label){
-  int cx=SCR_W/2, cy=SCR_H/2-6;
-  float ang = fmodf((float)millis(),1200.0f)/1200.0f*360.0f;
-  s.drawArc(cx,cy,26,20,0,360,T().divider);
-  s.drawArc(cx,cy,26,20,ang,ang+260,T().accent2);
-  s.setTextColor(T().subtext); s.setTextSize(1);
-  int tw=s.textWidth(label);
-  s.setCursor(cx-tw/2,cy+40); s.print(label);
+  drawLoadingRing(s,SCR_W/2,SCR_H/2-6,label);
 }
 // return: true kalau titik (x,y) kena tombol "Coba Lagi" pd layout error
 // generik ini (dipakai touch handler masing2 app).
@@ -17397,8 +17413,7 @@ void drawEpicView(LGFX_Sprite& s){
     s.setCursor(SCR_W/2-(int)strlen(m2)*3,imgTop+imgH/2+2); s.print(m2);
   } else if(epicPhotoLoading){
     s.setTextColor(T().subtext); s.setTextSize(1);
-    const char* m="Memuat citra...";
-    s.setCursor(SCR_W/2-(int)strlen(m)*3,imgTop+imgH/2-4); s.print(m);
+    drawLoadingRing(s,SCR_W/2,imgTop+imgH/2-6,"Memuat citra...");
   } else if(epicImgReady && epicImgW==SCR_W && epicImgH==imgH){
     epicImg.pushSprite(&s,0,imgTop);
   } else if(epicImgReady){
@@ -17791,8 +17806,7 @@ void drawImgLibView(LGFX_Sprite& s){
   s.fillRoundRect(0,imgTop,SCR_W,imgH,0,T().surface2);
   if(imgLibPhotoLoading){
     s.setTextColor(T().subtext); s.setTextSize(1);
-    const char* m="Memuat gambar...";
-    s.setCursor(SCR_W/2-(int)strlen(m)*3,imgTop+imgH/2-4); s.print(m);
+    drawLoadingRing(s,SCR_W/2,imgTop+imgH/2-6,"Memuat gambar...");
   } else if(imgLibImgReady && imgLibImgW==SCR_W && imgLibImgH==imgH && imgLibCount>0){
     imgLibImgSpr.pushSprite(&s,0,imgTop);
   } else if(imgLibImgReady){
@@ -19602,6 +19616,8 @@ void loop(){
     if(epicPage==EPIC_LOADING) diTickProgress(); // v96
     if(curScreen()==SCR_NASAIMG && imgLibPage==ILIB_LOADING){ needRedraw=true; }
     if(imgLibPage==ILIB_LOADING) diTickProgress(); // v96
+    if(curScreen()==SCR_EPIC && epicPhotoLoading){ needRedraw=true; }       // v129: ring foto EPIC beranimasi
+    if(curScreen()==SCR_NASAIMG && imgLibPhotoLoading){ needRedraw=true; }  // v129: ring galeri NASA beranimasi
     // v22: animasi buka/tutup kolom cari (ikon kaca pembesar) -- berbasis
     // waktu (searchBarStep), jalan tiap frame selagi app itu aktif &
     // animasinya blm selesai (lihat WIDGET: TOMBOL CARI utk detail).
