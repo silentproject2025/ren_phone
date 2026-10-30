@@ -18991,7 +18991,7 @@ void dragCloseFinish(float p0){
   dragCloseActive=false;
   renderCurrentFrame(); push(); needRedraw=false;
   homeAodWake();
-  // dragCloseBounce();  // dimatikan: efek zoom ikon tiba-tiba terasa tidak natural
+  dragCloseBounce();
 }
 void dragCloseCancel(float p0){
   unsigned long MS=(unsigned long)(110.0f+120.0f*p0);
