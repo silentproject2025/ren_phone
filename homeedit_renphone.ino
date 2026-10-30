@@ -5,6 +5,7 @@
 // Hanya tipe primitif di parameter fungsi (aman dari bug prototype otomatis arduino-cli).
 // =====================================================================
 #define HE_RH 30
+#define HE_WROWS 6   // v132: home widget setting -- 6 baris pengaturan widget di atas daftar app
 static int  heScroll = 0;
 static bool heDown = false, heDrag = false;
 static int  heSx = 0, heSy = 0, heLy = 0;
@@ -12,7 +13,7 @@ static unsigned long heResetArmUntil = 0;
 
 static int heTop() { return 48; }
 static int heBot() { return backY() - 6; }
-static int heMaxScroll() { int m = APP_COUNT * HE_RH - (heBot() - heTop()); return m > 0 ? m : 0; }
+static int heMaxScroll() { int m = (APP_COUNT + HE_WROWS) * HE_RH - (heBot() - heTop()); return m > 0 ? m : 0; }
 static void heClamp() { int m = heMaxScroll(); if (heScroll > m) heScroll = m; if (heScroll < 0) heScroll = 0; }
 
 // tombol di tiap baris (dari kanan): [naik] [turun] [Tampil/Sembunyi]
@@ -54,9 +55,27 @@ void drawHomeEdit(LGFX_Sprite& s) {
   drawGlassPanel(s, 8, top - 2, SCR_W - 16, bot - top + 4, 12, T().surface2, 150);
   heClamp();
   s.setClipRect(8, top, SCR_W - 16, bot - top);
+  {                                                    // v132: home widget setting -- baris pengaturan widget
+    static const char* const wl[HE_WROWS] = {"Kartu Jam", "Kartu Musik", "Kartu Baterai", "Kartu Cuaca", "Susunan (potret)", "Ukuran kartu Jam"};
+    for (int r = 0; r < HE_WROWS; r++) {
+      int y = top + r * HE_RH - heScroll;
+      if (y + HE_RH < top || y > bot) continue;
+      bool isTog = (r < 4);
+      bool on = isTog ? (((homeWMask >> r) & 1) != 0) : (r == 4 ? (homeWLayout != 0) : (homeWBig != 0));
+      const char* bl = isTog ? (on ? "Tampil" : "Sembunyi") : (r == 4 ? (on ? "Ringkas" : "Standar") : (on ? "Besar" : "Normal"));
+      bool dim = isTog && !on;
+      s.setTextSize(1); s.setTextColor(dim ? T().subtext : T().text);
+      s.setCursor(18, y + HE_RH / 2 - 4); s.print(wl[r]);
+      int by = y + (HE_RH - 22) / 2;
+      drawGlassPanel(s, heVisX(), by, heVisW(), 22, 8, dim ? T().surface2 : T().accent, 190);
+      s.setTextColor(dim ? T().subtext : T().text);
+      s.setCursor(heVisX() + heVisW() / 2 - s.textWidth(bl) / 2, by + 7); s.print(bl);
+      s.drawFastHLine(14, y + HE_RH - 1, SCR_W - 28, T().divider);
+    }
+  }
   int nameX = 46, nameMax = heUpX() - 6 - nameX;
   for (int k = 0; k < APP_COUNT; k++) {
-    int y = top + k * HE_RH - heScroll;
+    int y = top + (HE_WROWS + k) * HE_RH - heScroll;
     if (y + HE_RH < top || y > bot) continue;
     int i = homeOrder[k];
     bool hid = homeHide[i];
@@ -92,7 +111,18 @@ void drawHomeEdit(LGFX_Sprite& s) {
 
 static void heTap(int x, int y) {
   int top = heTop();
-  int k = (y - top + heScroll) / HE_RH;
+  int r0 = (y - top + heScroll) / HE_RH;
+  if (r0 < 0) return;
+  if (r0 < HE_WROWS) {                                  // v132: ketuk baris pengaturan widget
+    if (x < heUpX() - 2) return;
+    if (r0 < 4) homeWMask ^= (uint8_t)(1u << r0);
+    else if (r0 == 4) homeWLayout = homeWLayout ? 0 : 1;
+    else homeWBig = homeWBig ? 0 : 1;
+    homeLayoutSave();
+    needRedraw = true;
+    return;
+  }
+  int k = r0 - HE_WROWS;
   if (k < 0 || k >= APP_COUNT) return;
   int i = homeOrder[k];
   if (x >= heUpX() - 2 && x <= heUpX() + 28) {                    // naik

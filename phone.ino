@@ -6121,12 +6121,16 @@ bool homeHide[APP_COUNT];
 int  homeVis[APP_COUNT];
 int  homeVisN = 0;
 bool homeLayoutLoaded = false;
+uint8_t homeWMask = 0x0F;  // v132: home widget setting -- bit0 jam, bit1 musik, bit2 baterai, bit3 cuaca (1 = tampil)
+uint8_t homeWLayout = 1;   // 0 = Standar, 1 = Ringkas (baterai+cuaca satu baris, potret)
+uint8_t homeWBig = 1;      // 0 = jam Normal, 1 = jam Besar
 
 void homeLayoutRebuildVis(){
   homeVisN=0;
   for(int k=0;k<APP_COUNT;k++){ int i=homeOrder[k]; if(!homeHide[i]) homeVis[homeVisN++]=i; }
 }
 void homeLayoutDefault(){
+  homeWMask=0x0F; homeWLayout=1; homeWBig=1;   // v132: ikut kembali ke awal saat Reset
   for(int i=0;i<APP_COUNT;i++){ homeOrder[i]=i; homeHide[i]=(apps[i].screen==SCR_HOMEEDIT); }
   homeLayoutRebuildVis();
 }
@@ -6135,6 +6139,7 @@ void homeLayoutLoad(){
   homeLayoutDefault();
   Preferences pr;
   if(!pr.begin("homelay",true)) return;
+  homeWMask=pr.getUChar("wmask",homeWMask); homeWLayout=pr.getUChar("wlay",homeWLayout); homeWBig=pr.getUChar("wbig",homeWBig); // v132
   size_t n=pr.getBytesLength("ord");
   if(n>0 && n<=64){
     uint8_t ids[64];
@@ -6168,6 +6173,7 @@ void homeLayoutSave(){
   if(!pr.begin("homelay",false)) return;
   pr.putBytes("ord",ids,n);
   pr.putULong64("hid",hid);
+  pr.putUChar("wmask",homeWMask); pr.putUChar("wlay",homeWLayout); pr.putUChar("wbig",homeWBig); // v132
   pr.end();
 }
 void homeLayoutEnsure(){ if(!homeLayoutLoaded) homeLayoutLoad(); }
@@ -6189,23 +6195,44 @@ int homeDockY(){ return SCR_H-38-8; }
 // Landscape: jam (kiri) + baterai (kanan) di baris 1, kartu musik di baris 2.
 // Portrait : jam, kartu musik, baterai (bar) bertumpuk. Grid app mulai di bawahnya.
 bool homeIsLand(){ return currentOrient==ORIENT_LANDSCAPE; }
-HomeRect homeWClock(){ /* v131: home layout */ HomeRect r; r.x=10; r.y=STATUS_H+28; r.h=homeIsLand()?66:88; r.w=homeIsLand()?188:SCR_W-20; return r; }
-HomeRect homeWMusic(){ HomeRect r; r.x=10; r.w=SCR_W-20; if(homeIsLand()){ r.y=STATUS_H+28+66+8; r.h=48; } else { r.y=STATUS_H+28+88+8; r.h=58; } return r; }
-HomeRect homeWBatt(){
-  HomeRect r;
-  if(homeIsLand()){ r.x=206; r.y=STATUS_H+28; r.w=SCR_W-216; r.h=66; }
-  else { r.x=10; r.y=STATUS_H+28+88+8+58+8; r.w=84; r.h=76; }
-  return r;
+// v132: home widget setting -- posisi semua kartu dihitung SEKALI dari pengaturan (homeWMask/homeWLayout/homeWBig).
+// Kartu yang disembunyikan = rect kosong (h=0, di luar layar) sehingga gambar & hit-test otomatis melewatinya.
+HomeRect hwNone(){ HomeRect r; r.x=-1000; r.y=-1000; r.w=0; r.h=0; return r; }
+void hwCompute(HomeRect& c, HomeRect& m, HomeRect& b, HomeRect& w, int& endY){
+  homeLayoutEnsure();
+  const bool sc=(homeWMask&1)!=0, sm=(homeWMask&2)!=0, sb=(homeWMask&4)!=0, sw=(homeWMask&8)!=0;
+  const bool land=homeIsLand(), big=(homeWBig!=0);
+  c=hwNone(); m=hwNone(); b=hwNone(); w=hwNone();
+  int y=STATUS_H+28; bool any=false;
+  if(land){
+    int rh=big?76:66;
+    if(sc||sb){
+      if(sc&&sb){ c.x=10; c.y=y; c.w=188; c.h=rh;  b.x=206; b.y=y; b.w=SCR_W-216; b.h=rh; }
+      else if(sc){ c.x=10; c.y=y; c.w=SCR_W-20; c.h=rh; }
+      else { b.x=10; b.y=y; b.w=SCR_W-20; b.h=rh; }
+      y+=rh+8; any=true;
+    }
+    if(sm){ m.x=10; m.y=y; m.w=SCR_W-20; m.h=48; y+=56; any=true; }
+    if(sw){ w.x=10; w.y=y; w.w=SCR_W-20; w.h=40; y+=48; any=true; }
+  } else {
+    if(sc){ c.x=10; c.y=y; c.w=SCR_W-20; c.h=big?88:80; y+=c.h+8; any=true; }
+    if(sm){ m.x=10; m.y=y; m.w=SCR_W-20; m.h=58; y+=66; any=true; }
+    if(homeWLayout!=0){                                   // Ringkas
+      if(sb&&sw){ b.x=10; b.y=y; b.w=84; b.h=76; w.x=b.x+b.w+8; w.y=y; w.w=SCR_W-10-w.x; w.h=76; y+=84; any=true; }
+      else if(sb){ b.x=10; b.y=y; b.w=SCR_W-20; b.h=76; y+=84; any=true; }
+      else if(sw){ w.x=10; w.y=y; w.w=SCR_W-20; w.h=48; y+=56; any=true; }
+    } else {                                              // Standar (susunan lama)
+      if(sb){ b.x=10; b.y=y; b.w=SCR_W-20; b.h=44; y+=52; any=true; }
+      if(sw){ w.x=10; w.y=y; w.w=SCR_W-20; w.h=48; y+=56; any=true; }
+    }
+  }
+  endY = any ? (y-8) : (STATUS_H+22);
 }
-// Widget cuaca: baris tambahan DI BAWAH kartu musik/baterai (grid app otomatis turun
-// krn homeGridTop() memakai homeWidgetsEnd()). Data & gambar di features_renphone.ino.
-HomeRect homeWWeather(){
-  HomeRect b=homeWBatt(), m=homeWMusic(); HomeRect r;
-  if(homeIsLand()){ r.x=10; r.w=SCR_W-20; r.y=max(b.y+b.h,m.y+m.h)+8; r.h=40; }
-  else { r.x=b.x+b.w+8; r.w=SCR_W-10-r.x; r.y=b.y; r.h=b.h; }   // v131: portrait -- di KANAN baterai, satu baris
-  return r;
-}
-int homeWidgetsEnd(){ HomeRect b=homeWBatt(), m=homeWMusic(), w=homeWWeather(); return max(max(b.y+b.h,m.y+m.h),w.y+w.h); }
+HomeRect homeWClock(){ HomeRect c,m,b,w; int e; hwCompute(c,m,b,w,e); return c; }
+HomeRect homeWMusic(){ HomeRect c,m,b,w; int e; hwCompute(c,m,b,w,e); return m; }
+HomeRect homeWBatt(){ HomeRect c,m,b,w; int e; hwCompute(c,m,b,w,e); return b; }
+HomeRect homeWWeather(){ HomeRect c,m,b,w; int e; hwCompute(c,m,b,w,e); return w; }
+int homeWidgetsEnd(){ HomeRect c,m,b,w; int e; hwCompute(c,m,b,w,e); return e; }
 int homeGridTop(){ return homeWidgetsEnd()+30; } // UI-OVERHAUL: grid di bawah blok widget (+ ruang utk judul "Semua App")
 int homeResultsTop(){ return STATUS_H+34; }      // hasil pencarian dirender dari atas layar
 // v105: batas ATAS area grid yg boleh digambar/di-tap. Header (sapaan+jam+
@@ -6364,10 +6391,10 @@ void drawHome(LGFX_Sprite& s,float sc){
     uiText(s,14,STATUS_H+8-scPx,"Accretion",wp?(uint16_t)0xFFFF:T().text,wp,true);
 
     // ---- widget ----
-    HomeRect rc=homeWClock(); drawClockCard(s,rc.x,rc.y-scPx,rc.w,rc.h);
-    HomeRect rb=homeWBatt();  drawBattWidget(s,rb.x,rb.y-scPx,rb.w,rb.h);
-    HomeRect rm=homeWMusic(); drawMusicMini(s,rm.x,rm.y-scPx,rm.w,rm.h,true);
-    HomeRect rw=homeWWeather(); drawWeatherWidget(s,rw.x,rw.y-scPx,rw.w,rw.h);
+    HomeRect rc=homeWClock(); if(rc.h>0) drawClockCard(s,rc.x,rc.y-scPx,rc.w,rc.h);
+    HomeRect rb=homeWBatt();  if(rb.h>0) drawBattWidget(s,rb.x,rb.y-scPx,rb.w,rb.h);
+    HomeRect rm=homeWMusic(); if(rm.h>0) drawMusicMini(s,rm.x,rm.y-scPx,rm.w,rm.h,true);
+    HomeRect rw=homeWWeather(); if(rw.h>0) drawWeatherWidget(s,rw.x,rw.y-scPx,rw.w,rw.h);
 
     // ---- judul grid ----
     s.setTextSize(1);
