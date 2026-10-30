@@ -14601,6 +14601,15 @@ void drawInf(LGFX_Sprite& s){
   }
 
   // ---- Dinding: 1 sinar per kolom layar, algoritma DDA (tanpa sqrt) ----
+  // v128: inferno perf -- nilai yg SAMA untuk semua kolom dihitung SEKALI per frame (dulu per kolom:
+  // millis() berkali-kali + sinf kedip obor s/d 4x per kolom).
+  const unsigned long nowMs=millis();
+  float torchFlick[INF_TORCH_COUNT];
+  for(int ti=0;ti<INF_TORCH_COUNT;ti++) torchFlick[ti]=0.85f+0.15f*sinf(nowMs*0.006f+ti*2.1f);
+  const bool flashOn = nowMs<infMuzzleFlashUntil;
+  float flashT0 = 0.0f;
+  if(flashOn){ flashT0=(float)(infMuzzleFlashUntil-nowMs)/90.0f; if(flashT0>1.0f) flashT0=1.0f; }
+  int pcMX=-9999, pcMY=-9999; float pulse4=0.0f, pulseD=0.0f;   // cache pulsa dinding per tile
   for(int x=0;x<SCR_W;x++){
     float cameraX = 2.0f*x/(float)SCR_W - 1.0f;
     float rayDirX = infDirX + infPlaneX*cameraX;
@@ -14638,6 +14647,11 @@ void drawInf(LGFX_Sprite& s){
     hitX-=floorf(hitX);
 
     uint16_t baseCol;
+    if((hitTile=='4'||hitTile=='D') && (mapX!=pcMX||mapY!=pcMY)){
+      pcMX=mapX; pcMY=mapY;
+      pulse4=0.5f+0.5f*sinf(nowMs*0.004f+mapX*0.7f+mapY*0.5f);
+      pulseD=0.5f+0.5f*sinf(nowMs*0.003f+mapX*0.9f+mapY*0.6f);
+    }
     switch(hitTile){
       case '2': {
         // v75: "bata" -- dulu warna solid rata. Sekarang dikasih garis
@@ -14657,7 +14671,7 @@ void drawInf(LGFX_Sprite& s){
       case '4': {
         // Dinding "organik" -- kecerahan berdenyut pelan (kesan "hidup").
         // TIDAK berubah dari v74.
-        float pulse=0.5f+0.5f*sinf(millis()*0.004f+mapX*0.7f+mapY*0.5f);
+        float pulse=pulse4;
         baseCol=blend565(INF_WALL_FLESH,0xF800,(uint8_t)(pulse*45.0f));
         break;
       }
@@ -14667,7 +14681,7 @@ void drawInf(LGFX_Sprite& s){
         // "beda, ada maksudnya" dari jauh. Baris ini praktis cuma kepakai
         // selagi msh terkunci (begitu infHasKey true, tile ini SUDAH
         // tembus di loop DDA di atas, jadi gak pernah nyampe render).
-        float pulse=0.5f+0.5f*sinf(millis()*0.003f+mapX*0.9f+mapY*0.6f);
+        float pulse=pulseD;
         baseCol=blend565(INF_WALL_DOOR,0xFFFF,(uint8_t)(pulse*60.0f));
         break;
       }
@@ -14699,7 +14713,7 @@ void drawInf(LGFX_Sprite& s){
       float tdx=worldHX-infTorchX[ti], tdy=worldHY-infTorchY[ti];
       float td2=tdx*tdx+tdy*tdy;
       if(td2>=16.0f) continue;
-      float flick=0.85f+0.15f*sinf(millis()*0.006f+ti*2.1f); // tiap obor beda fase, gak kompak berkedip
+      float flick=torchFlick[ti]; // tiap obor beda fase, gak kompak berkedip (dihitung 1x per frame, lihat atas)
       float contrib=flick*(1.0f-td2/16.0f);
       if(contrib>torchGlow) torchGlow=contrib;
     }
@@ -14712,9 +14726,8 @@ void drawInf(LGFX_Sprite& s){
     // pakai perpDist yg SUDAH DIHITUNG di atas, gak nambah biaya sqrt).
     // flashT diturunkan dari sisa waktu infMuzzleFlashUntil (durasi total
     // kilatan = 90ms, sudah didefinisikan di infFire()).
-    if(millis()<infMuzzleFlashUntil){
-      float flashT=(float)(infMuzzleFlashUntil-millis())/90.0f;
-      if(flashT>1.0f) flashT=1.0f;
+    if(flashOn){
+      float flashT=flashT0;
       float wglow=constrain(1.0f-perpDist/3.0f,0.0f,1.0f)*flashT;
       if(wglow>0.0f) baseCol=blend565(baseCol,0xFFFF,(uint8_t)(wglow*90.0f));
     }
