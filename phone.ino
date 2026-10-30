@@ -19550,4 +19550,129 @@ void loop(){
         if(touched){ apps[idx].touch(tx,ty,held,newT); }
       } else if(curScreen()==SCR_NES){
         // v86: dipanggil TERUS (termasuk saat !touched) supaya dpad/tombol
-        // virtual NES bis                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               
+        // virtual NES bisa "lepas" pas jari diangkat -- lihat nesInput_touch().
+        apps[idx].touch(tx,ty,held,newT);
+        nesWatchdogTick();
+        nesWatchdogTick();
+      } else if(curScreen()==SCR_DOOM){
+        // Pola SAMA PERSIS dgn SCR_NES di atas: dipanggil TERUS (termasuk
+        // saat !touched) supaya tombol virtual DOOM (gerak/tembak/dsb) ikut
+        // "lepas" pas jari diangkat -- lihat doomTouch() di doom_renphone.ino.
+        apps[idx].touch(tx,ty,held,newT);
+      } else {
+        if(newT) apps[idx].touch(tx,ty,false,true);
+        else if(touched && held) apps[idx].touch(tx,ty,true,false);
+      }
+    }
+    if(curScreen()==SCR_CLOCK && millis()-lastClk>500){ needRedraw=true; lastClk=millis(); }
+    if(curScreen()==SCR_SENSOR && millis()-lastSen>50){ needRedraw=true; lastSen=millis(); }
+    // v27: meteran mic di-poll ~30x/detik selagi app-nya kebuka (dipakai
+    // timer lastSen yg sama krn beda screen, gak akan tabrakan).
+    if(curScreen()==SCR_MICLEVEL && millis()-lastSen>30){ micLvlPoll(); needRedraw=true; lastSen=millis(); }
+    // v31: HWmonitor -- sampling tiap 500ms (jendela sampel yg dipakai
+    // hwmonPoll() buat hitung persen sibuk per core, lihat komentarnya)
+    if(curScreen()==SCR_HWMON && millis()-hwmonLastPoll>500){ hwmonPoll(); needRedraw=true; hwmonLastPoll=millis(); }
+    ownerLoopPoll(); // Profil: tutup Galeri setelah foto profil dipilih
+    if(curScreen()==SCR_ABOUT) aboutLoopPoll();
+    // v58 FIX bug "Labirin gak bisa digerakin sama sekali": SCR_MAZE lupa
+    // didaftarin di sini pas game-nya dibikin (v56/v57). Tanpa ini,
+    // drawMaze() -- tempat mazePlayerTick()/mazeGhostTick() dipanggil --
+    // cuma jalan SEKALI pas app dibuka (redraw awal), abis itu berhenti
+    // total krn gak ada yg terus2an minta needRedraw=true. Swipe/tilt-nya
+    // sebenarnya kebaca (nyimpen ke mazeQueuedDirX/Y), cuma gak pernah
+    // ke-proses krn drawMaze() gak pernah dipanggil ulang.
+    bool inActionGame = curScreen()==SCR_SNAKE || curScreen()==SCR_FLAPPY || curScreen()==SCR_BREAKOUT || curScreen()==SCR_MAZE || curScreen()==SCR_INF;
+    if(inActionGame && millis()-lastSen>40){ needRedraw=true; lastSen=millis(); }
+    if(curScreen()==SCR_AICHAT && aiLoading){ needRedraw=true; }
+    if(aiLoading) diTickProgress(); // v96: Live Activity jalan trs walau user udah pindah screen, bukan cuma pas AI Chat kebuka
+    // v112: Pomodoro -- pola SAMA PERSIS kayak diTickProgress() di atas,
+    // timer tetap ngitung mundur walau user pindah app lain selagi belajar.
+    if(pomoRunning) pomoTick();
+    if(curScreen()==SCR_TRIVIA && triviaPage==TRV_LOADING){ needRedraw=true; } // v14: animasi spinner
+    if(curScreen()==SCR_APOD && apodPage==APOD_LOADING){ needRedraw=true; } // v21: animasi spinner APOD
+    if(apodPage==APOD_LOADING) diTickProgress(); // v96
+    // v22: animasi spinner loading utk 4 app astronomi tambahan
+    if(curScreen()==SCR_NEOWS && neoPage==NEO_LOADING){ needRedraw=true; }
+    if(neoPage==NEO_LOADING) diTickProgress(); // v96
+    if(curScreen()==SCR_EPIC && epicPage==EPIC_LOADING){ needRedraw=true; }
+    if(epicPage==EPIC_LOADING) diTickProgress(); // v96
+    if(curScreen()==SCR_NASAIMG && imgLibPage==ILIB_LOADING){ needRedraw=true; }
+    if(imgLibPage==ILIB_LOADING) diTickProgress(); // v96
+    // v22: animasi buka/tutup kolom cari (ikon kaca pembesar) -- berbasis
+    // waktu (searchBarStep), jalan tiap frame selagi app itu aktif &
+    // animasinya blm selesai (lihat WIDGET: TOMBOL CARI utk detail).
+    if(curScreen()==SCR_APOD && searchBarStep(apodSearchBar, apodSearchRightX())) needRedraw=true;
+    if(curScreen()==SCR_NEOWS && searchBarStep(neoSearchBar, neoSearchRightX())) needRedraw=true;
+    if(curScreen()==SCR_EPIC && searchBarStep(epicSearchBar, epicSearchRightX())) needRedraw=true;
+    if(curScreen()==SCR_NASAIMG && searchBarStep(imgLibSearchBar, imgLibSearchRightX())) needRedraw=true;
+
+    // v12: momentum scroll halus utk teks (AI Chat & isi file di File
+    // Explorer) selagi jari SUDAH dilepas -> gerakannya jalan terus lalu
+    // melambat pelan-pelan, senada dgn gaya momentum scroll Home.
+    if(!touched){
+      if(curScreen()==SCR_AICHAT && !kbVisible){
+        if(fabsf(aiRespScrollVel)>0.3f){
+          aiRespScrollY = constrain(aiRespScrollY + aiRespScrollVel, 0.0f, (float)aiRespMaxScroll);
+          aiRespScrollVel *= powf(0.92f, dt/16.0f); // v14: decay dinormalisasi dt (lihat catatan di blok Home)
+          needRedraw = true;
+        } else {
+          aiRespScrollVel = 0;
+        }
+      }
+      if(curScreen()==SCR_FILEEXPLORER && expViewFileName.length()>0){
+        if(fabsf(expViewScrollVel)>0.3f){
+          expViewScrollY = constrain(expViewScrollY + expViewScrollVel, 0.0f, (float)expViewMaxScroll);
+          expViewScrollVel *= powf(0.92f, dt/16.0f); // v14: decay dinormalisasi dt
+          needRedraw = true;
+        } else {
+          expViewScrollVel = 0;
+        }
+      }
+      // v21: momentum scroll teks penjelasan APOD, pola PERSIS sama dgn AI Chat di atas
+      if(curScreen()==SCR_APOD && apodPage==APOD_VIEW){
+        if(fabsf(apodTextScrollVel)>0.3f){
+          apodTextScrollY = constrain(apodTextScrollY + apodTextScrollVel, 0.0f, (float)apodTextMaxScroll);
+          apodTextScrollVel *= powf(0.92f, dt/16.0f);
+          needRedraw = true;
+        } else {
+          apodTextScrollVel = 0;
+        }
+      }
+    }
+
+    // FIX bug layar putih bergaris/crash pas main NES: selagi emulator
+    // BENERAN jalan, task nofrendo di core lain pegang SPI display
+    // langsung (scanline blit tiap frame, transaksi startWrite() dibuka
+    // dari awal sampai keluar game). Kalau core 0 di sini ikut manggil
+    // push()/canvas.pushSprite() ke display yg SAMA tanpa lock apapun,
+    // dua core rebutan bus SPI -> korup/hang. Jadi drpd nambah mutex yg
+    // resikonya malah bikin salah satu sisi ke-block/nge-lag, cukup
+    // JANGAN sentuh display dari core 0 sama sekali selama momen ini --
+    // overlay dpad/tombol toh sudah digambar sendiri oleh emulator lewat
+    // nesOverlay_afterFrame(). needRedraw tetap direset spy gak numpuk.
+    if(curScreen()==SCR_NES && nesIsPlaying()){
+      needRedraw=false;
+    } else if(curScreen()==SCR_DOOM && doomIsPlaying()){
+      // Sama persis alasannya dgn guard SCR_NES di atas: selagi task
+      // DoomGlue beneran jalan, task itu pegang SPI display LANGSUNG
+      // (lihat RenPhoneDoomDisplay::beginFrame/writeRow/endFrame di
+      // doom_renphone.ino). Core render UI (canvas.pushSprite via push())
+      // TIDAK BOLEH ikut nyentuh display di momen yg sama -- dua core
+      // rebutan bus SPI -> korup/hang, sama kayak kasus NES.
+      needRedraw=false;
+    } else if(needRedraw){
+      renderCurrentFrame();push();needRedraw=false;
+    }
+  }
+  wasTouched=touched;
+  // v95: SEMUA delay(8) di file ini (loop() + loop animasi boot + early-
+  // return touch di bawah) diperkecil ke delay(1) -- AMAN krn tiap animasi
+  // di kode ini SUDAH dinormalisasi terhadap dt/waktu nyata (bukan hitung
+  // frame), jadi loop() lebih sering jalan = polling touch & redraw lebih
+  // rapat TANPA bikin animasi jadi lebih cepat dari seharusnya. delay(1)
+  // (bukan 0) sengaja disisakan spy task idle FreeRTOS (WiFi/BT/WDT) tetap
+  // kebagian jatah CPU. Bottleneck terbesar sebenarnya bukan di sini, tapi
+  // di pushSprite() lewat SPI (lihat DISPLAY_SPI_FREQ_EXPERIMENTAL di LGFX
+  // CONFIG) -- itu yg beneran nentuin "mentok"-nya frame rate render.
+  delay(1);
+}
