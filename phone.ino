@@ -725,6 +725,7 @@ struct Theme {
   uint16_t bg, surface, surface2, accent, accent2,
            text, subtext, divider, good, danger;
 };
+void uiBoostKick(); // fwd-decl (CI)
 
 
 // v53 FIX bug "semua fitur ber-API NASA selalu HTTP error -1": -1
