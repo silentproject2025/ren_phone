@@ -920,7 +920,10 @@ static void wxCloud(LGFX_Sprite& s, int cx, int cy, int r, uint16_t col) {
   s.fillRect(cx - r / 2, cy + r / 6, r + r / 3, r / 2, col);
 }
 
+#define WX_ANIM_MS 160UL   // v130: home anim -- jeda redraw ikon cuaca di Home (~6 fps). 0 = animasi MATI (hemat baterai)
 static void wxIcon(LGFX_Sprite& s, int cx, int cy, int r, int code, bool day) {
+  const unsigned long wms = millis();
+  const int bob = (int)lroundf(sinf(wms * 0.0021f) * 1.0f);   // awan naik-turun 1 px
   const uint16_t SUN = 0xFEA0, MOON = 0xDEFB, CLOUD = 0xC618, DARK = 0x8410, DROP = 0x5D7F;
   bool clear = (code == 0 || code == 1);
   bool rain = (code >= 51 && code <= 67) || (code >= 80 && code <= 82);
@@ -930,7 +933,7 @@ static void wxIcon(LGFX_Sprite& s, int cx, int cy, int r, int code, bool day) {
     if (day) {
       s.fillCircle(cx, cy, r / 2 + 1, SUN);
       for (int i = 0; i < 8; i++) {
-        float a = i * 0.785398f;
+        float a = i * 0.785398f + wms * 0.0007f;   // sinar matahari berputar pelan
         s.drawLine(cx + (int)(cosf(a) * (r * 0.75f)), cy + (int)(sinf(a) * (r * 0.75f)),
                    cx + (int)(cosf(a) * r), cy + (int)(sinf(a) * r), SUN);
       }
@@ -938,16 +941,22 @@ static void wxIcon(LGFX_Sprite& s, int cx, int cy, int r, int code, bool day) {
       s.fillCircle(cx, cy, r * 3 / 4, MOON);
       s.fillCircle(cx + r / 3, cy - r / 4, r * 3 / 4, T().surface);   // potongan bulan sabit
     }
-    if (code == 1) wxCloud(s, cx + r / 3, cy + r / 3, r * 2 / 3, CLOUD);
+    if (code == 1) wxCloud(s, cx + r / 3, cy + r / 3 + bob, r * 2 / 3, CLOUD);
     return;
   }
-  wxCloud(s, cx, cy - (rain || snow || storm ? r / 5 : 0), r, (rain || storm) ? DARK : CLOUD);
+  wxCloud(s, cx, cy - (rain || snow || storm ? r / 5 : 0) + bob, r, (rain || storm) ? DARK : CLOUD);
   int by = cy + r / 2 + 1;
   if (rain) {
-    for (int i = -1; i <= 1; i++) s.drawLine(cx + i * (r / 2), by, cx + i * (r / 2) - 2, by + r / 2, DROP);
+    const int hh = (r / 2 > 1) ? r / 2 : 1;                  // tetes hujan jatuh bergantian
+    for (int i = -1; i <= 1; i++) {
+      float ph = fmodf(wms * 0.0022f + (i + 1) * 0.37f, 1.0f); int dy = (int)(ph * hh); int x0 = cx + i * (r / 2);
+      s.drawLine(x0 - (2 * dy) / hh, by + dy, x0 - (2 * (dy + hh / 2)) / hh, by + dy + hh / 2, DROP);
+    }
   } else if (snow) {
-    for (int i = -1; i <= 1; i++) s.fillCircle(cx + i * (r / 2), by + r / 4, 1, 0xFFFF);
-  } else if (storm) {
+    for (int i = -1; i <= 1; i++)                              // salju turun sambil melayang
+      s.fillCircle(cx + i * (r / 2) + (int)lroundf(sinf(wms * 0.003f + i * 1.7f) * 1.5f),
+                   by + (int)(fmodf(wms * 0.0012f + (i + 1) * 0.31f, 1.0f) * (r / 2)), 1, 0xFFFF);
+  } else if (storm && (wms / 300UL) % 5 != 4) {              // petir berkedip
     s.fillTriangle(cx + 1, by - 1, cx - 4, by + r / 2, cx, by + r / 2, SUN);
     s.fillTriangle(cx, by + r / 2, cx + 5, by + 1, cx + 1, by + 1, SUN);
   }
@@ -992,6 +1001,10 @@ void drawWeatherWidget(LGFX_Sprite& s, int x, int y, int w, int h) {
 // HOOK dari loop() -- murah kalau tidak ada kerjaan
 // =====================================================================
 void featuresLoopPoll() {
+#if WX_ANIM_MS > 0
+  { static unsigned long wxAnimMs = 0; unsigned long nA = millis();     // v130: home anim -- redraw terbatas utk ikon cuaca
+    if (wxValid && !locked && !aodActive && curScreen() == SCR_HOME && nA - wxAnimMs >= WX_ANIM_MS) { wxAnimMs = nA; needRedraw = true; } }
+#endif
   swTick();
   screenshotPoll();
   memoPoll();

@@ -3475,6 +3475,7 @@ void drawMusicMini(LGFX_Sprite& s,int x,int y,int w,int h,bool ctrl){
 }
 
 // Kartu jam: sapaan (kiri-atas) + tanggal (kanan-atas), jam besar tebal di bawah
+unsigned long homeEnterMs=0; // v130: home anim -- diisi loop() saat layar berpindah KE Home
 void drawClockCard(LGFX_Sprite& s,int x,int y,int w,int h){
   drawGlassCard(s,x,y,w,h,bentoR(h,24),bentoTint(T().accent,80),185);
   struct tm t; bool ok=ntpSynced&&getLocalTime(&t);
@@ -3494,7 +3495,28 @@ void drawClockCard(LGFX_Sprite& s,int x,int y,int w,int h){
   while(sz>1.5f && s.textWidth(tb)>w-32){ sz-=0.25f; s.setTextSize(sz); }
   s.setTextColor(T().text);
   s.setTextDatum(lgfx::textdatum_t::baseline_left);
-  s.drawString(tb,x+16,y+h-12);
+  {                                                  // v130: home anim -- digit berubah naik+memudar masuk
+    static char lastTb[6]=""; static unsigned long chgMs[5]={0,0,0,0,0};
+    const unsigned long nowC=millis();
+    if(ok){
+      if(lastTb[0]){ for(int i=0;i<5;i++) if(tb[i]!=lastTb[i]) chgMs[i]=nowC; }
+      memcpy(lastTb,tb,6);
+    }
+    bool animC=false;
+    for(int i=0;i<5;i++){
+      char pre[6]; memcpy(pre,tb,i); pre[i]=0;
+      int px=x+16+(i? s.textWidth(pre):0);
+      char ch[2]={tb[i],0};
+      if(ok && chgMs[i] && nowC-chgMs[i]<350UL){
+        float ik=1.0f-(float)(nowC-chgMs[i])/350.0f; float ee=1.0f-ik*ik*ik;   // ease-out cubic
+        s.setTextColor(blend565(T().subtext,T().text,(uint8_t)(ee*255.0f)));
+        s.drawString(ch,px,y+h-12+(int)lroundf((1.0f-ee)*8.0f));
+        animC=true;
+      } else { s.setTextColor(T().text); s.drawString(ch,px,y+h-12); }
+    }
+    s.setTextColor(T().text);
+    if(animC) needRedraw=true;
+  }
   s.setTextDatum(lgfx::textdatum_t::top_left);
   s.setFont(&lgfx::fonts::Font0); // Home selalu Font0 (lihat renderCurrentFrame)
   s.setTextSize(1);
@@ -3511,11 +3533,14 @@ void drawBattWidget(LGFX_Sprite& s,int x,int y,int w,int h){
     uint16_t track=blend565(T().surface,0xFFFF,50);
     s.fillArc(cx,cy,ri,ro,0.0f,180.0f,track);
     s.fillArc(cx,cy,ri,ro,180.0f,360.0f,track);
-    float a1=270.0f+battPercent*3.6f;
-    if(battPercent>0){
+    float shown=(float)battPercent;                  // v130: home anim -- cincin terisi saat Home dibuka
+    { unsigned long dB=millis()-homeEnterMs;
+      if(homeEnterMs && dB<700UL){ float ikB=1.0f-(float)dB/700.0f; shown=battPercent*(1.0f-ikB*ikB*ikB); needRedraw=true; } }
+    float a1=270.0f+shown*3.6f;
+    if(shown>0.5f){
       if(a1<=360.0f) s.fillArc(cx,cy,ri,ro,270.0f,a1,bc);
       else { s.fillArc(cx,cy,ri,ro,270.0f,360.0f,bc); s.fillArc(cx,cy,ri,ro,0.0f,a1-360.0f,bc); }
-      if(battPercent<100){                                   // v129: ujung arc membulat
+      if(shown<99.5f){                                       // v129: ujung arc membulat
         int cr=(ro-ri)/2, rm=(ri+ro)/2; float er=a1*0.0174532925f;
         s.fillCircle(cx,cy-rm,cr,bc);
         s.fillCircle(cx+(int)lroundf(cosf(er)*rm),cy+(int)lroundf(sinf(er)*rm),cr,bc);
@@ -19070,6 +19095,8 @@ unsigned long lastClk=0,lastSen=0,lastMpu=0,lastBatt=0;
 unsigned long hwmonLastPoll=0; // v31: timer polling app HWmonitor (pola sama dgn lastSen dkk)
 unsigned long lastLoopMs=0; // v14: dipakai normalisasi decay momentum scroll thdp waktu nyata (dt)
 void loop(){
+  { static Screen s_hePrev=SCR_HOME; Screen s_heC=curScreen();   // v130: home anim -- catat saat masuk Home
+    if(s_heC!=s_hePrev){ if(s_heC==SCR_HOME) homeEnterMs=millis(); s_hePrev=s_heC; } }
   unsigned long nowMs=millis();
   float dt = lastLoopMs? (float)(nowMs-lastLoopMs) : 16.0f;
   if(dt>100.0f) dt=100.0f; // jaga2 abis jeda blocking panjang (mis. persis setelah boot)
