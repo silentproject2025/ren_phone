@@ -4350,33 +4350,17 @@ void unlockFollowBegin(){
   unlockFollowActive=true; unlockP=0.0f; unlockLastP=-1.0f; unlockMaxDy=0; ufHasPrev=false;
 }
 // u=0 sebesar ikon, u=1 layar penuh. Jendela cuma tumbuh/menyusut -> hanya area yg baru ditinggalkan yg dipulihkan.
-void unlockFollowDraw(float u){
+void unlockFollowDraw(float u){   // v126: unlock geser -- lock screen naik, Home diam di bawahnya
   if(u<0.0f) u=0.0f; if(u>1.0f) u=1.0f;
-  int x0=(int)lroundf(ufX*(1.0f-u)), y0=(int)lroundf(ufY*(1.0f-u));
-  int x1=(int)lroundf((ufX+ufW)*(1.0f-u)+SCR_W*u), y1=(int)lroundf((ufY+ufH)*(1.0f-u)+SCR_H*u);
-  if(x0<0) x0=0; if(y0<0) y0=0; if(x1>SCR_W) x1=SCR_W; if(y1>SCR_H) y1=SCR_H;
-  if(x1<=x0||y1<=y0) return;
-  int w=x1-x0, h=y1-y0;
+  int off=(int)lroundf((float)SCR_H*u);
+  if(off<0) off=0; if(off>SCR_H) off=SCR_H;
+  if(ufHasPrev && off==ufPX0) return;                  // ufPX0 dipakai sbg "offset terakhir"
   display.startWrite();
-  if(ufHasPrev){                                       // jendela menyusut -> pulihkan lock screen di area yg ditinggalkan
-    unlockFollowPush(transShot,ufPX0,ufPY0,ufPX1-ufPX0,y0-ufPY0);
-    unlockFollowPush(transShot,ufPX0,y1,ufPX1-ufPX0,ufPY1-y1);
-    unlockFollowPush(transShot,ufPX0,y0,x0-ufPX0,h);
-    unlockFollowPush(transShot,x1,y0,ufPX1-x1,h);
-  }
-  if(u>=0.5f){
-    unlockFollowPush(canvas,x0,y0,w,h);                // isi jendela = Home
-  } else {
-    float cr=u*1.6f; if(cr>1.0f) cr=1.0f;
-    int rr=(int)lroundf(ufR*(1.0f-cr)); if(rr>w/2) rr=w/2; if(rr>h/2) rr=h/2; if(rr<0) rr=0;
-    if(rr>0){                                          // pojok terpotong lengkungan -> kembalikan isi lock screen
-      unlockFollowPush(transShot,x0,y0,rr,rr); unlockFollowPush(transShot,x1-rr,y0,rr,rr);
-      unlockFollowPush(transShot,x0,y1-rr,rr,rr); unlockFollowPush(transShot,x1-rr,y1-rr,rr,rr);
-    }
-    display.fillRoundRect(x0,y0,w,h,rr,blend565(T().surface2,T().bg,(uint8_t)(u*2.0f*190.0f)));
-  }
+  if(off<SCR_H){ display.setClipRect(0,0,SCR_W,SCR_H-off); transShot.pushSprite(0,-off); }   // lock screen (naik)
+  if(off>0){ display.setClipRect(0,SCR_H-off,SCR_W,off); canvas.pushSprite(0,0); }           // Home (terbuka dari bawah)
+  display.clearClipRect();
   display.endWrite();
-  ufPX0=x0; ufPY0=y0; ufPX1=x1; ufPY1=y1; ufHasPrev=true;
+  ufPX0=off; ufHasPrev=true;
 }
 void unlockFollowFinish(float u0){
   unsigned long MS=(unsigned long)(90.0f+200.0f*(1.0f-u0));
@@ -4466,7 +4450,7 @@ void lockScreenInput(bool touched,bool newT,int tx,int ty){
     if(follow){
       if(!unlockFollowActive && dy>=8 && dy>abs(tx-startX)) unlockFollowBegin();   // swipe naik dominan -> Home mulai tumbuh
       if(unlockFollowActive){
-        float p=(float)dy/((float)SCR_H*0.55f); if(p<0.0f) p=0.0f; if(p>1.0f) p=1.0f;
+        float p=(float)dy/((float)SCR_H*0.80f); if(p<0.0f) p=0.0f; if(p>1.0f) p=1.0f;
         if(dy>unlockMaxDy) unlockMaxDy=dy;
         unlockP=p;
         if(fabsf(p-unlockLastP)>0.004f){ unlockFollowDraw(p); unlockLastP=p; }
@@ -4480,7 +4464,7 @@ void lockScreenInput(bool touched,bool newT,int tx,int ty){
     lockDragging=false;
     if(unlockFollowActive){
       unsigned long el=millis()-startMs;
-      if(unlockMaxDy>=40 && (unlockP>=0.30f || el<220UL)) unlockFollowFinish(unlockP);
+      if(unlockMaxDy>=40 && (unlockP>=0.20f || el<220UL)) unlockFollowFinish(unlockP);
       else unlockFollowCancel(unlockP);
       return;
     }
