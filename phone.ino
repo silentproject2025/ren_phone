@@ -6189,19 +6189,21 @@ int homeDockY(){ return SCR_H-38-8; }
 // Landscape: jam (kiri) + baterai (kanan) di baris 1, kartu musik di baris 2.
 // Portrait : jam, kartu musik, baterai (bar) bertumpuk. Grid app mulai di bawahnya.
 bool homeIsLand(){ return currentOrient==ORIENT_LANDSCAPE; }
-HomeRect homeWClock(){ HomeRect r; r.x=10; r.y=STATUS_H+28; r.h=homeIsLand()?66:80; r.w=homeIsLand()?188:SCR_W-20; return r; }
-HomeRect homeWMusic(){ HomeRect r; r.x=10; r.w=SCR_W-20; if(homeIsLand()){ r.y=STATUS_H+28+66+8; r.h=48; } else { r.y=STATUS_H+28+80+8; r.h=58; } return r; }
+HomeRect homeWClock(){ /* v131: home layout */ HomeRect r; r.x=10; r.y=STATUS_H+28; r.h=homeIsLand()?66:88; r.w=homeIsLand()?188:SCR_W-20; return r; }
+HomeRect homeWMusic(){ HomeRect r; r.x=10; r.w=SCR_W-20; if(homeIsLand()){ r.y=STATUS_H+28+66+8; r.h=48; } else { r.y=STATUS_H+28+88+8; r.h=58; } return r; }
 HomeRect homeWBatt(){
   HomeRect r;
   if(homeIsLand()){ r.x=206; r.y=STATUS_H+28; r.w=SCR_W-216; r.h=66; }
-  else { r.x=10; r.y=STATUS_H+28+80+8+58+8; r.w=SCR_W-20; r.h=44; }
+  else { r.x=10; r.y=STATUS_H+28+88+8+58+8; r.w=84; r.h=76; }
   return r;
 }
 // Widget cuaca: baris tambahan DI BAWAH kartu musik/baterai (grid app otomatis turun
 // krn homeGridTop() memakai homeWidgetsEnd()). Data & gambar di features_renphone.ino.
 HomeRect homeWWeather(){
   HomeRect b=homeWBatt(), m=homeWMusic(); HomeRect r;
-  r.x=10; r.w=SCR_W-20; r.y=max(b.y+b.h,m.y+m.h)+8; r.h=homeIsLand()?40:48; return r;
+  if(homeIsLand()){ r.x=10; r.w=SCR_W-20; r.y=max(b.y+b.h,m.y+m.h)+8; r.h=40; }
+  else { r.x=b.x+b.w+8; r.w=SCR_W-10-r.x; r.y=b.y; r.h=b.h; }   // v131: portrait -- di KANAN baterai, satu baris
+  return r;
 }
 int homeWidgetsEnd(){ HomeRect b=homeWBatt(), m=homeWMusic(), w=homeWWeather(); return max(max(b.y+b.h,m.y+m.h),w.y+w.h); }
 int homeGridTop(){ return homeWidgetsEnd()+30; } // UI-OVERHAUL: grid di bawah blok widget (+ ruang utk judul "Semua App")

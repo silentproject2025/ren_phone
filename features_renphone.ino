@@ -967,9 +967,28 @@ void drawWeatherWidget(LGFX_Sprite& s, int x, int y, int w, int h) {
   int cy = y + h / 2;
   s.setTextSize(1);
   if (!wxValid) {
-    const char* msg = wxFetching ? "Memuat cuaca..." : (!wifiConnected ? "Cuaca: WiFi belum terhubung" : (wxFailed ? "Gagal memuat cuaca - ketuk untuk coba lagi" : "Ketuk untuk memuat cuaca"));
+    const bool nar = (w < 150);                                  // v131: kartu sempit -> pesan singkat
+    const char* msg = wxFetching ? "Memuat cuaca..." : (!wifiConnected ? (nar ? "Tanpa WiFi" : "Cuaca: WiFi belum terhubung") : (wxFailed ? (nar ? "Gagal, ketuk ulang" : "Gagal memuat cuaca - ketuk untuk coba lagi") : (nar ? "Ketuk utk muat" : "Ketuk untuk memuat cuaca")));
     s.setTextColor(T().subtext);
     s.setCursor(x + 16, cy - 4); s.print(msg);
+    return;
+  }
+  if (w < 150) {                                                 // v131: tata letak ringkas (kartu di samping baterai)
+    const int rn = 12; const int icy = y + 10 + rn;
+    wxIcon(s, x + 12 + rn, icy, rn, wxCode, wxIsDay != 0);
+    char tn[8]; snprintf(tn, sizeof(tn), "%d", (int)lroundf(wxTemp));
+    int txn = x + 12 + rn * 2 + 8;
+    s.setTextSize(2); s.setTextColor(T().text);
+    s.setCursor(txn, icy - 8); s.print(tn);
+    s.setCursor(txn + 1, icy - 8); s.print(tn);
+    int twn = s.textWidth(tn);
+    s.setTextSize(1);
+    s.drawCircle(txn + twn + 4, icy - 6, 2, T().text);
+    s.setCursor(txn + twn + 9, icy - 8); s.print("C");
+    uiText(s, x + 12, y + h - 30, wxDesc(wxCode), T().text, false, true);
+    char dn[28]; snprintf(dn, sizeof(dn), "%d/%d C  Hujan %d%%", (int)lroundf(wxMax), (int)lroundf(wxMin), wxRain);
+    s.setTextColor(T().subtext);
+    s.setCursor(x + 12, y + h - 15); s.print(dn);
     return;
   }
   int r = (h >= 46) ? 13 : 11;
