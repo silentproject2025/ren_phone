@@ -88,6 +88,13 @@ static volatile bool     chatToastFlag = false;
 static char              chatErrBuf[44] = "";
 static char              chatToastBuf[44] = "";
 // indikator "sedang mengetik"
+// status pesan yg KITA kirim: bubble sementara "Mengirim..." -> hilang digantikan bubble asli (+tanda terkirim)
+// begitu pesannya kembali dari broker; kalau gagal/10 dtk tak kembali -> "Gagal" + ketuk untuk kirim ulang.
+static volatile uint8_t  chatOutState = 0;                   // 0 tidak ada, 1 mengirim, 2 gagal
+static char              chatOutText[CHAT_TEXT_LEN] = "";
+static char              chatOutName[CHAT_USER_LEN] = "";
+static uint32_t          chatOutMs = 0;
+static int               chatOutX = 0, chatOutY = 0, chatOutW = 0, chatOutH = 0;   // area bubble (utk ketuk kirim ulang)
 static char              chatPeerName[CHAT_USER_LEN] = "";   // diisi callback MQTT (di bawah chatMx), dibaca UI
 static volatile uint32_t chatPeerTypeUntil = 0;              // millis() sampai kapan indikator tampil (0 = mati)
 static char              chatTypeNameBuf[CHAT_USER_LEN] = "";// nama yg dikirim task jaringan
@@ -212,6 +219,7 @@ static void chatInsert(uint32_t seq, uint32_t ts, const char* user, int ulen, co
       chatCopyAscii(m.text, CHAT_TEXT_LEN, text, tlen);
       m.born = (chatConn == 1) ? millis() : 0;          // riwayat (sebelum "siap") tidak dianimasikan
       if (chatConn == 1 && m.born == 0) m.born = 1;
+      if (chatOutState != 0 && strcmp(chatOutName, m.user) == 0 && strcmp(chatOutText, m.text) == 0) chatOutState = 0;   // pesan kita sudah kembali dari broker
       if (strcmp(chatPeerName, m.user) == 0) chatPeerTypeUntil = 0;   // pengirimnya sudah kirim pesan -> titik-titik hilang
       chatCount++;
       if (seq > chatLastSeq) chatLastSeq = seq;
@@ -319,6 +327,7 @@ static void chatTaskFunc(void*) {
               chatSendPending = false;
             } else {
               chatSendPending = false;
+              chatOutState = 2;
               chatToast("Pesan gagal terkirim");
             }
           }
@@ -375,6 +384,7 @@ void chatEnter() {
   if (!chatConfigured() && chatCfgFromSd()) { chatCfgSave(); showToast("Konfigurasi dimuat dari SD", 2200); }
   chatScroll = 0;
   chatCfgEdit = -1;
+  chatOutState = 0;
   chatPeerTypeUntil = 0; chatPeerName[0] = 0; chatTypeAnim = 0.0f; chatTypeSentMs = 0; chatTypeSendReq = false;
   chatCfgMode = !chatConfigured();
   chatConn = 0;
@@ -422,6 +432,7 @@ void chatLoopPoll() {
     if (curScreen() == SCR_CHAT) needRedraw = true;
   }
   if (curScreen() != SCR_CHAT || chatCfgMode || !chatMsgs) { chatTypeAnim = 0.0f; return; }
+  if (chatOutState == 1 && millis() - chatOutMs > 10000UL) { chatOutState = 2; needRedraw = true; }   // tak kembali dari broker
   // animasi: indikator mengetik (muncul/hilang + titik memantul) & pesan baru masuk, ~30 fps
   static unsigned long lastMs = 0;
   unsigned long now = millis();
@@ -563,7 +574,17 @@ void drawChat(LGFX_Sprite& s) {
   int maxCh = (maxBW - 2 * CB_PADX) / 6;
   if (areaH > 10 && chatMx && xSemaphoreTake(chatMx, pdMS_TO_TICKS(30)) == pdTRUE) {
     int typeSlot = (int)lroundf((float)CB_TYPE_H * chatEaseOut(chatTypeAnim));
-    int total = typeSlot;
+    // bubble "sedang dikirim / gagal" milik kita: slot tambahan paling bawah di atas indikator mengetik
+    int outN = 0, outMl = 0, outH = 0, outGap = CB_GAP_NEW;
+    if (chatOutState != 0) {
+      int ost[8], oln[8];
+      outN = chatWrap(chatOutText, maxCh, ost, oln, 8);
+      if (outN < 1) outN = 1;
+      else for (int k = 0; k < outN; k++) if (oln[k] > outMl) outMl = oln[k];
+      if (chatCount > 0 && strcmp(chatMsgs[chatCount - 1].user, chatName.c_str()) == 0) outGap = CB_GAP_SAME;
+      outH = outGap + CB_PADT + outN * CB_LINE + CB_TIMEH + CB_PADB;
+    }
+    int total = typeSlot + outH;
     for (int i = 0; i < chatCount; i++) total += chatMsgLayout(i, maxCh, 0, 0, 0, 0);
     int maxScroll = total > areaH ? total - areaH : 0;
     if (chatScroll > maxScroll) chatScroll = maxScroll;
@@ -606,6 +627,32 @@ void drawChat(LGFX_Sprite& s) {
     }
     y -= typeSlot;
 
+    if (outH > 0) {
+      y -= outH;
+      uint8_t os = chatOutState;
+      int minW = (os == 2) ? 26 * 6 : 11 * 6;
+      int bw = (outMl * 6 > minW ? outMl * 6 : minW) + 2 * CB_PADX;
+      int bh = CB_PADT + outN * CB_LINE + CB_TIMEH + CB_PADB;
+      int bx = SCR_W - 6 - bw, by = y + outGap;
+      uint16_t bc = (os == 2) ? blend565(T().surface2, T().danger, 150) : blend565(T().accent, T().bg, 90);   // pucat = belum terkirim
+      s.fillRoundRect(bx, by, bw, bh, 9, bc);
+      s.fillRect(bx + bw - 9, by + bh - 9, 9, 9, bc);
+      if (os == 2) s.drawRoundRect(bx, by, bw, bh, 9, T().danger);
+      int ost[8], oln[8];
+      int nn = chatWrap(chatOutText, maxCh, ost, oln, 8);
+      s.setTextColor(T().bg);
+      for (int k = 0; k < nn; k++) {
+        char line[64];
+        int L = oln[k] < (int)sizeof(line) - 1 ? oln[k] : (int)sizeof(line) - 1;
+        memcpy(line, chatOutText + ost[k], L); line[L] = 0;
+        s.setCursor(bx + CB_PADX, by + CB_PADT + k * CB_LINE); s.print(line);
+      }
+      const char* st = (os == 2) ? "Gagal - ketuk utk kirim ulang" : "Mengirim...";
+      s.setTextColor(os == 2 ? (uint16_t)T().danger : blend565(T().bg, T().accent, 90));
+      s.setCursor(bx + bw - CB_PADX - s.textWidth(st), by + CB_PADT + outN * CB_LINE); s.print(st);
+      chatOutX = bx; chatOutY = by; chatOutW = bw; chatOutH = bh;
+    } else { chatOutW = 0; chatOutH = 0; }
+
     for (int i = chatCount - 1; i >= 0; i--) {
       int n, ml, gap; bool showName;
       int h = chatMsgLayout(i, maxCh, &n, &ml, &gap, &showName);
@@ -613,7 +660,8 @@ void drawChat(LGFX_Sprite& s) {
       if (y + h <= top) break;
       if (y >= bot) continue;
       bool mine = (strcmp(chatName.c_str(), chatMsgs[i].user) == 0);
-      int bw = (ml * 6 > 30 ? ml * 6 : 30) + 2 * CB_PADX;
+      int minIn = mine ? 42 : 30;
+      int bw = (ml * 6 > minIn ? ml * 6 : minIn) + 2 * CB_PADX;
       int bh = CB_PADT + n * CB_LINE + CB_TIMEH + CB_PADB;
       int bx = mine ? (SCR_W - 6 - bw) : 6;
       if (i == chatCount - 1) bx += mine ? newX : -newX;
@@ -644,6 +692,11 @@ void drawChat(LGFX_Sprite& s) {
       } else snprintf(hm, sizeof(hm), "--:--");
       s.setTextColor(mine ? blend565(T().bg, T().accent, 90) : (uint16_t)T().subtext);
       s.setCursor(bx + bw - CB_PADX - s.textWidth(hm), by + CB_PADT + n * CB_LINE); s.print(hm);
+      if (mine) {                                       // tanda terkirim: sudah diterima broker (pesan kembali dari langganan)
+        int kx = bx + bw - CB_PADX - s.textWidth(hm) - 11, ky = by + CB_PADT + n * CB_LINE + 3;
+        uint16_t kc = blend565(T().bg, T().accent, 60);
+        s.drawLine(kx, ky + 2, kx + 2, ky + 4, kc); s.drawLine(kx + 2, ky + 4, kx + 7, ky - 1, kc);
+      }
     }
     if (chatCount == 0) {
       s.setTextColor(T().subtext);
@@ -703,10 +756,26 @@ static void chatDoSend() {
   t.replace("|", "/");                       // '|' dipakai sbg pemisah payload
   xSemaphoreTake(chatMx, portMAX_DELAY);
   chatSendQ = chatName + "\n" + t;
+  chatCopyAscii(chatOutText, CHAT_TEXT_LEN, t.c_str(), (int)t.length());     // salinan yg sudah disanitasi = persis yg nanti kembali
+  chatCopyAscii(chatOutName, CHAT_USER_LEN, chatName.c_str(), (int)chatName.length());
+  chatOutState = 1; chatOutMs = millis();
   xSemaphoreGive(chatMx);
   chatSendPending = true;
   chatInput = "";
   chatScroll = 0;
+  needRedraw = true;
+}
+
+// ketuk bubble "Gagal" -> kirim ulang
+static void chatResend() {
+  if (chatOutState != 2) return;
+  if (chatConn != 1) { showToast("Belum tersambung ke broker", 1800); return; }
+  if (chatSendPending) { showToast("Tunggu pesan sebelumnya...", 1400); return; }
+  xSemaphoreTake(chatMx, portMAX_DELAY);
+  chatSendQ = String(chatOutName) + "\n" + String(chatOutText);
+  xSemaphoreGive(chatMx);
+  chatSendPending = true;
+  chatOutState = 1; chatOutMs = millis();
   needRedraw = true;
 }
 
@@ -780,6 +849,7 @@ void chatTouch(int x, int y, bool held, bool isNew) {
       else chatStartTyping(&chatInput);
       return;
     }
+    if (chatOutState == 2 && x >= chatOutX && x <= chatOutX + chatOutW && y >= chatOutY && y <= chatOutY + chatOutH) { chatResend(); return; }
     if (y >= top && y <= bot) { dragging = true; dragY = y; }
   } else if (held && dragging) {
     int dy = y - dragY;

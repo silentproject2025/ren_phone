@@ -55,6 +55,16 @@ void notifHistPush(char icon, const String& title, uint16_t color, const String&
   notifHist[0].badge=badge; notifHist[0].ts=millis();
   notifHist[0].linkScreen=linkScreen; notifHist[0].hasLink=hasLink;
   if(notifHistCount<NOTIF_HIST_MAX) notifHistCount++;
+  needRedraw=true;   // NOTIF-LOCK: kartu di lock screen ikut muncul
+}
+
+// hapus 1 baris histori (dipakai geser-hapus di lock screen)
+void notifHistRemove(int idx){
+  if(idx<0 || idx>=notifHistCount) return;
+  for(int i=idx;i<notifHistCount-1;i++) notifHist[i]=notifHist[i+1];
+  notifHistCount--;
+  notifHist[notifHistCount].title=""; notifHist[notifHistCount].badge="";
+  needRedraw=true;
 }
 
 // -----------------------------------------------------------------
@@ -366,4 +376,117 @@ void diMenuTouch(int x,int y){
   if(row==0){ diHide(); }              // "Sembunyikan" -- collapse notif yg lg tampil skrg
   else if(row==1){ openNotifShade(); } // "Buka Notifikasi" -- langsung ke shade penuh
   else if(row==2){ notifHistCount=0; needRedraw=true; } // "Bersihkan Semua"
+}
+
+
+// =================================================================
+// NOTIF-LOCK -- kartu notifikasi di LOCK SCREEN.
+// Isi = histori yg sama dgn Notification Shade (terbaru di atas), maks 3 kartu dan hanya sebanyak yg
+// muat di area [lockNotifTop,lockNotifBottom] yg disisakan drawLockScreen().
+//  - kartu baru meluncur masuk dari kanan (berbasis waktu, 320 ms)
+//  - geser kartu ke kiri/kanan: ikut jari; lepas jauh/cepat = terlempar keluar & dihapus dari histori,
+//    lepas pendek = membal balik. Gestur ini membatalkan gestur "geser naik utk buka" yg sedang menunggu.
+// =================================================================
+#define LN_CARD_H   34
+#define LN_GAP      4
+#define LN_MAX      3
+#define LN_ANIM_MS  320UL
+#define LN_OUT_MS   180UL
+static int   lnCand=-1, lnDragIdx=-1, lnSx=0, lnSy=0, lnLastX=0;
+static bool  lnDragOn=false;
+static float lnDragDx=0, lnVel=0;
+static unsigned long lnLastMs=0;
+static int   lnOutIdx=-1, lnOutDir=1;
+static float lnOutFrom=0;
+static unsigned long lnOutT0=0;
+
+static int lnCount(){
+  int avail=(lockNotifBottom-lockNotifTop+LN_GAP)/(LN_CARD_H+LN_GAP);
+  int c=notifHistCount<LN_MAX?notifHistCount:LN_MAX;
+  if(avail<c) c=avail;
+  return c<0?0:c;
+}
+static int lnCardY(int i){ return lockNotifTop-(int)lockDragY+i*(LN_CARD_H+LN_GAP); }
+static int lnHit(int tx,int ty){
+  int n=lnCount();
+  for(int i=0;i<n;i++){ int y=lnCardY(i); if(ty>=y && ty<=y+LN_CARD_H && tx>=14 && tx<=SCR_W-14) return i; }
+  return -1;
+}
+static float lnEase(float t){ if(t<0)t=0; if(t>1)t=1; float q=1-t; return 1-q*q*q; }
+
+void lockNotifDraw(LGFX_Sprite& s,int lift,uint16_t fg,uint16_t fg2){
+  (void)lift;
+  int n=lnCount(); if(n<=0) return;
+  const int x0=14, w=SCR_W-28;
+  unsigned long now=millis();
+  for(int i=0;i<n;i++){
+    NotifEntry &e=notifHist[i];
+    int y=lnCardY(i), dx=0;
+    unsigned long age=now-e.ts;
+    if(age<LN_ANIM_MS){ float k=1.0f-(float)age/(float)LN_ANIM_MS; dx=(int)(k*k*k*(float)(w/2)); }   // masuk dari kanan
+    if(i==lnOutIdx){ dx=(int)lroundf(lnOutFrom+((float)lnOutDir*(float)SCR_W-lnOutFrom)*lnEase((float)(now-lnOutT0)/(float)LN_OUT_MS)); }
+    else if(i==lnDragIdx) dx=(int)lroundf(lnDragDx);
+    int x=x0+dx;
+    drawGlassCard(s,x,y,w,LN_CARD_H,12,T().surface,150);
+    int cy=y+LN_CARD_H/2;
+    drawAppIcon(s,e.icon,x+19,cy,11,e.color);
+    String t=e.title; int maxCh=(w-56)/6; if((int)t.length()>maxCh) t=t.substring(0,maxCh-2)+"..";
+    s.setTextSize(1);
+    s.setTextColor(fg); s.setCursor(x+38,cy-9); s.print(t.c_str());
+    char ageStr[16];
+    if(age<60000UL) strcpy(ageStr,"baru saja");
+    else if(age<3600000UL) snprintf(ageStr,sizeof(ageStr),"%lum lalu",age/60000UL);
+    else snprintf(ageStr,sizeof(ageStr),"%ljam lalu",age/3600000UL);
+    s.setTextColor(fg2); s.setCursor(x+38,cy+3); s.print(ageStr);
+  }
+}
+
+bool lockNotifInput(bool touched,bool newT,int tx,int ty){
+  if(lnOutIdx>=0) return false;                       // kartu sedang terlempar: gestur lain jalan normal
+  unsigned long now=millis();
+  if(newT){
+    lnCand=lnHit(tx,ty); lnDragOn=false; lnSx=tx; lnSy=ty; lnVel=0; lnLastX=tx; lnLastMs=now;
+    return false;                                     // gestur unlock tetap dimulai; dibatalkan bila ternyata geser mendatar
+  }
+  if(lnCand<0) return false;
+  if(touched){
+    int dx=tx-lnSx, dy=ty-lnSy;
+    if(!lnDragOn && !unlockFollowActive && abs(dx)>12 && abs(dx)>abs(dy)){
+      lnDragOn=true; lnDragIdx=lnCand; lockDragging=false; lockDragY=0;
+    }
+    if(lnDragOn){
+      lnDragDx=(float)dx;
+      unsigned long dt=now-lnLastMs;
+      if(dt>0) lnVel=lnVel*0.6f+((float)(tx-lnLastX)/(float)dt)*0.4f;
+      lnLastX=tx; lnLastMs=now;
+      needRedraw=true;
+      return true;
+    }
+    return false;
+  }
+  // jari lepas
+  int c=lnCand; lnCand=-1;
+  if(!lnDragOn) return false;
+  lnDragOn=false;
+  if(now-lnLastMs>90) lnVel=0;
+  bool far=fabsf(lnDragDx)>(float)SCR_W/3.0f;
+  bool fast=fabsf(lnVel)>0.5f && ((lnVel<0)==(lnDragDx<0));
+  if(far||fast){ lnOutIdx=c; lnOutFrom=lnDragDx; lnOutDir=(lnDragDx<0)?-1:1; lnOutT0=now; }
+  needRedraw=true;
+  return true;
+}
+
+void lockNotifTick(){
+  if(!locked || aodActive) return;
+  unsigned long now=millis();
+  if(lnOutIdx>=0){
+    if(now-lnOutT0>=LN_OUT_MS){ notifHistRemove(lnOutIdx); lnOutIdx=-1; lnDragIdx=-1; lnDragDx=0; }
+    needRedraw=true; return;
+  }
+  if(lnDragIdx>=0 && !lnDragOn){                      // membal balik
+    lnDragDx*=0.6f;
+    if(fabsf(lnDragDx)<1.0f){ lnDragDx=0; lnDragIdx=-1; }
+    needRedraw=true;
+  }
+  if(notifHistCount>0 && now-notifHist[0].ts<LN_ANIM_MS+40UL) needRedraw=true;   // kartu baru masih meluncur
 }

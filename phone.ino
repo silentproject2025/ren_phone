@@ -2836,6 +2836,7 @@ void notepadRequestConfirm(int act); // act: 1=Back, 2=Home -> tampilkan dialog 
 // Home  = geser TURUN (kesan "menutup/pulang", searah swipe unlock)
 // =============================================
 void renderCurrentFrame(); // forward decl - dipakai utk render frame BARU sblm animasi
+void ptrPointerTick(bool touched,bool wasT,int tx,int ty); void ptrDraw(LGFX_Sprite& s); // ptr_renphone.ino: pull-to-refresh + swipe-back tepi kiri
 // UI-OVERHAUL: API musik utk widget Home/Lock (definisi di musicbt_renphone.ino)
 bool homeMusStarted(); bool homeMusLoaded(); bool homeMusPlaying(); float homeMusProgress();
 void homeMusTitle(char* out,int cap); void homeMusToggle(); void homeMusNext();
@@ -4035,6 +4036,12 @@ bool isBack(int x,int y){
 // LOCK SCREEN
 // =============================================
 float lockDragY=0; bool lockDragging=false;
+// NOTIF-LOCK: kartu notifikasi di lock screen (digambar & diurus di phone_notif_center.ino, krn struct NotifEntry ada di sana).
+// drawLockScreen() cuma menentukan area [Top,Bottom] yg kosong; kartu muat sebanyak yg ada tempatnya (maks 3).
+int lockNotifTop=0, lockNotifBottom=0;
+void lockNotifDraw(LGFX_Sprite& s,int lift,uint16_t fg,uint16_t fg2);
+bool lockNotifInput(bool touched,bool newT,int tx,int ty);
+void lockNotifTick();
 
 // v96: FITUR BARU -- Always-On Display (AOD) ringan. Kalau layar TERKUNCI
 // & gak disentuh selama AOD_IDLE_MS, backlight diredupkan jauh + tampilan
@@ -4064,6 +4071,7 @@ void aodWake(){
 // urus transisi ke AOD kalau sudah idle cukup lama + jaga jam AOD/lock
 // biasa tetap update berkala walau gak disentuh.
 void lockIdleTick(bool touched){
+  lockNotifTick();   // NOTIF-LOCK: animasi kartu masuk / hapus / balik
   if(touched){ aodWake(); return; }
   // v110: swipe batal -> jam & kartu musik "meluncur" balik pelan (peluruhan eksponensial), bukan loncat langsung ke 0
   if(!lockDragging && lockDragY>0.5f){ lockDragY*=0.70f; if(lockDragY<0.5f) lockDragY=0; needRedraw=true; }
@@ -4324,6 +4332,14 @@ void drawLockScreen(LGFX_Sprite& s){
     }
   }
 
+  // NOTIF-LOCK: kartu notifikasi di antara jam/IP dan kartu musik (atau hint kalau tak ada musik)
+  {
+    int ipBottom=ty+fh+2+20;
+    lockNotifTop=ipBottom+8;
+    lockNotifBottom=(homeMusStarted() && homeMusLoaded()) ? SCR_H-100-6 : SCR_H-52-6;
+    lockNotifDraw(s,lift,fg,fg2);
+  }
+
   // kartu musik mini (hanya kalau ada lagu aktif)
   if(homeMusStarted() && homeMusLoaded()){
     int cw=SCR_W-40, cy0=SCR_H-100-lift;
@@ -4466,6 +4482,7 @@ void chargeAnimTick(){
 void lockScreenInput(bool touched,bool newT,int tx,int ty){
   static int startY=0; static int startX=0; static unsigned long startMs=0;
   if(newT && aodActive){ aodWake(); return; } // v96: sentuhan pertama pas AOD cuma "bangunin", belum mulai gestur unlock
+  if(lockNotifInput(touched,newT,tx,ty)) return; // NOTIF-LOCK: geser kartu notifikasi ke samping = hapus (gestur unlock dibatalkan)
   if(newT && homeMusStarted() && homeMusLoaded()){ // v110: ketuk tombol di kartu musik = kontrol, BUKAN mulai swipe unlock
     int mcy0=SCR_H-100-(int)lockDragY, mpc, mnc;
     homeMusBtnPos(20,SCR_W-40,mpc,mnc);
@@ -11176,6 +11193,7 @@ void renderCurrentFrame(){
   } else {
     int idx=appIndexForScreen(curScreen());
     if(idx>=0) apps[idx].draw(canvas);
+    ptrDraw(canvas); // pull-to-refresh + swipe-back tepi kiri (ptr_renphone.ino)
   }
   // v90: 2 overlay baru (Notification Shade + context menu DI) disisipkan
   // di sini, mutually-exclusive dgn Control Center persis pola yg sama.
@@ -19897,6 +19915,7 @@ void loop(){
     if(curScreen()==SCR_SETTINGS && !kbVisible) settingsPointerTick(touched,wasTouched,tx,ty); // Pengaturan ala iOS: scroll + tap-saat-lepas
     if(curScreen()==SCR_FILEEXPLORER) fileExpPointerTick(touched,wasTouched,tx,ty); // File Explorer: drag-scroll + ketuk saat lepas
     if(curScreen()==SCR_GALLERY) galPointerTick(touched,wasTouched,tx,ty);          // Galeri: scroll/ketuk + pemuat thumbnail
+    ptrPointerTick(touched,wasTouched,tx,ty);                                        // pull-to-refresh + swipe-back tepi kiri
     if(curScreen()==SCR_REMOTE) remotePointerTick(touched,wasTouched,tx,ty);        // Remote: geser daftar + ketuk saat lepas
     if(curScreen()==SCR_HOMEEDIT) homeEditPointerTick(touched,wasTouched,tx,ty);    // Atur Home: geser daftar + ketuk saat lepas
     int idx=appIndexForScreen(curScreen());
