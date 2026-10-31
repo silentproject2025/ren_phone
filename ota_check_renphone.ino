@@ -451,6 +451,14 @@ static bool otaOtherSlotValid(const esp_partition_t** outp) {
   return true;
 }
 
+// Ukuran slot OTA tujuan update (KB), atau -1 kalau tabel partisi perangkat TIDAK punya slot OTA.
+// Dipakai layar GAGAL app Update supaya penyebab "Partition Could Not be Found" / "Not Enough Space" jelas.
+int otaSlotSizeKB() {
+  const esp_partition_t* o = esp_ota_get_next_update_partition(NULL);   // sama dgn yg dipakai Update.begin()
+  if (!o) return -1;
+  return (int)(o->size / 1024UL);
+}
+
 static bool otaRbReady = false;
 void otaRollbackRefresh() { otaRbReady = otaOtherSlotValid(nullptr); }
 bool otaRollbackReady()   { return otaRbReady; }

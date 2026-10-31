@@ -5431,7 +5431,7 @@ void drawUpdate(LGFX_Sprite&); void updTouch(int,int,bool,bool);
 void otaGuardBoot(); void otaGuardPoll(); void otaGuardArm();
 String otaBranchName(); String otaChannelName(); void otaChannelCycle(); void otaAddBranchBegin(); void otaAddBranchPoll(); void otaVersionLabel(char* out, int n);
 bool otaRollbackReady(); void otaRollbackRefresh(); bool otaRollbackNow(bool);
-void otaHdrReset(); bool otaHdrFeed(const uint8_t*,size_t,size_t); bool otaPreInstall(const String&,int,String&); void otaApplyExpect(const String&);
+void otaHdrReset(); bool otaHdrFeed(const uint8_t*,size_t,size_t); bool otaPreInstall(const String&,int,String&); void otaApplyExpect(const String&); int otaSlotSizeKB();
 // ---- Chat MQTT: forward declarations (chat_renphone.ino) ----
 void chatEnter(); void chatExit(); void drawChat(LGFX_Sprite&); void chatTouch(int,int,bool,bool); void chatLoopPoll();
 // ---- Telepon SIP/LAN: forward declarations (call_renphone.ino) ----
@@ -5618,18 +5618,73 @@ AppDef apps[42] = {
 // benar2 buka appnya (pola sama kayak badge notifikasi HP asli).
 // =============================================
 int appNotifCount[APP_COUNT] = {0};
+// BOUNCE-BADGE: saat ada notifikasi BARU (notifAdd n>0), ikon app-nya memantul 3x (tinggi
+// meluruh) dan lencana merahnya "pop" (membesar sedikit lewat 1.0 lalu mengendap). Cuma
+// menyimpan waktu mulai per app (0 = diam) -- animasinya dihitung dari millis() saat digambar,
+// jadi tidak ada state lain yg perlu di-update & kecepatannya sama di FPS berapa pun.
+#define NOTIF_BOUNCE_MS 950UL
+#define NOTIF_POP_MS    320.0f
+unsigned long appBounceMs[APP_COUNT] = {0};
 void notifAdd(Screen s, int n){
-  for(int i=0;i<APP_COUNT;i++) if(apps[i].screen==s){ appNotifCount[i]+=n; needRedraw=true; return; }
+  for(int i=0;i<APP_COUNT;i++) if(apps[i].screen==s){
+    appNotifCount[i]+=n;
+    if(n>0){ appBounceMs[i]=millis(); if(appBounceMs[i]==0) appBounceMs[i]=1; }
+    needRedraw=true; return;
+  }
+}
+// progres animasi 0..1 utk app ke-i, atau -1 kalau tidak sedang memantul (sekaligus membersihkan yg sudah selesai)
+float appBounceU(int i){
+  if(i<0||i>=APP_COUNT||appBounceMs[i]==0) return -1.0f;
+  unsigned long el=millis()-appBounceMs[i];
+  if(el>=NOTIF_BOUNCE_MS){ appBounceMs[i]=0; return -1.0f; }
+  return (float)el/(float)NOTIF_BOUNCE_MS;
+}
+// geser vertikal ikon (px, negatif = naik): 3 lompatan, tiap lompatan lebih pendek
+int appBounceDy(int i,int iconR){
+  float u=appBounceU(i); if(u<0.0f) return 0;
+  float env=1.0f-u; env*=env;
+  float hop=fabsf(sinf(3.0f*3.14159265f*u));
+  return -(int)lroundf((float)iconR*0.45f*env*hop);
+}
+// skala lencana: 0 -> ~1.2 -> 1.0 (easeOutBack) dalam NOTIF_POP_MS pertama
+float appBadgePop(int i){
+  float u=appBounceU(i); if(u<0.0f) return 1.0f;
+  float el=u*(float)NOTIF_BOUNCE_MS;
+  if(el>=NOTIF_POP_MS) return 1.0f;
+  float q=el/NOTIF_POP_MS-1.0f;
+  return 1.0f + 3.2f*q*q*q + 2.2f*q*q;
+}
+// true kalau ada ikon yg masih memantul; dockOnly=true kalau SEMUA yg memantul ikon dock
+// (dock tidak ikut digambar ulang di mode pita Home, jadi loop() perlu frame penuh)
+bool appBounceAny(bool& dockOnly){
+  bool any=false, grid=false;
+  const int dockIdx[4]={0,4,6,7};
+  for(int i=0;i<APP_COUNT;i++){
+    if(appBounceU(i)<0.0f) continue;
+    any=true;
+    bool inDock=false; for(int k=0;k<4;k++) if(dockIdx[k]==i) inDock=true;
+    if(!inDock) grid=true;
+  }
+  dockOnly = any && !grid;
+  return any;
 }
 void notifClear(Screen s){
   for(int i=0;i<APP_COUNT;i++) if(apps[i].screen==s && appNotifCount[i]!=0){ appNotifCount[i]=0; needRedraw=true; return; }
 }
-void drawNotifBadge(LGFX_Sprite& s, int cx,int cy,int iconR,int count){
+void drawNotifBadge(LGFX_Sprite& s, int cx,int cy,int iconR,int count,float pop){
   if(count<=0) return;
   int bx=cx+iconR-2, by=cy-iconR+2; // UI-MODERN: sudut kanan-atas squircle (dulu 0.72*r utk lingkaran)
   int br = count>9? 8 : 6;
-  s.fillCircle(bx,by,br,T().danger);
-  s.drawCircle(bx,by,br,T().bg); // cincin tipis warna bg -- pisahin badge dr ikon di baliknya
+  if(pop<0.99f || pop>1.01f){ // BOUNCE-BADGE: lencana baru "pop" -- lingkaran membesar-mengecil, angka muncul setelah cukup besar
+    int brp=(int)lroundf((float)br*pop); if(brp<1) brp=1;
+    s.fillCircle(bx,by,brp,T().danger);
+    s.drawCircle(bx,by,brp,T().bg);
+    if(pop<0.6f) return;
+    br=brp;
+  } else {
+    s.fillCircle(bx,by,br,T().danger);
+    s.drawCircle(bx,by,br,T().bg); // cincin tipis warna bg -- pisahin badge dr ikon di baliknya
+  }
   s.setTextColor(0xFFFF); s.setTextSize(1);
   char buf[4]; if(count>9) strcpy(buf,"9+"); else sprintf(buf,"%d",count);
   int tw=s.textWidth(buf);
@@ -6377,10 +6432,10 @@ void drawHome(LGFX_Sprite& s,float sc){
         int x=gap+col*(cw+gap), y=rt+row*(ch+gap);
         if(y>contentBot) continue;
         float pa = homePressAmt(i);
-        int cx=x+cw/2, cy=y+(ch-16)/2;
+        int cx=x+cw/2, cy=y+(ch-16)/2 + appBounceDy(i,iconR);
         int rEff = iconR - (int)lroundf(pa*iconR*0.12f);
         drawAppIcon(s, apps[i].sym, cx, cy, rEff, apps[i].color);
-        drawNotifBadge(s, cx, cy, iconR, appNotifCount[i]);
+        drawNotifBadge(s, cx, cy, iconR, appNotifCount[i], appBadgePop(i));
         s.setTextColor(T().text);s.setTextSize(1);
         homeDrawLabel(s, apps[i].name, x+cw/2, y+ch-14, cw+6);
       }
@@ -6408,10 +6463,10 @@ void drawHome(LGFX_Sprite& s,float sc){
       int x=gap+col*(cw+gap), y=gridTop+row*(ch+gap)-scPx;
       if(y+ch<clipTop||y>contentBot)continue;
       float pa = homePressAmt(i);
-      int cx=x+cw/2, cy=y+(ch-16)/2;
+      int cx=x+cw/2, cy=y+(ch-16)/2 + appBounceDy(i,iconR);
       int rEff = iconR - (int)lroundf(pa*iconR*0.12f);
       drawAppIcon(s, apps[i].sym, cx, cy, rEff, apps[i].color);
-      drawNotifBadge(s, cx, cy, iconR, appNotifCount[i]);
+      drawNotifBadge(s, cx, cy, iconR, appNotifCount[i], appBadgePop(i));
       s.setTextColor(T().text);s.setTextSize(1);
       homeDrawLabel(s, apps[i].name, x+cw/2, y+ch-14, cw+6);
     }
@@ -6444,8 +6499,9 @@ void drawHome(LGFX_Sprite& s,float sc){
     int dockIconR=14;
     for(int i=0;i<4;i++){
       int di=dockIdx[i];
-      int cx=6+i*dw+dw/2, cy=dockY+dockH/2;
+      int cx=6+i*dw+dw/2, cy=dockY+dockH/2 + appBounceDy(di,dockIconR);
       drawAppIcon(s, apps[di].sym, cx, cy, dockIconR, apps[di].color);
+      drawNotifBadge(s, cx, cy, dockIconR, appNotifCount[di], appBadgePop(di)); // BOUNCE-BADGE: dock ikut punya lencana
     }
   }
   if(!band && kbVisible && kbTarget==&homeSearchInput) drawKb(s);
@@ -10357,13 +10413,41 @@ void updScanFiles(){
   Serial.printf("[Update] %d file .bin ditemukan di %s\n", updFileCount, UPDATE_FOLDER);
 }
 
-// ===== layar progres UI v2 =====
-// Kerangka (judul, trek, peringatan) digambar SEKALI oleh updDrawProgress(); selama unduh/tulis cukup
+// ===== layar progres UI v3 =====
+// Kerangka (judul, fase, trek, peringatan) digambar SEKALI oleh updDrawProgress(); selama unduh/tulis cukup
 // panggil updDrawProgressFast() -- hanya menimpa angka & menambah bagian batang yg baru, dan hanya saat
 // persen berubah (tidak ada hapus-lalu-gambar ulang -> tidak kedip, dan tidak menahan unduhan).
-static int updLastPct = -1;
-static int updBarFill = 0;
+// v3: + fase ("Menulis ke flash" / "Memverifikasi..."), ukuran dlm MB, kecepatan & perkiraan sisa waktu,
+// dan layar GAGAL yg menjelaskan penyebab (bahasa awam + saran) dgn tombol "Coba lagi".
+static int    updLastPct = -1;
+static int    updBarFill = 0;
+static const char* updPhaseLabel = "Menyiapkan...";   // fase yg sedang jalan (dipakai juga layar gagal)
+static unsigned long updT0 = 0;                       // mulai tulis/unduh
+static size_t updDoneBytes = 0, updTotalBytes = 0;
+static bool   updRetryReq = false;                    // user menekan "Coba lagi" di layar gagal
+
+static void updFmtSize(char* out, size_t n, size_t b){
+  if(b >= 1024UL*1024UL){
+    unsigned mb = (unsigned)(b/(1024UL*1024UL));
+    unsigned fr = (unsigned)(((b%(1024UL*1024UL))*100UL)/(1024UL*1024UL));
+    snprintf(out, n, "%u,%02u MB", mb, fr);
+  } else snprintf(out, n, "%u KB", (unsigned)(b/1024UL));
+}
+static void updFmtDur(char* out, size_t n, unsigned long sec){
+  if(sec >= 60) snprintf(out, n, "%lu mnt %lu dtk", sec/60, sec%60);
+  else          snprintf(out, n, "%lu dtk", sec);
+}
+// label fase di bawah judul (mis. "Menulis ke flash", "Memverifikasi firmware...")
+static void updDrawPhase(const char* label){
+  updPhaseLabel = label;
+  display.fillRect(0, UPD_PG_BARY-70, SCR_W, 10, TFT_BLACK);
+  display.setTextSize(1);
+  display.setTextColor(0xBDF7);
+  display.setCursor((SCR_W-display.textWidth(label))/2, UPD_PG_BARY-70);
+  display.print(label);
+}
 void updDrawProgressFast(size_t written, size_t total){
+  updDoneBytes = written; updTotalBytes = total;
   int pct = (total>0) ? (int)(((uint64_t)written*100)/total) : 0;
   if(pct > 100) pct = 100;
   if(pct == updLastPct) return;
@@ -10374,25 +10458,42 @@ void updDrawProgressFast(size_t written, size_t total){
     display.fillRect(UPD_PG_BARX+2+updBarFill, UPD_PG_BARY+2, fillW-updBarFill, UPD_PG_BARH-4, 0x07F5);
     updBarFill = fillW;
   }
-  char buf[32];
+  char buf[40];
   snprintf(buf, sizeof(buf), "%3d%%", pct);
   display.setTextSize(4);
   display.setTextColor(TFT_WHITE, TFT_BLACK);
   display.setCursor((SCR_W-96)/2, UPD_PG_BARY-52);
   display.print(buf);
-  snprintf(buf, sizeof(buf), "%u / %u KB      ", (unsigned)(written/1024), (unsigned)(total/1024));
+  // kiri: "1,24 / 2,05 MB"   kanan: "182 KB/s  sisa 5 dtk"  (teks berlatar hitam & lebar tetap -> menimpa tanpa kedip)
+  char a[16], b[16];
+  updFmtSize(a, sizeof(a), written); updFmtSize(b, sizeof(b), total);
+  snprintf(buf, sizeof(buf), "%-18s", (String(a)+" / "+String(b)).c_str());
   display.setTextSize(1);
   display.setTextColor(0x8410, TFT_BLACK);
   display.setCursor(UPD_PG_BARX, UPD_PG_BARY+UPD_PG_BARH+10);
   display.print(buf);
+  unsigned long el = millis() - updT0;
+  char r[40];
+  if(el > 800UL && written > 0){
+    unsigned long bps = (unsigned long)(((uint64_t)written*1000ULL)/el);   // byte/detik
+    if(bps == 0) bps = 1;
+    unsigned long eta = (unsigned long)((total-written)/bps);
+    if(eta >= 60) snprintf(r, sizeof(r), "%lu KB/s  sisa %lu mnt", bps/1024UL, (eta+30)/60);
+    else          snprintf(r, sizeof(r), "%lu KB/s  sisa %lu dtk", bps/1024UL, eta);
+  } else snprintf(r, sizeof(r), "menghitung...");
+  snprintf(buf, sizeof(buf), "%26s", r);
+  display.setCursor(UPD_PG_BARX+UPD_PG_BARW-26*6, UPD_PG_BARY+UPD_PG_BARH+10);
+  display.print(buf);
 }
 
 void updDrawProgress(const char* title, size_t written, size_t total){
+  updT0 = millis(); updDoneBytes = written; updTotalBytes = total;
   display.fillScreen(TFT_BLACK);
   display.setTextSize(1);
   display.setTextColor(0x07FF);
   display.setCursor((SCR_W-display.textWidth(title))/2, UPD_PG_BARY-86);
   display.print(title);
+  updDrawPhase(updPhaseLabel);
   display.fillRoundRect(UPD_PG_BARX, UPD_PG_BARY, UPD_PG_BARW, UPD_PG_BARH, 3, 0x2104);
   const char* warn = "JANGAN MATIKAN PERANGKAT!";
   display.setTextColor(0xFD20);
@@ -10416,14 +10517,101 @@ void updDrawBusy(const char* title){
   for(int i=0;i<3;i++) display.fillCircle(SCR_W/2-14+i*14, SCR_H/2+28, 3, i==0 ? 0x07FF : (i==1 ? 0x0555 : 0x02AA));
 }
 
+bool getInputPoint(lgfx::touch_point_t &tp);   // definisi di bawah (dipakai layar GAGAL utk menunggu ketukan)
+// ---- penjelasan galat Update (bahasa awam + saran) utk layar GAGAL ----
+static bool updHas(const String& s, const char* k){
+  String a = s; a.toLowerCase();
+  String b = String(k); b.toLowerCase();
+  return a.indexOf(b) >= 0;
+}
+// return true kalau galat dikenali (msg/hint diisi ulang); false -> msg = raw apa adanya
+static bool updExplain(const String& raw, String& msg, String& hint){
+  int slot = otaSlotSizeKB();            // -1 = tabel partisi tak punya slot OTA
+  char tmp[160];
+  msg = raw;
+  hint = "Coba lagi. Kalau terus gagal, periksa file atau koneksinya.";
+  if(updHas(raw, "Partition Could Not be Found")){
+    msg  = "Partisi OTA tidak ditemukan di flash perangkat.";
+    hint = "Tabel partisi yg terpasang tidak punya slot OTA. Flash ulang SEKALI lewat USB dgn skema partisi app3M_fat9M_16MB; setelah itu update lewat SD/WiFi bisa dipakai.";
+    return true;
+  }
+  if(updHas(raw, "Not Enough Space") || updHas(raw, "Bad Size")){
+    msg = "Firmware lebih besar dari slot OTA.";
+    if(slot >= 0) snprintf(tmp, sizeof(tmp), "Firmware %u KB, slot OTA hanya %d KB. Pakai firmware yg lebih kecil atau skema partisi dgn slot lebih besar.", (unsigned)(updTotalBytes/1024UL), slot);
+    else          snprintf(tmp, sizeof(tmp), "Firmware %u KB tidak muat. Periksa skema partisi perangkat.", (unsigned)(updTotalBytes/1024UL));
+    hint = tmp;
+    return true;
+  }
+  if(updHas(raw, "Flash Write") || updHas(raw, "Flash Erase") || updHas(raw, "Flash Read")){
+    msg  = "Gagal menulis ke memori flash.";
+    hint = "Coba lagi. Kalau berulang, flash mungkin bermasalah atau daya kurang (colok charger).";
+    return true;
+  }
+  if(updHas(raw, "Stream Read Timeout") || updHas(raw, "Timeout")){
+    msg  = "Koneksi macet saat mengunduh.";
+    hint = "Dekatkan ke WiFi / pastikan sinyal stabil, lalu coba lagi.";
+    return true;
+  }
+  if(updHas(raw, "MD5")){
+    msg  = "Pemeriksaan keutuhan (MD5) gagal.";
+    hint = "File rusak atau tidak lengkap. Unduh ulang berkasnya.";
+    return true;
+  }
+  if(updHas(raw, "Magic Byte") || updHas(raw, "bukan image")){
+    msg  = "Berkas ini bukan firmware ESP32-S3 yang valid.";
+    hint = "Pastikan memilih file .bin hasil build firmware ini.";
+    return true;
+  }
+  if(updHas(raw, "HTTP GET gagal")){
+    int ci = raw.lastIndexOf(':');
+    String code = ci >= 0 ? raw.substring(ci+1) : String("");
+    code.trim();
+    msg  = String("Server menolak permintaan (HTTP ") + code + ").";
+    hint = "Periksa URL firmware / channel yg dipilih, lalu coba lagi.";
+    return true;
+  }
+  if(updHas(raw, "Content-Length")){
+    msg  = "Server tidak mengirim ukuran file.";
+    hint = "Pakai tautan unduhan langsung (mis. GitHub Release).";
+    return true;
+  }
+  return false;
+}
+
+// cetak teks dgn pembungkus kata di display; return jumlah baris yg tercetak
+static int updPrintWrap(const String& txt, int x, int y, int maxW, int lineH, int maxLines){
+  int lines = 0, i = 0, L = (int)txt.length();
+  String line = "";
+  while(i < L && lines < maxLines){
+    int j = i; while(j < L && txt[j] != ' ') j++;
+    String word = txt.substring(i, j);
+    if(!line.length() && display.textWidth(word.c_str()) > maxW){   // satu kata lebih lebar dari baris: potong paksa
+      int k = (int)word.length();
+      while(k > 1 && display.textWidth(word.substring(0, k).c_str()) > maxW) k--;
+      display.setCursor(x, y + lines*lineH); display.print(word.substring(0, k)); lines++;
+      i += k;
+      while(i < L && txt[i] == ' ') i++;
+      continue;
+    }
+    String trial = line.length() ? (line + " " + word) : word;
+    if(display.textWidth(trial.c_str()) <= maxW){ line = trial; i = j + 1; }
+    else { display.setCursor(x, y + lines*lineH); display.print(line); lines++; line = ""; }
+  }
+  if(line.length() && lines < maxLines){ display.setCursor(x, y + lines*lineH); display.print(line); lines++; }
+  return lines;
+}
+
 // reason: alasan gagal yang ditampilkan LANGSUNG di layar (bukan cuma di Serial),
 // supaya kelihatan penyebab pastinya walau dipakai tanpa PC/serial monitor.
+// v3: layar gagal = ikon + judul + "gagal saat <fase> (NN%)" + penjelasan awam + saran + detail teknis,
+// lalu MENUNGGU ketukan ("Coba lagi" / "Tutup"; otomatis tutup setelah 2 menit) -- bukan lagi hilang sendiri 3 detik.
 void updShowResult(bool success, const String& reason){
   updBusy = false;
   display.fillScreen(TFT_BLACK);
-  int cx = SCR_W/2, cy = SCR_H/2-44;
-  display.setTextSize(2);
+  int cx = SCR_W/2;
   if(success){
+    int cy = SCR_H/2-44;
+    display.setTextSize(2);
     otaGuardArm(); // firmware baru ditandai 'pending' -> otaGuardBoot()/otaGuardPoll() di boot berikutnya
     display.fillCircle(cx, cy, 28, 0x07F5);
     for(int d=-1; d<=1; d++){
@@ -10435,34 +10623,94 @@ void updShowResult(bool success, const String& reason){
     display.setCursor((SCR_W-display.textWidth(t1))/2, cy+44);
     display.print(t1);
     display.setTextSize(1);
+    char sz[16], du[24], sm[64];
+    updFmtSize(sz, sizeof(sz), updTotalBytes);
+    updFmtDur(du, sizeof(du), (millis()-updT0)/1000UL);
+    snprintf(sm, sizeof(sm), "%s terpasang dalam %s", sz, du);
+    display.setTextColor(0xBDF7);
+    display.setCursor((SCR_W-display.textWidth(sm))/2, cy+68);
+    display.print(sm);
     display.setTextColor(TFT_WHITE);
     const char* t2 = "Perangkat restart otomatis...";
-    display.setCursor((SCR_W-display.textWidth(t2))/2, cy+68);
+    display.setCursor((SCR_W-display.textWidth(t2))/2, cy+82);
     display.print(t2);
-    delay(1800);
+    delay(2200);
     ESP.restart();
-  } else {
-    display.fillCircle(cx, cy, 28, 0xF9A6);
-    for(int d=-1; d<=1; d++){
-      display.drawLine(cx-11, cy-11+d, cx+11, cy+11+d, 0xFFFF);
-      display.drawLine(cx-11, cy+11+d, cx+11, cy-11+d, 0xFFFF);
-    }
-    const char* t1 = "Update Gagal";
-    display.setTextColor(0xF9A6);
-    display.setCursor((SCR_W-display.textWidth(t1))/2, cy+44);
-    display.print(t1);
-    display.setTextSize(1);
-    display.setTextColor(TFT_WHITE);
-    display.setCursor(16, cy+70);
-    display.setTextWrap(true);
-    display.print(reason.length() ? reason : "Cek file/koneksi, coba lagi.");
-    display.setTextWrap(false);
-    delay(3000);
-    needRedrawNow();
+    return;
   }
+
+  // ---- GAGAL ----
+  String msg, hint;
+  bool mapped = updExplain(reason, msg, hint);
+  if(!msg.length()) msg = "Update gagal.";
+  const int icy = 34;
+  display.fillCircle(cx, icy, 22, 0xF9A6);
+  for(int d=-1; d<=1; d++){
+    display.drawLine(cx-9, icy-9+d, cx+9, icy+9+d, 0xFFFF);
+    display.drawLine(cx-9, icy+9+d, cx+9, icy-9+d, 0xFFFF);
+  }
+  display.setTextSize(2);
+  const char* t1 = "Update Gagal";
+  display.setTextColor(0xF9A6);
+  display.setCursor((SCR_W-display.textWidth(t1))/2, icy+30);
+  display.print(t1);
+  display.setTextSize(1);
+  int y = icy + 54;
+  // gagal pada fase apa & sudah berapa persen
+  {
+    int pct = (updTotalBytes > 0) ? (int)(((uint64_t)updDoneBytes*100ULL)/updTotalBytes) : 0;
+    if(pct > 100) pct = 100;
+    char st[80];
+    snprintf(st, sizeof(st), "Gagal saat: %s (%d%%)", updPhaseLabel, pct);
+    display.setTextColor(0xBDF7);
+    display.setCursor((SCR_W-display.textWidth(st))/2, y);
+    display.print(st);
+    y += 16;
+  }
+  const int footY = SCR_H - 64;        // baris "firmware lama aman"
+  const int lh = 11, mw = SCR_W - 32;
+  auto room = [&](int cap)->int{ int r = (footY - 4 - y)/lh; return r < cap ? r : cap; };
+  display.setTextColor(TFT_WHITE);
+  if(room(3) > 0){ int n = updPrintWrap(msg, 16, y, mw, lh, room(3)); y += n*lh + 5; }
+  display.setTextColor(0xFFE0);
+  if(room(3) > 0){ int n = updPrintWrap(hint, 16, y, mw, lh, room(3)); y += n*lh + 5; }
+  if(mapped && reason.length()){       // detail teknis asli (sama dgn yg dulu tampil), kecil & redup
+    display.setTextColor(0x8410);
+    if(room(2) > 0) updPrintWrap(reason, 16, y, mw, lh, room(2));
+  }
+  const char* safe = "Firmware lama tetap aman, perangkat tidak berubah.";
+  display.setTextColor(0x07F5);
+  display.setCursor((SCR_W-display.textWidth(safe))/2, footY);
+  display.print(safe);
+  // tombol
+  const int bh = 28, by = SCR_H - 40, bwid = (SCR_W - 48)/2;
+  const int bx1 = 16, bx2 = 16 + bwid + 16;
+  display.fillRoundRect(bx1, by, bwid, bh, 8, 0x07FF);
+  display.fillRoundRect(bx2, by, bwid, bh, 8, 0x2104);
+  display.setTextColor(TFT_BLACK);
+  display.setCursor(bx1 + (bwid-display.textWidth("Coba lagi"))/2, by + 10); display.print("Coba lagi");
+  display.setTextColor(TFT_WHITE);
+  display.setCursor(bx2 + (bwid-display.textWidth("Tutup"))/2, by + 10); display.print("Tutup");
+
+  // tunggu ketukan (harus lepas dulu supaya sentuhan sisa tidak langsung menekan tombol)
+  unsigned long tw0 = millis();
+  bool armed = false;
+  for(;;){
+    lgfx::touch_point_t tp;
+    bool down = getInputPoint(tp);
+    if(!down) armed = true;
+    else if(armed && tp.y >= by-6 && tp.y <= by+bh+6){
+      if(tp.x >= bx1 && tp.x <= bx1+bwid){ updRetryReq = true; break; }
+      if(tp.x >= bx2 && tp.x <= bx2+bwid){ break; }
+    }
+    if(millis() - tw0 > 120000UL) break;
+    delay(15);
+    yield();
+  }
+  needRedrawNow();
 }
 
-bool updInstallFromSD(const String& filename){
+bool updInstallFromSDOnce(const String& filename){
   String fullPath = String(UPDATE_FOLDER) + "/" + filename;
   File f = SD_MMC.open(fullPath, FILE_READ);
   if(!f || f.isDirectory()){
@@ -10478,8 +10726,11 @@ bool updInstallFromSD(const String& filename){
   }
 
   updBusy = true;
+  updTotalBytes = fileSize; updDoneBytes = 0; updT0 = millis();
+  updPhaseLabel = "Menulis ke flash";
   updDrawProgress("Update Lokal (SD Card)...", 0, fileSize);
 
+  updPhaseLabel = "Menyiapkan penyimpanan";
   if(!Update.begin(fileSize, U_FLASH)){
     f.close();
     String why = Update.errorString();
@@ -10514,6 +10765,7 @@ bool updInstallFromSD(const String& filename){
     yield();
   }
   f.close();
+  updDrawPhase("Memverifikasi firmware...");
 
   if(!Update.end(true) || !Update.isFinished()){
     String why = Update.errorString();
@@ -10525,7 +10777,7 @@ bool updInstallFromSD(const String& filename){
   return true;
 }
 
-bool updInstallFromURL(const String& url){
+bool updInstallFromURLOnce(const String& url){
   if(WiFi.status() != WL_CONNECTED){
     showToast("WiFi belum terhubung!");
     return false;
@@ -10579,6 +10831,8 @@ bool updInstallFromURL(const String& url){
   }
   { String otaWhy; if(!otaPreInstall(url, contentLen, otaWhy)){ http.end(); updShowResult(false, otaWhy); return false; } }
 
+  updTotalBytes = (size_t)contentLen; updDoneBytes = 0; updT0 = millis();
+  updPhaseLabel = "Menyiapkan penyimpanan";
   if(!Update.begin((size_t)contentLen, U_FLASH)){
     http.end();
     String why = Update.errorString();
@@ -10600,6 +10854,7 @@ bool updInstallFromURL(const String& url){
   size_t written = 0;
   unsigned long lastData = millis();
   updLastPct = -1; updBarFill = 0;
+  updPhaseLabel = "Mengunduh & menulis ke flash";
   updDrawProgress("Update via WiFi...", 0, contentLen);
 
   while(http.connected() && written < (size_t)contentLen){
@@ -10638,6 +10893,7 @@ bool updInstallFromURL(const String& url){
     yield();
   }
   http.end();
+  updDrawPhase("Memverifikasi firmware...");
 
   if(!Update.end(true) || !Update.isFinished()){
     String why = Update.errorString();
@@ -10647,6 +10903,23 @@ bool updInstallFromURL(const String& url){
   }
   updShowResult(true, "");
   return true;
+}
+
+// v3: pembungkus "Coba lagi" -- layar gagal (updShowResult) menyalakan updRetryReq kalau user menekan tombolnya,
+// lalu proses diulang dari awal di SINI (bukan rekursi: buffer 4 KB di stack fungsi SD tidak boleh menumpuk).
+bool updInstallFromSD(const String& filename){
+  for(;;){
+    updRetryReq = false;
+    bool ok = updInstallFromSDOnce(filename);
+    if(ok || !updRetryReq) return ok;
+  }
+}
+bool updInstallFromURL(const String& url){
+  for(;;){
+    updRetryReq = false;
+    bool ok = updInstallFromURLOnce(url);
+    if(ok || !updRetryReq) return ok;
+  }
 }
 
 void updEnter(){
@@ -19556,6 +19829,15 @@ void loop(){
         }
         if(homePressAnim<=0.0f && homePressedIdx<0) homePressAnimIdx=-1;
         needRedraw=true; bandCand=true;
+      }
+    }
+    // BOUNCE-BADGE: ikon yg baru dapat notifikasi memantul -- redraw selama animasi. Kalau yg memantul
+    // ikon DOCK, dock tdk digambar di mode pita -> paksa frame penuh (bandCand=false).
+    {
+      bool dockOnlyBounce=false;
+      if(appBounceAny(dockOnlyBounce)){
+        needRedraw=true;
+        bandCand = !dockOnlyBounce;
       }
     }
     // v-baru: animasi buka/tutup kolom cari (pola sama persis dgn

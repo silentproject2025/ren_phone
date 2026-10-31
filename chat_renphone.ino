@@ -11,6 +11,9 @@
 //   Tiap HP subscribe renphone/chat/m/+ . Saat tersambung, broker langsung mengirim isi 24
 //   slot retained = RIWAYAT 24 pesan terakhir (termasuk yg dikirim waktu app ini tertutup).
 //   Pesan live masuk lewat topik yg sama. Urutan & duplikat ditangani lewat nomor seq.
+//   renphone/chat/t          indikator "sedang mengetik": payload = "<nama>", TIDAK retained, QoS 0.
+//                            Dikirim paling sering tiap 2,5 dtk selagi user mengetik; penerima menampilkan
+//                            titik-titik 4,5 dtk sejak paket terakhir (HP lama yg tak langganan topik ini tetap normal).
 //   seq berikutnya = seq tertinggi yg pernah dilihat + 1. Kalau dua HP kirim di detik yg
 //   persis sama bisa bertabrakan di slot yg sama (salah satu hilang) -- jarang utk pemakaian
 //   pribadi. Kirim DIBLOKIR ~1,5 dtk setelah tersambung supaya riwayat selesai diterima dulu.
@@ -45,8 +48,22 @@
 #define CHAT_TOP       (STATUS_H+22)
 #define CHAT_PORT      8883
 #define CHAT_TOPIC_BASE "renphone/chat/m/"
+#define CHAT_TOPIC_TYPING "renphone/chat/t"
+#define CHAT_TYPE_SHOW_MS  4500UL     // indikator mengetik bertahan segini sejak paket terakhir
+#define CHAT_TYPE_SEND_GAP 2500UL     // jeda minimum antar paket "mengetik" yg kita kirim
+#define CHAT_ANIM_MS       280UL      // animasi pesan live baru masuk
+// ukuran bubble
+#define CB_PADX     8
+#define CB_PADT     5
+#define CB_LINE     10
+#define CB_TIMEH    9
+#define CB_PADB     3
+#define CB_NAMEH    11
+#define CB_GAP_SAME 3
+#define CB_GAP_NEW  8
+#define CB_TYPE_H   26                // tinggi slot indikator mengetik (bubble 20 + celah)
 
-struct ChatMsg { uint32_t seq; uint32_t ts; char user[CHAT_USER_LEN]; char text[CHAT_TEXT_LEN]; };
+struct ChatMsg { uint32_t seq; uint32_t ts; char user[CHAT_USER_LEN]; char text[CHAT_TEXT_LEN]; uint32_t born; };   // born = millis() saat pesan LIVE masuk (0 = riwayat, tanpa animasi)
 
 static ChatMsg*          chatMsgs = nullptr;        // PSRAM
 static int               chatCount = 0;
@@ -70,6 +87,13 @@ static volatile bool     chatSendPending = false;
 static volatile bool     chatToastFlag = false;
 static char              chatErrBuf[44] = "";
 static char              chatToastBuf[44] = "";
+// indikator "sedang mengetik"
+static char              chatPeerName[CHAT_USER_LEN] = "";   // diisi callback MQTT (di bawah chatMx), dibaca UI
+static volatile uint32_t chatPeerTypeUntil = 0;              // millis() sampai kapan indikator tampil (0 = mati)
+static char              chatTypeNameBuf[CHAT_USER_LEN] = "";// nama yg dikirim task jaringan
+static volatile bool     chatTypeSendReq = false;
+static uint32_t          chatTypeSentMs = 0;
+static float             chatTypeAnim = 0.0f;                // 0..1: tinggi slot indikator (muncul/hilang halus)
 
 // ---------------------------------------------------------------------
 // konfigurasi
@@ -186,6 +210,9 @@ static void chatInsert(uint32_t seq, uint32_t ts, const char* user, int ulen, co
       m.seq = seq; m.ts = ts;
       chatCopyAscii(m.user, CHAT_USER_LEN, user, ulen);
       chatCopyAscii(m.text, CHAT_TEXT_LEN, text, tlen);
+      m.born = (chatConn == 1) ? millis() : 0;          // riwayat (sebelum "siap") tidak dianimasikan
+      if (chatConn == 1 && m.born == 0) m.born = 1;
+      if (strcmp(chatPeerName, m.user) == 0) chatPeerTypeUntil = 0;   // pengirimnya sudah kirim pesan -> titik-titik hilang
       chatCount++;
       if (seq > chatLastSeq) chatLastSeq = seq;
       chatDirty = true;
@@ -209,8 +236,21 @@ static void chatOnPayload(const char* payload, unsigned int len) {
   chatInsert(seq, ts, p2 + 1, (int)(p3 - (p2 + 1)), p3 + 1, (int)strlen(p3 + 1));
 }
 
+static void chatOnTyping(const char* payload, unsigned int len) {
+  if (!chatMx || len == 0 || len > 60) return;
+  char nm[CHAT_USER_LEN];
+  chatCopyAscii(nm, sizeof(nm), payload, (int)len);
+  xSemaphoreTake(chatMx, portMAX_DELAY);
+  strncpy(chatPeerName, nm, sizeof(chatPeerName) - 1);
+  chatPeerName[sizeof(chatPeerName) - 1] = 0;
+  chatPeerTypeUntil = millis() + CHAT_TYPE_SHOW_MS;
+  if (chatPeerTypeUntil == 0) chatPeerTypeUntil = 1;
+  xSemaphoreGive(chatMx);
+  chatDirty = true;
+}
+
 static void chatMqttCb(char* topic, uint8_t* payload, unsigned int len) {
-  (void)topic;
+  if (topic && strcmp(topic, CHAT_TOPIC_TYPING) == 0) { chatOnTyping((const char*)payload, len); return; }
   chatOnPayload((const char*)payload, len);
 }
 
@@ -251,6 +291,7 @@ static void chatTaskFunc(void*) {
       snprintf(cid, sizeof(cid), "renphone-%08x", (unsigned)esp_random());
       if (mqtt.connect(cid, user.c_str(), pass.c_str())) {
         mqtt.subscribe(CHAT_TOPIC_BASE "+", 1);
+        mqtt.subscribe(CHAT_TOPIC_TYPING, 0);
         uint32_t readyAt = millis() + 1500UL;          // beri waktu riwayat retained masuk
         bool ready = false;
         while (chatActive && mqtt.connected() && WiFi.status() == WL_CONNECTED) {
@@ -280,6 +321,10 @@ static void chatTaskFunc(void*) {
               chatSendPending = false;
               chatToast("Pesan gagal terkirim");
             }
+          }
+          if (ready && chatTypeSendReq) {
+            chatTypeSendReq = false;
+            mqtt.publish(CHAT_TOPIC_TYPING, chatTypeNameBuf);      // QoS 0, tidak retained
           }
           vTaskDelay(pdMS_TO_TICKS(20));
         }
@@ -330,6 +375,7 @@ void chatEnter() {
   if (!chatConfigured() && chatCfgFromSd()) { chatCfgSave(); showToast("Konfigurasi dimuat dari SD", 2200); }
   chatScroll = 0;
   chatCfgEdit = -1;
+  chatPeerTypeUntil = 0; chatPeerName[0] = 0; chatTypeAnim = 0.0f; chatTypeSentMs = 0; chatTypeSendReq = false;
   chatCfgMode = !chatConfigured();
   chatConn = 0;
   chatErrBuf[0] = 0;
@@ -342,11 +388,57 @@ void chatExit() {
 }
 
 // dipanggil tiap putaran loop() (lihat apply_chat_patch.py)
+static float chatEaseOut(float t) {
+  if (t < 0.0f) t = 0.0f;
+  if (t > 1.0f) t = 1.0f;
+  float q = 1.0f - t;
+  return 1.0f - q * q * q;
+}
+
+// ada orang LAIN yg sedang mengetik? (nama sama dgn kita = gema paket kita sendiri -> diabaikan)
+static bool chatPeerTyping() {
+  uint32_t until = chatPeerTypeUntil;
+  if (until == 0 || (int32_t)(until - millis()) <= 0) return false;
+  return strcmp(chatPeerName, chatName.c_str()) != 0;
+}
+
+// pesan live terbaru masih dalam animasi masuk?
+static bool chatNewestAnimating() {
+  if (!chatMx || !chatMsgs) return false;
+  bool r = false;
+  if (xSemaphoreTake(chatMx, 0) == pdTRUE) {
+    if (chatCount > 0) {
+      uint32_t b = chatMsgs[chatCount - 1].born;
+      r = (b != 0 && (uint32_t)(millis() - b) < CHAT_ANIM_MS + 40UL);
+    }
+    xSemaphoreGive(chatMx);
+  }
+  return r;
+}
+
 void chatLoopPoll() {
   if (chatDirty) {
     chatDirty = false;
     if (curScreen() == SCR_CHAT) needRedraw = true;
   }
+  if (curScreen() != SCR_CHAT || chatCfgMode || !chatMsgs) { chatTypeAnim = 0.0f; return; }
+  // animasi: indikator mengetik (muncul/hilang + titik memantul) & pesan baru masuk, ~30 fps
+  static unsigned long lastMs = 0;
+  unsigned long now = millis();
+  if (now - lastMs < 30) return;
+  float dt = (float)(now - lastMs);
+  if (dt > 100.0f) dt = 100.0f;
+  lastMs = now;
+  bool want = chatPeerTyping();
+  float tgt = want ? 1.0f : 0.0f;
+  bool moving = false;
+  if (chatTypeAnim != tgt) {
+    float step = dt / 180.0f;
+    if (chatTypeAnim < tgt) { chatTypeAnim += step; if (chatTypeAnim > tgt) chatTypeAnim = tgt; }
+    else                    { chatTypeAnim -= step; if (chatTypeAnim < tgt) chatTypeAnim = tgt; }
+    moving = true;
+  }
+  if (want || moving || chatNewestAnimating()) needRedraw = true;
 }
 
 // ---------------------------------------------------------------------
@@ -366,11 +458,23 @@ static int chatWrap(const char* t, int maxCh, int* st, int* ln, int maxL) {
   return n;
 }
 
-static int chatMsgHeight(int idx, int maxCh) {
+// Tata letak satu pesan sbg bubble. Mengembalikan tinggi slot (celah + nama + bubble).
+// Out: jumlah baris, panjang baris terpanjang (karakter), celah di atas, tampilkan nama?
+static int chatMsgLayout(int idx, int maxCh, int* nLines, int* maxLen, int* gap, bool* showName) {
   int st[8], ln[8];
   int n = chatWrap(chatMsgs[idx].text, maxCh, st, ln, 8);
+  int ml = 0;
   if (n < 1) n = 1;
-  return 9 + n * 9 + 4;
+  else for (int k = 0; k < n; k++) if (ln[k] > ml) ml = ln[k];
+  bool mine = strcmp(chatName.c_str(), chatMsgs[idx].user) == 0;
+  bool newGroup = (idx == 0) || strcmp(chatMsgs[idx].user, chatMsgs[idx - 1].user) != 0;
+  bool sn = !mine && newGroup;
+  int g = newGroup ? CB_GAP_NEW : CB_GAP_SAME;
+  if (nLines)   *nLines = n;
+  if (maxLen)   *maxLen = ml;
+  if (gap)      *gap = g;
+  if (showName) *showName = sn;
+  return g + (sn ? CB_NAMEH : 0) + CB_PADT + n * CB_LINE + CB_TIMEH + CB_PADB;
 }
 
 static void chatPrintCentered(LGFX_Sprite& s, int x, int w, int y, const char* t) {
@@ -452,44 +556,94 @@ void drawChat(LGFX_Sprite& s) {
   iosRR(s, SCR_W - 52, 24, 48, 18, 5, T().surface2);
   s.setTextColor(T().accent); chatPrintCentered(s, SCR_W - 52, 48, 29, "Atur");
 
-  // ---- area pesan ----
+  // ---- area pesan (bubble) ----
   int inputY = (kbVisible ? kbY() : backY()) - 26;
   int top = CHAT_TOP, bot = inputY - 4, areaH = bot - top;
-  int maxCh = (SCR_W - 16) / 6;
+  int maxBW = SCR_W * 3 / 4;
+  int maxCh = (maxBW - 2 * CB_PADX) / 6;
   if (areaH > 10 && chatMx && xSemaphoreTake(chatMx, pdMS_TO_TICKS(30)) == pdTRUE) {
-    int total = 0;
-    for (int i = 0; i < chatCount; i++) total += chatMsgHeight(i, maxCh);
+    int typeSlot = (int)lroundf((float)CB_TYPE_H * chatEaseOut(chatTypeAnim));
+    int total = typeSlot;
+    for (int i = 0; i < chatCount; i++) total += chatMsgLayout(i, maxCh, 0, 0, 0, 0);
     int maxScroll = total > areaH ? total - areaH : 0;
     if (chatScroll > maxScroll) chatScroll = maxScroll;
     if (chatScroll < 0) chatScroll = 0;
 
+    // pesan live baru: seluruh daftar "didorong naik" halus (digeser turun sebesar tinggi pesan lalu
+    // mengendap ke 0), bubble barunya meluncur masuk dari tepi kanan/kiri. Hanya kalau user di dasar.
+    int pushOff = 0, newX = 0;
+    if (chatCount > 0 && chatScroll == 0) {
+      uint32_t b0 = chatMsgs[chatCount - 1].born;
+      uint32_t age = (b0 != 0) ? (uint32_t)(millis() - b0) : 0xFFFFFFFFUL;
+      if (age < CHAT_ANIM_MS) {
+        float e = chatEaseOut((float)age / (float)CHAT_ANIM_MS);
+        int hNew = chatMsgLayout(chatCount - 1, maxCh, 0, 0, 0, 0);
+        pushOff = (int)lroundf((float)hNew * (1.0f - e));
+        newX = (int)lroundf(28.0f * (1.0f - e));
+      }
+    }
+
     s.setClipRect(0, top, SCR_W, areaH);
-    int y = bot + chatScroll;
+    int y = bot + chatScroll + pushOff;
+
+    // indikator "sedang mengetik": bubble kecil dgn 3 titik memantul, meluncur naik dari bawah
+    if (typeSlot > 4) {
+      int bx = 6, by = y - CB_TYPE_H + 3 + (CB_TYPE_H - typeSlot);
+      s.fillRoundRect(bx, by, 46, 20, 9, T().surface2);
+      s.fillRect(bx, by + 11, 9, 9, T().surface2);
+      float ph = (float)millis() / 170.0f;
+      for (int k = 0; k < 3; k++) {
+        float bn = sinf(ph - (float)k * 0.9f);
+        if (bn < 0.0f) bn = 0.0f;
+        int dy = (int)lroundf(3.0f * bn);
+        uint16_t dc = blend565(T().subtext, T().text, (uint8_t)(255.0f * bn));
+        s.fillCircle(bx + 14 + k * 10, by + 10 - dy, 3, dc);
+      }
+      char who[CHAT_USER_LEN + 12];
+      snprintf(who, sizeof(who), "%s mengetik", chatPeerName[0] ? chatPeerName : "Seseorang");
+      s.setTextColor(T().subtext);
+      s.setCursor(bx + 46 + 6, by + 6); s.print(who);
+    }
+    y -= typeSlot;
+
     for (int i = chatCount - 1; i >= 0; i--) {
-      int h = chatMsgHeight(i, maxCh);
+      int n, ml, gap; bool showName;
+      int h = chatMsgLayout(i, maxCh, &n, &ml, &gap, &showName);
       y -= h;
       if (y + h <= top) break;
       if (y >= bot) continue;
-      bool mine = (chatName == String(chatMsgs[i].user));
-      s.setTextColor(mine ? (uint16_t)T().accent : (uint16_t)T().good);
-      s.setCursor(8, y); s.print(chatMsgs[i].user);
+      bool mine = (strcmp(chatName.c_str(), chatMsgs[i].user) == 0);
+      int bw = (ml * 6 > 30 ? ml * 6 : 30) + 2 * CB_PADX;
+      int bh = CB_PADT + n * CB_LINE + CB_TIMEH + CB_PADB;
+      int bx = mine ? (SCR_W - 6 - bw) : 6;
+      if (i == chatCount - 1) bx += mine ? newX : -newX;
+      int by = y + gap + (showName ? CB_NAMEH : 0);
+      uint16_t bc = mine ? (uint16_t)T().accent : (uint16_t)T().surface2;
+      uint16_t tc = mine ? (uint16_t)T().bg : (uint16_t)T().text;
+      if (showName) {
+        s.setTextColor(T().good);
+        s.setCursor(bx + 4, y + gap); s.print(chatMsgs[i].user);
+      }
+      s.fillRoundRect(bx, by, bw, bh, 9, bc);
+      if (mine) s.fillRect(bx + bw - 9, by + bh - 9, 9, 9, bc);   // sudut "ekor" bubble sendiri
+      else      s.fillRect(bx, by + bh - 9, 9, 9, bc);            // sudut "ekor" bubble lawan bicara
+      int st[8], ln[8];
+      int nn = chatWrap(chatMsgs[i].text, maxCh, st, ln, 8);
+      s.setTextColor(tc);
+      for (int k = 0; k < nn; k++) {
+        char line[64];
+        int L = ln[k] < (int)sizeof(line) - 1 ? ln[k] : (int)sizeof(line) - 1;
+        memcpy(line, chatMsgs[i].text + st[k], L); line[L] = 0;
+        s.setCursor(bx + CB_PADX, by + CB_PADT + k * CB_LINE); s.print(line);
+      }
       char hm[8];
       if (chatMsgs[i].ts > 0) {
         time_t tt = (time_t)(chatMsgs[i].ts + CHAT_TZ_SEC);
         struct tm tmv; gmtime_r(&tt, &tmv);
         snprintf(hm, sizeof(hm), "%02d:%02d", tmv.tm_hour, tmv.tm_min);
       } else snprintf(hm, sizeof(hm), "--:--");
-      s.setTextColor(T().subtext);
-      s.setCursor(8 + s.textWidth(chatMsgs[i].user) + 8, y); s.print(hm);
-      int st[8], ln[8];
-      int n = chatWrap(chatMsgs[i].text, maxCh, st, ln, 8);
-      s.setTextColor(T().text);
-      for (int k = 0; k < n; k++) {
-        char line[64];
-        int L = ln[k] < (int)sizeof(line) - 1 ? ln[k] : (int)sizeof(line) - 1;
-        memcpy(line, chatMsgs[i].text + st[k], L); line[L] = 0;
-        s.setCursor(8, y + 9 + k * 9); s.print(line);
-      }
+      s.setTextColor(mine ? blend565(T().bg, T().accent, 90) : (uint16_t)T().subtext);
+      s.setCursor(bx + bw - CB_PADX - s.textWidth(hm), by + CB_PADT + n * CB_LINE); s.print(hm);
     }
     if (chatCount == 0) {
       s.setTextColor(T().subtext);
@@ -528,6 +682,17 @@ static void chatStartTyping(String* target) {
   needRedraw = true;
 }
 
+// dipanggil tiap isi kotak input berubah (diketik/dihapus): minta task jaringan kirim paket "mengetik"
+static void chatNoteTyping() {
+  if (chatConn != 1 || chatName.length() == 0 || chatInput.length() == 0) return;
+  uint32_t now = millis();
+  if (chatTypeSentMs != 0 && now - chatTypeSentMs < CHAT_TYPE_SEND_GAP) return;
+  chatTypeSentMs = now;
+  strncpy(chatTypeNameBuf, chatName.c_str(), sizeof(chatTypeNameBuf) - 1);
+  chatTypeNameBuf[sizeof(chatTypeNameBuf) - 1] = 0;
+  chatTypeSendReq = true;
+}
+
 static void chatDoSend() {
   String t = chatInput;
   t.trim();
@@ -561,7 +726,11 @@ void chatTouch(int x, int y, bool held, bool isNew) {
   if (kbVisible) {
     if (!isNew) return;
     if (y < kbY() - 2) { kbVisible = false; kbTarget = nullptr; chatCfgEdit = -1; }
-    else kbTouch(x, y);
+    else {
+      size_t before = chatInput.length();
+      kbTouch(x, y);
+      if (!chatCfgMode && chatInput.length() != before) chatNoteTyping();
+    }
     needRedraw = true;
     return;
   }

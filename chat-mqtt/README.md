@@ -43,3 +43,4 @@ Lalu buka app Chat (atau tombol *Muat SD* di layar pengaturan).
 ## Alternatif kalau EMQX nanti berubah juga
 - Broker sendiri (mis. Mosquitto) di PC/Raspberry Pi: gratis, tapi agar bisa diakses dari luar rumah butuh port forwarding atau tunnel.
 - Server sendiri di Cloudflare Workers + Durable Objects (paket gratis yang saya cek sebelumnya). Itu butuh versi app Chat yang memakai HTTP polling, bukan MQTT.
+- Topik `renphone/chat/t` (non-retained, QoS 0): indikator "sedang mengetik" berisi nama pengirim; sudah tercakup ACL `renphone/chat/#`.
