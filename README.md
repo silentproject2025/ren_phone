@@ -8,14 +8,15 @@ NyxOS tidak berbasis Android maupun Linux. Peluncur aplikasi (launcher), pusat n
 |---|---|
 | **Mikrokontroler** | ESP32-S3, flash 16 MB, PSRAM OPI 8 MB |
 | **Aplikasi bawaan** | 42 aplikasi |
-| **Ukuran kode** | ±37.400 baris firmware utama + ±1.400 baris firmware ko-prosesor (tidak termasuk kode pihak ketiga) |
+| **Ukuran kode** | ±40.200 baris firmware utama + ±1.400 baris firmware ko-prosesor (tidak termasuk kode pihak ketiga) |
 | **Versi** | 1.0.0 (lihat berkas `VERSION`) |
 | **Lisensi** | AGPL-3.0 |
 
 > **Catatan mengenai status pengujian.** Sebagian besar fitur telah diuji langsung oleh pembuatnya pada perangkat fisik. Terdapat dua pengecualian yang perlu diketahui sejak awal:
 >
 > - **Telepon** baru teruji sebagian: berhasil dengan akun `sip2sip.info` (SIP melalui TCP), sedangkan penyedia SIP lain, mode LAN, dan TURN belum terkonfirmasi.
-> > - **NyxPPU** masih berupa eksperimen (fase 1), dan **SPI Overclock** bergantung pada kualitas kabel.
+> - **NyxPPU** masih berupa eksperimen (fase 1), dan **SPI Overclock** bergantung pada kualitas kabel.
+> - **Gestur sistem baru** (tarik-untuk-muat-ulang, geser-kembali dari tepi kiri, panel yang mengikuti jari) baru ditambahkan dan berstatus `BETA`.
 >
 > Penjelasan lengkap tiap fitur tersedia pada [bagian 5](#5-fitur-secara-rinci) dan [bagian 6](#6-fitur-eksperimental-dan-catatan-perangkat-keras).
 
@@ -58,7 +59,9 @@ NyxOS tidak berbasis Android maupun Linux. Peluncur aplikasi (launcher), pusat n
 
 | Fitur | Status | Keterangan |
 |---|---|---|
-| Antarmuka sistem (Home, Lock Screen, Control Center, dan lainnya) | `OK` | Digunakan sehari-hari. |
+| Antarmuka sistem (Home, Lock Screen, Control Center, dan lainnya) | `OK` | Digunakan sehari-hari. Termasuk tema Nyx, ikon squircle, widget bento, dan animasi buka/tutup app. |
+| Animasi mengisi daya (Lock Screen) | `OK` | Muncul saat charger dicolok dan HP terkunci. Syarat lengkap di [bagian 5.1](#51-antarmuka-sistem-ok). |
+| Gestur sistem baru (pull-to-refresh, swipe-back tepi kiri, panel mengikuti jari) | `BETA` | Kode sudah terpasang di build, belum diuji menyeluruh pada perangkat. |
 | Chat melalui broker MQTT | `OK` | Diuji dengan broker sungguhan. |
 | Musik Bluetooth dan AVRCP | `OK` | Cover ID3, kontrol dari earbuds, mode acak AI. |
 | Pemutar AVI (seek, resume, zoom) | `OK` | |
@@ -160,6 +163,8 @@ Setiap *push* memicu workflow **Build Firmware Binaries** yang menerbitkan Relea
 | `cam_merged.bin` | Image lengkap ESP32-CAM, dari workflow **Build CAM BT Co-Processor**. |
 
 Penamaan tag: `build-<nomor>` untuk S3, `cam-<nomor>` untuk CAM, dan `channel-<branch>` untuk channel OTA per branch. Branch `main`, `master`, dan `remote-control` diterbitkan sebagai rilis biasa; branch lain selalu berstatus *prerelease*.
+
+Saat dijalankan manual (*Run workflow*), workflow menyediakan dua input: `use_custom_libs` (pakai atau lewati library core kustom) dan `loop_core` (`default`, `0`, atau `1`; memilih core tempat `loop()`/UI berjalan, untuk tes A/B performa game).
 
 Workflow **Web Flasher (GitHub Pages)** memanggil otomatis setelah Release dibuat dan menyusun halaman flasher berbasis browser. Halaman tersebut membedakan firmware **stabil** (dari `main`/`master`) dan **uji coba** (dari branch lain), serta menyediakan tombol unduh `.bin`, checksum SHA-256, dan tautan repositori.
 
@@ -269,7 +274,7 @@ python3 apply_camera_patch.py    # Kamera
 git add -A && git commit -m "Pasang fitur" && git push
 ```
 
-> Berkas `.ino` baru harus didaftarkan pada langkah `cp` di `build-firmware.yml`. Versi `arduino-cli`, core ESP32, dan library di CI **belum dikunci**, sehingga pembaruan dari upstream dapat menyebabkan build gagal tanpa ada perubahan di repositori.
+> Berkas `.ino` baru **harus** didaftarkan pada langkah `cp` di `build-firmware.yml`. Jika terlewat, build gagal pada tahap *link* dengan pesan `undefined reference to ...` untuk fungsi yang didefinisikan di berkas tersebut (pernah terjadi pada `ptr_renphone.ino`). Versi `arduino-cli`, core ESP32, dan library di CI **belum dikunci**, sehingga pembaruan dari upstream dapat menyebabkan build gagal tanpa ada perubahan di repositori.
 
 ---
 
@@ -281,17 +286,45 @@ NyxOS menghadirkan pengalaman ponsel modern pada layar kecil 320×240.
 
 | Komponen | Fungsi |
 |---|---|
-| **Lock Screen** | Jam, wallpaper kustom, geser untuk membuka kunci. |
+| **Lock Screen** | Jam, wallpaper kustom, geser untuk membuka kunci. Saat membuka, lock screen **naik mengikuti jari** dan menyingkap Home di bawahnya. |
 | **Home** | Grid ikon dengan pencarian, widget cuaca (Open-Meteo, tanpa API key), dan badge notifikasi pada ikon. |
-| **Control Center** | Tombol WiFi, Airplane, DND, Tema, Orientasi, Shake, Kunci, Neopixel, Senyap, Bluetooth, dan Tangkap layar, ditambah slider kecerahan. |
+| **Control Center** | Tombol WiFi, Airplane, DND, Tema, Orientasi, Shake, Kunci, Neopixel, Senyap, Bluetooth, dan Tangkap layar, ditambah slider kecerahan. **Tahan lama** sebuah tombol untuk membuka pengaturan fitur itu (WiFi, Tema, Rotasi, Neopixel, Bluetooth, Galeri); tahan lama tombol **Kunci** membuka menu Daya. |
 | **Notification Shade** | Riwayat notifikasi. |
 | **Dynamic Island** | Elemen berbentuk pil di bagian atas layar yang berubah sesuai kejadian. |
 | **App Switcher** | Berpindah antaraplikasi. |
 | **Always-On Display** | Tampilan hemat daya saat layar diredupkan. |
 | **Keyboard layar** | Tersedia untuk seluruh aplikasi. |
-| **7 tema** | Aurora, Dark, AMOLED, Light, Pastel, iOS, Full Dark. |
+| **8 tema** | Aurora, Dark, AMOLED, Light, Pastel, iOS, Full Dark, dan **Nyx** (hitam keunguan dengan aksen violet dan teal; jadi tema bawaan, dapat diganti di Pengaturan). |
+| **Menu Daya** | Matikan total (deep sleep; bangun dengan tombol BOOT atau RST) dan Mulai ulang. Dibuka dari tahan-lama tombol Kunci atau Pengaturan → Tentang → Daya. |
 
 **Keputusan desain.** Getaran sengaja dibuat minimal: hanya untuk kejadian penting, bukan pada setiap ketukan. Efek kaca buram merupakan tiruan ringan (mengambil sampel warna dari piksel yang sudah tergambar lalu mencampurnya dengan *tint* tema), bukan blur sungguhan, agar beban CPU tetap rendah.
+
+**Tampilan "Nyx Modern"**
+
+- **Ikon squircle** (kotak membulat) dengan bayangan lembut dan kilap tepi; warna ikon neon dilembutkan secara otomatis.
+- **Latar aurora**: dua cahaya radial lembut dari warna aksen tema pada halaman seperti Pengaturan.
+- **Pengaturan** dengan chip ikon berwarna di tiap baris, **widget Home gaya bento** (jam, baterai, musik, cuaca), dan **keyboard datar** dengan efek tekan.
+- **Transisi app**: ikon di Home membesar menjadi layar app saat dibuka, dan mengecil kembali ke ikonnya saat ditutup. Toast dan Dynamic Island muncul dengan animasi yang lebih halus.
+- **Animasi widget Home**: angka jam berganti halus, cincin baterai terisi saat Home dibuka, dan ikon cuaca bergerak pelan.
+
+**Animasi mengisi daya** `OK`
+
+Saat charger dicolok, lock screen menampilkan lubang hitam kecil dengan cincin akresi yang berdenyut selama ±4,6 detik; panjang busur cincin mengikuti persentase baterai, dan teks berubah menjadi "Terisi penuh" pada 100%. Menyentuh layar menghentikannya. Animasi hanya muncul jika **semua** syarat berikut terpenuhi:
+
+- HP sedang berada di lock screen (AOD akan dibangunkan otomatis).
+- Sudah lewat ±8 detik sejak boot.
+- Status sebelumnya "tidak mengisi" minimal 1,5 detik, lalu charger dicolok (charger yang sudah terpasang sejak boot tidak memicu animasi sampai dicabut dulu).
+- INA219 terbaca dan arus charge melewati 20 mA (arah arus dapat dibalik pada tab Baterai bila status tidak pernah berubah menjadi "Mengisi").
+
+**Gestur sistem baru** `BETA`
+
+| Gestur | Cara kerja |
+|---|---|
+| **Pull-to-refresh** | Tarik ke bawah dari strip atas layar (di kiri tombol cari) pada app yang punya aksi muat ulang: Update, NEO Asteroid, Bumi EPIC, dan Galeri NASA. Lingkaran penunjuk mengikuti jari dan terisi; lepas setelah penuh untuk memuat ulang. |
+| **Swipe-back tepi kiri** | Sentuh tepi kiri layar lalu geser ke kanan; gelembung "<" mengikuti jari, lepas setelah cukup jauh untuk kembali. Hanya aktif pada app non-game dan non-editor agar tidak mengganggu D-pad, kanvas gambar, atau pengetikan. |
+| **Panel mengikuti jari** | Control Center dan Notification Shade tumbuh mengikuti jari saat ditarik; lepas untuk membuka (dengan pantulan kecil) atau menutup. |
+
+**Perlindungan ghost touch.** Jika panel sentuh mengirim sentuhan palsu, sistem menolak titik di kotak mati, di luar layar, atau dengan tekanan rendah, lalu menahan seluruh input sampai layar benar-benar sepi. Saat boot, bila sentuhan palsu terdeteksi, wizard kalibrasi dilewati dan kalibrasi bawaan dipakai tanpa disimpan. Ambang dan kotak mati diatur lewat konstanta `TOUCH_*` pada `phone.ino`; sentuhan jari asli juga bisa ikut tertolak selama ghost terus-menerus aktif.
 
 **Fitur personalisasi**
 
@@ -403,7 +436,8 @@ Perangkat memancarkan **WiFi sendiri (Access Point)**. Sambungkan ponsel atau la
 | Layar langsung | Isi canvas dikirim sebagai **ubin 16×16 yang berubah saja** (delta), sehingga antarmuka yang diam hampir tidak memakai data. Mode *Hemat* memakai RGB332 (setengah ukuran). |
 | Sentuhan | Ketuk, geser, dan tahan di web disuntikkan sebagai sentuhan asli, sehingga **seluruh** antarmuka merespons seperti disentuh langsung. |
 | Tombol | Back, Home, Recents, Notifikasi, Control Center, Kunci, Screenshot, slider kecerahan, daftar aplikasi, serta pengetikan teks dari keyboard perangkat pengontrol. |
-| Pengaturan | AP hidup/mati, nama dan sandi WiFi, mulai otomatis, mode lihat-saja, layar tetap menyala, kualitas gambar, batas FPS, dan izin melalui WiFi rumah. Dapat diatur dari web **atau** dari aplikasi *Remote* pada perangkat. |
+| Pengaturan | AP hidup/mati, nama dan sandi WiFi, mulai otomatis, mode lihat-saja, layar tetap menyala, kualitas gambar, batas FPS, izin melalui WiFi rumah, dan **Tanpa preview**. Dapat diatur dari web **atau** dari aplikasi *Remote* pada perangkat. |
+| Tanpa preview | Mematikan pengiriman layar ke web (hanya header kecil yang dikirim, tanpa alokasi buffer dan snapshot). Sentuhan tetap diteruskan. Berguna untuk mengukur FPS asli, misalnya pada app Kamera, tanpa beban streaming. |
 
 **Keamanan.** AP memakai WPA2 dengan sandi yang dibuat saat pertama kali digunakan (tampil di aplikasi Remote dan dapat diganti). Endpoint hanya melayani koneksi melalui AP; akses melalui WiFi rumah ditolak kecuali opsi *Izinkan via WiFi rumah* dinyalakan. Hanya satu penonton aktif pada satu waktu.
 
@@ -537,7 +571,8 @@ Daya dibaca dari sensor **INA219** melalui I2C. Aplikasi memiliki empat tab (Rin
 - tegangan, arus, dan daya waktu nyata, plus grafik 10 menit;
 - persentase baterai dari kurva tegangan Li-ion, kompensasi resistansi dalam, dan *coulomb counting*;
 - deteksi pengisian, mAh masuk dan keluar, estimasi sisa waktu atau waktu penuh, serta hitungan siklus;
-- pengaturan lengkap chip (shunt, PGA, resolusi ADC, *averaging*, mode operasi) yang tersimpan di NVS.
+- pengaturan lengkap chip (shunt, PGA, resolusi ADC, *averaging*, mode operasi) yang tersimpan di NVS;
+- opsi **Arah arus** untuk membalik tanda arus jika pengkabelan shunt terbalik, dan status "Mengisi" yang memicu animasi di lock screen.
 
 **Pengkabelan:** VCC 3,3 V, GND, SDA 15, SCL 7. Resistor shunt dipasang seri pada kabel positif baterai. Nilai bawaan: shunt 100 mΩ, gain /8, kapasitas 2300 mAh, resistansi dalam 150 mΩ.
 
@@ -806,6 +841,9 @@ Proyek ini ditujukan sebagai perangkat pribadi dan eksperimental. Pertimbangkan 
 | Pembaruan OTA ditolak | Basis kode firmware berbeda | Perilaku yang disengaja; gunakan firmware dari basis kode yang sama. |
 | Persen baterai dan tegangan tidak berubah | INA219 tidak terdeteksi | Periksa pengkabelan SDA 15 dan SCL 7 serta alamat I2C. |
 | Wake Word sulit mengenali | Ruangan bising atau sampel kurang representatif | Rekam ulang 4 sampel di lingkungan tenang; sesuaikan slider *Sensitivitas*. |
+| Build CI gagal dengan `undefined reference to ...` | Berkas `.ino` baru belum didaftarkan pada langkah `cp` di `build-firmware.yml` | Tambahkan baris `cp <berkas>.ino build_sketch/`, lalu push ulang. |
+| Animasi mengisi daya tidak muncul | HP tidak sedang terkunci, charger sudah terpasang sejak boot, atau INA219 tidak mendeteksi arus charge | Kunci HP, tunggu 10 detik, cabut charger 3 detik, lalu colok lagi; cek status "Mengisi" di tab Baterai dan opsi Arah arus. |
+| Fitur baru tidak muncul setelah flash | Build terbaru gagal sehingga yang ter-flash adalah `.bin` lama | Periksa Actions dan nomor build di About Phone. |
 | Build CI hijau tetapi tidak memakai library kustom | Salah satu syarat pemasangan paket tidak terpenuhi | Periksa log langkah *Pasang* dan *Verifikasi* (lihat [bagian 4.5](#45-library-core-kustom-mbedtls-di-psram)). |
 
 ---
@@ -848,6 +886,7 @@ phone_notif_center.ino          Notifikasi dan Dynamic Island
                                 call, camera, ina219, about, owner, homeedit, ota,
                                 wakeword, gamepad, power, doom, nes_*, features, dan lainnya)
 ppu_engine_renphone.ino         NyxPPU
+ptr_renphone.ino                Gestur sistem: pull-to-refresh, swipe-back tepi kiri, panel mengikuti jari
 ryne_engine.h                   RYNE v2
 rplink.h  MjpegClass.h          Protokol link CAM dan parser MJPEG
 cam_rx.h  cam_avi.h             Penerima frame kamera dan penulis AVI (sisi S3)
