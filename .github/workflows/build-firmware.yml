@@ -197,6 +197,7 @@ jobs:
           cp gamepad_renphone.ino build_sketch/
           cp ina219_renphone.ino build_sketch/
           cp ota_check_renphone.ino build_sketch/
+          cp ptr_renphone.ino build_sketch/
           cp rplink.h build_sketch/
           cp cam_rx.h build_sketch/
           cp cam_avi.h build_sketch/
