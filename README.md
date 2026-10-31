@@ -7,7 +7,7 @@ NyxOS tidak berbasis Android maupun Linux. Peluncur aplikasi (launcher), pusat n
 | | |
 |---|---|
 | **Mikrokontroler** | ESP32-S3, flash 16 MB, PSRAM OPI 8 MB |
-| **Aplikasi bawaan** | 42 aplikasi |
+| **Aplikasi bawaan** | 43 aplikasi |
 | **Ukuran kode** | ±40.200 baris firmware utama + ±1.400 baris firmware ko-prosesor (tidak termasuk kode pihak ketiga) |
 | **Versi** | 1.0.0 (lihat berkas `VERSION`) |
 | **Lisensi** | AGPL-3.0 |
@@ -73,6 +73,7 @@ NyxOS tidak berbasis Android maupun Linux. Peluncur aplikasi (launcher), pusat n
 | Baterai (INA219), Galeri, HWmonitor, Profil, dan lainnya | `OK` | |
 | **Telepon (SIP dan LAN)** | `SEBAGIAN` | Teruji dengan `sip2sip.info` melalui TCP. Penyedia lain, mode LAN, dan TURN belum terkonfirmasi. |
 | Kamera (OV2640 pada ESP32-CAM) | `OK` | Seluruh fitur telah diuji pemilik, termasuk link 3 Mbaud dengan kualitas JPEG 10. Lihat [`KAMERA.md`](./KAMERA.md). |
+| Buku (pembaca `.txt` dan `.epub`) | `BETA` | Logika inti (inflate, ZIP, EPUB, HTML ke teks, tata letak) diuji di komputer; antarmuka belum diuji pada perangkat. Lihat bagian *App Buku* di bawah. |
 | SPI Overclock layar | `HW` | Hasil bergantung pada batas fisik kabel. |
 | NyxPPU (mesin piksel) | `EXP` | Fase 1; hanya tersedia pada aplikasi PPU Demo. |
 
@@ -271,6 +272,7 @@ Banyak fitur disusun sebagai pasangan `*_renphone.ino` dan `apply_*.py`. Skrip d
 ```bash
 python3 apply_call_patch.py      # Telepon (SIP + LAN)
 python3 apply_camera_patch.py    # Kamera
+python3 apply_ebook_patch.py     # Buku (pembaca .txt / .epub)
 git add -A && git commit -m "Pasang fitur" && git push
 ```
 
@@ -919,3 +921,22 @@ Kode pihak ketiga mengikuti lisensinya masing-masing:
 | ESP-DOOM / doomgeneric (`esp_doom_core/`) | Port DOOM |
 | LovyanGFX, JPEGDEC, PubSubClient, WebSockets | Library Arduino yang dipasang saat build |
 | audio-tools, arduino-libhelix, ESP32-A2DP | Library firmware ko-prosesor CAM |
+
+---
+
+## App Buku (pembaca `.txt` dan `.epub`) `BETA`
+
+Salin file `.txt` atau `.epub` ke folder `/books` pada SD card (dibuat otomatis; file di root SD juga ikut terdaftar), lalu buka app **Buku**.
+
+| Aksi | Hasil |
+|---|---|
+| Ketuk sepertiga kanan / geser ke kiri | Halaman berikutnya |
+| Ketuk sepertiga kiri / geser ke kanan | Halaman sebelumnya |
+| Ketuk tengah | Menu: slider halaman, **Isi** (daftar isi), **Aa** (ganti font), **Tema**, **Tutup** (kembali ke daftar buku) |
+
+- **Font:** Sans, Serif, Mono, Kecil, Sans+, Serif+. **Tema baca:** Terang, Sepia, Gelap, Hitam (terpisah dari tema sistem).
+- **Posisi baca** disimpan per buku di `/books/.nyxreader` (bab + offset teks, jadi tetap tepat setelah ganti font atau orientasi). Daftar buku mengurutkan buku terakhir dibaca di atas dan menampilkan persen terbaca.
+- **EPUB 2 dan 3:** bab dibaca satu per satu dari ZIP (hemat RAM); daftar isi dari NCX atau `nav`. ZIP64 dan EPUB ber-DRM tidak didukung.
+- **TXT:** UTF-8, UTF-16 (dengan BOM), Latin-1/Windows-1252. Teks berbaris-keras (gaya Project Gutenberg) disambung ulang menjadi paragraf. Baris seperti `Chapter 1`, `BAB IV`, `Prolog` dikenali sebagai judul dan masuk daftar isi. Batas 3 MB per file (sisanya dipotong dengan pemberitahuan).
+- **Batasan layar:** font bawaan hanya ASCII. Huruf beraksen ditampilkan sebagai huruf dasar, tanda kutip dan strip melengkung diluruskan, dan aksara non-Latin (CJK, Arab, Kiril) tampil sebagai `?`. Gambar di dalam EPUB tidak ditampilkan.
+- **Pengujian:** `tests_ebook/` (jalankan `python3 tests_ebook/test_ebook.py`) menguji inflate terhadap zlib, EPUB 2/3 buatan, TXT berbagai penyandian, invarian tata letak, dan fuzz dengan AddressSanitizer. Sintaks antarmuka diperiksa dengan *mock API* (`tests_ebook/mock_arduino.h`). Antarmuka belum diuji pada perangkat.

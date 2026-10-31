@@ -214,6 +214,8 @@ jobs:
           # ---- App DOOM (lib ESP-DOOM, divendor di esp_doom_core/) ----
           cp doom_renphone.ino build_sketch/
           cp camera_renphone.ino build_sketch/
+          cp ebook_renphone.ino build_sketch/
+          cp ebook_core.h build_sketch/
           cp hw_conf.h         build_sketch/
 
           mkdir -p build_sketch/src

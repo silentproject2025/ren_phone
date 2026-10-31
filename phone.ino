@@ -639,7 +639,9 @@ enum Screen { SCR_HOME, SCR_CLOCK, SCR_CALC, SCR_SENSOR,
               // Telepon SIP/LAN -- lihat call_renphone.ino
               SCR_CALL,
               // Kamera OV2640 (ESP32-CAM) -- lihat camera_renphone.ino
-              SCR_CAMERA };
+              SCR_CAMERA,
+              // Buku: pembaca .txt / .epub -- lihat ebook_renphone.ino + ebook_core.h
+              SCR_EBOOK };
 enum Orientation { ORIENT_LANDSCAPE = 0, ORIENT_PORTRAIT = 1 };
 
 // Dipindah ke atas — alasan sama dengan AiLine & Vec3f: arduino-cli men-generate
@@ -5375,6 +5377,18 @@ void drawAppIcon(LGFX_Sprite& s, char sym, int cx, int cy, int r, uint16_t bgCir
       s.drawCircle(cx,cy+2,max(2,bh/5),ic);
       break;
     }
+    case 'b': { // Buku: dua halaman terbuka + garis teks
+      int rr=max(8,r-6);
+      int bw=rr*2, bh=rr*3/2+2, x0=cx-bw/2, y0=cy-bh/2;
+      s.fillRoundRect(x0,y0,bw/2-1,bh,2,ic);
+      s.fillRoundRect(cx+1,y0,bw/2-1,bh,2,ic);
+      for(int i=0;i<3;i++){
+        int ly=y0+4+i*max(3,bh/4);
+        s.drawFastHLine(x0+3,ly,bw/2-7,bgCircle);
+        s.drawFastHLine(cx+4,ly,bw/2-7,bgCircle);
+      }
+      break;
+    }
     case 'p': { // Telepon: gagang telepon
       int rr=max(8,r-6);
       s.fillRoundRect(cx-rr,cy-rr/3,rr*2,rr*2/3,rr/3,ic);
@@ -5488,6 +5502,9 @@ void callEnter(); void callExit(); void drawCall(LGFX_Sprite&); void callTouch(i
 bool callOverlayActive(); void drawCallOverlay(LGFX_Sprite&); void callOverlayTouch(bool,int,int);
 // ---- Kamera: forward declarations (camera_renphone.ino) ----
 void camEnter(); void camExit(); void drawCamera(LGFX_Sprite&); void camTouch(int,int,bool,bool); void camLoopPoll();
+// ---- Buku (ebook_renphone.ino): pembaca .txt / .epub ----
+void ebookEnter(); void ebookExit(); void drawEbook(LGFX_Sprite&); void ebookTouch(int,int,bool,bool);
+void ebookPointerTick(bool,bool,int,int); void ebookLoopPoll();
 // ---- BATERAI: forward declarations (BARU di v8) ----
 void battEnter(); void battExit();
 void drawBatteryApp(LGFX_Sprite&); void battTouch(int,int,bool,bool);
@@ -5591,7 +5608,7 @@ void remoteEnter(); void remoteExit(); void drawRemote(LGFX_Sprite&); void remot
 void remotePointerTick(bool,bool,int,int);
 void rcLoopPoll(); void rcRegisterRoutes(); bool rcApIsUp(); bool rcInputPoll(int*,int*); void rcFrameMark();
 
-AppDef apps[42] = {
+AppDef apps[43] = {
   { "Jam",        'J', 0, clockEnter,    clockExit,    drawClock,        clockTouch,    SCR_CLOCK },
   { "Kalkulator", '+', 0, calcEnter,     calcExit,     drawCalc,         calcTouch,     SCR_CALC },
   { "Orientasi3D", '3', 0, sensorEnter,   sensorExit,   drawSensor,       sensorTouch,   SCR_SENSOR },
@@ -5653,8 +5670,9 @@ AppDef apps[42] = {
   { "Chat",   'c', 0, chatEnter,   chatExit,   drawChat,   chatTouch,   SCR_CHAT   },
   { "Telepon", 'p', 0, callEnter,   callExit,   drawCall,   callTouch,   SCR_CALL   },
   { "Kamera",  'k', 0, camEnter,    camExit,    drawCamera, camTouch,    SCR_CAMERA },
+  { "Buku",    'b', 0, ebookEnter,  ebookExit,  drawEbook,  ebookTouch,  SCR_EBOOK  },
 };
-#define APP_COUNT 42
+#define APP_COUNT 43
 
 // =============================================
 // NOTIFIKASI BADGE (BARU) -- angka kecil merah di pojok ikon app, mirip
@@ -5823,6 +5841,7 @@ void initAppColors(){
   apps[39].color=0x34DF; // Chat - biru lembut
   apps[40].color=0x2E8B; // Telepon - hijau
   apps[41].color=0xF9A0; // Kamera - oranye
+  apps[42].color=0xE68A; // Buku - krem kecokelatan (kertas)
   for(int i=0;i<APP_COUNT;i++) apps[i].color=modernTone(apps[i].color); // UI-MODERN: lembutkan warna neon
 }
 
@@ -19510,6 +19529,7 @@ void loop(){
   chatLoopPoll(); // Chat: redraw kalau ada pesan/status baru dari task MQTT
   callLoopPoll(); // Telepon: panggilan masuk, dering, notifikasi, siaga (no-op kalau belum dipakai)
   camLoopPoll();  // Kamera: ambil frame dari CAM, foto/rekam/gerak (no-op kalau app tertutup)
+  ebookLoopPoll(); // Buku: jalankan pembukaan buku setelah layar "Membuka..." sempat tampil (no-op kalau tidak ada)
   otaGuardPoll(); // OTA guard: tandai firmware sehat setelah hidup 30 dtk (+ toast kalau barusan di-rollback)
   rcLoopPoll(); // Remote Control: aksi tombol, status penonton, keep-awake
 
@@ -20005,6 +20025,7 @@ void loop(){
     ptrPointerTick(touched,wasTouched,tx,ty);                                        // pull-to-refresh + swipe-back tepi kiri
     if(curScreen()==SCR_REMOTE) remotePointerTick(touched,wasTouched,tx,ty);        // Remote: geser daftar + ketuk saat lepas
     if(curScreen()==SCR_HOMEEDIT) homeEditPointerTick(touched,wasTouched,tx,ty);    // Atur Home: geser daftar + ketuk saat lepas
+    if(curScreen()==SCR_EBOOK) ebookPointerTick(touched,wasTouched,tx,ty);          // Buku: geser daftar/halaman, ketuk saat lepas
     int idx=appIndexForScreen(curScreen());
     if(idx>=0){
       bool held = touched&&wasTouched;
