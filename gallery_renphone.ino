@@ -1809,3 +1809,6 @@ void galExit() {
   galPtrDown = false;
   galPendingPath[0] = 0;
 }
+
+// dipakai phone.ino (backHidden): di penampil foto, tombol Kembali tetap tampil
+bool galInViewer() { return galMode == GM_VIEW; }

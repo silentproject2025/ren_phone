@@ -2836,6 +2836,7 @@ void notepadRequestConfirm(int act); // act: 1=Back, 2=Home -> tampilkan dialog 
 // Home  = geser TURUN (kesan "menutup/pulang", searah swipe unlock)
 // =============================================
 void renderCurrentFrame(); // forward decl - dipakai utk render frame BARU sblm animasi
+extern bool panelPullActive; void panelPullBegin(bool shade,int startY); void panelPullHandle(bool touched,int tx,int ty); // ptr_renphone.ino: CC/shade mengikuti jari
 void ptrPointerTick(bool touched,bool wasT,int tx,int ty); void ptrDraw(LGFX_Sprite& s); // ptr_renphone.ino: pull-to-refresh + swipe-back tepi kiri
 // UI-OVERHAUL: API musik utk widget Home/Lock (definisi di musicbt_renphone.ino)
 bool homeMusStarted(); bool homeMusLoaded(); bool homeMusPlaying(); float homeMusProgress();
@@ -4016,8 +4017,33 @@ void drawDynamicIsland(LGFX_Sprite& s){
 int backX(){ return 4; }
 int backY(){ return SCR_H-BACK_H-3; }
 
+// BACK-HIDDEN: di app yg sudah punya swipe-back dari tepi kiri (daftar putih ini = daftar putih di ptr_renphone.ino),
+// pil "Kembali" TIDAK digambar & tidak bisa diketuk. Cadangannya: ketuk garis kecil (home indicator) di dasar layar.
+// Posisi/tinggi layout app tidak diubah -- strip bawah dibiarkan kosong.
+bool galInViewer();   // gallery_renphone.ino: di penampil foto geser dari tepi = foto sebelumnya, jadi tombol Kembali tetap tampil
+bool screenHasEdgeBack(Screen sc){
+  switch(sc){
+    case SCR_SETTINGS: case SCR_FILEEXPLORER: case SCR_UPDATE: case SCR_BATTERY: case SCR_APOD: case SCR_NEOWS:
+    case SCR_EPIC: case SCR_NASAIMG: case SCR_ABOUT: case SCR_OWNER: case SCR_HOMEEDIT: case SCR_REMOTE:
+    case SCR_CHAT: case SCR_CLOCK: case SCR_SENSOR: case SCR_HWMON: case SCR_MICLEVEL: case SCR_POMODORO:
+    case SCR_WAKE: case SCR_MEMO: case SCR_STOPWATCH: case SCR_MUSIC: case SCR_GALLERY:
+      return true;
+    default: return false;
+  }
+}
+bool backHidden(){
+  Screen c=curScreen();
+  if(!screenHasEdgeBack(c)) return false;
+  if(c==SCR_GALLERY && galInViewer()) return false;
+  return true;
+}
+
 void drawBack(LGFX_Sprite& s){
   if(kbVisible)return;
+  if(backHidden()){ // hanya home indicator
+    int hiW=96; s.fillRoundRect(SCR_W/2-hiW/2,SCR_H-6,hiW,4,2,blend565(T().bg,T().text,170));
+    return;
+  }
   // iOS: pil kaca + chevron + "Kembali" (warna aksen), plus home-indicator tipis di dasar layar
   int bx=backX(), by=backY(), cy=by+BACK_H/2;
   drawGlassCard(s,bx,by,BACK_W,BACK_H,BACK_H/2,T().surface2,170);
@@ -4029,6 +4055,7 @@ void drawBack(LGFX_Sprite& s){
 }
 
 bool isBack(int x,int y){
+  if(!kbVisible && backHidden()) return y>=SCR_H-16 && abs(x-SCR_W/2)<=60;   // cadangan: ketuk home indicator
   return !kbVisible && x>=backX() && x<=backX()+BACK_W && y>=backY() && y<=backY()+BACK_H;
 }
 
@@ -4036,6 +4063,10 @@ bool isBack(int x,int y){
 // LOCK SCREEN
 // =============================================
 float lockDragY=0; bool lockDragging=false;
+// HOME-JIGGLE: tahan ikon grid Home ~0,55 dtk = mode atur (ikon bergoyang, badge "-" utk menyembunyikan app).
+// Penyembunyian memakai homeHide[] yg sama dgn layar "Atur Home" (bisa ditampilkan lagi dari sana).
+bool homeJiggle=false;
+int  homeGoneIdx=-1; unsigned long homeGoneMs=0;   // ikon yg sedang menyusut sebelum benar2 disembunyikan
 // NOTIF-LOCK: kartu notifikasi di lock screen (digambar & diurus di phone_notif_center.ino, krn struct NotifEntry ada di sana).
 // drawLockScreen() cuma menentukan area [Top,Bottom] yg kosong; kartu muat sebanyak yg ada tempatnya (maks 3).
 int lockNotifTop=0, lockNotifBottom=0;
@@ -4060,6 +4091,7 @@ unsigned long lastLockClockMs=0;
 // Dipanggil pas layar BARU dikunci (CC/boot) -- reset state AOD spy gak
 // langsung "meredup" instan kalau kebetulan lastLockActivityMs lama.
 void lockScreenReset(){
+  homeJiggle=false; homeGoneIdx=-1;
   lastLockActivityMs=millis(); lastLockClockMs=millis();
   if(aodActive){ aodActive=false; display.setBrightness((uint8_t)brightness); }
 }
@@ -6482,10 +6514,24 @@ void drawHome(LGFX_Sprite& s,float sc){
       float pa = homePressAmt(i);
       int cx=x+cw/2, cy=y+(ch-16)/2 + appBounceDy(i,iconR);
       int rEff = iconR - (int)lroundf(pa*iconR*0.12f);
-      drawAppIcon(s, apps[i].sym, cx, cy, rEff, apps[i].color);
-      drawNotifBadge(s, cx, cy, iconR, appNotifCount[i], appBadgePop(i));
-      s.setTextColor(T().text);s.setTextSize(1);
-      homeDrawLabel(s, apps[i].name, x+cw/2, y+ch-14, cw+6);
+      bool gone=(i==homeGoneIdx);
+      if(homeJiggle){ // HOME-JIGGLE: goyang kecil, fase beda tiap ikon
+        float ph=(float)millis()/55.0f+(float)k*1.7f;
+        cx+=(int)lroundf(sinf(ph)*1.5f); cy+=(int)lroundf(cosf(ph*0.9f)*1.0f);
+      }
+      if(gone){ float ge=(float)(millis()-homeGoneMs)/200.0f; if(ge>1.0f)ge=1.0f; rEff=(int)lroundf((float)iconR*(1.0f-ge)); }
+      if(rEff>0) drawAppIcon(s, apps[i].sym, cx, cy, rEff, apps[i].color);
+      if(!gone){
+        drawNotifBadge(s, cx, cy, iconR, appNotifCount[i], appBadgePop(i));
+        s.setTextColor(T().text);s.setTextSize(1);
+        homeDrawLabel(s, apps[i].name, x+cw/2, y+ch-14, cw+6);
+        if(homeJiggle){ int mx=cx-iconR+3, my=cy-iconR+3; s.fillCircle(mx,my,8,T().bg); s.fillCircle(mx,my,7,T().danger); s.fillRect(mx-4,my-1,9,3,0xFFFF); }
+      }
+    }
+    if(homeJiggle){ // chip "Selesai" di baris judul (ikut scroll)
+      int chy=STATUS_H+3-scPx;
+      drawGlassCard(s,SCR_W-74,chy,64,18,9,T().accent,200);
+      s.setTextColor(T().bg); s.setTextSize(1); s.setCursor(SCR_W-74+32-s.textWidth("Selesai")/2,chy+5); s.print("Selesai");
     }
 
     // ---- indikator scroll ----
@@ -6666,6 +6712,27 @@ int homeIndexAt(int x,int y,float sc){
     if(x>=ax&&x<=ax+cw&&y>=ay&&y<=ay+ch) return homeVis[k];
   }
   return -1;
+}
+
+// HOME-JIGGLE: ketukan saat mode atur. Urutan: chip "Selesai" -> badge "-" sebuah ikon -> ruang kosong = selesai.
+void homeJiggleTap(int x,int y,int idx){
+  int scPx=homeScrollPx(homeScrollY);
+  int chy=STATUS_H+3-scPx;
+  if(x>=SCR_W-78 && x<=SCR_W-6 && y>=chy-4 && y<=chy+24){ homeJiggle=false; needRedraw=true; return; }
+  int cols=homeCols(), cw=homeCardW(), ch=homeCardH(), gap=10, gridTop=homeGridTop();
+  int iconR=min(cw,ch-16)/2-2; if(iconR>24) iconR=24; if(iconR<14) iconR=14;
+  homeLayoutEnsure();
+  for(int k=0;k<homeVisN;k++){
+    int i=homeVis[k];
+    int col=k%cols,row=k/cols;
+    int ax=gap+col*(cw+gap), ay=gridTop+row*(ch+gap)-scPx;
+    int mx=ax+cw/2-iconR+3, my=ay+(ch-16)/2-iconR+3;
+    if(abs(x-mx)<=13 && abs(y-my)<=13){
+      if(apps[i].screen==SCR_SETTINGS){ vibWarn(); showToast("Pengaturan tidak bisa disembunyikan",1500); return; }
+      homeGoneIdx=i; homeGoneMs=millis(); vibTap(); needRedraw=true; return;
+    }
+  }
+  if(idx<0){ homeJiggle=false; needRedraw=true; }
 }
 
 // UI-POLISH-V2: hitung asal animasi zoom (ikon grid / ikon dock / kartu widget) lalu arm navZoomArm().
@@ -19485,6 +19552,11 @@ void loop(){
     needRedraw=true;
   }
   notifShadeAnimTick(); // v90: animasi buka/tutup Notification Shade, pola sama dgn ccAnimating di atas
+  if(panelPullActive){ // PANEL-PULL: CC / Notification Shade sedang ditarik mengikuti jari
+    panelPullHandle(touched,tx,ty);
+    if(needRedraw){ renderCurrentFrame(); push(); needRedraw=false; }
+    wasTouched=touched; delay(1); return;
+  }
 
   // v96: App Switcher -- early-return modal, pola PERSIS sama dgn
   // controlCenterOpen di bawah. Dicek SEBELUM locked cuma buat konsisten
@@ -19607,9 +19679,11 @@ void loop(){
     // separuh KIRI = Notification Shade (histori notif), separuh KANAN =
     // Control Center (quick-toggle). Sebelumnya SELURUH tepi atas cuma
     // buka Control Center, gak ada cara lain buka histori notif.
-    if(gStartY<STATUS_H+6 && dy>28 && abs(dy)>abs(dx) && !nesBlocksCC){
-      if(gStartX < SCR_W/2) openNotifShade(); else openControlCenter();
+    if(gStartY<STATUS_H+6 && dy>10 && abs(dy)>abs(dx) && !nesBlocksCC){
+      panelPullBegin(gStartX < SCR_W/2, gStartY); // PANEL-PULL: panel tumbuh mengikuti jari; lepas -> buka (memantul) / tutup
       gGestureDone=true;
+      panelPullHandle(true,tx,ty);
+      if(needRedraw){ renderCurrentFrame(); push(); needRedraw=false; }
       wasTouched=touched; delay(1); return;
     }
     if(gStartY>SCR_H-16 && dy<-8 && abs(dy)>abs(dx) && dragCloseAllowed()){   // v124: mulai tutup-mengikuti-jari
@@ -19752,8 +19826,11 @@ void loop(){
         homeScrollSpringing=false; homeSpringMode=false;
         homeDragRaw = homeRubberInv(homeScrollY,(float)homeMaxScroll());
         homeDragAccum=0; homeDragSampleMs=millis();
-        homePressedIdx = homeIndexAt(tx,ty,homeScrollY); // v-baru: highlight instan pas jari nempel ikon
+        homePressedIdx = homeJiggle ? -1 : homeIndexAt(tx,ty,homeScrollY); // v-baru: highlight instan pas jari nempel ikon
       } else {
+        if(!homeJiggle && !isSwiping && homePressedIdx>=0 && !searching && millis()-swipeStartTime>=550UL){
+          homeJiggle=true; homePressedIdx=-1; vibTap(); needRedraw=true; // HOME-JIGGLE: tahan ikon = mode atur
+        }
         if(!isSwiping && abs(ty-touchStartY)>HOME_DRAG_SLOP){
           isSwiping=true; homePressedIdx=-1; // v-baru: batal highlight begitu jelas ini scroll, bukan tap
           // v105: TANPA dead-zone -- drag mulai dari titik sentuh awal, jadi
@@ -19789,6 +19866,7 @@ void loop(){
         // (mis. tap di dock), baru jatuh balik ke homeCheck() lama.
         int idx = homeIndexAt(touchStartX,touchStartY,homeScrollY);
         Screen nx = (idx>=0)? apps[idx].screen : homeCheck(touchStartX,touchStartY,homeScrollY);
+        if(homeJiggle){ homeJiggleTap(touchStartX,touchStartY,idx); nx=SCR_HOME; } // HOME-JIGGLE: saat mode atur, ketukan tidak membuka app
         // v91: getar konfirmasi tap dipindah ke SINI (baru bunyi kalau
         // beneran kebuka app-nya) -- pasangan dr overHomeIcon di atas yg
         // nyekek getar generik pas jari BARU nempel. Efeknya: getar cuma
@@ -19851,11 +19929,20 @@ void loop(){
     }
     // BOUNCE-BADGE: ikon yg baru dapat notifikasi memantul -- redraw selama animasi. Kalau yg memantul
     // ikon DOCK, dock tdk digambar di mode pita -> paksa frame penuh (bandCand=false).
+    bool dockBounceNow=false;
     {
       bool dockOnlyBounce=false;
       if(appBounceAny(dockOnlyBounce)){
         needRedraw=true;
+        dockBounceNow=dockOnlyBounce;
         bandCand = !dockOnlyBounce;
+      }
+    }
+    if(homeJiggle || homeGoneIdx>=0){ // HOME-JIGGLE: goyang + animasi menyusut jalan terus
+      needRedraw=true;
+      if(!dockBounceNow) bandCand=true;
+      if(homeGoneIdx>=0 && millis()-homeGoneMs>=200UL){
+        homeHide[homeGoneIdx]=true; homeLayoutRebuildVis(); homeLayoutSave(); homeGoneIdx=-1; bandCand=false;
       }
     }
     // v-baru: animasi buka/tutup kolom cari (pola sama persis dgn

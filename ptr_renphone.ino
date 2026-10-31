@@ -43,14 +43,7 @@ static void ptrFire() {
 
 static bool edgeBackScreenOk() {
   if (locked || appSwitcherOpen || controlCenterOpen || notifShadeOpen || diMenuOpen || powerMenuOpen || kbVisible || updBusy) return false;
-  switch (curScreen()) {
-    case SCR_SETTINGS: case SCR_FILEEXPLORER: case SCR_UPDATE: case SCR_BATTERY: case SCR_APOD: case SCR_NEOWS:
-    case SCR_EPIC: case SCR_NASAIMG: case SCR_ABOUT: case SCR_OWNER: case SCR_HOMEEDIT: case SCR_REMOTE:
-    case SCR_CHAT: case SCR_CLOCK: case SCR_SENSOR: case SCR_HWMON: case SCR_MICLEVEL: case SCR_POMODORO:
-    case SCR_WAKE: case SCR_MEMO: case SCR_STOPWATCH: case SCR_MUSIC: case SCR_GALLERY:
-      return true;
-    default: return false;
-  }
+  return screenHasEdgeBack(curScreen());
 }
 
 static bool  edgeTracking = false, edgeActive = false;
@@ -137,4 +130,54 @@ void ptrDraw(LGFX_Sprite& s) {
     s.drawLine(cx + 3, cy - 7, cx - 3, cy, fg); s.drawLine(cx - 3, cy, cx + 3, cy + 7, fg);
     s.drawLine(cx + 4, cy - 7, cx - 2, cy, fg); s.drawLine(cx - 2, cy, cx + 4, cy + 7, fg);
   }
+}
+
+
+// =====================================================================
+// PANEL-PULL -- Control Center (tepi atas kanan) & Notification Shade (tepi atas kiri) MENGIKUTI JARI.
+// Dulu swipe-turun >28 px langsung memicu animasi buka. Sekarang tinggi panel = jarak jari (ditambah tarikan karet
+// kalau melewati tinggi penuh); lepas: cukup jauh (>=35% tinggi) atau lemparan cepat -> animasi BUKA dari posisi
+// jari (kurva easeOutBackSoft yg sudah ada = melenting sedikit di ujung), kalau tidak -> animasi TUTUP.
+// Animasi buka/tutup yg dipakai tetap milik openControlCenter()/openNotifShade() (From = offset saat ini).
+// =====================================================================
+bool panelPullActive = false;
+static bool  ppShade = false;
+static int   ppSy = 0, ppLastY = 0;
+static float ppVel = 0;
+static unsigned long ppLastMs = 0;
+
+void panelPullBegin(bool shade, int startY) {
+  ppShade = shade; ppSy = startY; ppLastY = startY; ppVel = 0; ppLastMs = millis();
+  panelPullActive = true;
+  if (shade) {
+    notifShadeOpen = true; nsAnimating = false; nsOffset = 0; nsScrollY = 0; nsPressedRow = -1; nsIsSwiping = false;
+  } else {
+    ccSnapBtnAnim();
+    controlCenterOpen = true; ccAnimating = false; ccOffset = 0;
+  }
+  needRedraw = true;
+}
+
+void panelPullHandle(bool touched, int tx, int ty) {
+  (void)tx;
+  float panelH = (float)(ppShade ? nsPanelH() : ccPanelH());
+  unsigned long now = millis();
+  if (touched) {
+    float dy = (float)(ty - ppSy);
+    float off = dy < 0 ? 0 : (dy > panelH ? panelH + (dy - panelH) * 0.25f : dy);   // lewat penuh = tarikan karet
+    if (ppShade) nsOffset = off; else ccOffset = off;
+    unsigned long dt = now - ppLastMs;
+    if (dt > 0) ppVel = ppVel * 0.6f + ((float)(ty - ppLastY) / (float)dt) * 0.4f;
+    ppLastY = ty; ppLastMs = now;
+    needRedraw = true;
+    return;
+  }
+  // jari lepas
+  panelPullActive = false;
+  if (now - ppLastMs > 90) ppVel = 0;
+  float cur = ppShade ? nsOffset : ccOffset;
+  bool open = (cur >= panelH * 0.35f) || (ppVel > 0.4f && cur > 12.0f);
+  if (ppShade) { if (open) openNotifShade(); else closeNotifShade(); }
+  else         { if (open) openControlCenter(); else closeControlCenter(); }
+  needRedraw = true;
 }

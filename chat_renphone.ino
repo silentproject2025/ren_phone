@@ -61,6 +61,7 @@
 #define CB_NAMEH    11
 #define CB_GAP_SAME 3
 #define CB_GAP_NEW  8
+#define CB_QUOTE_H  20                // tinggi kotak kutipan balasan di dalam bubble
 #define CB_TYPE_H   26                // tinggi slot indikator mengetik (bubble 20 + celah)
 
 struct ChatMsg { uint32_t seq; uint32_t ts; char user[CHAT_USER_LEN]; char text[CHAT_TEXT_LEN]; uint32_t born; };   // born = millis() saat pesan LIVE masuk (0 = riwayat, tanpa animasi)
@@ -95,6 +96,12 @@ static char              chatOutText[CHAT_TEXT_LEN] = "";
 static char              chatOutName[CHAT_USER_LEN] = "";
 static uint32_t          chatOutMs = 0;
 static int               chatOutX = 0, chatOutY = 0, chatOutW = 0, chatOutH = 0;   // area bubble (utk ketuk kirim ulang)
+// BALAS: tahan bubble -> bar "Membalas ..." di atas kotak input. Format di kabel: "{r:Nama:kutipan}isi pesan"
+// (HP berfirmware lama menampilkannya apa adanya; yg baru menggambar kutipan di dalam bubble).
+static bool              chatReplyOn = false;
+static char              chatReplyName[CHAT_USER_LEN] = "";
+static char              chatReplyQuote[30] = "";
+static int               chatHitN = 0, chatHitR[24][4], chatHitIdx[24];   // area bubble yg tampil (utk tahan-balas)
 static char              chatPeerName[CHAT_USER_LEN] = "";   // diisi callback MQTT (di bawah chatMx), dibaca UI
 static volatile uint32_t chatPeerTypeUntil = 0;              // millis() sampai kapan indikator tampil (0 = mati)
 static char              chatTypeNameBuf[CHAT_USER_LEN] = "";// nama yg dikirim task jaringan
@@ -384,7 +391,7 @@ void chatEnter() {
   if (!chatConfigured() && chatCfgFromSd()) { chatCfgSave(); showToast("Konfigurasi dimuat dari SD", 2200); }
   chatScroll = 0;
   chatCfgEdit = -1;
-  chatOutState = 0;
+  chatOutState = 0; chatReplyOn = false;
   chatPeerTypeUntil = 0; chatPeerName[0] = 0; chatTypeAnim = 0.0f; chatTypeSentMs = 0; chatTypeSendReq = false;
   chatCfgMode = !chatConfigured();
   chatConn = 0;
@@ -469,14 +476,35 @@ static int chatWrap(const char* t, int maxCh, int* st, int* ln, int maxL) {
   return n;
 }
 
+// "{r:Nama:kutipan}isi" -> nama, kutipan, penunjuk ke isi. false (body = text) kalau bukan balasan.
+static bool chatParseReply(const char* text, char* qn, int qnCap, char* qt, int qtCap, const char** body) {
+  *body = text;
+  if (strncmp(text, "{r:", 3) != 0) return false;
+  const char* e = strchr(text + 3, '}');
+  if (!e) return false;
+  const char* col = (const char*)memchr(text + 3, ':', (size_t)(e - (text + 3)));
+  if (!col) return false;
+  int nl = (int)(col - (text + 3)); if (nl > qnCap - 1) nl = qnCap - 1;
+  memcpy(qn, text + 3, (size_t)nl); qn[nl] = 0;
+  int tl = (int)(e - (col + 1)); if (tl > qtCap - 1) tl = qtCap - 1;
+  memcpy(qt, col + 1, (size_t)tl); qt[tl] = 0;
+  const char* b = e + 1;
+  while (*b == ' ') b++;
+  *body = b;
+  return true;
+}
+
 // Tata letak satu pesan sbg bubble. Mengembalikan tinggi slot (celah + nama + bubble).
 // Out: jumlah baris, panjang baris terpanjang (karakter), celah di atas, tampilkan nama?
 static int chatMsgLayout(int idx, int maxCh, int* nLines, int* maxLen, int* gap, bool* showName) {
   int st[8], ln[8];
-  int n = chatWrap(chatMsgs[idx].text, maxCh, st, ln, 8);
+  char qn[20], qt[32]; const char* body;
+  bool hq = chatParseReply(chatMsgs[idx].text, qn, sizeof(qn), qt, sizeof(qt), &body);
+  int n = chatWrap(body, maxCh, st, ln, 8);
   int ml = 0;
   if (n < 1) n = 1;
   else for (int k = 0; k < n; k++) if (ln[k] > ml) ml = ln[k];
+  if (hq) { int ql = (int)strlen(qn) + 2 + (int)strlen(qt); if (ql > maxCh) ql = maxCh; if (ql > ml) ml = ql; }
   bool mine = strcmp(chatName.c_str(), chatMsgs[idx].user) == 0;
   bool newGroup = (idx == 0) || strcmp(chatMsgs[idx].user, chatMsgs[idx - 1].user) != 0;
   bool sn = !mine && newGroup;
@@ -485,7 +513,7 @@ static int chatMsgLayout(int idx, int maxCh, int* nLines, int* maxLen, int* gap,
   if (maxLen)   *maxLen = ml;
   if (gap)      *gap = g;
   if (showName) *showName = sn;
-  return g + (sn ? CB_NAMEH : 0) + CB_PADT + n * CB_LINE + CB_TIMEH + CB_PADB;
+  return g + (sn ? CB_NAMEH : 0) + (hq ? CB_QUOTE_H : 0) + CB_PADT + n * CB_LINE + CB_TIMEH + CB_PADB;
 }
 
 static void chatPrintCentered(LGFX_Sprite& s, int x, int w, int y, const char* t) {
@@ -569,7 +597,8 @@ void drawChat(LGFX_Sprite& s) {
 
   // ---- area pesan (bubble) ----
   int inputY = (kbVisible ? kbY() : backY()) - 26;
-  int top = CHAT_TOP, bot = inputY - 4, areaH = bot - top;
+  int top = CHAT_TOP, bot = inputY - 4 - (chatReplyOn ? 18 : 0), areaH = bot - top;
+  chatHitN = 0;
   int maxBW = SCR_W * 3 / 4;
   int maxCh = (maxBW - 2 * CB_PADX) / 6;
   if (areaH > 10 && chatMx && xSemaphoreTake(chatMx, pdMS_TO_TICKS(30)) == pdTRUE) {
@@ -578,7 +607,9 @@ void drawChat(LGFX_Sprite& s) {
     int outN = 0, outMl = 0, outH = 0, outGap = CB_GAP_NEW;
     if (chatOutState != 0) {
       int ost[8], oln[8];
-      outN = chatWrap(chatOutText, maxCh, ost, oln, 8);
+      char oqn[20], oqt[32]; const char* obody;
+      chatParseReply(chatOutText, oqn, sizeof(oqn), oqt, sizeof(oqt), &obody);
+      outN = chatWrap(obody, maxCh, ost, oln, 8);
       if (outN < 1) outN = 1;
       else for (int k = 0; k < outN; k++) if (oln[k] > outMl) outMl = oln[k];
       if (chatCount > 0 && strcmp(chatMsgs[chatCount - 1].user, chatName.c_str()) == 0) outGap = CB_GAP_SAME;
@@ -639,12 +670,14 @@ void drawChat(LGFX_Sprite& s) {
       s.fillRect(bx + bw - 9, by + bh - 9, 9, 9, bc);
       if (os == 2) s.drawRoundRect(bx, by, bw, bh, 9, T().danger);
       int ost[8], oln[8];
-      int nn = chatWrap(chatOutText, maxCh, ost, oln, 8);
+      char oqn2[20], oqt2[32]; const char* obody2;
+      chatParseReply(chatOutText, oqn2, sizeof(oqn2), oqt2, sizeof(oqt2), &obody2);
+      int nn = chatWrap(obody2, maxCh, ost, oln, 8);
       s.setTextColor(T().bg);
       for (int k = 0; k < nn; k++) {
         char line[64];
         int L = oln[k] < (int)sizeof(line) - 1 ? oln[k] : (int)sizeof(line) - 1;
-        memcpy(line, chatOutText + ost[k], L); line[L] = 0;
+        memcpy(line, obody2 + ost[k], L); line[L] = 0;
         s.setCursor(bx + CB_PADX, by + CB_PADT + k * CB_LINE); s.print(line);
       }
       const char* st = (os == 2) ? "Gagal - ketuk utk kirim ulang" : "Mengirim...";
@@ -662,7 +695,10 @@ void drawChat(LGFX_Sprite& s) {
       bool mine = (strcmp(chatName.c_str(), chatMsgs[i].user) == 0);
       int minIn = mine ? 42 : 30;
       int bw = (ml * 6 > minIn ? ml * 6 : minIn) + 2 * CB_PADX;
-      int bh = CB_PADT + n * CB_LINE + CB_TIMEH + CB_PADB;
+      char qn[20], qt[32]; const char* body;
+      bool hq = chatParseReply(chatMsgs[i].text, qn, sizeof(qn), qt, sizeof(qt), &body);
+      int qo = hq ? CB_QUOTE_H : 0;
+      int bh = qo + CB_PADT + n * CB_LINE + CB_TIMEH + CB_PADB;
       int bx = mine ? (SCR_W - 6 - bw) : 6;
       if (i == chatCount - 1) bx += mine ? newX : -newX;
       int by = y + gap + (showName ? CB_NAMEH : 0);
@@ -675,14 +711,25 @@ void drawChat(LGFX_Sprite& s) {
       s.fillRoundRect(bx, by, bw, bh, 9, bc);
       if (mine) s.fillRect(bx + bw - 9, by + bh - 9, 9, 9, bc);   // sudut "ekor" bubble sendiri
       else      s.fillRect(bx, by + bh - 9, 9, 9, bc);            // sudut "ekor" bubble lawan bicara
+      if (hq) {                                          // kotak kutipan balasan
+        uint16_t qbg = mine ? blend565(T().accent, T().bg, 70) : blend565(T().surface2, T().bg, 70);
+        s.fillRoundRect(bx + 5, by + 4, bw - 10, CB_QUOTE_H - 3, 4, qbg);
+        s.fillRect(bx + 5, by + 4, 2, CB_QUOTE_H - 3, mine ? (uint16_t)T().bg : (uint16_t)T().accent);
+        char ql[60]; int qmax = (bw - 10 - 8) / 6;
+        snprintf(ql, sizeof(ql), "%s: %s", qn, qt);
+        if ((int)strlen(ql) > qmax && qmax > 3) { ql[qmax - 2] = 0; strcat(ql, ".."); }
+        s.setTextColor(mine ? (uint16_t)T().bg : (uint16_t)T().subtext);
+        s.setCursor(bx + 10, by + 8); s.print(ql);
+      }
+      if (chatHitN < 24) { chatHitR[chatHitN][0] = bx; chatHitR[chatHitN][1] = by; chatHitR[chatHitN][2] = bw; chatHitR[chatHitN][3] = bh; chatHitIdx[chatHitN] = i; chatHitN++; }
       int st[8], ln[8];
-      int nn = chatWrap(chatMsgs[i].text, maxCh, st, ln, 8);
+      int nn = chatWrap(body, maxCh, st, ln, 8);
       s.setTextColor(tc);
       for (int k = 0; k < nn; k++) {
         char line[64];
         int L = ln[k] < (int)sizeof(line) - 1 ? ln[k] : (int)sizeof(line) - 1;
-        memcpy(line, chatMsgs[i].text + st[k], L); line[L] = 0;
-        s.setCursor(bx + CB_PADX, by + CB_PADT + k * CB_LINE); s.print(line);
+        memcpy(line, body + st[k], L); line[L] = 0;
+        s.setCursor(bx + CB_PADX, by + CB_PADT + qo + k * CB_LINE); s.print(line);
       }
       char hm[8];
       if (chatMsgs[i].ts > 0) {
@@ -691,9 +738,9 @@ void drawChat(LGFX_Sprite& s) {
         snprintf(hm, sizeof(hm), "%02d:%02d", tmv.tm_hour, tmv.tm_min);
       } else snprintf(hm, sizeof(hm), "--:--");
       s.setTextColor(mine ? blend565(T().bg, T().accent, 90) : (uint16_t)T().subtext);
-      s.setCursor(bx + bw - CB_PADX - s.textWidth(hm), by + CB_PADT + n * CB_LINE); s.print(hm);
+      s.setCursor(bx + bw - CB_PADX - s.textWidth(hm), by + CB_PADT + qo + n * CB_LINE); s.print(hm);
       if (mine) {                                       // tanda terkirim: sudah diterima broker (pesan kembali dari langganan)
-        int kx = bx + bw - CB_PADX - s.textWidth(hm) - 11, ky = by + CB_PADT + n * CB_LINE + 3;
+        int kx = bx + bw - CB_PADX - s.textWidth(hm) - 11, ky = by + CB_PADT + qo + n * CB_LINE + 3;
         uint16_t kc = blend565(T().bg, T().accent, 60);
         s.drawLine(kx, ky + 2, kx + 2, ky + 4, kc); s.drawLine(kx + 2, ky + 4, kx + 7, ky - 1, kc);
       }
@@ -706,6 +753,16 @@ void drawChat(LGFX_Sprite& s) {
     xSemaphoreGive(chatMx);
   }
 
+  if (chatReplyOn) {                                      // bar "Membalas ..." di atas kotak input
+    int ry = inputY - 18;
+    s.fillRoundRect(4, ry, SCR_W - 8, 16, 5, T().surface2);
+    s.fillRect(8, ry + 3, 2, 10, T().accent);
+    char rl[72]; int rmax = (SCR_W - 52) / 6; if (rmax > 70) rmax = 70;
+    snprintf(rl, sizeof(rl), "Membalas %s: %s", chatReplyName, chatReplyQuote);
+    if ((int)strlen(rl) > rmax && rmax > 3) { rl[rmax - 2] = 0; strcat(rl, ".."); }
+    s.setTextColor(T().subtext); s.setCursor(14, ry + 4); s.print(rl);
+    s.setTextColor(T().danger); s.setCursor(SCR_W - 18, ry + 4); s.print("x");
+  }
   // ---- baris input ----
   int boxW = SCR_W - 4 - 62;
   iosRR(s, 4, inputY, boxW, 22, 5, T().surface);
@@ -752,8 +809,17 @@ static void chatDoSend() {
   if (!t.length()) return;
   if (chatConn != 1) { showToast("Belum tersambung ke broker", 1800); return; }
   if (chatSendPending) { showToast("Tunggu pesan sebelumnya...", 1400); return; }
-  if (t.length() > 200) t = t.substring(0, 200);
   t.replace("|", "/");                       // '|' dipakai sbg pemisah payload
+  if (chatReplyOn) {                         // balasan: awali dgn "{r:Nama:kutipan}"
+    String pf = String("{r:") + chatReplyName + ":" + chatReplyQuote + "}";
+    pf.replace("|", "/");
+    int room = 200 - (int)pf.length();
+    if (room < 10) { pf = ""; room = 200; }
+    if ((int)t.length() > room) t = t.substring(0, room);
+    t = pf + t;
+    chatReplyOn = false;
+  }
+  if (t.length() > 200) t = t.substring(0, 200);
   xSemaphoreTake(chatMx, portMAX_DELAY);
   chatSendQ = chatName + "\n" + t;
   chatCopyAscii(chatOutText, CHAT_TEXT_LEN, t.c_str(), (int)t.length());     // salinan yg sudah disanitasi = persis yg nanti kembali
@@ -794,6 +860,7 @@ void chatTouch(int x, int y, bool held, bool isNew) {
 
   if (kbVisible) {
     if (!isNew) return;
+    if (chatReplyOn && !chatCfgMode && x >= SCR_W - 30 && y >= kbY() - 26 - 20 && y < kbY() - 26 - 2) { chatReplyOn = false; needRedraw = true; return; }
     if (y < kbY() - 2) { kbVisible = false; kbTarget = nullptr; chatCfgEdit = -1; }
     else {
       size_t before = chatInput.length();
@@ -833,9 +900,12 @@ void chatTouch(int x, int y, bool held, bool isNew) {
   }
 
   int inputY = backY() - 26;
-  int top = CHAT_TOP, bot = inputY - 4;
+  int top = CHAT_TOP, bot = inputY - 4 - (chatReplyOn ? 18 : 0);
+  static unsigned long lpStart = 0; static int lpX = 0, lpY = 0; static bool lpFired = false;
   if (isNew) {
     dragging = false;
+    lpStart = millis(); lpX = x; lpY = y; lpFired = false;
+    if (chatReplyOn && x >= SCR_W - 30 && y >= inputY - 20 && y < inputY - 2) { chatReplyOn = false; needRedraw = true; return; }
     if (isBack(x, y)) { navBack(); return; }
     if (x >= SCR_W - 52 && x <= SCR_W - 4 && y >= 24 && y <= 42) {
       chatActive = false;
@@ -852,6 +922,30 @@ void chatTouch(int x, int y, bool held, bool isNew) {
     if (chatOutState == 2 && x >= chatOutX && x <= chatOutX + chatOutW && y >= chatOutY && y <= chatOutY + chatOutH) { chatResend(); return; }
     if (y >= top && y <= bot) { dragging = true; dragY = y; }
   } else if (held && dragging) {
+    if (!lpFired && abs(x - lpX) < 8 && abs(y - lpY) < 8 && millis() - lpStart > 450UL) {   // tahan bubble = balas
+      lpFired = true;
+      for (int k = 0; k < chatHitN; k++) {
+        if (x >= chatHitR[k][0] && x <= chatHitR[k][0] + chatHitR[k][2] && y >= chatHitR[k][1] && y <= chatHitR[k][1] + chatHitR[k][3]) {
+          int mi = chatHitIdx[k];
+          if (xSemaphoreTake(chatMx, pdMS_TO_TICKS(30)) == pdTRUE) {
+            if (mi >= 0 && mi < chatCount) {
+              char qn[20], qt[32]; const char* body;
+              const char* who = chatMsgs[mi].user;
+              if (chatParseReply(chatMsgs[mi].text, qn, sizeof(qn), qt, sizeof(qt), &body)) { /* body = isi tanpa kutipan lama */ }
+              strncpy(chatReplyName, who, sizeof(chatReplyName) - 1); chatReplyName[sizeof(chatReplyName) - 1] = 0;
+              for (char* q = chatReplyName; *q; q++) if (*q == ':' || *q == '}' || *q == '{') *q = '_';
+              strncpy(chatReplyQuote, body, sizeof(chatReplyQuote) - 1); chatReplyQuote[sizeof(chatReplyQuote) - 1] = 0;
+              for (char* q = chatReplyQuote; *q; q++) if (*q == '}' || *q == '{' || *q == '|') *q = ' ';
+              chatReplyOn = true;
+            }
+            xSemaphoreGive(chatMx);
+            vibTap(); dragging = false; needRedraw = true;
+          }
+          break;
+        }
+      }
+      if (!dragging) return;
+    }
     int dy = y - dragY;
     if (dy != 0) { chatScroll += dy; if (chatScroll < 0) chatScroll = 0; dragY = y; needRedraw = true; }
   }
