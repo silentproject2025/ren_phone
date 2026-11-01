@@ -1186,7 +1186,7 @@ static int musListRows() { int r = (mBotY - 8 - 48) / 30; return r < 1 ? 1 : r; 
 static int musScanRows() { int r = (mBotY - 8 - 48) / 30; return r < 1 ? 1 : r; }
 
 static void musPanel(LGFX_Sprite& s, int x, int y, int w, int h, int r, uint16_t col, uint8_t a) {
-  s.fillRoundRect(x, y, w, h, r, blend565(T().bg, col, a));
+  nyxAaRR(s, x, y, w, h, r, blend565(T().bg, col, a));
 }
 
 static void musSetVol(int v) {
@@ -1225,7 +1225,7 @@ static void musDrawShuffle(LGFX_Sprite& s, int cx, int cy, uint16_t c) {
   s.fillTriangle(cx + 10, cy - 5, cx + 4, cy - 9, cx + 4, cy - 1, c);
 }
 static void musDrawRepeat(LGFX_Sprite& s, int cx, int cy, uint16_t c, bool one) {
-  s.drawRoundRect(cx - 10, cy - 6, 20, 12, 4, c);
+  nyxAaRRRing(s, cx - 10, cy - 6, 20, 12, 4, c);
   s.fillRect(cx + 3, cy - 7, 7, 3, T().bg);
   s.fillRect(cx - 10, cy + 4, 7, 3, T().bg);
   s.fillTriangle(cx + 9, cy - 5, cx + 3, cy - 9, cx + 3, cy - 1, c);
@@ -1233,8 +1233,8 @@ static void musDrawRepeat(LGFX_Sprite& s, int cx, int cy, uint16_t c, bool one) 
   if (one) { s.setTextSize(1); s.setTextColor(c); s.setCursor(cx - 2, cy - 3); s.print("1"); }
 }
 static void musDrawHeart(LGFX_Sprite& s, int cx, int cy, uint16_t c) {
-  s.fillCircle(cx - 3, cy - 2, 3, c);
-  s.fillCircle(cx + 3, cy - 2, 3, c);
+  nyxAaCircle(s, cx - 3, cy - 2, 3, c);
+  nyxAaCircle(s, cx + 3, cy - 2, 3, c);
   s.fillTriangle(cx - 6, cy - 1, cx + 6, cy - 1, cx, cy + 6, c);
 }
 static void musDrawSpeaker(LGFX_Sprite& s, int cx, int cy, uint16_t c, int lvl) {
@@ -1274,7 +1274,7 @@ static void musDrawCover(LGFX_Sprite& s, bool playing, const char* title) {
         float z = (float)S / MUS_COVER_SZ;
         cv->pushRotateZoom(&s, x + S / 2.0f, y + S / 2.0f, 0.0f, z, z);
       }
-      s.drawRoundRect(x - 1, y - 1, S + 2, S + 2, 2, blend565(T().bg, T().text, 60));
+      nyxAaRRRing(s, x - 1, y - 1, S + 2, S + 2, 2, blend565(T().bg, T().text, 60));
       return;
     }
   }
@@ -1287,11 +1287,11 @@ static void musDrawCover(LGFX_Sprite& s, bool playing, const char* title) {
     int hh = (S - i < 4) ? (S - i) : 4;
     s.fillRect(x, y + i, S, hh, blend565(c1, c2, (uint8_t)((i * 255) / S)));
   }
-  s.drawRoundRect(x - 1, y - 1, S + 2, S + 2, 2, blend565(T().bg, T().text, 60));
+  nyxAaRRRing(s, x - 1, y - 1, S + 2, S + 2, 2, blend565(T().bg, T().text, 60));
 
   int cx = x + S / 2, cy = y + S / 2, R = (S * 44) / 100;
-  s.fillCircle(cx, cy, R, 0x1082);
-  for (int g = 6; g < R - 8; g += 6) s.drawCircle(cx, cy, R - g, 0x2124);
+  nyxAaCircle(s, cx, cy, R, 0x1082);
+  for (int g = 6; g < R - 8; g += 6) nyxAaCircleRing(s, cx, cy, R - g, 0x2124);
   uint32_t now = millis();
   float dt = (now - musAnimMs) / 1000.f; if (dt > 0.25f) dt = 0.25f;
   musAnimMs = now;
@@ -1303,8 +1303,8 @@ static void musDrawCover(LGFX_Sprite& s, bool playing, const char* title) {
     s.drawLine(cx + (int)(ca * R * 0.5f), cy + (int)(sa * R * 0.5f),
                cx + (int)(ca * (R - 2)),  cy + (int)(sa * (R - 2)), 0x52AA);
   }
-  s.fillCircle(cx, cy, (R * 38) / 100, c1);
-  s.fillCircle(cx, cy, 3, 0x1082);
+  nyxAaCircle(s, cx, cy, (R * 38) / 100, c1);
+  nyxAaCircle(s, cx, cy, 3, 0x1082);
 }
 
 static void musDrawEq(LGFX_Sprite& s, bool playing) {
@@ -1318,7 +1318,7 @@ static void musDrawEq(LGFX_Sprite& s, bool playing) {
                         : 0.07f;
     musEq[i] += (tgt - musEq[i]) * 0.45f;
     int h = (int)(musEq[i] * mEqH); if (h < 2) h = 2;
-    s.fillRoundRect(mEqX + i * (bw + gap), mEqY + mEqH - h, bw, h, 1,
+    nyxAaRR(s, mEqX + i * (bw + gap), mEqY + mEqH - h, bw, h, 1,
                     blend565(T().accent, T().accent2, (uint8_t)((i * 255) / (n - 1))));
   }
 }
@@ -1335,8 +1335,8 @@ static void musDrawChips(LGFX_Sprite& s) {
   else if (musConnecting)  { st = "Menghubungkan...";  col = T().accent2; }
   else                     { st = "TWS putus";         col = T().subtext; }
   musPanel(s, mTwsX, mHdrY, mTwsW, mChipH, 9, T().surface2, 210);
-  s.fillCircle(mTwsX + 11, mHdrY + 9, 4, col);
-  if (musConnecting && !musBtConn) s.drawCircle(mTwsX + 11, mHdrY + 9, 5 + (int)((millis() / 150) % 4), col);
+  nyxAaCircle(s, mTwsX + 11, mHdrY + 9, 4, col);
+  if (musConnecting && !musBtConn) nyxAaCircleRing(s, mTwsX + 11, mHdrY + 9, 5 + (int)((millis() / 150) % 4), col);
   s.setTextColor(T().text); s.setCursor(mTwsX + 22, mHdrY + 5); s.print(st);
 }
 
@@ -1403,7 +1403,7 @@ static void musDrawPlayer(LGFX_Sprite& s) {
     s.setTextColor(T().danger); s.setCursor(mTitX, mVibeY >= 0 ? mVibeY : mSubY + 11); s.print(musRstMsg);
   } else if (mVibeY >= 0) {                            // baris vibe (RYNE)
     uint16_t vc = musHsv(vi * 45.f, 0.7f, 0.95f);
-    s.fillCircle(mTitX + 4, mVibeY + 4, 3, vc);
+    nyxAaCircle(s, mTitX + 4, mVibeY + 4, 3, vc);
     char vb[40];
     if (vp > 0) snprintf(vb, sizeof(vb), "Vibe: %s %d%%", RY_VIBE_NAME[vi], vp);
     else        snprintf(vb, sizeof(vb), "Vibe: mempelajari...");
@@ -1415,10 +1415,10 @@ static void musDrawPlayer(LGFX_Sprite& s) {
   // volume
   int lvl = (musVol == 0) ? 0 : (musVol < 64 ? 1 : 2);
   musDrawSpeaker(s, mVolIcX, mVolY + 7, T().subtext, lvl);
-  s.fillRoundRect(mVolSX, mVolY + 4, mVolSW, 6, 3, blend565(T().bg, T().text, 40));
+  nyxAaRR(s, mVolSX, mVolY + 4, mVolSW, 6, 3, blend565(T().bg, T().text, 40));
   int vf = (mVolSW * musVol) / 127;
-  if (vf > 0) s.fillRoundRect(mVolSX, mVolY + 4, vf, 6, 3, T().accent2);
-  s.fillCircle(mVolSX + vf, mVolY + 7, 6, T().text);
+  if (vf > 0) nyxAaRR(s, mVolSX, mVolY + 4, vf, 6, 3, T().accent2);
+  nyxAaCircle(s, mVolSX + vf, mVolY + 7, 6, T().text);
 
   // progress + waktu
   char t1[12], t2[12];
@@ -1433,7 +1433,7 @@ static void musDrawPlayer(LGFX_Sprite& s) {
   if (!musLoaded) fw = 0;
   // v109: BAR BERGELOMBANG -- bagian yg sudah diputar = gelombang sinus (bergerak saat play, lurus saat pause),
   // sisa lagu = garis lurus tipis. Layar pemutar di-redraw ~10 fps jadi geraknya cukup halus.
-  s.fillRoundRect(mBarX + fw, mBarY + 2, mBarW - fw, 3, 1, blend565(T().bg, T().text, 40));
+  nyxAaRR(s, mBarX + fw, mBarY + 2, mBarW - fw, 3, 1, blend565(T().bg, T().text, 40));
   if (fw > 0) {
     const float amp = playing ? 2.6f : 0.f;
     const float ph = (float)(millis() % 1400) * (6.2832f / 1400.f);
@@ -1442,20 +1442,20 @@ static void musDrawPlayer(LGFX_Sprite& s) {
       ky = mBarY + 3 + (int)lroundf(amp * sinf(x * 0.30f - ph));
       s.fillRect(mBarX + x, ky - 1, 1, 3, T().accent);
     }
-    s.fillCircle(mBarX + fw, ky, 6, T().text);
+    nyxAaCircle(s, mBarX + fw, ky, 6, T().text);
   }
 
   // kontrol
   int sm = musShufMode;
   musDrawShuffle(s, mShufX, mCtlCY, sm == 2 ? T().accent2 : (sm == 1 ? T().accent : T().subtext));
-  if (sm == 1) s.fillCircle(mShufX, mCtlCY + 15, 2, T().accent);
+  if (sm == 1) nyxAaCircle(s, mShufX, mCtlCY + 15, 2, T().accent);
   if (sm == 2) { s.setTextSize(1); s.setTextColor(T().accent2); s.setCursor(mShufX - 6, mCtlCY + 11); s.print("AI"); }
   musDrawRepeat(s, mRepX, mCtlCY, musRepeat ? T().accent : T().subtext, musRepeat == 2);
-  if (musRepeat) s.fillCircle(mRepX, mCtlCY + 15, 2, T().accent);
+  if (musRepeat) nyxAaCircle(s, mRepX, mCtlCY + 15, 2, T().accent);
   musDrawIcon(s, 0, mPrevX, mCtlCY, T().text);
   musDrawIcon(s, 1, mNextX, mCtlCY, T().text);
-  if (playing) s.drawCircle(mPlayX, mCtlCY, mPlayR + 3, blend565(T().bg, T().accent, 120));
-  s.fillCircle(mPlayX, mCtlCY, mPlayR, T().accent);
+  if (playing) nyxAaCircleRing(s, mPlayX, mCtlCY, mPlayR + 3, blend565(T().bg, T().accent, 120));
+  nyxAaCircle(s, mPlayX, mCtlCY, mPlayR, T().accent);
   musDrawIcon(s, playing ? 3 : 2, mPlayX, mCtlCY, T().bg);
 }
 
@@ -1490,7 +1490,7 @@ static void musDrawList(LGFX_Sprite& s) {
     int y = 48 + r * 30;
     bool cur = (idx == musCur);
     musPanel(s, 12, y, SCR_W - 30, 28, 8, cur ? T().accent : T().surface2, cur ? 90 : 170);
-    s.fillCircle(28, y + 14, 10, cur ? T().accent : blend565(T().bg, T().text, 40));
+    nyxAaCircle(s, 28, y + 14, 10, cur ? T().accent : blend565(T().bg, T().text, 40));
     char num[12]; snprintf(num, sizeof(num), "%d", idx + 1);
     s.setTextSize(1); s.setTextColor(cur ? T().bg : T().subtext);
     s.setCursor(28 - s.textWidth(num) / 2, y + 10); s.print(num);
@@ -1502,8 +1502,8 @@ static void musDrawList(LGFX_Sprite& s) {
   if (n > rows) {                                   // scrollbar
     int trackH = rows * 30 - 2, thumbH = (trackH * rows) / n; if (thumbH < 12) thumbH = 12;
     int thumbY = 48 + ((trackH - thumbH) * musListTop) / (n - rows > 0 ? n - rows : 1);
-    s.fillRoundRect(SCR_W - 9, 48, 3, trackH, 1, blend565(T().bg, T().text, 30));
-    s.fillRoundRect(SCR_W - 9, thumbY, 3, thumbH, 1, T().accent);
+    nyxAaRR(s, SCR_W - 9, 48, 3, trackH, 1, blend565(T().bg, T().text, 30));
+    nyxAaRR(s, SCR_W - 9, thumbY, 3, thumbH, 1, T().accent);
   }
 
   int bw3 = (SCR_W - 24 - 12) / 3;
@@ -1521,9 +1521,9 @@ static void musDrawScan(LGFX_Sprite& s) {
   if (musScanning) {                                // radar
     int rcx = SCR_W - 24, rcy = mHdrY + 9;
     int ph = (int)((millis() / 90) % 12);
-    s.fillCircle(rcx, rcy, 3, T().accent);
-    s.drawCircle(rcx, rcy, 3 + ph, blend565(T().bg, T().accent, (uint8_t)(255 - ph * 20)));
-    s.drawCircle(rcx, rcy, 3 + ((ph + 6) % 12), blend565(T().bg, T().accent, (uint8_t)(255 - ((ph + 6) % 12) * 20)));
+    nyxAaCircle(s, rcx, rcy, 3, T().accent);
+    nyxAaCircleRing(s, rcx, rcy, 3 + ph, blend565(T().bg, T().accent, (uint8_t)(255 - ph * 20)));
+    nyxAaCircleRing(s, rcx, rcy, 3 + ((ph + 6) % 12), blend565(T().bg, T().accent, (uint8_t)(255 - ((ph + 6) % 12) * 20)));
   }
   s.setTextSize(1);
   s.setCursor(12, 46);

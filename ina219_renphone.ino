@@ -590,10 +590,10 @@ static void inaDrawSummary(LGFX_Sprite& s, int top, int bottom) {
   }
   uint16_t bc = inaSocColor();
   int iw = 84, ih = 34, ix = 10, iy = top + 2;
-  s.drawRoundRect(ix, iy, iw, ih, 5, T().text);
-  s.fillRoundRect(ix + iw, iy + ih / 2 - 5, 5, 10, 2, T().text);
+  nyxAaRRRing(s, ix, iy, iw, ih, 5, T().text);
+  nyxAaRR(s, ix + iw, iy + ih / 2 - 5, 5, 10, 2, T().text);
   int fw = ((iw - 6) * inaSoc) / 100;
-  if (fw > 0) s.fillRoundRect(ix + 3, iy + 3, fw, ih - 6, 3, bc);
+  if (fw > 0) nyxAaRR(s, ix + 3, iy + 3, fw, ih - 6, 3, bc);
   char pb[8]; snprintf(pb, sizeof(pb), "%d%%", inaSoc);
   s.setTextSize(3); s.setTextColor(bc);
   int px = ix + iw + 16;

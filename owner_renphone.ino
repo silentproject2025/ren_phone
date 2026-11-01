@@ -145,18 +145,18 @@ static void ownerDrawFrame(LGFX_Sprite& s, int cx, int cy, int r) {
   int t = (r >= 40) ? 3 : (r >= 24 ? 2 : 1);
   switch (ownerFrameStyle) {
     case 1:                                                    // Solid
-      for (int i = 0; i < t; i++) s.drawCircle(cx, cy, r - i, col);
+      for (int i = 0; i < t; i++) nyxAaCircleRing(s, cx, cy, r - i, col);
       break;
     case 2:                                                    // Ganda: cincin tebal + cincin tipis di dalam
-      s.drawCircle(cx, cy, r, col); s.drawCircle(cx, cy, r - 1, col);
-      if (r >= 16) s.drawCircle(cx, cy, r - t - 3, blend565(T().bg, col, 200));
+      nyxAaCircleRing(s, cx, cy, r, col); nyxAaCircleRing(s, cx, cy, r - 1, col);
+      if (r >= 16) nyxAaCircleRing(s, cx, cy, r - t - 3, blend565(T().bg, col, 200));
       break;
     case 3: {                                                  // Titik
       int n = r * 9 / 10; if (n < 14) n = 14; if (n > 40) n = 40;
       int dr = (r >= 30) ? 2 : 1;
       for (int i = 0; i < n; i++) {
         float a = 6.2831853f * (float)i / (float)n;
-        s.fillCircle(cx + (int)lroundf(cosf(a) * (r - 2)), cy + (int)lroundf(sinf(a) * (r - 2)), dr, col);
+        nyxAaCircle(s, cx + (int)lroundf(cosf(a) * (r - 2)), cy + (int)lroundf(sinf(a) * (r - 2)), dr, col);
       }
       break;
     }
@@ -164,13 +164,13 @@ static void ownerDrawFrame(LGFX_Sprite& s, int cx, int cy, int r) {
       int n = r * 5; if (n < 48) n = 48; if (n > 130) n = 130;
       for (int i = 0; i < n; i++) {
         float a = 6.2831853f * (float)i / (float)n;
-        s.fillCircle(cx + (int)lroundf(cosf(a) * (r - 1)), cy + (int)lroundf(sinf(a) * (r - 1)), 1,
+        nyxAaCircle(s, cx + (int)lroundf(cosf(a) * (r - 1)), cy + (int)lroundf(sinf(a) * (r - 1)), 1,
                      ownerHue565(i * 360 / n));
       }
       break;
     }
     default:                                                   // Tipis (gaya lama)
-      s.drawCircle(cx, cy, r, blend565(T().bg, T().text, 70));
+      nyxAaCircleRing(s, cx, cy, r, blend565(T().bg, T().text, 70));
   }
 }
 // ---------------------------------------------------------------------------
@@ -323,7 +323,7 @@ void ownerDrawAvatar(LGFX_Sprite& s, int cx, int cy, int r) {
     }
     ownerDrawFrame(s, cx, cy, r);                                 // bingkai pilihan (gaya Tipis = cincin tipis lama)
   } else {
-    s.fillCircle(cx, cy, r, blend565(T().bg, T().accent, 150));
+    nyxAaCircle(s, cx, cy, r, blend565(T().bg, T().accent, 150));
     char ini[2] = { '?', 0 };
     for (const char* c = ownerNameBuf; *c; c++) {
       if ((*c >= 'a' && *c <= 'z') || (*c >= 'A' && *c <= 'Z') || (*c >= '0' && *c <= '9')) {
@@ -450,8 +450,8 @@ static void ownerDrawPick(LGFX_Sprite& s) {
   for (int j = 0; j < OWNER_PAL_N; j++) {
     int x = op_rx + (j % 5) * (op_sw + 6), y = op_sy0 + (j / 5) * op_sstride;
     uint16_t c = (j == 0) ? T().accent : ownerPal[j - 1];
-    s.fillRoundRect(x, y, op_sw, op_sw, 8, c);
-    if (j == ownerFrameCol) s.drawRoundRect(x - 2, y - 2, op_sw + 4, op_sw + 4, 10, T().text);
+    nyxAaRR(s, x, y, op_sw, op_sw, 8, c);
+    if (j == ownerFrameCol) nyxAaRRRing(s, x - 2, y - 2, op_sw + 4, op_sw + 4, 10, T().text);
   }
 }
 
@@ -534,7 +534,7 @@ static void ownerDrawStats(LGFX_Sprite& s) {
     while (n > 1 && s.textWidth(nm) > nameW) nm[--n] = 0;
     s.setTextColor(T().text); s.setCursor(14, y + 2); s.print(nm);
     int w = (int)((uint64_t)bc * (uint64_t)maxW / (uint64_t)best0); if (w < 4) w = 4;
-    s.fillRoundRect(bx0, y, w, 10, 4, ownerFrameColor());
+    nyxAaRR(s, bx0, y, w, 10, 4, ownerFrameColor());
     char c[12]; snprintf(c, sizeof(c), "%u", (unsigned)bc);
     s.setTextColor(T().subtext); s.setCursor(SCR_W - 14 - s.textWidth(c), y + 2); s.print(c);
     rows++;

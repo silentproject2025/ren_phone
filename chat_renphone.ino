@@ -587,7 +587,7 @@ void drawChat(LGFX_Sprite& s) {
   // ---- header ----
   s.setTextColor(T().accent); s.setCursor(8, 26); s.print("Chat");
   uint16_t dot = (chatConn == 1) ? (uint16_t)T().good : ((chatConn == 2) ? (uint16_t)T().danger : (uint16_t)T().subtext);
-  s.fillCircle(46, 30, 3, dot);
+  nyxAaCircle(s, 46, 30, 3, dot);
   String stt = (chatConn == 1) ? String("terhubung") : ((chatConn == 2) ? String(chatErrBuf) : String("menyambung..."));
   int maxSt = (SCR_W - 54 - 58) / 6;
   if ((int)stt.length() > maxSt) stt = stt.substring(0, maxSt > 2 ? maxSt - 2 : maxSt) + "..";
@@ -641,7 +641,7 @@ void drawChat(LGFX_Sprite& s) {
     // indikator "sedang mengetik": bubble kecil dgn 3 titik memantul, meluncur naik dari bawah
     if (typeSlot > 4) {
       int bx = 6, by = y - CB_TYPE_H + 3 + (CB_TYPE_H - typeSlot);
-      s.fillRoundRect(bx, by, 46, 20, 9, T().surface2);
+      nyxAaRR(s, bx, by, 46, 20, 9, T().surface2);
       s.fillRect(bx, by + 11, 9, 9, T().surface2);
       float ph = (float)millis() / 170.0f;
       for (int k = 0; k < 3; k++) {
@@ -649,7 +649,7 @@ void drawChat(LGFX_Sprite& s) {
         if (bn < 0.0f) bn = 0.0f;
         int dy = (int)lroundf(3.0f * bn);
         uint16_t dc = blend565(T().subtext, T().text, (uint8_t)(255.0f * bn));
-        s.fillCircle(bx + 14 + k * 10, by + 10 - dy, 3, dc);
+        nyxAaCircle(s, bx + 14 + k * 10, by + 10 - dy, 3, dc);
       }
       char who[CHAT_USER_LEN + 12];
       snprintf(who, sizeof(who), "%s mengetik", chatPeerName[0] ? chatPeerName : "Seseorang");
@@ -666,9 +666,9 @@ void drawChat(LGFX_Sprite& s) {
       int bh = CB_PADT + outN * CB_LINE + CB_TIMEH + CB_PADB;
       int bx = SCR_W - 6 - bw, by = y + outGap;
       uint16_t bc = (os == 2) ? blend565(T().surface2, T().danger, 150) : blend565(T().accent, T().bg, 90);   // pucat = belum terkirim
-      s.fillRoundRect(bx, by, bw, bh, 9, bc);
+      nyxAaRR(s, bx, by, bw, bh, 9, bc);
       s.fillRect(bx + bw - 9, by + bh - 9, 9, 9, bc);
-      if (os == 2) s.drawRoundRect(bx, by, bw, bh, 9, T().danger);
+      if (os == 2) nyxAaRRRing(s, bx, by, bw, bh, 9, T().danger);
       int ost[8], oln[8];
       char oqn2[20], oqt2[32]; const char* obody2;
       chatParseReply(chatOutText, oqn2, sizeof(oqn2), oqt2, sizeof(oqt2), &obody2);
@@ -708,12 +708,12 @@ void drawChat(LGFX_Sprite& s) {
         s.setTextColor(T().good);
         s.setCursor(bx + 4, y + gap); s.print(chatMsgs[i].user);
       }
-      s.fillRoundRect(bx, by, bw, bh, 9, bc);
+      nyxAaRR(s, bx, by, bw, bh, 9, bc);
       if (mine) s.fillRect(bx + bw - 9, by + bh - 9, 9, 9, bc);   // sudut "ekor" bubble sendiri
       else      s.fillRect(bx, by + bh - 9, 9, 9, bc);            // sudut "ekor" bubble lawan bicara
       if (hq) {                                          // kotak kutipan balasan
         uint16_t qbg = mine ? blend565(T().accent, T().bg, 70) : blend565(T().surface2, T().bg, 70);
-        s.fillRoundRect(bx + 5, by + 4, bw - 10, CB_QUOTE_H - 3, 4, qbg);
+        nyxAaRR(s, bx + 5, by + 4, bw - 10, CB_QUOTE_H - 3, 4, qbg);
         s.fillRect(bx + 5, by + 4, 2, CB_QUOTE_H - 3, mine ? (uint16_t)T().bg : (uint16_t)T().accent);
         char ql[60]; int qmax = (bw - 10 - 8) / 6;
         snprintf(ql, sizeof(ql), "%s: %s", qn, qt);
@@ -755,7 +755,7 @@ void drawChat(LGFX_Sprite& s) {
 
   if (chatReplyOn) {                                      // bar "Membalas ..." di atas kotak input
     int ry = inputY - 18;
-    s.fillRoundRect(4, ry, SCR_W - 8, 16, 5, T().surface2);
+    nyxAaRR(s, 4, ry, SCR_W - 8, 16, 5, T().surface2);
     s.fillRect(8, ry + 3, 2, 10, T().accent);
     char rl[72]; int rmax = (SCR_W - 52) / 6; if (rmax > 70) rmax = 70;
     snprintf(rl, sizeof(rl), "Membalas %s: %s", chatReplyName, chatReplyQuote);

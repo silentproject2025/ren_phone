@@ -917,8 +917,8 @@ void shadowSoft(LGFX_Sprite& s, int x,int y,int w,int h,int radius){
   // digelapin -- bukan asumsi T().bg polos, biar nyambung mulus di atas
   // wallpaper/konten apapun yg lg tergambar (gak ada kotak nempel patah).
   uint16_t base = glassSampleAvg(s, x, y+2, w, h, 3);
-  s.fillRoundRect(x-1,y+3,w+2,h+2,radius+1,blend565(base,0x0000,55));
-  s.fillRoundRect(x,y+2,w,h,radius,blend565(base,0x0000,35));
+  nyxAaRR(s, x-1,y+3,w+2,h+2,radius+1,blend565(base,0x0000,55));
+  nyxAaRR(s, x,y+2,w,h,radius,blend565(base,0x0000,35));
 }
 void drawGlassPanel(LGFX_Sprite& s, int x,int y,int w,int h,int radius, uint16_t tint, uint8_t tintAlpha){
   shadowSoft(s,x,y,w,h,radius);
@@ -944,7 +944,7 @@ void drawGlassPanel(LGFX_Sprite& s, int x,int y,int w,int h,int radius, uint16_t
   }
   uint16_t avgWhole = glassSampleAvg(s,x,y,w,h); // dipakai buat siluet dasar + border/highlight
   uint16_t glassColor = blend565(avgWhole, tint, tintAlpha);
-  s.fillRoundRect(x,y,w,h,radius,glassColor); // siluet bulat dasar dulu -- jaga sudut tetap rapi
+  nyxAaRR(s, x,y,w,h,radius,glassColor); // siluet bulat dasar dulu -- jaga sudut tetap rapi
   int inset = max(2, radius/2); // margin aman biar gradasi gak nongol keluar sudut bulat
   int mx=x+inset, my=y+inset, mw=max(0,w-2*inset), mh=max(0,h-2*inset);
   if(mw>0 && mh>0){
@@ -963,7 +963,7 @@ void drawGlassPanel(LGFX_Sprite& s, int x,int y,int w,int h,int radius, uint16_t
     s.clearClipRect();
   }
   uint16_t borderCol = blend565(glassColor, T().text, 55);
-  s.drawRoundRect(x,y,w,h,radius,borderCol);
+  nyxAaRRRing(s, x,y,w,h,radius,borderCol);
   int hiW = max(0, w-radius*2);
   if(hiW>0){
     // v-baru: highlight 2 lapis (terang tipis di baris 1, lebih pudar di
@@ -977,7 +977,7 @@ void drawGlassPanel(LGFX_Sprite& s, int x,int y,int w,int h,int radius, uint16_t
 
 // Varian lingkaran (dipakai tombol Control Center)
 void drawGlassCircle(LGFX_Sprite& s, int cx,int cy,int r, uint16_t tint, uint8_t tintAlpha){
-  { uint16_t sb=glassSampleAvg(s,cx-r,cy-r+2,r*2,r*2,3); s.fillCircle(cx,cy+2,r+1,blend565(sb,0x0000,45)); } // v-baru: bayangan lembut, nyampel warna asli spt shadowSoft()
+  { uint16_t sb=glassSampleAvg(s,cx-r,cy-r+2,r*2,r*2,3); nyxAaCircle(s, cx,cy+2,r+1,blend565(sb,0x0000,45)); } // v-baru: bayangan lembut, nyampel warna asli spt shadowSoft()
   // v51: sama kayak drawGlassPanel -- gradasi bilinear gantiin mosaic flat
   // v49 (yg bikin "pecah"). Diklip ke kotak inscribed di dlm lingkaran.
   // v96: grid/mosaic diperhalus, pola sama persis dgn drawGlassPanel di atas
@@ -990,7 +990,7 @@ void drawGlassCircle(LGFX_Sprite& s, int cx,int cy,int r, uint16_t tint, uint8_t
   }
   uint16_t avgWhole = glassSampleAvg(s, x, y, w, h);
   uint16_t glassColor = blend565(avgWhole, tint, tintAlpha);
-  s.fillCircle(cx,cy,r,glassColor); // siluet bulat dasar dulu
+  nyxAaCircle(s, cx,cy,r,glassColor); // siluet bulat dasar dulu
   int half = (int)(r*0.7071f); // sisi setengah kotak yg pas inscribed di lingkaran (r/sqrt2)
   if(half>0){
     s.setClipRect(cx-half, cy-half, half*2, half*2);
@@ -1008,7 +1008,7 @@ void drawGlassCircle(LGFX_Sprite& s, int cx,int cy,int r, uint16_t tint, uint8_t
     s.clearClipRect();
   }
   uint16_t borderCol = blend565(glassColor, T().text, 55);
-  s.drawCircle(cx,cy,r,borderCol);
+  nyxAaCircleRing(s, cx,cy,r,borderCol);
   // v-baru: arc highlight 2 lapis (senada sama drawGlassPanel di atas)
   uint16_t hi1 = blend565(glassColor, 0xFFFF, 55);
   uint16_t hi2 = blend565(glassColor, 0xFFFF, 25);
@@ -1036,11 +1036,11 @@ void modernIconBase(LGFX_Sprite& s,int cx,int cy,int r,uint16_t col){
     if(sy<0) sy=0;
     if(sy>=s.height()) sy=s.height()-1;
     uint16_t base=s.readPixel(sx,sy);
-    s.fillRoundRect(x+1,y+3,d-2,d,rr,blend565(base,0x0000,70));
+    nyxAaRR(s, x+1,y+3,d-2,d,rr,blend565(base,0x0000,70));
   }
-  s.fillRoundRect(x,y,d,d,rr,col);
+  nyxAaRR(s, x,y,d,d,rr,col);
   if(r>=12){
-    s.drawRoundRect(x,y,d,d,rr,blend565(col,0xFFFF,34));
+    nyxAaRRRing(s, x,y,d,d,rr,blend565(col,0xFFFF,34));
     int hx=x+rr, hw=d-2*rr;
     if(hw>0){
       s.drawFastHLine(hx,y+1,hw,blend565(col,0xFFFF,95));    // kilap atas
@@ -1059,7 +1059,7 @@ void modernGlow(LGFX_Sprite& s,int cx,int cy,int rad,uint16_t col,int maxAlpha){
     int rr=(rad*(N-i))/N;
     int a=(maxAlpha*(i+1))/N;
     if(a<2) continue;
-    s.fillCircle(cx,cy,rr,blend565(T().bg,col,(uint8_t)a));
+    nyxAaCircle(s, cx,cy,rr,blend565(T().bg,col,(uint8_t)a));
   }
 }
 
@@ -1266,6 +1266,9 @@ String nyxVoiceInstruction(); bool nyxVoiceExtract(String&);
 void nyxShotThumbCapture(const char*); void nyxShotThumbHide(); bool nyxShotThumbActive();
 void drawShotThumb(LGFX_Sprite&); bool nyxShotThumbTouch(bool,bool,int,int);
 void nyxSkeleton(LGFX_Sprite&,int);
+// NYX-AA-V1: bentuk anti-alias (nyxextras_renphone.ino)
+void nyxAaCircle(lgfx::LGFXBase&,int,int,int,uint16_t); void nyxAaCircleRing(lgfx::LGFXBase&,int,int,int,uint16_t);
+void nyxAaRR(lgfx::LGFXBase&,int,int,int,int,int,uint16_t); void nyxAaRRRing(lgfx::LGFXBase&,int,int,int,int,int,uint16_t);
 
 // v47: WALLPAPER Home Screen -- didefinisikan penuh dekat drawHome()
 // (bagian HOME SCREEN & APP INTERFACE), di-extern di sini spy bisa
@@ -3210,7 +3213,7 @@ void drawKb(LGFX_Sprite& s){
       int kx=ox+c*(kw+2);
       bool pr=(kbPressKey==r*10+c);
       int in=pr?1:0;                                           // ditekan: mengecil 1px tiap sisi
-      s.fillRoundRect(kx+in,ry+in,kw-2*in,kh-2*in,kr,pr?keyP:keyC);
+      nyxAaRR(s, kx+in,ry+in,kw-2*in,kh-2*in,kr,pr?keyP:keyC);
       const char* lb=lay[r][c];
       s.setTextSize(2); s.setTextColor(T().text);
       int tw=s.textWidth(lb);
@@ -3229,27 +3232,27 @@ void drawKb(LGFX_Sprite& s){
     bool pr=(kbPressKey==100); int in=pr?1:0;
     uint16_t bg = up ? T().accent : (pr?fnP:fnC);
     uint16_t ic = up ? inkAcc : T().text;
-    s.fillRoundRect(shX+in,cy+in,shW-2*in,kh-2*in,kr,bg);
+    nyxAaRR(s, shX+in,cy+in,shW-2*in,kh-2*in,kr,bg);
     int acx=shX+shW/2, acy=cy+kh/2;
     s.fillTriangle(acx,acy-6, acx-6,acy+2, acx+6,acy+2, ic);
     s.fillRect(acx-3,acy+2,6,4,ic);
   }
   { // 123 / ABC
     bool pr=(kbPressKey==101); int in=pr?1:0;
-    s.fillRoundRect(nmX+in,cy+in,nmW-2*in,kh-2*in,kr,pr?fnP:fnC);
+    nyxAaRR(s, nmX+in,cy+in,nmW-2*in,kh-2*in,kr,pr?fnP:fnC);
     const char* nl=(kbMode==KB_NUM)?"ABC":"123";
     s.setTextColor(T().text);
     s.setCursor(nmX+(nmW-s.textWidth(nl))/2,cy+kh/2-4+in); s.print(nl);
   }
   { // spasi (tuts huruf)
     bool pr=(kbPressKey==102); int in=pr?1:0;
-    s.fillRoundRect(spX+in,cy+in,spW-2*in,kh-2*in,kr,pr?keyP:keyC);
+    nyxAaRR(s, spX+in,cy+in,spW-2*in,kh-2*in,kr,pr?keyP:keyC);
     s.setTextColor(T().text);
     s.setCursor(spX+(spW-s.textWidth("spasi"))/2,cy+kh/2-4+in); s.print("spasi");
   }
   { // hapus
     bool pr=(kbPressKey==103); int in=pr?1:0;
-    s.fillRoundRect(dlX+in,cy+in,dlW-2*in,kh-2*in,kr,pr?fnP:fnC);
+    nyxAaRR(s, dlX+in,cy+in,dlW-2*in,kh-2*in,kr,pr?fnP:fnC);
     int acx=dlX+dlW/2-4, acy=cy+kh/2;
     s.fillTriangle(acx-8,acy, acx,acy-6, acx,acy+6, T().text);
     s.fillRect(acx,acy-3,10,6,T().text);
@@ -3330,10 +3333,10 @@ void drawToast(LGFX_Sprite& s){
   int ty=SCR_H-40+(int)((1.0f-ein)*14.0f)+(int)(pout*pout*10.0f);
   uint8_t ta=(uint8_t)(205.0f*vis);
   drawGlassPanel(s, tx,ty,tw,th,th/2, T().surface, ta);
-  s.drawRoundRect(tx,ty,tw,th,th/2,blend565(T().surface,0xFFFF,60));   // rim tipis
+  nyxAaRRRing(s, tx,ty,tw,th,th/2,blend565(T().surface,0xFFFF,60));   // rim tipis
   if(tx+26+textW <= tx+tw-4){                    // teks hanya digambar kalau muat di dalam pil
     uint8_t va=(uint8_t)(255.0f*vis);
-    s.fillCircle(tx+14,ty+th/2,3,blend565(T().surface,T().accent,va));
+    nyxAaCircle(s, tx+14,ty+th/2,3,blend565(T().surface,T().accent,va));
     s.setTextColor(blend565(T().surface,T().text,va)); s.setTextSize(1);
     s.setCursor(tx+26,ty+th/2-4); s.print(buf);
   }
@@ -3352,8 +3355,8 @@ void drawGlassCard(LGFX_Sprite& s,int x,int y,int w,int h,int r,uint16_t tint,ui
   if(w<=0||h<=0||y>=SCR_H||y+h<=0) return;
   uint16_t base=glassSampleAvg(s,x,y,w,h,4);
   uint16_t fillC=blend565(base,tint,a);
-  s.fillRoundRect(x,y+2,w,h,r,blend565(base,0x0000,70)); // bayangan tipis
-  s.fillRoundRect(x,y,w,h,r,fillC);
+  nyxAaRR(s, x,y+2,w,h,r,blend565(base,0x0000,70)); // bayangan tipis
+  nyxAaRR(s, x,y,w,h,r,fillC);
   for(int dy=0;dy<h;dy++){ // pantulan cahaya: terang di atas, memudar ke bawah
     float t=1.0f-(float)dy/(float)h;
     uint8_t al=(uint8_t)(40.0f*t*t);
@@ -3362,7 +3365,7 @@ void drawGlassCard(LGFX_Sprite& s,int x,int y,int w,int h,int r,uint16_t tint,ui
     if(dy<r){ float d=(float)(r-dy)-0.5f; float q=(float)r*(float)r-d*d; if(q<0) q=0; inset=(int)ceilf((float)r-sqrtf(q)); }
     s.drawFastHLine(x+inset,y+dy,w-2*inset,blend565(fillC,0xFFFF,al));
   }
-  s.drawRoundRect(x,y,w,h,r,blend565(fillC,0xFFFF,70));
+  nyxAaRRRing(s, x,y,w,h,r,blend565(fillC,0xFFFF,70));
 }
 
 // Teks dgn bayangan 1px (biar kebaca di wallpaper apapun) & opsi "tebal"
@@ -3391,25 +3394,25 @@ int iosRadius(int w,int h,int r){
   if(rr<0) rr=0;
   return rr;
 }
-// pengganti s.fillRoundRect(x,y,w,h,r,c) -- geometri & hit-test TIDAK berubah, cuma sudutnya
+// pengganti nyxAaRR(s, x,y,w,h,r,c) -- geometri & hit-test TIDAK berubah, cuma sudutnya
 void iosRR(LGFX_Sprite& s,int x,int y,int w,int h,int r,uint16_t c){
   if(w<=0||h<=0) return;
   int rr=iosRadius(w,h,r);
   bool card = !(w<=h*16/10) && !(w<=h*32/10 && h<=34); // baris/kartu lebar
   if(card && h>=20){ drawGlassCard(s,x,y,w,h,rr,c,225); return; } // kaca: bayangan + pantulan + rim
-  s.fillRoundRect(x,y,w,h,rr,c);
+  nyxAaRR(s, x,y,w,h,rr,c);
   if(h>=14 && w>=2*rr+6){ // tombol: rim tipis + kilap atas
-    s.drawRoundRect(x,y,w,h,rr,blend565(c,0xFFFF,46));
+    nyxAaRRRing(s, x,y,w,h,rr,blend565(c,0xFFFF,46));
     s.drawFastHLine(x+rr,y+1,w-2*rr,blend565(c,0xFFFF,70));
   }
 }
 // Switch ala iOS 34x20: trek hijau/abu + kenop putih bersayap bayangan
 void iosSwitch(LGFX_Sprite& s,int x,int y,bool on){
   uint16_t tr = on ? (uint16_t)IOS_GREEN : blend565(T().surface2,0xFFFF,45);
-  s.fillRoundRect(x,y,34,20,10,tr);
+  nyxAaRR(s, x,y,34,20,10,tr);
   int kx = on ? x+24 : x+10, ky=y+10;
-  s.fillCircle(kx,ky+1,8,blend565(tr,0x0000,90));
-  s.fillCircle(kx,ky,8,0xFFFF);
+  nyxAaCircle(s, kx,ky+1,8,blend565(tr,0x0000,90));
+  nyxAaCircle(s, kx,ky,8,0xFFFF);
 }
 // Chevron tebal "<" (2 garis) buat tombol Kembali
 void iosChevron(LGFX_Sprite& s,int cx,int cy,uint16_t col){
@@ -3448,10 +3451,10 @@ void drawMusicMini(LGFX_Sprite& s,int x,int y,int w,int h,bool ctrl){
   bool started=homeMusStarted(), loaded=homeMusLoaded(), playing=homeMusPlaying();
   int cr=(h>=50)?19:15, ccx=x+14+cr;
   uint16_t disc=T().accent2;
-  s.fillCircle(ccx,cy,cr,disc);
-  s.drawCircle(ccx,cy,cr-4,blend565(disc,0x0000,90));
-  s.fillCircle(ccx,cy,cr/3+1,blend565(disc,0xFFFF,130));
-  s.fillCircle(ccx,cy,2,blend565(disc,0x0000,170));
+  nyxAaCircle(s, ccx,cy,cr,disc);
+  nyxAaCircleRing(s, ccx,cy,cr-4,blend565(disc,0x0000,90));
+  nyxAaCircle(s, ccx,cy,cr/3+1,blend565(disc,0xFFFF,130));
+  nyxAaCircle(s, ccx,cy,2,blend565(disc,0x0000,170));
   int tx=ccx+cr+12;
   int pc,nc; homeMusBtnPos(x,w,pc,nc);
   int maxX=(ctrl&&started)?(pc-20):(x+w-34);
@@ -3468,17 +3471,17 @@ void drawMusicMini(LGFX_Sprite& s,int x,int y,int w,int h,bool ctrl){
   if(started&&loaded){ // progres tipis
     int bx=tx, bw=maxX-tx, by=y+h-12;
     if(bw>10){
-      s.fillRoundRect(bx,by,bw,4,2,blend565(T().surface,0xFFFF,60));
+      nyxAaRR(s, bx,by,bw,4,2,blend565(T().surface,0xFFFF,60));
       int fw=(int)(bw*homeMusProgress());
-      if(fw>0) s.fillRoundRect(bx,by,max(fw,4),4,2,T().accent);
+      if(fw>0) nyxAaRR(s, bx,by,max(fw,4),4,2,T().accent);
     }
   }
   uint16_t ink=appIconInk(T().accent);
   if(ctrl&&started){
-    s.fillCircle(pc,cy,15,T().accent);
+    nyxAaCircle(s, pc,cy,15,T().accent);
     if(playing){ s.fillRect(pc-5,cy-6,4,12,ink); s.fillRect(pc+1,cy-6,4,12,ink); }
     else s.fillTriangle(pc-4,cy-7,pc-4,cy+7,pc+6,cy,ink);
-    s.fillCircle(nc,cy,12,blend565(T().surface2,0xFFFF,40));
+    nyxAaCircle(s, nc,cy,12,blend565(T().surface2,0xFFFF,40));
     s.fillTriangle(nc-5,cy-5,nc-5,cy+5,nc+3,cy,T().text);
     s.fillRect(nc+4,cy-5,2,10,T().text);
   } else if(!ctrl && started && loaded){
@@ -3556,8 +3559,8 @@ void drawBattWidget(LGFX_Sprite& s,int x,int y,int w,int h){
       else { s.fillArc(cx,cy,ri,ro,270.0f,360.0f,bc); s.fillArc(cx,cy,ri,ro,0.0f,a1-360.0f,bc); }
       if(shown<99.5f){                                       // v129: ujung arc membulat
         int cr=(ro-ri)/2, rm=(ri+ro)/2; float er=a1*0.0174532925f;
-        s.fillCircle(cx,cy-rm,cr,bc);
-        s.fillCircle(cx+(int)lroundf(cosf(er)*rm),cy+(int)lroundf(sinf(er)*rm),cr,bc);
+        nyxAaCircle(s, cx,cy-rm,cr,bc);
+        nyxAaCircle(s, cx+(int)lroundf(cosf(er)*rm),cy+(int)lroundf(sinf(er)*rm),cr,bc);
       }
     }
     s.setTextSize(battPercent>=100?1:2);
@@ -3571,9 +3574,9 @@ void drawBattWidget(LGFX_Sprite& s,int x,int y,int w,int h){
     int tw=s.textWidth(pf);
     uiText(s,x+w-16-tw,y+9,pf,bc,false,true);
     int bx=x+16, bw=w-32, by=y+h-15;
-    s.fillRoundRect(bx,by,bw,8,4,blend565(T().surface,0xFFFF,50));
+    nyxAaRR(s, bx,by,bw,8,4,blend565(T().surface,0xFFFF,50));
     int fw=(bw*battPercent)/100;
-    if(fw>0) s.fillRoundRect(bx,by,max(fw,8),8,4,bc);
+    if(fw>0) nyxAaRR(s, bx,by,max(fw,8),8,4,bc);
   }
 }
 
@@ -3600,11 +3603,11 @@ void drawStatusBar(LGFX_Sprite& s){
   // --- Baterai: kapsul + persen ---
   int bw=24,bh=11, bx=rx-bw, by=6;
   uint16_t bc = battCharging ? T().good : battColor();
-  s.drawRoundRect(bx,by,bw-2,bh,3,fg2);
-  s.fillRoundRect(bx+bw-2,by+3,2,bh-6,1,fg2); // kutub kecil
+  nyxAaRRRing(s, bx,by,bw-2,bh,3,fg2);
+  nyxAaRR(s, bx+bw-2,by+3,2,bh-6,1,fg2); // kutub kecil
   int innerW = bw-2-6;
   int fillW = constrain((innerW*battPercent)/100,0,innerW);
-  if(fillW>0) s.fillRoundRect(bx+3,by+3,fillW,bh-6,1,bc);
+  if(fillW>0) nyxAaRR(s, bx+3,by+3,fillW,bh-6,1,bc);
   if(battCharging){ // v109: petir kecil di tengah kapsul
     int zx=bx+(bw-2)/2, zy=by+bh/2;
     s.fillTriangle(zx+2,by+1, zx-3,zy+1, zx,zy+1, 0xFFFF);
@@ -3627,14 +3630,14 @@ void drawStatusBar(LGFX_Sprite& s){
   } else if(wifiConnected){
     int rssi=WiFi.RSSI(); int lv=(rssi>-60)?3:(rssi>-72)?2:1; // v109: kuat sinyal -> 1..3 lengkung menyala
     rx -= 9;
-    s.fillCircle(rx,16,2,fg);
+    nyxAaCircle(s, rx,16,2,fg);
     s.drawArc(rx,18,5,4,210,330,(lv>=2)?fg:fgDim);
     s.drawArc(rx,18,9,8,210,330,(lv>=3)?fg:fgDim);
     rx -= 12;
   } else {
     rx -= 12;
     int wcx=rx, wcy=14;
-    s.fillCircle(wcx,wcy+2,1,T().danger);
+    nyxAaCircle(s, wcx,wcy+2,1,T().danger);
     s.drawArc(wcx,wcy+2,4,3,210,330,T().danger);
     s.drawArc(wcx,wcy+2,7,6,210,330,T().danger);
     s.drawLine(wcx-6,wcy-4,wcx+6,wcy+8,T().danger);
@@ -3948,8 +3951,8 @@ void drawDynamicIsland(LGFX_Sprite& s){
   // diubah nanti.
   uint16_t pillC = isAchv?blend565(0x0000,0xFE05,18):0x0000; // UI-POLISH-V2
   if(h>=20) shadowSoft(s,x,y,w,h,h/2);                       // bayangan lembut: pil terasa melayang
-  s.fillRoundRect(x,y,w,h,h/2,pillC);
-  if(h>=14) s.drawRoundRect(x,y,w,h,h/2,blend565(0x0000,0xFFFF,26)); // rim halus
+  nyxAaRR(s, x,y,w,h,h/2,pillC);
+  if(h>=14) nyxAaRRRing(s, x,y,w,h,h/2,blend565(0x0000,0xFFFF,26)); // rim halus
   if(w>h){
     uint16_t sheen = blend565(0x0000, 0xFFFF, 30);
     s.drawFastHLine(x+h/2, y+1, max(0,w-h), sheen);
@@ -3989,7 +3992,7 @@ void drawDynamicIsland(LGFX_Sprite& s){
       s.setCursor(x+w/2-tw2/2, y+h/2-4); s.print(diBadge);
     } else {
       float pulse = diPulse ? (0.6f+0.4f*sinf(millis()/260.0f)) : 1.0f;
-      s.fillCircle(x+w/2, y+h/2, max(2,(int)(3*pulse)), diColor);
+      nyxAaCircle(s, x+w/2, y+h/2, max(2,(int)(3*pulse)), diColor);
     }
   } else if(h>=22){
     int iconR = max(6,(h-6)/2);
@@ -4011,8 +4014,8 @@ void drawDynamicIsland(LGFX_Sprite& s){
           s.setTextColor(diColor); s.setTextSize(1);
           s.setCursor(pbX, y+h-9); s.print(pbuf);
         } else {
-          s.fillRoundRect(pbX,pbY,pbW,2,1,0x39C7);
-          s.fillRoundRect(pbX,pbY,(int)(pbW*diProgress),2,1,diColor);
+          nyxAaRR(s, pbX,pbY,pbW,2,1,0x39C7);
+          nyxAaRR(s, pbX,pbY,(int)(pbW*diProgress),2,1,diColor);
         }
       }
     }
@@ -4053,7 +4056,7 @@ bool backHidden(){
 void drawBack(LGFX_Sprite& s){
   if(kbVisible)return;
   if(backHidden()){ // hanya home indicator
-    int hiW=96; s.fillRoundRect(SCR_W/2-hiW/2,SCR_H-6,hiW,4,2,blend565(T().bg,T().text,170));
+    int hiW=96; nyxAaRR(s, SCR_W/2-hiW/2,SCR_H-6,hiW,4,2,blend565(T().bg,T().text,170));
     return;
   }
   // iOS: pil kaca + chevron + "Kembali" (warna aksen), plus home-indicator tipis di dasar layar
@@ -4063,7 +4066,7 @@ void drawBack(LGFX_Sprite& s){
   s.setTextColor(T().accent); s.setTextSize(1);
   s.setCursor(bx+21,by+8); s.print("Kembali");
   int hiW=96, hiX=SCR_W/2-hiW/2; // UI-MODERN: lebih lebar & tebal (4px)
-  if(hiX>bx+BACK_W+6) s.fillRoundRect(hiX,SCR_H-6,hiW,4,2,blend565(T().bg,T().text,170));
+  if(hiX>bx+BACK_W+6) nyxAaRR(s, hiX,SCR_H-6,hiW,4,2,blend565(T().bg,T().text,170));
 }
 
 bool isBack(int x,int y){
@@ -4244,7 +4247,7 @@ void drawChargeAnim(LGFX_Sprite& s){
       float wv=0.62f+0.38f*sinf(tSec*4.4f-fi*14.0f);        // gelombang terang merambat sepanjang busur
       float tt=(frac>0.01f)? fi/frac : 0.0f;
       uint16_t base=blend565(DEEP,HOT,(uint8_t)(255.0f*tt*tt));
-      s.fillCircle(px,py,2,blend565(0x0000,base,(uint8_t)(255.0f*wv*a)));
+      nyxAaCircle(s, px,py,2,blend565(0x0000,base,(uint8_t)(255.0f*wv*a)));
     } else {
       s.fillRect(px-1,py-1,2,2,blend565(0x0000,chgRGB(150,150,166),(uint8_t)(70.0f*a)));
     }
@@ -4252,15 +4255,15 @@ void drawChargeAnim(LGFX_Sprite& s){
   if(pct>0){                                                // kepala busur: titik terang berdenyut
     float ang=-1.5708f+frac*6.28318f;
     int hx=cx+(int)lroundf(cosf(ang)*ringR), hy=cy+(int)lroundf(sinf(ang)*ringR);
-    s.fillCircle(hx,hy,(int)(4.0f+beat*1.5f),blend565(0x0000,AMB,(uint8_t)(90.0f*a)));
-    s.fillCircle(hx,hy,2,blend565(0x0000,HOT,(uint8_t)(255.0f*a)));
+    nyxAaCircle(s, hx,hy,(int)(4.0f+beat*1.5f),blend565(0x0000,AMB,(uint8_t)(90.0f*a)));
+    nyxAaCircle(s, hx,hy,2,blend565(0x0000,HOT,(uint8_t)(255.0f*a)));
   }
 
   // lubang hitam kecil + piringan akresi miring (setengah belakang -> lubang -> setengah depan)
   const float R=11.0f, erx=R*2.3f, ery=R*0.62f;
   chgDiskHalf(s,cx,cy,erx,ery,3.14159f,blend565(0x0000,AMB,(uint8_t)((70.0f+60.0f*beat)*a)));
-  s.fillCircle(cx,cy,(int)R,0x0000);
-  s.drawCircle(cx,cy,(int)R+1,blend565(0x0000,HOT,(uint8_t)((110.0f+90.0f*beat)*a)));
+  nyxAaCircle(s, cx,cy,(int)R,0x0000);
+  nyxAaCircleRing(s, cx,cy,(int)R+1,blend565(0x0000,HOT,(uint8_t)((110.0f+90.0f*beat)*a)));
   chgDiskHalf(s,cx,cy,erx,ery,0.0f,blend565(0x0000,AMB,(uint8_t)((150.0f+90.0f*beat)*a)));
 
   // persen + keterangan
@@ -4329,9 +4332,9 @@ void drawLockScreen(LGFX_Sprite& s){
     int pw=s.textWidth(pb)+36, px=SCR_W-pw-10, py=8;
     drawGlassCard(s,px,py,pw,20,10,T().surface,140);
     uint16_t bc=battColor();
-    s.drawRoundRect(px+9,py+5,16,10,3,fg2);
+    nyxAaRRRing(s, px+9,py+5,16,10,3,fg2);
     s.fillRect(px+25,py+8,2,4,fg2);
-    int fw=(10*battPercent)/100; if(fw>0) s.fillRoundRect(px+11,py+7,fw,6,1,bc);
+    int fw=(10*battPercent)/100; if(fw>0) nyxAaRR(s, px+11,py+7,fw,6,1,bc);
     s.setTextColor(fg); s.setCursor(px+31,py+6); s.print(pb);
   }
 
@@ -4354,7 +4357,7 @@ void drawLockScreen(LGFX_Sprite& s){
 
   // gembok kecil + tanggal di atas jam
   int lockIconY = ty-22;
-  s.drawRoundRect(SCR_W/2-7,lockIconY-1,14,11,2,fg);
+  nyxAaRRRing(s, SCR_W/2-7,lockIconY-1,14,11,2,fg);
   s.drawArc(SCR_W/2,lockIconY-3,6,5,180,360,fg);
   if(ok){
     int dw=(int)s.textWidth(db);
@@ -4769,7 +4772,7 @@ void drawCCIcon(LGFX_Sprite& s, int idx, int cx, int cy, int r, bool active, uin
   // oleh pemanggil), spy ikon & "potongan" bulan DND ikut halus saat transisi ON/OFF.
   switch(idx){
     case 0: { // WiFi: titik + 2 lengkung sinyal, dicoret kalau OFF
-      s.fillCircle(cx,cy+r-8,2,ic);
+      nyxAaCircle(s, cx,cy+r-8,2,ic);
       s.drawArc(cx,cy+r-8,7,6,210,330,ic);
       s.drawArc(cx,cy+r-8,12,11,210,330,ic);
       if(!wifiConnected){
@@ -4783,23 +4786,23 @@ void drawCCIcon(LGFX_Sprite& s, int idx, int cx, int cy, int r, bool active, uin
       break;
     }
     case 2: { // DND: bulan sabit
-      s.fillCircle(cx,cy,r-6,ic);
-      s.fillCircle(cx+5,cy-3,r-7, fillCol);
+      nyxAaCircle(s, cx,cy,r-6,ic);
+      nyxAaCircle(s, cx+5,cy-3,r-7, fillCol);
       break;
     }
     case 3: { // Tema: palet warna (lingkaran + titik2 warna)
-      s.drawCircle(cx,cy,r-6,ic);
-      s.fillCircle(cx-5,cy-3,2, active?T().bg:T().accent);
-      s.fillCircle(cx+4,cy-5,2, active?T().bg:T().good);
-      s.fillCircle(cx+6,cy+4,2, active?T().bg:T().danger);
-      s.fillCircle(cx-3,cy+6,2, active?T().bg:T().accent2);
+      nyxAaCircleRing(s, cx,cy,r-6,ic);
+      nyxAaCircle(s, cx-5,cy-3,2, active?T().bg:T().accent);
+      nyxAaCircle(s, cx+4,cy-5,2, active?T().bg:T().good);
+      nyxAaCircle(s, cx+6,cy+4,2, active?T().bg:T().danger);
+      nyxAaCircle(s, cx-3,cy+6,2, active?T().bg:T().accent2);
       break;
     }
     case 4: { // Orientasi: siluet HP (ikut orientasi skrg) + panah rotasi
       if(currentOrient==ORIENT_LANDSCAPE){
-        s.drawRoundRect(cx-10,cy-6,20,12,2,ic);
+        nyxAaRRRing(s, cx-10,cy-6,20,12,2,ic);
       } else {
-        s.drawRoundRect(cx-6,cy-10,12,20,2,ic);
+        nyxAaRRRing(s, cx-6,cy-10,12,20,2,ic);
       }
       s.drawArc(cx,cy,r-1,r-2,20,300,ic);
       s.fillTriangle(cx+r-6,cy-r+4, cx+r-1,cy-r+7, cx+r-8,cy-r+9, ic);
@@ -4813,16 +4816,16 @@ void drawCCIcon(LGFX_Sprite& s, int idx, int cx, int cy, int r, bool active, uin
       break;
     }
     case 6: { // Kunci layar: gembok
-      s.drawRoundRect(cx-7,cy-1,14,11,2,ic);
+      nyxAaRRRing(s, cx-7,cy-1,14,11,2,ic);
       s.drawArc(cx,cy-3,6,5,180,360,ic);
       break;
     }
     case 7: { // Neopixel: bohlam + 3 titik RGB kecil di sekelilingnya
-      s.fillCircle(cx,cy-2,r-9,ic);
+      nyxAaCircle(s, cx,cy-2,r-9,ic);
       s.fillRect(cx-3,cy+r-11,6,5,ic);
-      s.fillCircle(cx-r+4,cy-3,2, active?T().bg:(uint16_t)0xF800);
-      s.fillCircle(cx+r-4,cy-3,2, active?T().bg:(uint16_t)0x07E0);
-      s.fillCircle(cx,cy-r+4,2, active?T().bg:(uint16_t)0x001F);
+      nyxAaCircle(s, cx-r+4,cy-3,2, active?T().bg:(uint16_t)0xF800);
+      nyxAaCircle(s, cx+r-4,cy-3,2, active?T().bg:(uint16_t)0x07E0);
+      nyxAaCircle(s, cx,cy-r+4,2, active?T().bg:(uint16_t)0x001F);
       break;
     }
     case 9: { // Bluetooth: rune "B" (+ titik hijau kalau TWS terhubung)
@@ -4837,8 +4840,8 @@ void drawCCIcon(LGFX_Sprite& s, int idx, int cx, int cy, int r, bool active, uin
         s.drawLine(cx+w+dx,cy+q, cx-w+dx,cy-q, ic);
       }
       if(btCcConnected()){
-        s.fillCircle(cx+r-1,cy-r+3,4,fillCol);
-        s.fillCircle(cx+r-1,cy-r+3,3,T().good);
+        nyxAaCircle(s, cx+r-1,cy-r+3,4,fillCol);
+        nyxAaCircle(s, cx+r-1,cy-r+3,3,T().good);
       }
       break;
     }
@@ -4850,12 +4853,12 @@ void drawCCIcon(LGFX_Sprite& s, int idx, int cx, int cy, int r, bool active, uin
         s.drawFastHLine(cx-a,cy+a-t,b,ic);       s.drawFastVLine(cx-a+t,cy+a-b+1,b,ic);
         s.drawFastHLine(cx+a-b+1,cy+a-t,b,ic);   s.drawFastVLine(cx+a-t,cy+a-b+1,b,ic);
       }
-      s.fillCircle(cx,cy,3,ic);
+      nyxAaCircle(s, cx,cy,3,ic);
       break;
     }
     case 8: { // Mode Senyap: lonceng, dicoret kalau getar lg dimatikan (active=true -> getar OFF)
       s.fillTriangle(cx,cy-8,cx-7,cy+3,cx+7,cy+3,ic);
-      s.fillRoundRect(cx-3,cy+4,6,3,1,ic);
+      nyxAaRR(s, cx-3,cy+4,6,3,1,ic);
       if(active) s.drawLine(cx-9,cy+9,cx+9,cy-9,ic);
       break;
     }
@@ -4869,7 +4872,7 @@ void drawControlCenter(LGFX_Sprite& s){
   int rad = min(22, ph/2); if(rad<0) rad=0;
   // v108: panel sedikit lebih pekat (215) -> latar lebih tenang/minimalis.
   drawGlassPanel(s, mx,0,pw,ph,rad, T().surface, 215);
-  s.fillRoundRect(SCR_W/2-12,ph-8,24,3,1,T().divider);
+  nyxAaRR(s, SCR_W/2-12,ph-8,24,3,1,T().divider);
 
   // Progres buka panel 0..1 (ccOffset bisa overshoot dikit -> di-clamp).
   float openP = (float)ph/(float)max(1,ccPanelH()); if(openP>1.0f) openP=1.0f;
@@ -4908,9 +4911,9 @@ void drawControlCenter(LGFX_Sprite& s){
     float a=ccBtnAnim[i];
     uint16_t glassIdle = blend565(T().surface2,0xFFFF,24);
     uint16_t fillC = lerpColor565(glassIdle, T().accent, a);
-    if(a>0.05f) s.fillRoundRect(tx-2,ty-2,tw2+4,th2+4,trad+2,blend565(T().surface,T().accent,(uint8_t)(70.0f*a)));
-    s.fillRoundRect(tx,ty,tw2,th2,trad,fillC);
-    s.drawRoundRect(tx,ty,tw2,th2,trad,blend565(fillC,0xFFFF,50));
+    if(a>0.05f) nyxAaRR(s, tx-2,ty-2,tw2+4,th2+4,trad+2,blend565(T().surface,T().accent,(uint8_t)(70.0f*a)));
+    nyxAaRR(s, tx,ty,tw2,th2,trad,fillC);
+    nyxAaRRRing(s, tx,ty,tw2,th2,trad,blend565(fillC,0xFFFF,50));
     if(li>=0.85f){ // ikon + label baru muncul setelah tile hampir penuh
       static const char* ccLbl[CC_ITEMS]={"Wi-Fi","Pesawat","DND","Tema","Rotasi","Goyang","Kunci","LED","Senyap","BT","Tangkap"};
       uint16_t icC = lerpColor565(T().text, T().bg, a);
@@ -4936,17 +4939,17 @@ void drawControlCenter(LGFX_Sprite& s){
     int tw=(int)(sw*sp);
     // UI-MODERN: track tebal 12px (pil penuh), isi aksen + kilap, grip pil putih di ujung isi
     int trY = sy-4, trH = 12;
-    s.fillRoundRect(sx,trY,tw,trH,6,blend565(T().surface,0xFFFF,38));
+    nyxAaRR(s, sx,trY,tw,trH,6,blend565(T().surface,0xFFFF,38));
     int fillW = map(brightness,0,255,0,sw);
     if(fillW>tw) fillW=tw;
     if(fillW>0){
       int fw2 = max(fillW,trH);
-      s.fillRoundRect(sx,trY,fw2,trH,6,T().accent);
+      nyxAaRR(s, sx,trY,fw2,trH,6,T().accent);
       s.drawFastHLine(sx+6,trY+1,max(0,fw2-12),blend565(T().accent,0xFFFF,110));
     }
     if(sp>=1.0f && fillW>trH){
       int gh = ccSliderDrag ? 10 : 6;       // grip memanjang sedikit selagi di-drag
-      s.fillRoundRect(sx+fillW-7,trY+(trH-gh)/2,3,gh,1,0xFFFF);
+      nyxAaRR(s, sx+fillW-7,trY+(trH-gh)/2,3,gh,1,0xFFFF);
     }
   }
   s.clearClipRect();
@@ -5041,14 +5044,14 @@ void drawAppIcon(LGFX_Sprite& s, char sym, int cx, int cy, int r, uint16_t bgCir
   uint16_t ic = appIconInk(bgCircle); // warna vektor ikon (kontras dgn lingkaran berwarna)
   switch(sym){
     case 'J': { // Jam: wajah jam + jarum
-      s.drawCircle(cx,cy,r-3,ic);
+      nyxAaCircleRing(s, cx,cy,r-3,ic);
       s.drawLine(cx,cy,cx,cy-r+6,ic);
       s.drawLine(cx,cy,cx+r-8,cy+2,ic);
-      s.fillCircle(cx,cy,1,ic);
+      nyxAaCircle(s, cx,cy,1,ic);
       break;
     }
     case '+': { // Kalkulator: kotak + grid tombol
-      s.fillRoundRect(cx-r+4,cy-r+4,(r-4)*2,(r-4)*2,3,ic);
+      nyxAaRR(s, cx-r+4,cy-r+4,(r-4)*2,(r-4)*2,3,ic);
       s.fillRect(cx-r+7,cy-r+7,(r-4)*2-6,5,bgCircle);
       for(int i=0;i<2;i++) for(int j=0;j<3;j++)
         s.fillRect(cx-r+8+j*7,cy-2+i*7,4,4,bgCircle);
@@ -5064,38 +5067,38 @@ void drawAppIcon(LGFX_Sprite& s, char sym, int cx, int cy, int r, uint16_t bgCir
       break;
     }
     case '@': { // Setting: gear
-      s.drawCircle(cx,cy,r-6,ic);
+      nyxAaCircleRing(s, cx,cy,r-6,ic);
       for(int i=0;i<8;i++){
         float a=i*PI/4.0f;
         int x1=cx+(int)(cosf(a)*(r-6)), y1=cy+(int)(sinf(a)*(r-6));
         int x2=cx+(int)(cosf(a)*(r-1)), y2=cy+(int)(sinf(a)*(r-1));
         s.drawLine(x1,y1,x2,y2,ic);
       }
-      s.fillCircle(cx,cy,4,ic);
-      s.fillCircle(cx,cy,2,bgCircle);
+      nyxAaCircle(s, cx,cy,4,ic);
+      nyxAaCircle(s, cx,cy,2,bgCircle);
       break;
     }
     case 'N': { // Notepad: kertas bergaris
-      s.fillRoundRect(cx-r+6,cy-r+4,(r-6)*2,(r-4)*2,2,ic);
+      nyxAaRR(s, cx-r+6,cy-r+4,(r-6)*2,(r-4)*2,2,ic);
       for(int i=0;i<3;i++) s.drawFastHLine(cx-r+10,cy-r+10+i*6,(r-6)*2-8,bgCircle);
       break;
     }
     case 'C': { // Canvas: kuas lukis
-      s.fillCircle(cx-4,cy-4,4,ic);
+      nyxAaCircle(s, cx-4,cy-4,4,ic);
       s.drawLine(cx-1,cy-1,cx+7,cy+7,ic);
       s.drawLine(cx+2,cy-2,cx+8,cy+4,ic);
-      s.fillCircle(cx+8,cy+7,2,ic);
+      nyxAaCircle(s, cx+8,cy+7,2,ic);
       break;
     }
     case 'A': { // AI Chat: gelembung percakapan
-      s.fillRoundRect(cx-r+5,cy-r+7,(r-5)*2,(r-7)*2-2,4,ic);
+      nyxAaRR(s, cx-r+5,cy-r+7,(r-5)*2,(r-7)*2-2,4,ic);
       s.fillTriangle(cx-4,cy+r-9,cx+2,cy+r-9,cx-6,cy+r-2,ic);
-      s.fillCircle(cx-5,cy-2,1,bgCircle); s.fillCircle(cx,cy-2,1,bgCircle); s.fillCircle(cx+5,cy-2,1,bgCircle);
+      nyxAaCircle(s, cx-5,cy-2,1,bgCircle); nyxAaCircle(s, cx,cy-2,1,bgCircle); nyxAaCircle(s, cx+5,cy-2,1,bgCircle);
       break;
     }
     case 'F': { // Files: folder
-      s.fillRoundRect(cx-r+5,cy-r+6,14,6,2,ic);
-      s.fillRoundRect(cx-r+5,cy-r+10,(r-5)*2,(r-10)*2,2,ic);
+      nyxAaRR(s, cx-r+5,cy-r+6,14,6,2,ic);
+      nyxAaRR(s, cx-r+5,cy-r+10,(r-5)*2,(r-10)*2,2,ic);
       break;
     }
     case 'M': { // MJPEG: tombol play
@@ -5108,33 +5111,33 @@ void drawAppIcon(LGFX_Sprite& s, char sym, int cx, int cy, int r, uint16_t bgCir
       break;
     }
     case 'B': { // Baterai
-      s.drawRoundRect(cx-r+6,cy-8,(r-6)*2-4,16,3,ic);
+      nyxAaRRRing(s, cx-r+6,cy-8,(r-6)*2-4,16,3,ic);
       s.fillRect(cx+r-8,cy-4,3,8,ic);
       s.fillRect(cx-r+9,cy-5,(r-6)*2-10,10,ic);
       break;
     }
     // ---------------- GAME ----------------
     case 'S': { // Snake
-      s.fillCircle(cx-8,cy+6,4,ic);
-      s.fillCircle(cx-2,cy+2,4,ic);
-      s.fillCircle(cx+3,cy-4,4,ic);
-      s.fillCircle(cx+8,cy-8,5,ic);      // kepala
-      s.fillCircle(cx+9,cy-9,1,bgCircle); // mata
+      nyxAaCircle(s, cx-8,cy+6,4,ic);
+      nyxAaCircle(s, cx-2,cy+2,4,ic);
+      nyxAaCircle(s, cx+3,cy-4,4,ic);
+      nyxAaCircle(s, cx+8,cy-8,5,ic);      // kepala
+      nyxAaCircle(s, cx+9,cy-9,1,bgCircle); // mata
       break;
     }
     case 'V': { // Flappy Block: burung
-      s.fillCircle(cx-2,cy,7,ic);
+      nyxAaCircle(s, cx-2,cy,7,ic);
       s.fillTriangle(cx+5,cy-2,cx+5,cy+2,cx+12,cy,ic);   // paruh
       s.fillTriangle(cx-9,cy-2,cx-2,cy-6,cx-2,cy+2,ic);  // sayap
-      s.fillCircle(cx+2,cy-3,1,bgCircle); // mata
+      nyxAaCircle(s, cx+2,cy-3,1,bgCircle); // mata
       break;
     }
     case '2': { // 2048: grid 2x2
       int gw=r-4;
-      s.fillRoundRect(cx-gw,cy-gw,gw-2,gw-2,2,ic);
-      s.fillRoundRect(cx+2,cy-gw,gw-2,gw-2,2,ic);
-      s.fillRoundRect(cx-gw,cy+2,gw-2,gw-2,2,ic);
-      s.fillRoundRect(cx+2,cy+2,gw-2,gw-2,2,ic);
+      nyxAaRR(s, cx-gw,cy-gw,gw-2,gw-2,2,ic);
+      nyxAaRR(s, cx+2,cy-gw,gw-2,gw-2,2,ic);
+      nyxAaRR(s, cx-gw,cy+2,gw-2,gw-2,2,ic);
+      nyxAaRR(s, cx+2,cy+2,gw-2,gw-2,2,ic);
       break;
     }
     case 'X': { // Tic-Tac-Toe: grid + X/O
@@ -5144,15 +5147,15 @@ void drawAppIcon(LGFX_Sprite& s, char sym, int cx, int cy, int r, uint16_t bgCir
       s.drawFastHLine(cx-9,cy+4,18,ic);
       s.drawLine(cx-8,cy-8,cx-2,cy-2,ic);
       s.drawLine(cx-8,cy-2,cx-2,cy-8,ic);
-      s.drawCircle(cx+5,cy+5,3,ic);
+      nyxAaCircleRing(s, cx+5,cy+5,3,ic);
       break;
     }
     case 'K': { // Breakout: bricks + paddle + bola
       s.fillRect(cx-8,cy-9,6,4,ic);
       s.fillRect(cx-1,cy-9,6,4,ic);
       s.fillRect(cx+6,cy-9,4,4,ic);
-      s.fillCircle(cx-2,cy+1,2,ic);
-      s.fillRoundRect(cx-9,cy+7,18,4,2,ic);
+      nyxAaCircle(s, cx-2,cy+1,2,ic);
+      nyxAaRR(s, cx-9,cy+7,18,4,2,ic);
       break;
     }
     // -------- Trivia Quiz & Dynamic Island (v14) --------
@@ -5162,7 +5165,7 @@ void drawAppIcon(LGFX_Sprite& s, char sym, int cx, int cy, int r, uint16_t bgCir
     case 'Q': { // Trivia: tanda tanya
       int rr = max(3, r*3/4);
       s.drawArc(cx, cy-rr/3, rr/2, max(1,rr/2-2), -150, 60, ic);
-      s.fillCircle(cx, cy+rr/2, max(1,rr/6), ic);
+      nyxAaCircle(s, cx, cy+rr/2, max(1,rr/6), ic);
       break;
     }
     case 'Y': { // Feedback: jawaban benar (centang)
@@ -5190,38 +5193,38 @@ void drawAppIcon(LGFX_Sprite& s, char sym, int cx, int cy, int r, uint16_t bgCir
     // -------- v22: 4 app astronomi tambahan --------
     case 'O': { // NEO Asteroid: gumpalan tak beraturan + sepotong lintasan orbit
       int rr=max(3,r-7);
-      s.fillCircle(cx-2,cy,rr,ic);
-      s.fillCircle(cx+3,cy-3,max(2,rr-3),ic);
-      s.fillCircle(cx-1,cy+3,max(2,rr-4),ic);
+      nyxAaCircle(s, cx-2,cy,rr,ic);
+      nyxAaCircle(s, cx+3,cy-3,max(2,rr-3),ic);
+      nyxAaCircle(s, cx-1,cy+3,max(2,rr-4),ic);
       s.drawArc(cx,cy,r-1,r-2,200,340,ic);
       break;
     }
     case 'E': { // Bumi EPIC: globe + garis khatulistiwa + "benua"
       int rr=r-4;
-      s.drawCircle(cx,cy,rr,ic);
+      nyxAaCircleRing(s, cx,cy,rr,ic);
       s.drawFastHLine(cx-rr+2,cy,rr*2-4,ic);
-      s.fillCircle(cx-4,cy-3,2,ic); s.fillCircle(cx+3,cy+4,2,ic); s.fillCircle(cx+1,cy-6,1,ic);
+      nyxAaCircle(s, cx-4,cy-3,2,ic); nyxAaCircle(s, cx+3,cy+4,2,ic); nyxAaCircle(s, cx+1,cy-6,1,ic);
       break;
     }
     case 'G': { // Galeri NASA: tumpukan bingkai foto
-      s.fillRoundRect(cx-9,cy-7,15,12,2,ic);
-      s.fillRoundRect(cx-4,cy-2,15,12,2,ic);
-      s.fillCircle(cx+3,cy+2,2,bgCircle);
+      nyxAaRR(s, cx-9,cy-7,15,12,2,ic);
+      nyxAaRR(s, cx-4,cy-2,15,12,2,ic);
+      nyxAaCircle(s, cx+3,cy+2,2,bgCircle);
       break;
     }
     case 'Z': { // Labirin: hantu sederhana -- kubah bulat + badan + alas bergerigi + mata
       int rr=r-4;
-      s.fillCircle(cx,cy-2,rr,ic);
+      nyxAaCircle(s, cx,cy-2,rr,ic);
       s.fillRect(cx-rr,cy-2,rr*2,rr,ic);
       for(int i=0;i<3;i++){
         int gx0=cx-rr+i*(rr*2/3);
         s.fillTriangle(gx0,cy+rr-3, gx0+(rr*2/3),cy+rr-3, gx0+(rr/3),cy+rr+3, bgCircle);
       }
-      s.fillCircle(cx-4,cy-3,2,bgCircle); s.fillCircle(cx+4,cy-3,2,bgCircle);
+      nyxAaCircle(s, cx-4,cy-3,2,bgCircle); nyxAaCircle(s, cx+4,cy-3,2,bgCircle);
       break;
     }
     case 'P': { // Neopixel: bohlam/LED menyala + pancaran cahaya
-      s.fillCircle(cx,cy-2,r/2,ic);
+      nyxAaCircle(s, cx,cy-2,r/2,ic);
       s.fillRect(cx-3,cy+r/2-4,6,5,ic);
       s.drawLine(cx-r,cy-2,cx-r+5,cy-2,ic);
       s.drawLine(cx+r-5,cy-2,cx+r,cy-2,ic);
@@ -5231,10 +5234,10 @@ void drawAppIcon(LGFX_Sprite& s, char sym, int cx, int cy, int r, uint16_t bgCir
     }
     case 'R': { // Inferno: tengkorak -- kubah kepala + rongga mata + rahang bergerigi
       int rr=r-4;
-      s.fillCircle(cx,cy-2,rr,ic);
+      nyxAaCircle(s, cx,cy-2,rr,ic);
       s.fillRect(cx-rr+2,cy-2,rr*2-4,rr/2+2,ic);
-      s.fillCircle(cx-rr/2,cy-3,max(1,rr/4),bgCircle);
-      s.fillCircle(cx+rr/2,cy-3,max(1,rr/4),bgCircle);
+      nyxAaCircle(s, cx-rr/2,cy-3,max(1,rr/4),bgCircle);
+      nyxAaCircle(s, cx+rr/2,cy-3,max(1,rr/4),bgCircle);
       for(int i=0;i<3;i++){
         int tx0=cx-rr/2+i*(rr/2);
         s.fillTriangle(tx0,cy+rr/2, tx0+rr/3,cy+rr/2, tx0+rr/6,cy+rr/2+4, bgCircle);
@@ -5251,7 +5254,7 @@ void drawAppIcon(LGFX_Sprite& s, char sym, int cx, int cy, int r, uint16_t bgCir
     // HWmonitor di Home bakal ketiban ikon WiFi ini, salah total).
     case 'I': { // Hotspot/WiFi: titik + 2 lengkung sinyal
       int rr=max(2,r-4);
-      s.fillCircle(cx,cy+rr/2,max(1,rr/4),ic);
+      nyxAaCircle(s, cx,cy+rr/2,max(1,rr/4),ic);
       s.drawArc(cx,cy+rr/2-1,rr/2,max(1,rr/2-1),210,330,ic);
       s.drawArc(cx,cy+rr/2-1,rr,rr-1,210,330,ic);
       break;
@@ -5266,13 +5269,13 @@ void drawAppIcon(LGFX_Sprite& s, char sym, int cx, int cy, int r, uint16_t bgCir
     case '#': { // Atur Home: grid 2x2 kotak
       int q=max(3,r/3), g2=max(2,r/6), tot=q*2+g2, x0=cx-tot/2, y0=cy-tot/2;
       for(int a=0;a<2;a++) for(int b=0;b<2;b++)
-        s.fillRoundRect(x0+a*(q+g2),y0+b*(q+g2),q,q,2,ic);
+        nyxAaRR(s, x0+a*(q+g2),y0+b*(q+g2),q,q,2,ic);
       break;
     }
     case 'H': { // HWmonitor: chip CPU -- badan persegi + pin nongol di 4 sisi
       int w=r-7;
-      s.fillRoundRect(cx-w,cy-w,w*2,w*2,2,ic);
-      s.fillRoundRect(cx-w/2,cy-w/2,w,w,1,bgCircle); // inti chip
+      nyxAaRR(s, cx-w,cy-w,w*2,w*2,2,ic);
+      nyxAaRR(s, cx-w/2,cy-w/2,w,w,1,bgCircle); // inti chip
       for(int i=-1;i<=1;i+=2){
         s.drawFastHLine(cx-w-4,cy+i*w/2,4,ic); s.drawFastHLine(cx+w,cy+i*w/2,4,ic);
         s.drawFastVLine(cx+i*w/2,cy-w-4,4,ic); s.drawFastVLine(cx+i*w/2,cy+w,4,ic);
@@ -5289,21 +5292,21 @@ void drawAppIcon(LGFX_Sprite& s, char sym, int cx, int cy, int r, uint16_t bgCir
       s.fillTriangle(cx-rr,cy, cx-rr/4,cy+rr/4, cx,cy, ic);
       s.fillTriangle(cx+rr,cy, cx+rr/4,cy-rr/4, cx,cy, ic);
       s.fillTriangle(cx+rr,cy, cx+rr/4,cy+rr/4, cx,cy, ic);
-      s.fillCircle(cx+rr/2,cy-rr/2,max(1,rr/6),ic);
+      nyxAaCircle(s, cx+rr/2,cy-rr/2,max(1,rr/6),ic);
       break;
     }
     case 'D': { // NES: gamepad -- badan bulat + D-pad kiri + 2 tombol aksi kanan
       int w=r-4;
-      s.fillRoundRect(cx-w,cy-w/2,w*2,w,r/2,ic);
+      nyxAaRR(s, cx-w,cy-w/2,w*2,w,r/2,ic);
       s.fillRect(cx-w+4,cy-2,8,4,bgCircle);
       s.fillRect(cx-w+6,cy-4,4,8,bgCircle);
-      s.fillCircle(cx+w-4,cy-3,2,bgCircle);
-      s.fillCircle(cx+w-9,cy+2,2,bgCircle);
+      nyxAaCircle(s, cx+w-4,cy-3,2,bgCircle);
+      nyxAaCircle(s, cx+w-9,cy+2,2,bgCircle);
       break;
     }
     case 'y': { // v97 PPU Demo: chip/prosesor -- kotak + pin di 4 sisi (dipindah dr 'Y', ketabrak ikon centang Trivia)
       int rr=max(5,r-6);
-      s.drawRoundRect(cx-rr,cy-rr,rr*2,rr*2,2,ic);
+      nyxAaRRRing(s, cx-rr,cy-rr,rr*2,rr*2,2,ic);
       for(int k=-1;k<=1;k++){
         s.drawFastVLine(cx+k*rr/2, cy-rr-3, 3, ic);
         s.drawFastVLine(cx+k*rr/2, cy+rr,   3, ic);
@@ -5322,16 +5325,16 @@ void drawAppIcon(LGFX_Sprite& s, char sym, int cx, int cy, int r, uint16_t bgCir
       rot(-rr-2,4,x0,y0); rot(-rr+6,4,x1,y1);
       s.fillTriangle(x0,y0, x1,y1, x0-2,y0+6, ic); // popor
       rot(rr-5,-2,x0,y0);
-      s.fillCircle(x0,y0,2,ic); // ujung laras
+      nyxAaCircle(s, x0,y0,2,ic); // ujung laras
       break;
     }
     case 'T': { // v100: Achievement/Trofi -- mangkuk piala + 2 pegangan bolong + kaki + alas
       int rr=max(4,r-6);
-      s.fillRoundRect(cx-rr/2, cy-rr, rr, rr, 2, ic);
-      s.fillCircle(cx-rr/2-2, cy-rr+3, max(1,rr/4), ic);
-      s.fillCircle(cx-rr/2-2, cy-rr+3, max(1,rr/6), bgCircle); // lubang pegangan kiri
-      s.fillCircle(cx+rr/2+2, cy-rr+3, max(1,rr/4), ic);
-      s.fillCircle(cx+rr/2+2, cy-rr+3, max(1,rr/6), bgCircle); // lubang pegangan kanan
+      nyxAaRR(s, cx-rr/2, cy-rr, rr, rr, 2, ic);
+      nyxAaCircle(s, cx-rr/2-2, cy-rr+3, max(1,rr/4), ic);
+      nyxAaCircle(s, cx-rr/2-2, cy-rr+3, max(1,rr/6), bgCircle); // lubang pegangan kiri
+      nyxAaCircle(s, cx+rr/2+2, cy-rr+3, max(1,rr/4), ic);
+      nyxAaCircle(s, cx+rr/2+2, cy-rr+3, max(1,rr/6), bgCircle); // lubang pegangan kanan
       s.fillRect(cx-1, cy, 2, rr/2, ic);          // batang piala
       s.fillRect(cx-rr/2, cy+rr/2-1, rr, 3, ic);  // alas piala
       break;
@@ -5339,7 +5342,7 @@ void drawAppIcon(LGFX_Sprite& s, char sym, int cx, int cy, int r, uint16_t bgCir
     case 'w': { // v115: Wake Word -- mikrofon (kapsul + busur penyangga + tiang + alas)
       int rr=max(8,r-6);
       int cw=max(4,rr/2);
-      s.fillRoundRect(cx-cw/2, cy-rr, cw, rr, cw/2, ic);       // kapsul mic
+      nyxAaRR(s, cx-cw/2, cy-rr, cw, rr, cw/2, ic);       // kapsul mic
       s.drawArc(cx, cy-rr/3, cw+1, cw-1, 0, 180, ic);            // busur penyangga (setengah bawah)
       s.fillRect(cx-1, cy-rr/3+cw, 2, max(2,rr/3), ic);          // tiang
       s.fillRect(cx-cw/2-1, cy-rr/3+cw+max(2,rr/3), cw+2, 2, ic); // alas
@@ -5349,8 +5352,8 @@ void drawAppIcon(LGFX_Sprite& s, char sym, int cx, int cy, int r, uint16_t bgCir
       int rr=max(8,r-6);
       int hx=max(3,rr/3);
       int lx=cx-rr/2, rx=cx+rr/2, hy=cy+rr/2-2;
-      s.fillCircle(lx, hy, hx, ic);
-      s.fillCircle(rx, hy, hx, ic);
+      nyxAaCircle(s, lx, hy, hx, ic);
+      nyxAaCircle(s, rx, hy, hx, ic);
       s.fillRect(lx+hx-1, cy-rr/2, 2, hy-(cy-rr/2), ic);
       s.fillRect(rx+hx-1, cy-rr/2, 2, hy-(cy-rr/2), ic);
       s.fillRect(lx+hx-1, cy-rr/2, rx-lx+2, 3, ic);
@@ -5358,40 +5361,40 @@ void drawAppIcon(LGFX_Sprite& s, char sym, int cx, int cy, int r, uint16_t bgCir
     }
     case 't': { // Stopwatch: muka bulat + tombol atas + jarum
       int rr=max(8,r-6); int fy=cy+2;
-      s.drawCircle(cx,fy,rr,ic); s.drawCircle(cx,fy,rr-1,ic);
+      nyxAaCircleRing(s, cx,fy,rr,ic); nyxAaCircleRing(s, cx,fy,rr-1,ic);
       s.fillRect(cx-2,fy-rr-4,5,3,ic);
       s.drawLine(cx,fy,cx+rr/2,fy-rr/2,ic); s.drawLine(cx+1,fy,cx+rr/2+1,fy-rr/2,ic);
-      s.fillCircle(cx,fy,2,ic);
+      nyxAaCircle(s, cx,fy,2,ic);
       break;
     }
     case 'v': { // Voice Memo: 5 batang gelombang suara
       int rr=max(8,r-6);
       int hs[5]={rr/2,rr,rr*3/2,rr,rr/2};
       int bw=3, gp=3, x0=cx-(5*bw+4*gp)/2;
-      for(int i=0;i<5;i++) s.fillRoundRect(x0+i*(bw+gp),cy-hs[i]/2,bw,max(hs[i],3),1,ic);
+      for(int i=0;i<5;i++) nyxAaRR(s, x0+i*(bw+gp),cy-hs[i]/2,bw,max(hs[i],3),1,ic);
       break;
     }
     case 'g': { // Galeri: bingkai foto + matahari + dua gunung
       int w=r-5;
-      s.drawRoundRect(cx-w,cy-w+3,w*2,w*2-6,3,ic);
-      s.fillCircle(cx+w/2,cy-w/2+3,2,ic);
+      nyxAaRRRing(s, cx-w,cy-w+3,w*2,w*2-6,3,ic);
+      nyxAaCircle(s, cx+w/2,cy-w/2+3,2,ic);
       s.fillTriangle(cx-w+2,cy+w-5,cx-w/3,cy-2,cx+1,cy+w-5,ic);
       s.fillTriangle(cx-2,cy+w-5,cx+w/3+1,cy+1,cx+w-2,cy+w-5,ic);
       break;
     }
     case 'k': { // Kamera: badan + tonjolan atas + lensa
       int bw=max(14,r+4), bh=max(10,r-2);
-      s.fillRoundRect(cx-bw/2,cy-bh/2+2,bw,bh,3,ic);
-      s.fillRoundRect(cx-bw/6,cy-bh/2-1,bw/3,4,1,ic);
-      s.fillCircle(cx,cy+2,max(3,bh/3),bgCircle);
-      s.drawCircle(cx,cy+2,max(2,bh/5),ic);
+      nyxAaRR(s, cx-bw/2,cy-bh/2+2,bw,bh,3,ic);
+      nyxAaRR(s, cx-bw/6,cy-bh/2-1,bw/3,4,1,ic);
+      nyxAaCircle(s, cx,cy+2,max(3,bh/3),bgCircle);
+      nyxAaCircleRing(s, cx,cy+2,max(2,bh/5),ic);
       break;
     }
     case 'b': { // Buku: dua halaman terbuka + garis teks
       int rr=max(8,r-6);
       int bw=rr*2, bh=rr*3/2+2, x0=cx-bw/2, y0=cy-bh/2;
-      s.fillRoundRect(x0,y0,bw/2-1,bh,2,ic);
-      s.fillRoundRect(cx+1,y0,bw/2-1,bh,2,ic);
+      nyxAaRR(s, x0,y0,bw/2-1,bh,2,ic);
+      nyxAaRR(s, cx+1,y0,bw/2-1,bh,2,ic);
       for(int i=0;i<3;i++){
         int ly=y0+4+i*max(3,bh/4);
         s.drawFastHLine(x0+3,ly,bw/2-7,bgCircle);
@@ -5401,36 +5404,36 @@ void drawAppIcon(LGFX_Sprite& s, char sym, int cx, int cy, int r, uint16_t bgCir
     }
     case 'p': { // Telepon: gagang telepon
       int rr=max(8,r-6);
-      s.fillRoundRect(cx-rr,cy-rr/3,rr*2,rr*2/3,rr/3,ic);
-      s.fillRoundRect(cx-rr,cy-rr/3,rr*2/3,rr*4/3,rr/3,ic);
-      s.fillRoundRect(cx+rr/3,cy-rr/3,rr*2/3,rr*4/3,rr/3,ic);
+      nyxAaRR(s, cx-rr,cy-rr/3,rr*2,rr*2/3,rr/3,ic);
+      nyxAaRR(s, cx-rr,cy-rr/3,rr*2/3,rr*4/3,rr/3,ic);
+      nyxAaRR(s, cx+rr/3,cy-rr/3,rr*2/3,rr*4/3,rr/3,ic);
       break;
     }
     case 'c': { // Chat: gelembung pesan + ekor + 3 titik
       int bw=max(16,r*3/2), bh=max(11,r), bx=cx-bw/2, by=cy-bh/2-2;
-      s.drawRoundRect(bx,by,bw,bh,4,ic); s.drawRoundRect(bx+1,by+1,bw-2,bh-2,3,ic);
+      nyxAaRRRing(s, bx,by,bw,bh,4,ic); nyxAaRRRing(s, bx+1,by+1,bw-2,bh-2,3,ic);
       s.fillTriangle(bx+bw/4,by+bh-1,bx+bw/4+6,by+bh-1,bx+bw/4-1,by+bh+4,ic);
-      int dy=by+bh/2; for(int i=-1;i<=1;i++) s.fillCircle(cx+i*5,dy,1,ic);
+      int dy=by+bh/2; for(int i=-1;i<=1;i++) nyxAaCircle(s, cx+i*5,dy,1,ic);
       break;
     }
     case 'r': { // Remote: monitor + kursor
       int mw=max(14,r*3/2), mh=max(10,r), mx=cx-mw/2, my=cy-mh/2-2;
-      s.drawRoundRect(mx,my,mw,mh,2,ic); s.drawRoundRect(mx+1,my+1,mw-2,mh-2,2,ic);
+      nyxAaRRRing(s, mx,my,mw,mh,2,ic); nyxAaRRRing(s, mx+1,my+1,mw-2,mh-2,2,ic);
       s.fillRect(cx-1,my+mh,3,3,ic); s.fillRect(cx-mw/4,my+mh+3,max(4,mw/2),2,ic);
       s.fillTriangle(cx-mw/6,cy-mh/3,cx+mw/6,cy+1,cx-mw/16,cy+mh/5,ic);
       break;
     }
     case 'i': { // About Phone
       int rr=max(8,r-6);
-      s.drawCircle(cx,cy,rr,ic); s.drawCircle(cx,cy,rr-1,ic);
-      s.fillCircle(cx,cy-rr/2,max(1,rr/7),ic);
+      nyxAaCircleRing(s, cx,cy,rr,ic); nyxAaCircleRing(s, cx,cy,rr-1,ic);
+      nyxAaCircle(s, cx,cy-rr/2,max(1,rr/7),ic);
       s.fillRect(cx-max(1,rr/9),cy-rr/6,max(2,rr/4),rr*2/3,ic);
       break;
     }
     case 'o': { // Profil: kepala + bahu
       int rr=max(8,r-6);
-      s.fillCircle(cx,cy-rr/3,max(3,rr/3),ic);
-      s.fillRoundRect(cx-rr*2/3,cy+rr/8,rr*4/3,rr*2/3,rr/3,ic);
+      nyxAaCircle(s, cx,cy-rr/3,max(3,rr/3),ic);
+      nyxAaRR(s, cx-rr*2/3,cy+rr/8,rr*4/3,rr*2/3,rr/3,ic);
       break;
     }
     default: {
@@ -5754,13 +5757,13 @@ void drawNotifBadge(LGFX_Sprite& s, int cx,int cy,int iconR,int count,float pop)
   int br = count>9? 8 : 6;
   if(pop<0.99f || pop>1.01f){ // BOUNCE-BADGE: lencana baru "pop" -- lingkaran membesar-mengecil, angka muncul setelah cukup besar
     int brp=(int)lroundf((float)br*pop); if(brp<1) brp=1;
-    s.fillCircle(bx,by,brp,T().danger);
-    s.drawCircle(bx,by,brp,T().bg);
+    nyxAaCircle(s, bx,by,brp,T().danger);
+    nyxAaCircleRing(s, bx,by,brp,T().bg);
     if(pop<0.6f) return;
     br=brp;
   } else {
-    s.fillCircle(bx,by,br,T().danger);
-    s.drawCircle(bx,by,br,T().bg); // cincin tipis warna bg -- pisahin badge dr ikon di baliknya
+    nyxAaCircle(s, bx,by,br,T().danger);
+    nyxAaCircleRing(s, bx,by,br,T().bg); // cincin tipis warna bg -- pisahin badge dr ikon di baliknya
   }
   s.setTextColor(0xFFFF); s.setTextSize(1);
   char buf[4]; if(count>9) strcpy(buf,"9+"); else sprintf(buf,"%d",count);
@@ -6554,7 +6557,7 @@ void drawHome(LGFX_Sprite& s,float sc){
         drawNotifBadge(s, cx, cy, iconR, appNotifCount[i], appBadgePop(i));
         s.setTextColor(T().text);s.setTextSize(1);
         homeDrawLabel(s, apps[i].name, x+cw/2, y+ch-14, cw+6);
-        if(homeJiggle){ int mx=cx-iconR+3, my=cy-iconR+3; s.fillCircle(mx,my,8,T().bg); s.fillCircle(mx,my,7,T().danger); s.fillRect(mx-4,my-1,9,3,0xFFFF); }
+        if(homeJiggle){ int mx=cx-iconR+3, my=cy-iconR+3; nyxAaCircle(s, mx,my,8,T().bg); nyxAaCircle(s, mx,my,7,T().danger); s.fillRect(mx-4,my-1,9,3,0xFFFF); }
       }
     }
     if(homeJiggle){ // chip "Selesai" di baris judul (ikut scroll)
@@ -6568,11 +6571,11 @@ void drawHome(LGFX_Sprite& s,float sc){
     if(maxSc>0){
       int railX=SCR_W-5, railTop=clipTop+6, railH=contentBot-2-railTop;
       if(railH>20){
-        s.fillRoundRect(railX,railTop,3,railH,1,blend565(T().surface,0xFFFF,50));
+        nyxAaRR(s, railX,railTop,3,railH,1,blend565(T().surface,0xFFFF,50));
         int thumbH=max(16,(int)(railH*railH/(float)(railH+maxSc)));
         float fr = sc/(float)maxSc; if(fr<0.0f) fr=0.0f; if(fr>1.0f) fr=1.0f;
         int thumbY=railTop+(int)((railH-thumbH)*fr);
-        s.fillRoundRect(railX,thumbY,3,thumbH,1,T().accent);
+        nyxAaRR(s, railX,thumbY,3,thumbH,1,T().accent);
       }
     }
   }
@@ -6866,7 +6869,7 @@ void gameBoosterAnim(){
     // Kotak ikon kecil, scale-in halus di tengah ring
     int boxSize=(int)(26*constrain(p*1.5f,0.0f,1.0f));
     if(boxSize>2){
-      canvas.fillRoundRect(cx-boxSize/2,cy-boxSize/2,boxSize,boxSize,boxSize/4,T().accent);
+      nyxAaRR(canvas, cx-boxSize/2,cy-boxSize/2,boxSize,boxSize,boxSize/4,T().accent);
     }
 
     if(p>0.45f){
@@ -6990,7 +6993,7 @@ void drawSnake(LGFX_Sprite& s){
   int top=STATUS_H;
   for(int i=0;i<snakeLen;i++){
     uint16_t c = (i==0)?T().accent:T().good;
-    s.fillRoundRect(snakeBody[i].x*SNAKE_CELL, top+snakeBody[i].y*SNAKE_CELL, SNAKE_CELL-1, SNAKE_CELL-1, 2, c);
+    nyxAaRR(s, snakeBody[i].x*SNAKE_CELL, top+snakeBody[i].y*SNAKE_CELL, SNAKE_CELL-1, SNAKE_CELL-1, 2, c);
   }
   iosRR(s,snakeFoodX*SNAKE_CELL, top+snakeFoodY*SNAKE_CELL, SNAKE_CELL-1, SNAKE_CELL-1, 4, T().danger);
 
@@ -7000,7 +7003,7 @@ void drawSnake(LGFX_Sprite& s){
   if(snakeOver){
     int bx=SCR_W/2-72, by=SCR_H/2-32, bw=144, bh=64;
     iosRR(s,bx,by,bw,bh,10,T().surface);
-    s.drawRoundRect(bx,by,bw,bh,10,T().danger);
+    nyxAaRRRing(s, bx,by,bw,bh,10,T().danger);
     s.setTextColor(T().danger); s.setTextSize(1); s.setCursor(bx+30,by+14); s.print("GAME OVER");
     s.setTextColor(T().subtext); s.setCursor(bx+10,by+34); s.print("Ketuk layar utk ulang");
   }
@@ -7097,7 +7100,7 @@ void drawFlap(LGFX_Sprite& s){
     iosRR(s,flapPipes[i].x, STATUS_H, FLAP_PIPE_W, max(0,gy-FLAP_GAP/2-STATUS_H), 4, T().good);
     iosRR(s,flapPipes[i].x, gy+FLAP_GAP/2, FLAP_PIPE_W, max(0,SCR_H-(gy+FLAP_GAP/2)), 4, T().good);
   }
-  s.fillCircle(FLAP_BIRD_X, (int)flapY, FLAP_BIRD_R, T().accent);
+  nyxAaCircle(s, FLAP_BIRD_X, (int)flapY, FLAP_BIRD_R, T().accent);
 
   char buf[8]; sprintf(buf,"%d",flapScore);
   s.setTextColor(T().text); s.setTextSize(2); s.setCursor(SCR_W/2-6,STATUS_H+6); s.print(buf);
@@ -7110,7 +7113,7 @@ void drawFlap(LGFX_Sprite& s){
   if(flapOver){
     int bx=SCR_W/2-72, by=SCR_H/2-32, bw=144, bh=64;
     iosRR(s,bx,by,bw,bh,10,T().surface);
-    s.drawRoundRect(bx,by,bw,bh,10,T().danger);
+    nyxAaRRRing(s, bx,by,bw,bh,10,T().danger);
     s.setTextColor(T().danger); s.setTextSize(1); s.setCursor(bx+30,by+14); s.print("GAME OVER");
     s.setTextColor(T().subtext); s.setCursor(bx+10,by+34); s.print("Ketuk layar utk ulang");
   }
@@ -7230,7 +7233,7 @@ void draw2048(LGFX_Sprite& s){
   if(g2048Over || g2048Win){
     int bx=SCR_W/2-72, by=SCR_H/2-32, bw=144, bh=64;
     iosRR(s,bx,by,bw,bh,10,T().surface);
-    s.drawRoundRect(bx,by,bw,bh,10,g2048Win?T().good:T().danger);
+    nyxAaRRRing(s, bx,by,bw,bh,10,g2048Win?T().good:T().danger);
     s.setTextColor(g2048Win?T().good:T().danger); s.setTextSize(1);
     s.setCursor(bx+30,by+14); s.print(g2048Win?"KAMU MENANG!":"GAME OVER");
     s.setTextColor(T().subtext); s.setCursor(bx+10,by+34); s.print("Ketuk layar utk ulang");
@@ -7466,7 +7469,7 @@ void drawTtt(LGFX_Sprite& s){
     int bx=SCR_W/2-72, by=gy+cellW*n+14, bw=144, bh=44;
     if(by+bh>backY()-4) by=backY()-4-bh; // v20: jaga2 kotak hasil gak kepotong di papan besar (5x5)
     iosRR(s,bx,by,bw,bh,10,T().surface);
-    s.drawRoundRect(bx,by,bw,bh,10,T().accent);
+    nyxAaRRRing(s, bx,by,bw,bh,10,T().accent);
     s.setTextColor(T().text); s.setTextSize(1);
     s.setCursor(SCR_W/2-(int)strlen(msg)*3,by+10); s.print(msg);
     s.setTextColor(T().subtext); s.setCursor(SCR_W/2-48,by+26); s.print("Ketuk utk main lagi");
@@ -7608,8 +7611,8 @@ void drawBrk(LGFX_Sprite& s){
     }
   }
   int padY=SCR_H-24;
-  s.fillRoundRect((int)(brkPadX-BRK_PADW/2), padY, BRK_PADW, BRK_PADH, 3, T().accent);
-  s.fillCircle((int)brkBallX,(int)brkBallY,BRK_BALLR,T().text);
+  nyxAaRR(s, (int)(brkPadX-BRK_PADW/2), padY, BRK_PADW, BRK_PADH, 3, T().accent);
+  nyxAaCircle(s, (int)brkBallX,(int)brkBallY,BRK_BALLR,T().text);
 
   char buf[24]; sprintf(buf,"Skor: %d",brkScore);
   s.setTextColor(T().subtext); s.setTextSize(1); s.setCursor(6,STATUS_H+2); s.print(buf);
@@ -7628,7 +7631,7 @@ void drawBrk(LGFX_Sprite& s){
   if(brkOver || brkWin){
     int bx=SCR_W/2-72, by=SCR_H/2-32, bw=144, bh=64;
     iosRR(s,bx,by,bw,bh,10,T().surface);
-    s.drawRoundRect(bx,by,bw,bh,10,brkWin?T().good:T().danger);
+    nyxAaRRRing(s, bx,by,bw,bh,10,brkWin?T().good:T().danger);
     s.setTextColor(brkWin?T().good:T().danger); s.setTextSize(1);
     s.setCursor(bx+30,by+14); s.print(brkWin?"MENANG!":"GAME OVER");
     s.setTextColor(T().subtext); s.setCursor(bx+10,by+34); s.print("Ketuk layar utk ulang");
@@ -7669,9 +7672,9 @@ void drawClock(LGFX_Sprite& s){
   else    { cx=SCR_W/2; cy=top+R+4;   x0=12;       y0=cy+R+10; }
 
   // muka jam
-  s.fillCircle(cx,cy,R,T().surface);
-  s.drawCircle(cx,cy,R,T().divider);
-  s.drawCircle(cx,cy,R-1,T().divider);
+  nyxAaCircle(s, cx,cy,R,T().surface);
+  nyxAaCircleRing(s, cx,cy,R,T().divider);
+  nyxAaCircleRing(s, cx,cy,R-1,T().divider);
   for(int i=0;i<12;i++){
     float a=i*30.0f*DEG_TO_RAD, sa=sinf(a), ca=cosf(a);
     int r1=(i%3==0)?R-10:R-6, r2=R-3;
@@ -7691,7 +7694,7 @@ void drawClock(LGFX_Sprite& s){
     hand(hA,R*50/100,3,T().text);     // jarum jam
     hand(mA,R*75/100,2,T().text);     // jarum menit
     hand(sA,R*86/100,1,T().accent);   // jarum detik
-    s.fillCircle(cx,cy,3,T().accent); s.fillCircle(cx,cy,1,T().bg);
+    nyxAaCircle(s, cx,cy,3,T().accent); nyxAaCircle(s, cx,cy,1,T().bg);
 
     // jam digital besar (font sama dgn lock screen) -- ukuran dikecilkan otomatis sampai muat
     const int wAvail = land ? (SCR_W-x0-8) : (SCR_W-24);
@@ -7867,7 +7870,7 @@ void drawPomo(LGFX_Sprite& s){
     // millis(), gak nyimpen state apa2, jadi aman digambar kapan pun.
     float pulse = 0.5f+0.5f*sinf(millis()/260.0f);
     int dotR = 2+(int)(1.4f*pulse);
-    s.fillCircle(plx+plw+8, ply+4, dotR, phaseColor);
+    nyxAaCircle(s, plx+plw+8, ply+4, dotR, phaseColor);
   }
 
   // ---- Kolom KIRI: ring progress melingkar + waktu ----
@@ -7952,8 +7955,8 @@ void drawPomo(LGFX_Sprite& s){
     int dotX0 = panelX+dotGap/2;
     for(int i=0;i<4;i++){
       int cx=dotX0+i*dotGap;
-      if(i<pomoCyclesDone) s.fillCircle(cx,dotY,dotR,phaseColor);
-      else s.drawCircle(cx,dotY,dotR,T().divider);
+      if(i<pomoCyclesDone) nyxAaCircle(s, cx,dotY,dotR,phaseColor);
+      else nyxAaCircleRing(s, cx,dotY,dotR,T().divider);
     }
     const char* mood = pomoPhase==POMO_FOCUS ? "Tetap fokus, kamu pasti bisa!" : "Rilekskan mata & badan sejenak";
     s.setTextColor(T().subtext);s.setCursor(panelX,118);s.print(mood);
@@ -8118,7 +8121,7 @@ void drawCalc(LGFX_Sprite& s){
       uint16_t bg = (isEq||isOp)?T().accent:(isSci?T().surface2:T().surface);
       uint16_t fg = (isOp||isEq)?appIconInk(T().accent):T().text;
       if(r==calcPressR && c==calcPressC && millis()-calcPressMs<140) bg=blend565(bg,0xFFFF,70);
-      s.fillRoundRect(x,y,w,h,h/2,bg); // iOS: tombol pil/bulat penuh
+      nyxAaRR(s, x,y,w,h,h/2,bg); // iOS: tombol pil/bulat penuh
       s.setTextColor(fg);s.setTextSize(isSci?1:2);
       int cwPx = isSci?6:12;
       int lw=strlen(l)*cwPx;
@@ -8253,7 +8256,7 @@ void draw3DPhoneBox(LGFX_Sprite& s,int cx,int cy,float rollDeg,float pitchDeg,fl
   for(int i=0;i<12;i++){
     s.drawLine((int)px[edges[i][0]],(int)py[edges[i][0]],(int)px[edges[i][1]],(int)py[edges[i][1]], T().accent);
   }
-  for(int i=0;i<8;i++) s.fillCircle((int)px[i],(int)py[i],2, T().accent2);
+  for(int i=0;i<8;i++) nyxAaCircle(s, (int)px[i],(int)py[i],2, T().accent2);
 }
 
 void sensorEnter(){} void sensorExit(){}
@@ -8486,18 +8489,18 @@ void settChip(LGFX_Sprite& s,int type,int x,int y){ // x,y = pojok kiri-atas chi
   }
   const uint16_t W=0xFFFF;
   int cx=x+11, cy=y+11;
-  s.fillRoundRect(x,y+1,22,22,6,blend565(col,0x0000,70));   // tepi bawah tipis
-  s.fillRoundRect(x,y,22,22,6,col);
+  nyxAaRR(s, x,y+1,22,22,6,blend565(col,0x0000,70));   // tepi bawah tipis
+  nyxAaRR(s, x,y,22,22,6,col);
   s.drawFastHLine(x+6,y+1,10,blend565(col,0xFFFF,70));      // kilap atas
   switch(type){
     case SR_BRIGHT: {  // matahari
-      s.fillCircle(cx,cy,3,W);
+      nyxAaCircle(s, cx,cy,3,W);
       static const int dxs[8]={0,1,1,1,0,-1,-1,-1}, dys[8]={-1,-1,0,1,1,1,0,-1};
       for(int i=0;i<8;i++){ int r1=(i&1)?6:7; s.drawLine(cx+dxs[i]*5,cy+dys[i]*5,cx+dxs[i]*r1,cy+dys[i]*r1,W); }
       } break;
     case SR_THEME:     // palet
-      s.fillCircle(cx,cy,7,W);
-      s.fillCircle(cx-3,cy-2,1,col); s.fillCircle(cx+1,cy-4,1,col); s.fillCircle(cx+3,cy,1,col); s.fillCircle(cx-1,cy+3,1,col);
+      nyxAaCircle(s, cx,cy,7,W);
+      nyxAaCircle(s, cx-3,cy-2,1,col); nyxAaCircle(s, cx+1,cy-4,1,col); nyxAaCircle(s, cx+3,cy,1,col); nyxAaCircle(s, cx-1,cy+3,1,col);
       break;
     case SR_FONT:      // "Aa"
       s.setTextSize(1); s.setTextColor(W); s.setCursor(cx-6,cy-4); s.print("Aa");
@@ -8507,35 +8510,35 @@ void settChip(LGFX_Sprite& s,int type,int x,int y){ // x,y = pojok kiri-atas chi
       s.fillTriangle(cx+2,cy-9,cx+2,cy-3,cx+8,cy-6,W);
       break;
     case SR_HOMEEDIT:  // kisi 2x2
-      s.fillRoundRect(cx-6,cy-6,5,5,1,W); s.fillRoundRect(cx+1,cy-6,5,5,1,W);
-      s.fillRoundRect(cx-6,cy+1,5,5,1,W); s.fillRoundRect(cx+1,cy+1,5,5,1,W);
+      nyxAaRR(s, cx-6,cy-6,5,5,1,W); nyxAaRR(s, cx+1,cy-6,5,5,1,W);
+      nyxAaRR(s, cx-6,cy+1,5,5,1,W); nyxAaRR(s, cx+1,cy+1,5,5,1,W);
       break;
     case SR_SPI:       // petir
       s.fillTriangle(cx+2,cy-8,cx-4,cy+1,cx+1,cy+1,W);
       s.fillTriangle(cx-1,cy-1,cx+4,cy-1,cx-2,cy+8,W);
       break;
     case SR_SCAN:      // wifi
-      s.fillCircle(cx,cy+6,1,W);
+      nyxAaCircle(s, cx,cy+6,1,W);
       s.drawArc(cx,cy+6,5,4,210,330,W); s.drawArc(cx,cy+6,8,7,210,330,W); s.drawArc(cx,cy+6,11,10,210,330,W);
       break;
     case SR_SSID:      // globe
-      s.drawCircle(cx,cy,7,W); s.drawFastHLine(cx-7,cy,15,W); s.drawFastVLine(cx,cy-7,15,W); s.drawCircle(cx,cy,3,W);
+      nyxAaCircleRing(s, cx,cy,7,W); s.drawFastHLine(cx-7,cy,15,W); s.drawFastVLine(cx,cy-7,15,W); nyxAaCircleRing(s, cx,cy,3,W);
       break;
     case SR_PASS:      // gembok
-      s.fillRoundRect(cx-5,cy-1,11,8,2,W);
+      nyxAaRR(s, cx-5,cy-1,11,8,2,W);
       s.drawFastVLine(cx-3,cy-6,5,W); s.drawFastVLine(cx+3,cy-6,5,W); s.drawFastHLine(cx-3,cy-7,7,W);
-      s.fillCircle(cx,cy+3,1,col);
+      nyxAaCircle(s, cx,cy+3,1,col);
       break;
     case SR_MPU:       // bidik
-      s.drawCircle(cx,cy,5,W); s.fillCircle(cx,cy,1,W);
+      nyxAaCircleRing(s, cx,cy,5,W); nyxAaCircle(s, cx,cy,1,W);
       s.drawFastHLine(cx-8,cy,4,W); s.drawFastHLine(cx+5,cy,4,W);
       s.drawFastVLine(cx,cy-8,4,W); s.drawFastVLine(cx,cy+5,4,W);
       break;
     case SR_TCAL:      // riak sentuh
-      s.fillCircle(cx,cy,2,W); s.drawCircle(cx,cy,5,W); s.drawCircle(cx,cy,8,W);
+      nyxAaCircle(s, cx,cy,2,W); nyxAaCircleRing(s, cx,cy,5,W); nyxAaCircleRing(s, cx,cy,8,W);
       break;
     case SR_ABOUT:     // "i"
-      s.fillCircle(cx,cy-5,2,W); s.fillRect(cx-1,cy-1,3,8,W);
+      nyxAaCircle(s, cx,cy-5,2,W); s.fillRect(cx-1,cy-1,3,8,W);
       break;
     case SR_POWER:     // tombol daya
       s.fillArc(cx,cy+1,5,7,300.0f,360.0f,W); s.fillArc(cx,cy+1,5,7,0.0f,240.0f,W);
@@ -8603,17 +8606,17 @@ void drawSettings(LGFX_Sprite& s){
         s.setTextSize(2); uiText(s,cx+2,ry+10,settRL[i],T().text,false,true); s.setTextSize(1);
         break;
       case SR_SECT: // UI-POLISH-V2: batang aksen + teks tebal
-        s.fillRoundRect(cx+2,ry+rh-14,3,10,1,T().accent);
+        nyxAaRR(s, cx+2,ry+rh-14,3,10,1,T().accent);
         uiText(s,cx+11,ry+rh-13,settRL[i],blend565(T().subtext,T().text,110),false,true);
         break;
       case SR_BRIGHT: {
         s.setTextColor(T().text); s.setCursor(xl,ty); s.print("Kecerahan");
         int x0=cx+110, x1=cx+cw-50, my=ry+rh/2;
-        s.fillRoundRect(x0,my-2,x1-x0,4,2,blend565(T().surface2,0xFFFF,60));
+        nyxAaRR(s, x0,my-2,x1-x0,4,2,blend565(T().surface2,0xFFFF,60));
         int kx=x0+(constrain((int)brightness,10,255)-10)*(x1-x0)/245;
-        if(kx>x0) s.fillRoundRect(x0,my-2,kx-x0,4,2,T().accent);
-        s.fillCircle(kx,my+1,8,blend565(T().surface,0x0000,120));
-        s.fillCircle(kx,my,8,0xFFFF);
+        if(kx>x0) nyxAaRR(s, x0,my-2,kx-x0,4,2,T().accent);
+        nyxAaCircle(s, kx,my+1,8,blend565(T().surface,0x0000,120));
+        nyxAaCircle(s, kx,my,8,0xFFFF);
         char bb[8]; sprintf(bb,"%d%%",brightness*100/255);
         settTextR(s,xr,ty,bb,T().subtext);
         } break;
@@ -8622,10 +8625,10 @@ void drawSettings(LGFX_Sprite& s){
         int x0=cx+72, step=(cw-84)/THEME_COUNT;
         for(int t=0;t<THEME_COUNT;t++){
           int tcx=x0+step*t+step/2, tcy=ry+19;
-          s.fillCircle(tcx,tcy,7,themes[t].bg);   // UI-MODERN: 8 tema -> lingkaran 9->7, cincin 12->9
-          s.drawCircle(tcx,tcy,7,blend565(themes[t].bg,0xFFFF,110));
-          s.fillCircle(tcx,tcy,3,themes[t].accent);
-          if(t==themeIdx){ s.drawCircle(tcx,tcy,9,T().accent); s.drawCircle(tcx,tcy,10,T().accent); }
+          nyxAaCircle(s, tcx,tcy,7,themes[t].bg);   // UI-MODERN: 8 tema -> lingkaran 9->7, cincin 12->9
+          nyxAaCircleRing(s, tcx,tcy,7,blend565(themes[t].bg,0xFFFF,110));
+          nyxAaCircle(s, tcx,tcy,3,themes[t].accent);
+          if(t==themeIdx){ nyxAaCircleRing(s, tcx,tcy,9,T().accent); nyxAaCircleRing(s, tcx,tcy,10,T().accent); }
         }
         const char* nm=themes[themeIdx].name;
         s.setTextColor(T().subtext); s.setCursor(x0+(step*THEME_COUNT)/2-s.textWidth(nm)/2,ry+37); s.print(nm);
@@ -8647,9 +8650,9 @@ void drawSettings(LGFX_Sprite& s){
         s.setTextColor(T().text); s.setCursor(xl,ty-4); s.print("SPI Overclock");
         s.setTextColor(T().subtext); s.setCursor(xl,ty+6); s.print(spiOcPendingIdx!=spiOcIdx?"Belum diterapkan":"Kecepatan layar");
         int sw=108, sx=xr-sw, sy=ry+(rh-22)/2;
-        s.fillRoundRect(sx,sy,sw,22,11,T().surface2);
+        nyxAaRR(s, sx,sy,sw,22,11,T().surface2);
         int selx=sx+2+spiOcPendingIdx*(sw/2-2);
-        s.fillRoundRect(selx,sy+2,sw/2-2,18,9,T().accent);
+        nyxAaRR(s, selx,sy+2,sw/2-2,18,9,T().accent);
         for(int k=0;k<2;k++){
           char lb[8]; sprintf(lb,"%dMHz",SPI_OC_OPTIONS[k]);
           s.setTextColor(k==spiOcPendingIdx?(uint16_t)0xFFFF:T().subtext);
@@ -8735,10 +8738,10 @@ void drawSettings(LGFX_Sprite& s){
   if(mxs>0){
     int railTop=top+6, railH=(bot-top)-12;
     if(railH>20){
-      s.fillRoundRect(SCR_W-5,railTop,3,railH,1,blend565(T().surface,0xFFFF,50));
+      nyxAaRR(s, SCR_W-5,railTop,3,railH,1,blend565(T().surface,0xFFFF,50));
       int thumbH=max(16,(int)(railH*(float)(bot-top)/(float)settTotalH));
       int thumbY=railTop+(int)((railH-thumbH)*(settScroll/mxs));
-      s.fillRoundRect(SCR_W-5,thumbY,3,thumbH,1,T().accent);
+      nyxAaRR(s, SCR_W-5,thumbY,3,thumbH,1,T().accent);
     }
   }
 
@@ -8923,7 +8926,7 @@ void drawNotepad(LGFX_Sprite& s){
     int dw = min(SCR_W-40, 220), dh=104;
     int dx=(SCR_W-dw)/2, dy=(SCR_H-dh)/2;
     iosRR(s,dx,dy,dw,dh,8,T().surface);
-    s.drawRoundRect(dx,dy,dw,dh,8,T().divider);
+    nyxAaRRRing(s, dx,dy,dw,dh,8,T().divider);
     s.setTextColor(T().text); s.setTextSize(1);
     s.setCursor(dx+12,dy+14); s.print("Simpan perubahan");
     s.setCursor(dx+12,dy+28); s.print("catatan ini?");
@@ -9033,8 +9036,8 @@ void drawCanvasScreen(LGFX_Sprite& s){
   int palGap = (SCR_W-8)/PAL_N;
   for(int i=0;i<PAL_N;i++){
     int px=4+i*palGap;
-    s.fillCircle(px+palGap/2,ty+10,7,palette[i]);
-    if(palette[i]==drawColor) s.drawCircle(px+palGap/2,ty+10,9,T().text);
+    nyxAaCircle(s, px+palGap/2,ty+10,7,palette[i]);
+    if(palette[i]==drawColor) nyxAaCircleRing(s, px+palGap/2,ty+10,9,T().text);
   }
   
   int r2Y = ty + 22;
@@ -9139,7 +9142,7 @@ void drawAiTypingDots(LGFX_Sprite& s, int x, int y, uint16_t color){
     float phase = t*4.0f - i*0.6f;
     float bounce = (sinf(phase)+1.0f)*0.5f; // 0..1
     int dy = (int)(bounce*3.0f);
-    s.fillCircle(x+i*10+3, cy-dy, 2, color);
+    nyxAaCircle(s, x+i*10+3, cy-dy, 2, color);
   }
 }
 
@@ -9253,8 +9256,8 @@ void drawAiChat(LGFX_Sprite& s){
     int trackX=SCR_W-8, trackY=chatTop+4, trackH=chatH-8;
     int thumbH = max(14, (int)((float)viewH/contentH*trackH));
     int thumbY = trackY + (int)((float)aiRespScrollY/aiRespMaxScroll*(trackH-thumbH));
-    s.fillRoundRect(trackX,trackY,3,trackH,1,T().divider);
-    s.fillRoundRect(trackX,thumbY,3,thumbH,1,T().accent);
+    nyxAaRR(s, trackX,trackY,3,trackH,1,T().divider);
+    nyxAaRR(s, trackX,thumbY,3,thumbH,1,T().accent);
   }
 
   if(!kbVisible){
@@ -9776,8 +9779,8 @@ void drawFileExplorer(LGFX_Sprite& s){
       int trackX=SCR_W-8, trackY=contentTop, trackH=viewAreaH;
       int thumbH = max(14, (int)((float)viewAreaH/contentH*trackH));
       int thumbY = trackY + (int)((float)expViewScrollY/expViewMaxScroll*(trackH-thumbH));
-      s.fillRoundRect(trackX,trackY,3,trackH,1,T().divider);
-      s.fillRoundRect(trackX,thumbY,3,thumbH,1,T().accent);
+      nyxAaRR(s, trackX,trackY,3,trackH,1,T().divider);
+      nyxAaRR(s, trackX,thumbY,3,thumbH,1,T().accent);
     }
 
     drawBack(s);drawToast(s);
@@ -9818,11 +9821,11 @@ void drawFileExplorer(LGFX_Sprite& s){
 
     if(isDir){                                 // ikon folder
       uint16_t fc = T().accent;
-      s.fillRoundRect(10,itemY+7,9,4,1,fc);
-      s.fillRoundRect(10,itemY+9,17,12,2,fc);
+      nyxAaRR(s, 10,itemY+7,9,4,1,fc);
+      nyxAaRR(s, 10,itemY+9,17,12,2,fc);
     } else {                                   // ikon file
       uint16_t fc = T().accent2;
-      s.drawRoundRect(12,itemY+6,12,15,2,fc);
+      nyxAaRRRing(s, 12,itemY+6,12,15,2,fc);
       s.drawFastHLine(15,itemY+11,6,fc);
       s.drawFastHLine(15,itemY+14,6,fc);
       s.drawFastHLine(15,itemY+17,6,fc);
@@ -10337,7 +10340,7 @@ void drawMjpegPlayer(LGFX_Sprite& s){
         if(ds >= 3600) snprintf(db,sizeof(db),"%u:%02u:%02u",(unsigned)(ds/3600),(unsigned)((ds/60)%60),(unsigned)(ds%60));
         else           snprintf(db,sizeof(db),"%u:%02u",(unsigned)(ds/60),(unsigned)(ds%60));
         int bw = (int)strlen(db)*6 + 6;
-        s.fillRoundRect(tx + MJ_TH_W - bw - 2, ty + MJ_TH_H - 13, bw, 11, 3, 0x0000);
+        nyxAaRR(s, tx + MJ_TH_W - bw - 2, ty + MJ_TH_H - 13, bw, 11, 3, 0x0000);
         s.setTextColor(0xFFFF); s.setTextSize(1);
         s.setCursor(tx + MJ_TH_W - bw + 1, ty + MJ_TH_H - 11);
         s.print(db);
@@ -10375,7 +10378,7 @@ void drawMjpegPlayer(LGFX_Sprite& s){
 
       // tombol play bundar di kanan
       int cx = SCR_W - 22, cy = itemY + MJ_CARD_H/2;
-      s.fillCircle(cx, cy, 11, T().good);
+      nyxAaCircle(s, cx, cy, 11, T().good);
       s.fillTriangle(cx-3, cy-6, cx-3, cy+6, cx+6, cy, T().bg);
     }
     mjpegThumbWant = anyMissing;                      // loop() akan membuat thumbnail berikutnya
@@ -11045,7 +11048,7 @@ void updExit(){}
 
 // ===== UI v2 app Update =====
 static void updIconArrow(LGFX_Sprite& s, int cx, int cy, uint16_t col){
-  s.fillCircle(cx, cy, 13, col);
+  nyxAaCircle(s, cx, cy, 13, col);
   s.fillTriangle(cx, cy-7, cx-6, cy, cx+6, cy, 0xFFFF);
   s.fillRect(cx-2, cy, 5, 7, 0xFFFF);
 }
@@ -11139,7 +11142,7 @@ void drawUpdate(LGFX_Sprite& s){
       int idx = startIdx+i;
       int itemY = UPD_ITEM_Y + i*(UPD_ITEM_H+UPD_ITEM_GAP);
       iosRR(s, 6, itemY, SCR_W-12, UPD_ITEM_H, 6, T().surface);
-      s.fillRoundRect(13, itemY+5, 10, 12, 2, T().accent);      // ikon file
+      nyxAaRR(s, 13, itemY+5, 10, 12, 2, T().accent);      // ikon file
       s.fillRect(16, itemY+9, 4, 1, T().bg); s.fillRect(16, itemY+12, 4, 1, T().bg);
       String fn = updFileList[idx];
       String fnDisp = fn;
@@ -11379,7 +11382,7 @@ void bootDrawParticleRing(int cx,int cy,int r,int count,uint16_t color,float pha
     float ang = (float)i/count*2.0f*PI + phase;
     int px = cx + (int)(cosf(ang)*r);
     int py = cy + (int)(sinf(ang)*r);
-    canvas.fillCircle(px,py,2,color);
+    nyxAaCircle(canvas, px,py,2,color);
   }
 }
 
@@ -11496,7 +11499,7 @@ void bootDiskInit(float rIn,float rOut){
 
 // 1 titik partikel: kecil = kotak 2x2 tajam, terang = kotak 2x2 + glow bulat tipis
 void bootDot(int x,int y,int sz,uint16_t col){
-  if(sz>=2) canvas.fillCircle(x,y,2,lerpColor565(0x0000,col,0.30f));
+  if(sz>=2) nyxAaCircle(canvas, x,y,2,lerpColor565(0x0000,col,0.30f));
   canvas.fillRect(x,y,2,2,col);
 }
 
@@ -11538,9 +11541,9 @@ void bootDrawStars(int w,int h,int cx,int cy,float R,float a,float tSec){
 void bootDrawAmbientGlow(int cx,int cy,int r,float a){
   if(a<=0.02f || r<4) return;
   uint16_t c=bootRGB(255,110,30);
-  canvas.fillCircle(cx,cy,r,              lerpColor565(0x0000,c,0.07f*a));
-  canvas.fillCircle(cx,cy,(int)(r*0.72f), lerpColor565(0x0000,c,0.12f*a));
-  canvas.fillCircle(cx,cy,(int)(r*0.46f), lerpColor565(0x0000,c,0.20f*a));
+  nyxAaCircle(canvas, cx,cy,r,              lerpColor565(0x0000,c,0.07f*a));
+  nyxAaCircle(canvas, cx,cy,(int)(r*0.72f), lerpColor565(0x0000,c,0.12f*a));
+  nyxAaCircle(canvas, cx,cy,(int)(r*0.46f), lerpColor565(0x0000,c,0.20f*a));
 }
 
 // Garis cahaya horizontal: terang di tengah, meredup ke ujung (+ glow
@@ -11630,9 +11633,9 @@ void bootStageEventHorizon(int w,int h){
     // singularitas: titik cahaya yg lenyap begitu lubang hitam tumbuh
     float pointA=seedP*(1.0f-holeP);
     if(pointA>0.03f){
-      canvas.fillCircle(cx,cy,(int)(4+10*pointA),lerpColor565(0x0000,bootRGB(255,110,30),0.18f*pointA));
-      canvas.fillCircle(cx,cy,(int)(2+4*pointA), lerpColor565(0x0000,bootRGB(255,238,214),0.50f*pointA));
-      canvas.fillCircle(cx,cy,2,                 lerpColor565(0x0000,0xFFFF,pointA));
+      nyxAaCircle(canvas, cx,cy,(int)(4+10*pointA),lerpColor565(0x0000,bootRGB(255,110,30),0.18f*pointA));
+      nyxAaCircle(canvas, cx,cy,(int)(2+4*pointA), lerpColor565(0x0000,bootRGB(255,238,214),0.50f*pointA));
+      nyxAaCircle(canvas, cx,cy,2,                 lerpColor565(0x0000,0xFFFF,pointA));
     }
 
     bootDrawAmbientGlow(cx,cy,(int)(curR*2.7f+6.0f),holeP*scale*pulse);
@@ -11652,9 +11655,9 @@ void bootStageEventHorizon(int w,int h){
       if(pass==1 && curR>1.0f){
         int hr=(int)curR;
         uint16_t ringHot=lerpColor565(0x0000,bootRGB(255,236,210),pulse*holeP);
-        canvas.fillCircle(cx,cy,hr+3,lerpColor565(0x0000,bootRGB(255,120,40),0.30f*holeP));
-        canvas.fillCircle(cx,cy,hr+1,ringHot);
-        canvas.fillCircle(cx,cy,hr,0x0000);
+        nyxAaCircle(canvas, cx,cy,hr+3,lerpColor565(0x0000,bootRGB(255,120,40),0.30f*holeP));
+        nyxAaCircle(canvas, cx,cy,hr+1,ringHot);
+        nyxAaCircle(canvas, cx,cy,hr,0x0000);
       }
       for(int i=0;i<BOOT_DISK_N;i++){
         BootDiskP& p=bootDisk[i];
@@ -11690,8 +11693,8 @@ void bootStageEventHorizon(int w,int h){
 
     // titik terang di akhir runtuh (jadi sumber garis cahaya tahap berikutnya)
     if(colP>0.0f){
-      canvas.fillCircle(cx,cy,(int)(3+colP*5),lerpColor565(0x0000,bootRGB(255,238,214),0.40f*colP));
-      canvas.fillCircle(cx,cy,(int)(1+colP*2),lerpColor565(0x0000,0xFFFF,colP));
+      nyxAaCircle(canvas, cx,cy,(int)(3+colP*5),lerpColor565(0x0000,bootRGB(255,238,214),0.40f*colP));
+      nyxAaCircle(canvas, cx,cy,(int)(1+colP*2),lerpColor565(0x0000,0xFFFF,colP));
     }
 
     push();
@@ -11742,24 +11745,24 @@ void bootStageHorizonReveal(int w,int h,unsigned long DUR){
     float gl=sinf(lp*3.14159f);
     if(gl>0.05f){
       int gr=(int)(30.0f+34.0f*lp); uint16_t gc=bootRGB(120,125,150);
-      canvas.fillCircle(cx,cy,gr,            lerpColor565(0x0000,gc,0.05f*gl));
-      canvas.fillCircle(cx,cy,(int)(gr*0.7f),lerpColor565(0x0000,gc,0.09f*gl));
-      canvas.fillCircle(cx,cy,(int)(gr*0.42f),lerpColor565(0x0000,gc,0.14f*gl));
+      nyxAaCircle(canvas, cx,cy,gr,            lerpColor565(0x0000,gc,0.05f*gl));
+      nyxAaCircle(canvas, cx,cy,(int)(gr*0.7f),lerpColor565(0x0000,gc,0.09f*gl));
+      nyxAaCircle(canvas, cx,cy,(int)(gr*0.42f),lerpColor565(0x0000,gc,0.14f*gl));
     }
 
     // inti: sambungan dari titik runtuh, lalu bola cahaya ledakan (lokal, bukan flash layar)
     float coreP=lp/0.16f; if(coreP>1.0f) coreP=1.0f; float coreA=1.0f-navEase(coreP);
     if(coreA>0.05f){
-      canvas.fillCircle(cx,cy,(int)(3+5*coreA),lerpColor565(0x0000,WARM,0.40f*coreA));
-      canvas.fillCircle(cx,cy,(int)(1+2*coreA),lerpColor565(0x0000,0xFFFF,coreA));
+      nyxAaCircle(canvas, cx,cy,(int)(3+5*coreA),lerpColor565(0x0000,WARM,0.40f*coreA));
+      nyxAaCircle(canvas, cx,cy,(int)(1+2*coreA),lerpColor565(0x0000,0xFFFF,coreA));
     }
     float bp=(lp-0.10f)/0.28f;
     if(bp>0.0f && bp<1.0f){
       float a=1.0f-bp; a=a*sqrtf(a);
       int br=(int)(6.0f+26.0f*navEase(bp));
-      canvas.fillCircle(cx,cy,br,            lerpColor565(0x0000,WARM,0.22f*a));
-      canvas.fillCircle(cx,cy,(int)(br*0.55f),lerpColor565(0x0000,WARM,0.55f*a));
-      canvas.fillCircle(cx,cy,2,             lerpColor565(0x0000,0xFFFF,a));
+      nyxAaCircle(canvas, cx,cy,br,            lerpColor565(0x0000,WARM,0.22f*a));
+      nyxAaCircle(canvas, cx,cy,(int)(br*0.55f),lerpColor565(0x0000,WARM,0.55f*a));
+      nyxAaCircle(canvas, cx,cy,2,             lerpColor565(0x0000,0xFFFF,a));
     }
 
     // 2 cincin kejut
@@ -11768,8 +11771,8 @@ void bootStageHorizonReveal(int w,int h,unsigned long DUR){
       int rr=(int)(4.0f+navEase(rp)*(maxR-4.0f));
       float a=1.0f-rp; a=a*a*(k==0?0.75f:0.45f);
       uint16_t rc=lerpColor565(bootRGB(255,190,130),bootRGB(150,150,166),rp);
-      canvas.drawCircle(cx,cy,rr,  lerpColor565(0x0000,rc,a));
-      canvas.drawCircle(cx,cy,rr+1,lerpColor565(0x0000,rc,a*0.35f));
+      nyxAaCircleRing(canvas, cx,cy,rr,  lerpColor565(0x0000,rc,a));
+      nyxAaCircleRing(canvas, cx,cy,rr+1,lerpColor565(0x0000,rc,a*0.35f));
     }
 
     // huruf terlempar dari pusat: urutan dari tengah ke luar, tiap huruf punya jejak
@@ -11836,8 +11839,8 @@ void bootQuickDotIn(int w,int h){
     float u=(float)(millis()-t0)/(float)DUR; if(u>1.0f) u=1.0f;
     float e=navEase(u);
     canvas.fillSprite(0x0000);
-    canvas.fillCircle(cx,cy,(int)(1+7*e),lerpColor565(0x0000,WARM,0.40f*e));
-    canvas.fillCircle(cx,cy,(int)(1+2*e),lerpColor565(0x0000,0xFFFF,0.25f+0.75f*e));
+    nyxAaCircle(canvas, cx,cy,(int)(1+7*e),lerpColor565(0x0000,WARM,0.40f*e));
+    nyxAaCircle(canvas, cx,cy,(int)(1+2*e),lerpColor565(0x0000,0xFFFF,0.25f+0.75f*e));
     push();
     if(u>=1.0f) break;
     if(bootSkipPoll()) break;
@@ -11978,8 +11981,8 @@ void bootPowerOffAnim(bool restart){
       int rr=(int)(maxR-(maxR-4.0f)*navEase(rp));
       float a=sinf(rp*3.14159f)*(k==0?0.70f:0.45f);
       uint16_t rc=lerpColor565(bootRGB(150,150,166),bootRGB(255,190,130),rp);
-      canvas.drawCircle(cx,cy,rr,  lerpColor565(0x0000,rc,a));
-      canvas.drawCircle(cx,cy,rr+1,lerpColor565(0x0000,rc,a*0.35f));
+      nyxAaCircleRing(canvas, cx,cy,rr,  lerpColor565(0x0000,rc,a));
+      nyxAaCircleRing(canvas, cx,cy,rr+1,lerpColor565(0x0000,rc,a*0.35f));
     }
     float fin=lp/0.08f; if(fin>1.0f) fin=1.0f;              // huruf muncul halus di awal
     for(int i=0;i<n;i++){
@@ -12000,9 +12003,9 @@ void bootPowerOffAnim(bool restart){
       float gp=(lp-0.22f)/0.56f; if(gp>1.0f) gp=1.0f;
       float dotA=(lp<0.78f)?1.0f:(1.0f-(lp-0.78f)/0.22f); if(dotA<0.0f) dotA=0.0f;
       int dr=(int)(2.0f+6.0f*sinf(gp*3.14159f));
-      canvas.fillCircle(cx,cy,dr+4,lerpColor565(0x0000,WARM,0.18f*dotA));
-      canvas.fillCircle(cx,cy,dr+1,lerpColor565(0x0000,WARM,0.45f*dotA));
-      canvas.fillCircle(cx,cy,(dr>3)?2:1,lerpColor565(0x0000,0xFFFF,dotA));
+      nyxAaCircle(canvas, cx,cy,dr+4,lerpColor565(0x0000,WARM,0.18f*dotA));
+      nyxAaCircle(canvas, cx,cy,dr+1,lerpColor565(0x0000,WARM,0.45f*dotA));
+      nyxAaCircle(canvas, cx,cy,(dr>3)?2:1,lerpColor565(0x0000,0xFFFF,dotA));
     }
     push();
     if(lp>=1.0f) break;
@@ -12615,7 +12618,7 @@ void drawTriviaSetup(LGFX_Sprite& s){
     bool sel=(i==triviaSelCat);
     uint16_t bg = sel? triviaCats[i].color : T().surface;
     iosRR(s,x,y,cw,ch,8,bg);
-    if(sel) s.drawRoundRect(x,y,cw,ch,8,T().text);
+    if(sel) nyxAaRRRing(s, x,y,cw,ch,8,T().text);
     s.setTextColor(sel?T().bg:T().text); s.setTextSize(1);
     int nl=s.textWidth(triviaCats[i].name);
     s.setCursor(x+cw/2-min(nl,cw-6)/2, y+ch/2-4);
@@ -12679,7 +12682,7 @@ void drawLoadingRing(LGFX_Sprite& s,int cx,int cy,const char* label){
   lrArc(s,cx,cy,ri,ro,st+sweep*0.5f,sweep*0.3f,blend565(trk,acc,190));
   lrArc(s,cx,cy,ri,ro,st+sweep*0.8f,sweep*0.2f,acc);           // kepala terang
   float hr=head*0.0174532925f;
-  s.fillCircle(cx+(int)lroundf(cosf(hr)*23.0f),cy+(int)lroundf(sinf(hr)*23.0f),3,acc);
+  nyxAaCircle(s, cx+(int)lroundf(cosf(hr)*23.0f),cy+(int)lroundf(sinf(hr)*23.0f),3,acc);
   uint8_t pa=(uint8_t)(110.0f+110.0f*sinf((float)ms*0.004f)); // teks berdenyut halus
   s.setTextColor(blend565(T().subtext,T().text,pa)); s.setTextSize(1);
   int tw=s.textWidth(label);
@@ -13120,7 +13123,7 @@ void drawMaze(LGFX_Sprite& s){
   for(int y=0;y<MAZE_ROWS;y++) for(int x=0;x<MAZE_COLS;x++){
     int wx=ox+x*tile, wy=oy+y*tile;
     if(mazeTemplate[y][x]=='#') s.fillRect(wx,wy,tile,tile,T().surface2);
-    else if(mazePellet[y][x]) s.fillCircle(wx+tile/2,wy+tile/2,max(1,tile/7),T().accent);
+    else if(mazePellet[y][x]) nyxAaCircle(s, wx+tile/2,wy+tile/2,max(1,tile/7),T().accent);
   }
 
   const uint16_t ghostColors[4]={T().danger,0xFC9F,0x07FF,0xFBE0};
@@ -13129,9 +13132,9 @@ void drawMaze(LGFX_Sprite& s){
     float lx,ly; mazeLerpPos(mazeGhosts[i].prevX,mazeGhosts[i].prevY,mazeGhosts[i].x,mazeGhosts[i].y,frac,lx,ly);
     int gx=ox+(int)((lx+0.5f)*tile), gy=oy+(int)((ly+0.5f)*tile);
     int r=max(2,tile/2-1);
-    s.fillRoundRect(gx-r,gy-r,r*2,r*2,r/2,ghostColors[i%4]);
-    s.fillCircle(gx-r/2,gy-r/3,max(1,r/4),T().bg);
-    s.fillCircle(gx+r/2,gy-r/3,max(1,r/4),T().bg);
+    nyxAaRR(s, gx-r,gy-r,r*2,r*2,r/2,ghostColors[i%4]);
+    nyxAaCircle(s, gx-r/2,gy-r/3,max(1,r/4),T().bg);
+    nyxAaCircle(s, gx+r/2,gy-r/3,max(1,r/4),T().bg);
   }
   {
     float frac=constrain((millis()-mazePlayerLastTick)/(float)mazePlayerTickMs,0.0f,1.0f);
@@ -13140,7 +13143,7 @@ void drawMaze(LGFX_Sprite& s){
     int r=max(2,tile/2-1);
     bool blink = mazeInvuln && ((millis()/150)%2==0);
     if(!blink){
-      s.fillCircle(px,py,r,mazePlayerColor());
+      nyxAaCircle(s, px,py,r,mazePlayerColor());
       bool moving=(mazeDirX!=0||mazeDirY!=0);
       if(moving && (millis()/150)%2==0){
         int ang = mazeDirX==1?0 : mazeDirY==1?90 : mazeDirX==-1?180 : 270;
@@ -13156,14 +13159,14 @@ void drawMaze(LGFX_Sprite& s){
   if(mazePageState==MAZE_LEVEL_CLEAR){
     int bx=SCR_W/2-70, by=SCR_H/2-24, bw=140, bh=48;
     iosRR(s,bx,by,bw,bh,10,T().surface);
-    s.drawRoundRect(bx,by,bw,bh,10,T().good);
+    nyxAaRRRing(s, bx,by,bw,bh,10,T().good);
     char lb[24]; snprintf(lb,sizeof(lb),"Level %d Selesai!",mazeLevel-1>0?mazeLevel-1:mazeLevel);
     s.setTextColor(T().good); s.setTextSize(1);
     int tw=(int)s.textWidth(lb); s.setCursor(SCR_W/2-tw/2,by+18); s.print(lb);
   } else if(mazePageState==MAZE_GAME_OVER){
     int bx=SCR_W/2-76, by=SCR_H/2-40, bw=152, bh=80;
     iosRR(s,bx,by,bw,bh,10,T().surface);
-    s.drawRoundRect(bx,by,bw,bh,10,T().danger);
+    nyxAaRRRing(s, bx,by,bw,bh,10,T().danger);
     s.setTextColor(T().danger); s.setTextSize(1); s.setCursor(bx+34,by+10); s.print("GAME OVER");
     char lb[40]; snprintf(lb,sizeof(lb),"Skor: %d (Lv%d)",mazeScore,mazeLevel);
     int tw=(int)s.textWidth(lb); s.setCursor(SCR_W/2-tw/2,by+30); s.print(lb);
@@ -14677,7 +14680,7 @@ void infDrawEnemySprite(LGFX_Sprite& s, InfEnemy& e, int cx, int cy, int h, int 
 
   // -- bayangan kontak di lantai (dipertahankan dr v75) --
   int shR=max(2,h/7);
-  s.fillCircle(cx, feetY, shR, blend565(INF_FLOOR_FAR,0x0000,90));
+  nyxAaCircle(s, cx, feetY, shR, blend565(INF_FLOOR_FAR,0x0000,90));
 
   // -- KAKI: 2 kaki terpisah yg berayun BERGANTIAN maju/mundur (bukan 1
   // segitiga tunggal spt sblmnya) -- inilah yg kasih kesan "berjalan",
@@ -14708,7 +14711,7 @@ void infDrawEnemySprite(LGFX_Sprite& s, InfEnemy& e, int cx, int cy, int h, int 
   s.fillRect(cx-max(1,r/4), shY-neckH, max(2,r/2), neckH+1, darkC);
 
   // -- KEPALA: kubah + dagu runcing (dulu bulat sempurna tanpa rahang) --
-  s.fillCircle(cx, headY, r, bodyC);
+  nyxAaCircle(s, cx, headY, r, bodyC);
   s.fillTriangle(cx-r/2, headY+r/2, cx+r/2, headY+r/2, cx, headY+r+r/3, bodyC); // dagu
   s.fillTriangle(cx-r, headY-r/6, cx+r, headY-r/6, cx, headY-r*3/4, darkC);     // alis/brow ridge, kesan galak
   // tanduk melengkung 2-segmen tiap sisi (dulu 1 segitiga lurus kaku)
@@ -14718,8 +14721,8 @@ void infDrawEnemySprite(LGFX_Sprite& s, InfEnemy& e, int cx, int cy, int h, int 
   s.fillTriangle(cx+r/4,headY-(int)(r*1.3f), cx+r/8,headY-(int)(r*1.7f), cx,headY-(int)(r*1.1f), darkC);
   // mata menyala (dipertahankan, elemen paling ikonik dr desain lama)
   int eyeR=max(1,r/4);
-  s.fillCircle(cx-r/3, headY, eyeR, INF_ENEMY_EYE);
-  s.fillCircle(cx+r/3, headY, eyeR, INF_ENEMY_EYE);
+  nyxAaCircle(s, cx-r/3, headY, eyeR, INF_ENEMY_EYE);
+  nyxAaCircle(s, cx+r/3, headY, eyeR, INF_ENEMY_EYE);
   // mulut menganga bertaring -- BARU, dulu wajah cuma 2 titik mata doang
   int mouthY=headY+r/2;
   s.fillRect(cx-r/3, mouthY, max(2,(r*2)/3), max(1,r/4), darkC);
@@ -14775,7 +14778,7 @@ void infGameOverBtnRectAt(int slot,int panelBy,int &bx,int &by,int &bw,int &bh){
 }
 void infDrawMenuButton(LGFX_Sprite& s,int bx,int by,int bw,int bh,const char* label,bool accent){
   iosRR(s,bx,by,bw,bh,7, accent? blend565(T().accent,0x0000,60) : T().surface2);
-  s.drawRoundRect(bx,by,bw,bh,7, accent? T().accent : T().subtext);
+  nyxAaRRRing(s, bx,by,bw,bh,7, accent? T().accent : T().subtext);
   s.setTextColor(T().text); s.setTextSize(1);
   int tw=(int)s.textWidth(label);
   s.setCursor(bx+bw/2-tw/2, by+bh/2-4); s.print(label);
@@ -15229,7 +15232,7 @@ void drawInf(LGFX_Sprite& s){
     int ey=vpTop+vpH-(int)(t*vpH);
     int ex=(int)(infEmberBaseX[i]+sinf(t*6.2831853f*2.0f+infEmberSeed[i]*9.0f)*12.0f);
     uint8_t alpha=(uint8_t)(220.0f*sinf(t*3.14159265f)); // muncul pelan dr bawah, pudar pelan sblm sampai atas
-    if(alpha>50) s.fillCircle(ex,ey,1, blend565(0x0000,0xFDA0,alpha));
+    if(alpha>50) nyxAaCircle(s, ex,ey,1, blend565(0x0000,0xFDA0,alpha));
   }
 
   float invDet=1.0f/(infPlaneX*infDirY-infDirX*infPlaneY);
@@ -15258,8 +15261,8 @@ void drawInf(LGFX_Sprite& s){
     else if(infItems[i].type==INF_ITEM_SPEED)  icol=INF_ITEM_SPEED_COL; // v94
     else if(infItems[i].type==INF_ITEM_INVULN) icol=INF_ITEM_INVULN_COL;// v94
     else                                        icol=INF_ITEM_AMMO_COL; // shotgun/plasma ammo
-    s.fillCircle(scrX,itemY+bob,itemR,icol);
-    s.drawCircle(scrX,itemY+bob,itemR+1,blend565(icol,0xFFFF,80));
+    nyxAaCircle(s, scrX,itemY+bob,itemR,icol);
+    nyxAaCircleRing(s, scrX,itemY+bob,itemR+1,blend565(icol,0xFFFF,80));
   }
 
   // ---- v85: tong/drum yg bisa dihancurkan (billboard persegi pendek +
@@ -15285,12 +15288,12 @@ void drawInf(LGFX_Sprite& s){
       float t=(millis()-infBarrels[i].explodeMs)/(float)INF_BARREL_EXPLODE_MS;
       int r=(int)(bw*(1.0f+t*2.5f));
       uint8_t a=(uint8_t)(255*(1.0f-t));
-      s.fillCircle(scrX,by,r,blend565(0x0000,0xFDA0,a));
-      s.drawCircle(scrX,by,r,blend565(0x0000,0xFFFF,a));
+      nyxAaCircle(s, scrX,by,r,blend565(0x0000,0xFDA0,a));
+      nyxAaCircleRing(s, scrX,by,r,blend565(0x0000,0xFFFF,a));
     } else {
-      s.fillRoundRect(scrX-bw/2,by-bh,bw,bh,2,0x2965); // badan tong hijau-gelap tua
+      nyxAaRR(s, scrX-bw/2,by-bh,bw,bh,2,0x2965); // badan tong hijau-gelap tua
       s.fillRect(scrX-bw/2,by-bh/2-1,bw,3,INF_WALL_HAZARD_A); // strip oranye peringatan
-      s.drawRoundRect(scrX-bw/2,by-bh,bw,bh,2,0x0000);
+      nyxAaRRRing(s, scrX-bw/2,by-bh,bw,bh,2,0x0000);
     }
   }
 
@@ -15312,7 +15315,7 @@ void drawInf(LGFX_Sprite& s){
     int by=vpTop+vpHalf+(int)(vpH/transY*0.1f);
     int r=max(1,(int)(vpH/transY*0.04f*(1.0f-t*0.4f)));
     uint8_t a=(uint8_t)(255*(1.0f-t));
-    s.fillCircle(scrX,by,r,blend565(0x0000,0xF800,a));
+    nyxAaCircle(s, scrX,by,r,blend565(0x0000,0xF800,a));
   }
 
   // ---- Musuh (billboard sprite), diurutkan terjauh->terdekat spy yg
@@ -15377,8 +15380,8 @@ void drawInf(LGFX_Sprite& s){
     if(transY>=infZBuf[col]) continue;
     int fr=max(2,(int)(vpH/transY*0.05f));
     float flick=0.7f+0.3f*sinf(millis()*0.03f+i*3.0f);
-    s.fillCircle(scrX,vpTop+vpHalf,fr, blend565(0x0000,INF_FIREBALL_COL,(uint8_t)(flick*255.0f)));
-    s.fillCircle(scrX,vpTop+vpHalf,max(1,fr/2), 0xFFFF);
+    nyxAaCircle(s, scrX,vpTop+vpHalf,fr, blend565(0x0000,INF_FIREBALL_COL,(uint8_t)(flick*255.0f)));
+    nyxAaCircle(s, scrX,vpTop+vpHalf,max(1,fr/2), 0xFFFF);
   }
 
   // ---- Crosshair ----
@@ -15388,21 +15391,21 @@ void drawInf(LGFX_Sprite& s){
   // ---- Senjata (viewmodel) + recoil & muzzle flash ----
   int gunY=vpTop+vpH-(int)(infGunKick*10);
   iosRR(s,SCR_W/2-16,gunY-30,32,34,4,INF_GUN_METAL);
-  s.fillRoundRect(SCR_W/2-6,gunY-52,12,26,3,INF_GUN_DARK);
-  s.fillCircle(SCR_W/2,gunY-52,5,infWeaponColor());
+  nyxAaRR(s, SCR_W/2-6,gunY-52,12,26,3,INF_GUN_DARK);
+  nyxAaCircle(s, SCR_W/2,gunY-52,5,infWeaponColor());
   if(millis()<infMuzzleFlashUntil){
     s.fillTriangle(SCR_W/2-14,gunY-58,SCR_W/2+14,gunY-58,SCR_W/2,gunY-84,INF_MUZZLE);
-    s.fillCircle(SCR_W/2,gunY-60,9,INF_MUZZLE);
+    nyxAaCircle(s, SCR_W/2,gunY-60,9,INF_MUZZLE);
   }
 
   // ---- HUD: bar nyawa, skor/level, sisa nyawa, minimap ----
   int hbX=8,hbY=vpTop+vpH-46,hbW=90,hbH=10;
   iosRR(s,hbX-2,hbY-12,hbW+4,hbH+16,4,blend565(T().surface,0x0000,60));
   s.setTextColor(T().subtext); s.setTextSize(1); s.setCursor(hbX,hbY-11); s.print("NYAWA");
-  s.fillRoundRect(hbX,hbY,hbW,hbH,3,T().surface2);
+  nyxAaRR(s, hbX,hbY,hbW,hbH,3,T().surface2);
   int hbFill=(int)(hbW*constrain(infHealth/infMaxHealth,0.0f,1.0f));
   uint16_t hbCol=infHealth>50?T().good:infHealth>25?0xFDA0:T().danger;
-  if(hbFill>0) s.fillRoundRect(hbX,hbY,hbFill,hbH,3,hbCol);
+  if(hbFill>0) nyxAaRR(s, hbX,hbY,hbFill,hbH,3,hbCol);
 
   // v94: indikator power-up aktif -- baris kecil di bawah bar nyawa, CUMA
   // digambar kalau ada yg lg aktif (gak makan tempat pas nggak dipakai).
@@ -15431,7 +15434,7 @@ void drawInf(LGFX_Sprite& s){
   char buf[48];
   snprintf(buf,sizeof(buf),"Lv%d  Skor:%d  Terbaik:%d",infLevel,infScore,infBestScore);
   s.setTextColor(T().subtext); s.setTextSize(1); s.setCursor(6,STATUS_H+2); s.print(buf);
-  for(int i=0;i<infLives;i++) s.fillCircle(SCR_W-14-i*14,STATUS_H+8,4,T().danger);
+  for(int i=0;i<infLives;i++) nyxAaCircle(s, SCR_W-14-i*14,STATUS_H+8,4,T().danger);
   // v78: label BOSS di level kelipatan INF_BOSS_EVERY_LEVEL, biar pemain
   // sadar gelombang ini beda drpd biasa (bukan cuma keliatan dari 1 musuh
   // gede doang).
@@ -15477,7 +15480,7 @@ void drawInf(LGFX_Sprite& s){
   int mp1x=mmX+(int)((infPosX+ccx1*2.2f)*mmS), mp1y=mmY+(int)((infPosY+ccy1*2.2f)*mmS);
   int mp2x=mmX+(int)((infPosX+ccx2*2.2f)*mmS), mp2y=mmY+(int)((infPosY+ccy2*2.2f)*mmS);
   s.fillTriangle(mppx,mppy,mp1x,mp1y,mp2x,mp2y, blend565(T().good,0x0000,150));
-  s.fillCircle(mppx,mppy,2,T().good);
+  nyxAaCircle(s, mppx,mppy,2,T().good);
 
   // ---- v75: Joystick virtual (zona kiri) -- digambar SELAGI infJoyActive
   // true, base ring di titik jangkar (sentuh pertama) + knob yg ngikutin
@@ -15485,12 +15488,12 @@ void drawInf(LGFX_Sprite& s){
   // "tarikan" joystick-nya & ke arah mana ----
   if(infJoyActive){
     int bx=infJoyAnchorX, by=infJoyAnchorY;
-    s.drawCircle(bx,by,INF_JOY_RADIUS, blend565(T().text,0x0000,110));
-    s.drawCircle(bx,by,INF_JOY_RADIUS-1, blend565(T().text,0x0000,110));
+    nyxAaCircleRing(s, bx,by,INF_JOY_RADIUS, blend565(T().text,0x0000,110));
+    nyxAaCircleRing(s, bx,by,INF_JOY_RADIUS-1, blend565(T().text,0x0000,110));
     float ox=(float)(infJoyCurX-bx), oy=(float)(infJoyCurY-by);
     float mag=sqrtf(ox*ox+oy*oy);
     if(mag>INF_JOY_RADIUS){ ox*=INF_JOY_RADIUS/mag; oy*=INF_JOY_RADIUS/mag; }
-    s.fillCircle(bx+(int)ox, by+(int)oy, 15, blend565(T().text,0x0000,40));
+    nyxAaCircle(s, bx+(int)ox, by+(int)oy, 15, blend565(T().text,0x0000,40));
   }
 
   // ---- v75: FPS meter, pojok kanan-atas viewport. Warna ikut nge-drop
@@ -15509,14 +15512,14 @@ void drawInf(LGFX_Sprite& s){
   // (lihat infCycleWeapon()). Ditaruh nempel tombol tembak biar jempol yg
   // sama gampang jangkau keduanya tanpa geser posisi tangan.
   int wcx=SCR_W-30, wcy=SCR_H-84, wr=17;
-  s.fillCircle(wcx,wcy,wr, blend565(T().surface,0x0000,90));
-  s.drawCircle(wcx,wcy,wr,T().text);
-  s.fillCircle(wcx,wcy,6,infWeaponColor());
+  nyxAaCircle(s, wcx,wcy,wr, blend565(T().surface,0x0000,90));
+  nyxAaCircleRing(s, wcx,wcy,wr,T().text);
+  nyxAaCircle(s, wcx,wcy,6,infWeaponColor());
 
   // ---- Tombol TEMBAK (lingkaran kanan-bawah, posisi tetap) ----
   int fcx=SCR_W-30, fcy=SCR_H-34, fr=24;
-  s.fillCircle(fcx,fcy,fr, blend565(T().danger,0x0000,(millis()<infMuzzleFlashUntil)?0:120));
-  s.drawCircle(fcx,fcy,fr,T().text);
+  nyxAaCircle(s, fcx,fcy,fr, blend565(T().danger,0x0000,(millis()<infMuzzleFlashUntil)?0:120));
+  nyxAaCircleRing(s, fcx,fcy,fr,T().text);
   s.setTextColor(T().text); s.setTextSize(1); s.setCursor(fcx-16,fcy-4); s.print("TEMBAK");
 
   if(infState==INF_LEVEL_CLEAR){
@@ -15528,7 +15531,7 @@ void drawInf(LGFX_Sprite& s){
     s.fillRect(0,vpTop,SCR_W,vpH, blend565(T().bg,0x0000,150));
     int bx=SCR_W/2-76,by=vpTop+vpHalf-24,bw=152,bh=48;
     iosRR(s,bx,by,bw,bh,10,T().surface);
-    s.drawRoundRect(bx,by,bw,bh,10,T().good);
+    nyxAaRRRing(s, bx,by,bw,bh,10,T().good);
     char lb[32]; snprintf(lb,sizeof(lb),"Zona %d Bersih!",infLevel);
     s.setTextColor(T().good); s.setTextSize(1);
     int tw=(int)s.textWidth(lb); s.setCursor(SCR_W/2-tw/2,by+18); s.print(lb);
@@ -15539,7 +15542,7 @@ void drawInf(LGFX_Sprite& s){
     s.fillRect(0,vpTop,SCR_W,vpH, blend565(T().bg,0x0000,150)); // v76: gelapkan latar belakang panel
     int bx=SCR_W/2-95,by=vpTop+vpHalf-64,bw=190,bh=128;
     iosRR(s,bx,by,bw,bh,10,T().surface);
-    s.drawRoundRect(bx,by,bw,bh,10,T().danger);
+    nyxAaRRRing(s, bx,by,bw,bh,10,T().danger);
     s.setTextColor(T().danger); s.setTextSize(1); s.setCursor(bx+48,by+8); s.print("KAU TEWAS");
     char lb[40]; snprintf(lb,sizeof(lb),"Skor: %d (Lv%d)",infScore,infLevel);
     int tw=(int)s.textWidth(lb); s.setCursor(SCR_W/2-tw/2,by+24); s.print(lb);
@@ -15712,8 +15715,8 @@ const int   SB_ICON_R  = 11;
 const int   SB_H       = 22;
 
 void drawSearchGlyph(LGFX_Sprite& s,int cx,int cy,uint16_t col){
-  s.drawCircle(cx-2,cy-2,5,col);
-  s.drawCircle(cx-2,cy-2,4,col);
+  nyxAaCircleRing(s, cx-2,cy-2,5,col);
+  nyxAaCircleRing(s, cx-2,cy-2,4,col);
   s.drawLine(cx+1,cy+1,cx+4,cy+4,col);
   s.drawLine(cx+2,cy,cx+5,cy+3,col);
 }
@@ -15722,13 +15725,13 @@ void drawSearchGlyph(LGFX_Sprite& s,int cx,int cy,uint16_t col){
 void drawSearchBar(LGFX_Sprite& s, SearchBarState& sb, int rightX, int topY, const String& value, const char* placeholder){
   bool closed = sb.curW < (float)(SB_ICON_R*2) && !sb.open && !sb.animating;
   if(closed){
-    s.fillCircle(rightX-SB_ICON_R, topY+SB_H/2, SB_ICON_R, T().surface2);
+    nyxAaCircle(s, rightX-SB_ICON_R, topY+SB_H/2, SB_ICON_R, T().surface2);
     drawSearchGlyph(s, rightX-SB_ICON_R, topY+SB_H/2, T().accent);
     return;
   }
   int w = max((int)sb.curW, SB_ICON_R*2);
   int x = rightX - w;
-  s.fillRoundRect(x, topY, w, SB_H, SB_H/2, T().surface2);
+  nyxAaRR(s, x, topY, w, SB_H, SB_H/2, T().surface2);
   if(w > SB_ICON_R*2+40){
     int btnW=42;
     s.setClipRect(x,topY,w,SB_H);
@@ -15738,7 +15741,7 @@ void drawSearchBar(LGFX_Sprite& s, SearchBarState& sb, int rightX, int topY, con
     if((int)disp.length()>maxC) disp=disp.substring(0,maxC);
     s.setCursor(x+10, topY+SB_H/2-4); s.print(disp);
     s.clearClipRect();
-    s.fillRoundRect(rightX-btnW, topY+2, btnW-2, SB_H-4, (SB_H-4)/2, T().accent);
+    nyxAaRR(s, rightX-btnW, topY+2, btnW-2, SB_H-4, (SB_H-4)/2, T().accent);
     s.setTextColor(T().bg); s.setCursor(rightX-btnW+7, topY+SB_H/2-4); s.print("Cari");
   } else {
     drawSearchGlyph(s, rightX-SB_ICON_R, topY+SB_H/2, T().accent);
@@ -16951,7 +16954,7 @@ void drawApod(LGFX_Sprite& s){
   s.setTextColor(T().accent); s.setCursor(xNext+10,29); s.print(">");
 
   int imgTop=apodImgTop(), imgH=apodImgAreaH();
-  s.fillRoundRect(0,imgTop,SCR_W,imgH,0,T().surface2);
+  nyxAaRR(s, 0,imgTop,SCR_W,imgH,0,T().surface2);
   if(apodMediaType!="image"){
     s.setTextColor(T().subtext); s.setTextSize(1);
     const char* m="(Konten hari ini video, tdk bisa ditampilkan)";
@@ -17002,8 +17005,8 @@ void drawApod(LGFX_Sprite& s){
     int trackX=SCR_W-8, trackY=textTop+4, trackH=textH-8;
     int thumbH=max(14,(int)((float)viewH/contentH*trackH));
     int thumbY=trackY+(int)((float)apodTextScrollY/apodTextMaxScroll*(trackH-thumbH));
-    s.fillRoundRect(trackX,trackY,3,trackH,1,T().divider);
-    s.fillRoundRect(trackX,thumbY,3,thumbH,1,T().accent);
+    nyxAaRR(s, trackX,trackY,3,trackH,1,T().divider);
+    nyxAaRR(s, trackX,thumbY,3,thumbH,1,T().accent);
   }
 
   // v22/v23: ikon kaca pembesar cari-tanggal -- kolom cari TETAP digambar
@@ -17846,7 +17849,7 @@ void drawEpicView(LGFX_Sprite& s){
   s.setTextColor(T().accent); s.setTextSize(1); s.setCursor(8,26); s.print(hdr);
 
   int imgTop=epicImgTop(), imgH=epicImgAreaH();
-  s.fillRoundRect(0,imgTop,SCR_W,imgH,0,T().surface2);
+  nyxAaRR(s, 0,imgTop,SCR_W,imgH,0,T().surface2);
   if(epicCount==0){
     s.setTextColor(T().subtext); s.setTextSize(1);
     const char* m1="Ketuk ikon kaca pembesar utk";
@@ -18245,7 +18248,7 @@ void drawImgLibView(LGFX_Sprite& s){
   s.setTextColor(T().accent); s.setTextSize(1); s.setCursor(8,26); s.print("Galeri: "+q);
 
   int imgTop=imgLibImgTop(), imgH=imgLibImgAreaH();
-  s.fillRoundRect(0,imgTop,SCR_W,imgH,0,T().surface2);
+  nyxAaRR(s, 0,imgTop,SCR_W,imgH,0,T().surface2);
   if(imgLibPhotoLoading){
     s.setTextColor(T().subtext); s.setTextSize(1);
     drawLoadingRing(s,SCR_W/2,imgTop+imgH/2-6,"Memuat gambar...");
@@ -18375,9 +18378,9 @@ void drawNpxApp(LGFX_Sprite& s){
     int cy=gt+row*npxRowStride()+d/2;
     uint16_t c565 = npxRgb565(npxPresets[i].r,npxPresets[i].g,npxPresets[i].b);
     bool sel = (npxOn && npxMode==0 && npxR==npxPresets[i].r && npxG==npxPresets[i].g && npxB==npxPresets[i].b);
-    if(sel){ s.drawCircle(cx,cy,d/2+4,T().accent); s.drawCircle(cx,cy,d/2+3,T().accent); }
-    s.fillCircle(cx,cy,d/2,c565);
-    s.drawCircle(cx,cy,d/2,T().divider);
+    if(sel){ nyxAaCircleRing(s, cx,cy,d/2+4,T().accent); nyxAaCircleRing(s, cx,cy,d/2+3,T().accent); }
+    nyxAaCircle(s, cx,cy,d/2,c565);
+    nyxAaCircleRing(s, cx,cy,d/2,T().divider);
     s.setTextColor(T().subtext); s.setTextSize(1);
     int lw=(int)s.textWidth(npxPresets[i].name);
     s.setCursor(cx-lw/2,cy+d/2+4); s.print(npxPresets[i].name);
@@ -18392,11 +18395,11 @@ void drawNpxApp(LGFX_Sprite& s){
 
   int by=npxBrightY();
   s.setTextColor(T().subtext); s.setCursor(gl,by-14); s.print("Kecerahan");
-  s.fillRoundRect(gl,by,sw,9,4,T().divider);
+  nyxAaRR(s, gl,by,sw,9,4,T().divider);
   int fillW = map(npxBrightness,0,255,0,sw);
   iosRR(s,gl,by,fillW,9,4,T().accent);
-  s.fillCircle(gl+fillW,by+4,7,T().bg);
-  s.fillCircle(gl+fillW,by+4,5,T().accent);
+  nyxAaCircle(s, gl+fillW,by+4,7,T().bg);
+  nyxAaCircle(s, gl+fillW,by+4,5,T().accent);
 
   drawBack(s);
   drawToast(s);
@@ -18771,7 +18774,7 @@ void drawMicLvl(LGFX_Sprite& s){
   bool micBusy = (micRecording || micTranscribing || micTaskHandle!=NULL);
   int barX=14, barY=50, barH=30;
   int barW=SCR_W-28;
-  s.drawRoundRect(barX,barY,barW,barH,6,T().text);
+  nyxAaRRRing(s, barX,barY,barW,barH,6,T().text);
 
   int pct = (int)(micLvlRms*100.0f);
   uint16_t lvlColor = (pct>=85)?T().danger : (pct>=55)?T().accent : T().good;
@@ -18934,9 +18937,9 @@ void hwmonDrawCoreBar(LGFX_Sprite& s, int x, int y, int w, const char* label, in
   s.print(pctBuf);
 
   int barY=y+12, barH=16;
-  s.drawRoundRect(x,barY,w,barH,4,T().text);
+  nyxAaRRRing(s, x,barY,w,barH,4,T().text);
   int fillW = constrain((w-4)*usage/100, 0, w-4);
-  if(fillW>0) s.fillRoundRect(x+2,barY+2,fillW,barH-4,3,hwmonLoadColor(usage));
+  if(fillW>0) nyxAaRR(s, x+2,barY+2,fillW,barH-4,3,hwmonLoadColor(usage));
 
   // v50: histori digambar ulang jadi "grafik ala monitor sistem Linux"
   // (kayak conky/htop) -- bg item pekat, garis hijau neon nyambung antar
@@ -19001,9 +19004,9 @@ void drawHwmon(LGFX_Sprite& s){
   s.setTextColor(hwmonLoadColor(ramPct)); s.setCursor(SCR_W-14-rw, top);
   s.print(ramBuf);
   top += 12;
-  s.drawRoundRect(14, top, SCR_W-28, 14, 4, T().text);
+  nyxAaRRRing(s, 14, top, SCR_W-28, 14, 4, T().text);
   int ramFillW = constrain((SCR_W-28-4)*ramPct/100, 0, SCR_W-28-4);
-  if(ramFillW>0) s.fillRoundRect(16, top+2, ramFillW, 10, 3, hwmonLoadColor(ramPct));
+  if(ramFillW>0) nyxAaRR(s, 16, top+2, ramFillW, 10, 3, hwmonLoadColor(ramPct));
   top += 22;
 
   // v60: "Blok Terbesar" -- BEDA dari "RAM Internal" di atas (yg itu
@@ -19040,9 +19043,9 @@ void drawHwmon(LGFX_Sprite& s){
     s.setTextColor(hwmonLoadColor(psPct)); s.setCursor(SCR_W-14-pw2, top);
     s.print(psBuf);
     top += 12;
-    s.drawRoundRect(14, top, SCR_W-28, 14, 4, T().text);
+    nyxAaRRRing(s, 14, top, SCR_W-28, 14, 4, T().text);
     int psFillW = constrain((SCR_W-28-4)*psPct/100, 0, SCR_W-28-4);
-    if(psFillW>0) s.fillRoundRect(16, top+2, psFillW, 10, 3, hwmonLoadColor(psPct));
+    if(psFillW>0) nyxAaRR(s, 16, top+2, psFillW, 10, 3, hwmonLoadColor(psPct));
     top += 22;
   } else {
     s.setTextColor(T().subtext); s.setCursor(14, top);

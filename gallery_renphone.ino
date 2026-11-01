@@ -1090,7 +1090,7 @@ static void galDrawThumb(LGFX_Sprite& s, int x, int y, int slot, uint8_t kind) {
       galFadeActive = true;
     }
   } else {
-    s.fillRoundRect(x, y, GAL_THUMB, GAL_THUMB, 6, T().surface2);
+    nyxAaRR(s, x, y, GAL_THUMB, GAL_THUMB, 6, T().surface2);
     int cx = x + GAL_THUMB / 2, cy = y + GAL_THUMB / 2;
     uint16_t ic = T().subtext;
     if (slot >= 0 && galSlotState[slot] == 2) {            // gagal didecode
@@ -1100,12 +1100,12 @@ static void galDrawThumb(LGFX_Sprite& s, int x, int y, int slot, uint8_t kind) {
     } else {
       s.fillTriangle(cx - 14, cy + 10, cx - 4, cy - 6, cx + 6, cy + 10, ic);
       s.fillTriangle(cx - 2, cy + 10, cx + 6, cy - 2, cx + 14, cy + 10, ic);
-      s.fillCircle(cx + 8, cy - 8, 3, ic);
+      nyxAaCircle(s, cx + 8, cy - 8, 3, ic);
     }
   }
   if (kind == 2) {                                          // lencana video
     int bx = x + 12, by = y + GAL_THUMB - 12;
-    s.fillCircle(bx, by, 9, 0x0000);
+    nyxAaCircle(s, bx, by, 9, 0x0000);
     s.fillTriangle(bx - 3, by - 5, bx - 3, by + 5, bx + 5, by, 0xFFFF);
   }
 }
@@ -1169,7 +1169,7 @@ static void galDrawAlbums(LGFX_Sprite& s) {
     int trackH = galBot - galTop;
     int th = trackH * trackH / (trackH + ms); if (th < 10) th = 10;
     int ty = galTop + (int)((float)(trackH - th) * galScrollY / (float)ms);
-    s.fillRoundRect(SCR_W - 3, ty, 2, th, 1, T().divider);
+    nyxAaRR(s, SCR_W - 3, ty, 2, th, 1, T().divider);
   }
 }
 
@@ -1210,7 +1210,7 @@ static void galDrawGrid(LGFX_Sprite& s) {
     int trackH = galBot - galTop;
     int th = trackH * trackH / (trackH + ms); if (th < 10) th = 10;
     int ty = galTop + (int)((float)(trackH - th) * galScrollY / (float)ms);
-    s.fillRoundRect(SCR_W - 3, ty, 2, th, 1, T().divider);
+    nyxAaRR(s, SCR_W - 3, ty, 2, th, 1, T().divider);
   }
 }
 
@@ -1248,7 +1248,7 @@ static void galDrawViewer(LGFX_Sprite& s) {
   if (galViewPending) {
     const char* m = "Memuat...";
     int mw = s.textWidth(m);
-    s.fillRoundRect(SCR_W / 2 - mw / 2 - 8, SCR_H / 2 - 12, mw + 16, 22, 8, 0x1082);
+    nyxAaRR(s, SCR_W / 2 - mw / 2 - 8, SCR_H / 2 - 12, mw + 16, 22, 8, 0x1082);
     s.setTextColor(0xFFFF);
     s.setCursor(SCR_W / 2 - mw / 2, SCR_H / 2 - 4); s.print(m);
   }
@@ -1271,10 +1271,10 @@ static void galDrawViewer(LGFX_Sprite& s) {
     if (galItemCount > 1) {
       int cy = SCR_H / 2;
       uint16_t bg = 0x1082, fg = 0xFFFF;
-      s.fillCircle(16, cy, 13, bg);
+      nyxAaCircle(s, 16, cy, 13, bg);
       s.drawLine(19, cy - 6, 13, cy, fg); s.drawLine(13, cy, 19, cy + 6, fg);
       s.drawLine(20, cy - 6, 14, cy, fg); s.drawLine(14, cy, 20, cy + 6, fg);
-      s.fillCircle(SCR_W - 16, cy, 13, bg);
+      nyxAaCircle(s, SCR_W - 16, cy, 13, bg);
       s.drawLine(SCR_W - 19, cy - 6, SCR_W - 13, cy, fg); s.drawLine(SCR_W - 13, cy, SCR_W - 19, cy + 6, fg);
       s.drawLine(SCR_W - 20, cy - 6, SCR_W - 14, cy, fg); s.drawLine(SCR_W - 14, cy, SCR_W - 20, cy + 6, fg);
     }

@@ -185,7 +185,7 @@ void drawNotifShade(LGFX_Sprite& s){
   if(ph<=0) return;
   int rad=min(22,ph/2); if(rad<0) rad=0;
   drawGlassPanel(s, 0,0,SCR_W,ph,rad, T().surface, 200);
-  s.fillRoundRect(SCR_W/2-14,ph-9,28,4,2,T().divider);
+  nyxAaRR(s, SCR_W/2-14,ph-9,28,4,2,T().divider);
 
   s.setTextColor(T().text); s.setTextSize(1);
   s.setCursor(10,8); s.print("Notifikasi");
@@ -217,7 +217,7 @@ void drawNotifShade(LGFX_Sprite& s){
       // pola baru.
       if(n.hasLink){
         bool pressed=(nsPressedRow==i);
-        s.drawCircle(cx,cy,iconR+3, pressed? T().accent : T().divider);
+        nyxAaCircleRing(s, cx,cy,iconR+3, pressed? T().accent : T().divider);
       }
       drawAppIcon(s, n.icon, cx, cy, iconR, n.color); // pola sama persis dgn ikon di pil DI
 
@@ -246,13 +246,13 @@ void drawNotifShade(LGFX_Sprite& s){
       int totalH = notifHistCount*NS_ROW_H;
       int thumbH = max(14, trackH*(trackH)/totalH);
       int thumbY = rowTop + (int)((trackH-thumbH)*(nsScrollY/(float)maxS));
-      s.fillRoundRect(SCR_W-5, rowTop, 2, trackH, 1, T().divider);
-      s.fillRoundRect(SCR_W-5, thumbY, 2, thumbH, 1, T().subtext);
+      nyxAaRR(s, SCR_W-5, rowTop, 2, trackH, 1, T().divider);
+      nyxAaRR(s, SCR_W-5, thumbY, 2, thumbH, 1, T().subtext);
     }
   }
 
   int btnY=ph-32, btnH=24;
-  s.fillRoundRect(10,btnY,SCR_W-20,btnH,10,T().surface2);
+  nyxAaRR(s, 10,btnY,SCR_W-20,btnH,10,T().surface2);
   s.setTextColor(T().danger); s.setTextSize(1);
   const char* clearLbl="Bersihkan Semua";
   int clw=s.textWidth(clearLbl);

@@ -2700,9 +2700,9 @@ void drawCallBanner(LGFX_Sprite& s) {
   callLock(); callCopy(pe, sizeof(pe), callPeer); callUnlock();
   iosRR(s, x + 1, y + 3, w, h, 14, blend565(T().bg, 0x0000, 150));          // bayangan
   iosRR(s, x, y, w, h, 14, T().surface2);
-  s.drawRoundRect(x, y, w, h, 14, blend565(T().surface2, T().text, 46));    // garis tipis
+  nyxAaRRRing(s, x, y, w, h, 14, blend565(T().surface2, T().text, 46));    // garis tipis
   int ax = x + 8 + 13, ay = y + h / 2;
-  s.fillCircle(ax, ay, 13, T().accent);
+  nyxAaCircle(s, ax, ay, 13, T().accent);
   char ini[2] = { pe[0] ? (char)toupper((unsigned char)pe[0]) : '?', 0 };
   s.setTextSize(2); s.setTextColor(T().bg); s.setCursor(ax - 5, ay - 7); s.print(ini);
   int btnW = 50, gap = 6, bx2 = x + w - 8 - btnW, bx1 = bx2 - gap - btnW;
@@ -2866,9 +2866,9 @@ static void callDrawInCall(LGFX_Sprite& s) {
   callCenter(s, 0, SCR_W, cy + 78, callAudioOut ? "Audio: TWS" : "Tanpa audio keluar (TWS?)");
   if (ph == CPH_ACTIVE) {                                      // meter mic kecil
     int bw = SCR_W - 80, bx = 40, by = cy + 94;
-    s.drawRoundRect(bx, by, bw, 6, 3, T().subtext);
+    nyxAaRRRing(s, bx, by, bw, 6, 3, T().subtext);
     int fw = (bw - 2) * callMicLvl / 100;
-    if (fw > 0) s.fillRoundRect(bx + 1, by + 1, fw, 4, 2, callMuted ? (uint16_t)T().danger : (uint16_t)T().good);
+    if (fw > 0) nyxAaRR(s, bx + 1, by + 1, fw, 4, 2, callMuted ? (uint16_t)T().danger : (uint16_t)T().good);
   }
   int by = callBtnY(), bh = 36;
   if (ph == CPH_INCOMING) {
@@ -2973,7 +2973,7 @@ static void callDrawCfg(LGFX_Sprite& s) {
   s.setTextColor(T().text); s.setCursor(12, ty + 5); s.print("Siaga terima panggilan");
   int sx = SCR_W - 40;
   iosRR(s, sx, ty + 3, 28, 12, 6, callStandby ? (uint16_t)T().good : (uint16_t)T().surface2);
-  s.fillCircle(callStandby ? sx + 22 : sx + 6, ty + 9, 4, T().text);
+  nyxAaCircle(s, callStandby ? sx + 22 : sx + 6, ty + 9, 4, T().text);
   int by = ty + 22;
   bool sdCfg = sdReady && SD_MMC.exists("/sip.cfg");
   int saveW = sdCfg ? (SCR_W - 12) * 6 / 10 : (SCR_W - 12);
@@ -3014,7 +3014,7 @@ void drawCall(LGFX_Sprite& s) {
   // header
   s.setTextColor(T().accent); s.setCursor(8, 26); s.print("Telepon");
   char rt[40]; uint16_t rc; callRegText(rt, sizeof(rt), &rc);
-  s.fillCircle(62, 30, 3, rc);
+  nyxAaCircle(s, 62, 30, 3, rc);
   String rs = rt; int maxSt = (SCR_W - 70 - 58) / 6;
   if ((int)rs.length() > maxSt) rs = rs.substring(0, maxSt);
   s.setTextColor(T().subtext); s.setCursor(70, 26); s.print(rs.c_str());

@@ -805,6 +805,111 @@ void nyxSkeleton(LGFX_Sprite& s, int kind) {
 }
 
 // =====================================================================
+//  6. BENTUK ANTI-ALIAS (lingkaran, persegi membulat, cincin)
+//     Dipakai menggantikan s.fillCircle / fillRoundRect / drawCircle / drawRoundRect
+//     (apply_nyx_aa_patch.py menulis ulang pemanggilnya). Hanya piksel di tepi yang
+//     dicampur dgn latar (readPixel), bagian dalam tetap digambar lewat drawFastHLine/
+//     fillRect biasa -> murah. Hanya untuk sprite (canvas), bukan langsung ke panel.
+// =====================================================================
+// ---- NYX-AA-BEGIN
+static inline void nyxAaPx(lgfx::LGFXBase& g, int x, int y, uint16_t col, float cov) {
+  if (cov <= 0.03f) return;
+  if (x < 0 || y < 0 || x >= g.width() || y >= g.height()) return;
+  if (cov >= 0.97f) { g.drawPixel(x, y, col); return; }
+  uint16_t bg = (uint16_t)g.readPixel(x, y);
+  g.drawPixel(x, y, blend565(bg, col, (uint8_t)(cov * 255.0f)));
+}
+
+// seperempat lingkaran terisi. Pusat (cx,cy), arah (sx,sy) = +1/-1, i0/j0 = mulai dari 0 atau 1
+// (sumbu dimiliki satu kuadran saja supaya tidak dicampur dua kali).
+static void nyxAaQuadFill(lgfx::LGFXBase& g, int cx, int cy, int sx, int sy, int r, int i0, int j0, uint16_t col) {
+  const float inR = (float)r - 0.15f, outR = (float)r + 0.85f;
+  for (int j = j0; j <= r; j++) {
+    float a = inR * inR - (float)(j * j);
+    int xin = a >= 0.0f ? (int)floorf(sqrtf(a)) : -1;                 // i <= xin: pasti di dalam
+    float b = outR * outR - (float)(j * j);
+    if (b < 0.0f) continue;
+    int xout = (int)floorf(sqrtf(b));
+    int y = cy + sy * j;
+    if (xin >= i0) {
+      int xa = cx + sx * i0, xb = cx + sx * xin;
+      g.drawFastHLine(xa < xb ? xa : xb, y, xin - i0 + 1, col);
+    }
+    for (int i = (xin + 1 > i0 ? xin + 1 : i0); i <= xout; i++) {
+      float d = sqrtf((float)(i * i + j * j));
+      nyxAaPx(g, cx + sx * i, y, col, outR - d);
+    }
+  }
+}
+
+// seperempat cincin 1 px (garis tepi)
+static void nyxAaQuadRing(lgfx::LGFXBase& g, int cx, int cy, int sx, int sy, int r, int i0, int j0, uint16_t col) {
+  for (int j = j0; j <= r + 1; j++) {
+    float lo2 = (float)((r - 1) * (r - 1) - j * j);
+    float lo = lo2 > 0.0f ? sqrtf(lo2) : 0.0f;
+    float hi2 = (float)((r + 1) * (r + 1) - j * j);
+    if (hi2 < 0.0f) continue;
+    float hi = sqrtf(hi2);
+    int ia = (int)floorf(lo); if (ia < i0) ia = i0;
+    int ib = (int)ceilf(hi);
+    for (int i = ia; i <= ib; i++) {
+      float d = sqrtf((float)(i * i + j * j));
+      nyxAaPx(g, cx + sx * i, cy + sy * j, col, 1.0f - fabsf(d - (float)r));
+    }
+  }
+}
+
+void nyxAaCircle(lgfx::LGFXBase& g, int cx, int cy, int r, uint16_t col) {
+  if (r <= 1) { g.fillCircle(cx, cy, r, col); return; }
+  nyxAaQuadFill(g, cx, cy, +1, +1, r, 0, 0, col);
+  nyxAaQuadFill(g, cx, cy, -1, +1, r, 1, 0, col);
+  nyxAaQuadFill(g, cx, cy, +1, -1, r, 0, 1, col);
+  nyxAaQuadFill(g, cx, cy, -1, -1, r, 1, 1, col);
+}
+
+void nyxAaCircleRing(lgfx::LGFXBase& g, int cx, int cy, int r, uint16_t col) {
+  if (r <= 2) { g.drawCircle(cx, cy, r, col); return; }
+  nyxAaQuadRing(g, cx, cy, +1, +1, r, 0, 0, col);
+  nyxAaQuadRing(g, cx, cy, -1, +1, r, 1, 0, col);
+  nyxAaQuadRing(g, cx, cy, +1, -1, r, 0, 1, col);
+  nyxAaQuadRing(g, cx, cy, -1, -1, r, 1, 1, col);
+}
+
+void nyxAaRR(lgfx::LGFXBase& g, int x, int y, int w, int h, int r, uint16_t col) {
+  if (w <= 0 || h <= 0) return;
+  int rm = (w < h ? w : h) / 2;
+  if (r > rm) r = rm;
+  if (r <= 1) { g.fillRoundRect(x, y, w, h, r < 0 ? 0 : r, col); return; }
+  g.fillRect(x + r, y, w - 2 * r, h, col);                    // pita tengah penuh tinggi
+  if (h - 2 * r > 0) {
+    g.fillRect(x, y + r, r, h - 2 * r, col);                  // sisi kiri
+    g.fillRect(x + w - r, y + r, r, h - 2 * r, col);          // sisi kanan
+  }
+  nyxAaQuadFill(g, x + r,         y + r,         -1, -1, r, 1, 1, col);
+  nyxAaQuadFill(g, x + w - 1 - r, y + r,         +1, -1, r, 1, 1, col);
+  nyxAaQuadFill(g, x + r,         y + h - 1 - r, -1, +1, r, 1, 1, col);
+  nyxAaQuadFill(g, x + w - 1 - r, y + h - 1 - r, +1, +1, r, 1, 1, col);
+}
+
+void nyxAaRRRing(lgfx::LGFXBase& g, int x, int y, int w, int h, int r, uint16_t col) {
+  if (w <= 0 || h <= 0) return;
+  int rm = (w < h ? w : h) / 2;
+  if (r > rm) r = rm;
+  if (r <= 2) { g.drawRoundRect(x, y, w, h, r < 0 ? 0 : r, col); return; }
+  g.drawFastHLine(x + r, y, w - 2 * r, col);
+  g.drawFastHLine(x + r, y + h - 1, w - 2 * r, col);
+  if (h - 2 * r > 0) {
+    g.drawFastVLine(x, y + r, h - 2 * r, col);
+    g.drawFastVLine(x + w - 1, y + r, h - 2 * r, col);
+  }
+  nyxAaQuadRing(g, x + r,         y + r,         -1, -1, r, 1, 1, col);
+  nyxAaQuadRing(g, x + w - 1 - r, y + r,         +1, -1, r, 1, 1, col);
+  nyxAaQuadRing(g, x + r,         y + h - 1 - r, -1, +1, r, 1, 1, col);
+  nyxAaQuadRing(g, x + w - 1 - r, y + h - 1 - r, +1, +1, r, 1, 1, col);
+}
+// ---- NYX-AA-END
+
+// =====================================================================
 //  POLL UTAMA (dipanggil tiap loop())
 // =====================================================================
 void nyxExtrasLoopPoll() {

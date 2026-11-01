@@ -70,7 +70,7 @@ void drawPowerMenu(LGFX_Sprite& s) {
     int bx = px + 12, by = py + 34 + i * (bh + gap), bw = pw - 24;
     uint16_t c = bg[i];
     if (pwrPress == i) c = blend565(c, 0xFFFF, 70);                 // feedback tekan
-    s.fillRoundRect(bx, by, bw, bh, 12, c);
+    nyxAaRR(s, bx, by, bw, bh, 12, c);
     s.setTextColor(i == 2 ? T().text : appIconInk(bg[i]));
     s.setCursor(bx + bw / 2 - s.textWidth(lbl[i]) / 2, by + bh / 2 - 4);
     s.print(lbl[i]);

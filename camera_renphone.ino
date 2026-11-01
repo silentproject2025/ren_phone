@@ -549,7 +549,7 @@ static bool camDrawJpeg(LGFX_Sprite& s, const uint8_t* d, uint32_t n) {
 
 static void camTextC(LGFX_Sprite& s, const char* t, int cx, int y) { int w = s.textWidth(t); s.setCursor(cx - w / 2, y); s.print(t); }
 static void camBtn(LGFX_Sprite& s, int x, int y, int w, int h, const char* label, bool on) {
-  s.fillRoundRect(x, y, w, h, 6, on ? (uint16_t)T().accent : (uint16_t)0x2104);
+  nyxAaRR(s, x, y, w, h, 6, on ? (uint16_t)T().accent : (uint16_t)0x2104);
   s.setTextColor(on ? (uint16_t)TFT_BLACK : (uint16_t)TFT_WHITE);
   camTextC(s, label, x + w / 2, y + (h - 8) / 2);
 }
@@ -593,16 +593,16 @@ static void camDrawMain(LGFX_Sprite& s) {
   int cx = CAM_RAIL_X + 27, cy = 112;
   bool busy = camRec || camMotionOn || camShotPending || camCdUntil;
   uint16_t sc = (camRec || camMotionOn) ? (uint16_t)T().danger : (uint16_t)TFT_WHITE;
-  s.fillCircle(cx, cy, 26, 0x2104);
-  s.drawCircle(cx, cy, 25, sc); s.drawCircle(cx, cy, 24, sc);
-  if (camRec) s.fillRoundRect(cx - 9, cy - 9, 18, 18, 3, sc);
-  else if (camMotionOn) { s.fillCircle(cx, cy, 10, sc); }
-  else if (busy) { s.drawCircle(cx, cy, 14, sc); }
-  else s.fillCircle(cx, cy, 17, camMode == 0 ? (uint16_t)TFT_WHITE : (uint16_t)T().danger);
+  nyxAaCircle(s, cx, cy, 26, 0x2104);
+  nyxAaCircleRing(s, cx, cy, 25, sc); nyxAaCircleRing(s, cx, cy, 24, sc);
+  if (camRec) nyxAaRR(s, cx - 9, cy - 9, 18, 18, 3, sc);
+  else if (camMotionOn) { nyxAaCircle(s, cx, cy, 10, sc); }
+  else if (busy) { nyxAaCircleRing(s, cx, cy, 14, sc); }
+  else nyxAaCircle(s, cx, cy, 17, camMode == 0 ? (uint16_t)TFT_WHITE : (uint16_t)T().danger);
   camBtn(s, CAM_RAIL_X + 4, 154, 46, 26, camCfg.flash == 0 ? "Flash" : (camCfg.flash == 3 ? "Kilat" : "Senter"), camCfg.flash != 0);
   camBtn(s, CAM_RAIL_X + 4, 186, 46, 26, "Atur", false);
   // kiri atas: back + HUD
-  s.fillRoundRect(4, 4, 30, 22, 6, 0x2104); s.setTextColor(TFT_WHITE); camTextC(s, "<", 19, 11);
+  nyxAaRR(s, 4, 4, 30, 22, 6, 0x2104); s.setTextColor(TFT_WHITE); camTextC(s, "<", 19, 11);
   if (camCfg.hud && camOpened) {
     char h[64]; uint8_t pc = camPrvCode();
     snprintf(h, sizeof(h), "%s %lu.%lufps %luK%s", CAM_RES_NAME[pc], (unsigned long)(camFpsShow10 / 10), (unsigned long)(camFpsShow10 % 10), (unsigned long)camLastFrameKb,
@@ -618,12 +618,12 @@ static void camDrawMain(LGFX_Sprite& s) {
     uint32_t sec = (now - camRecStartMs) / 1000; char r[48];
     if (camLapse) snprintf(r, sizeof(r), "LAPSE %lu f", (unsigned long)camAvi.frames);
     else snprintf(r, sizeof(r), "REC %02lu:%02lu  %luK", (unsigned long)(sec / 60), (unsigned long)(sec % 60), (unsigned long)(camRecBytes / 1024));
-    s.fillRoundRect(CAM_RAIL_X / 2 - 50, 4, 100, 18, 6, T().danger); s.setTextColor(TFT_WHITE); camTextC(s, r, CAM_RAIL_X / 2, 9);
+    nyxAaRR(s, CAM_RAIL_X / 2 - 50, 4, 100, 18, 6, T().danger); s.setTextColor(TFT_WHITE); camTextC(s, r, CAM_RAIL_X / 2, 9);
   } else if (camMotionOn) {
     char r[40]; snprintf(r, sizeof(r), "GERAK AKTIF  %d", camMotCount);
-    s.fillRoundRect(CAM_RAIL_X / 2 - 60, 4, 120, 18, 6, T().danger); s.setTextColor(TFT_WHITE); camTextC(s, r, CAM_RAIL_X / 2, 9);
+    nyxAaRR(s, CAM_RAIL_X / 2 - 60, 4, 120, 18, 6, T().danger); s.setTextColor(TFT_WHITE); camTextC(s, r, CAM_RAIL_X / 2, 9);
   } else if (camShotPending) {
-    s.fillRoundRect(CAM_RAIL_X / 2 - 50, 4, 100, 18, 6, 0x2104); s.setTextColor(TFT_WHITE); camTextC(s, "Mengambil foto...", CAM_RAIL_X / 2, 9);
+    nyxAaRR(s, CAM_RAIL_X / 2 - 50, 4, 100, 18, 6, 0x2104); s.setTextColor(TFT_WHITE); camTextC(s, "Mengambil foto...", CAM_RAIL_X / 2, 9);
   }
   if (camCdUntil) {
     int left = (int)((camCdUntil - now + 999) / 1000); char b[8]; snprintf(b, sizeof(b), "%d", left < 0 ? 0 : left);
@@ -725,16 +725,16 @@ static void camDrawSettings(LGFX_Sprite& s) {
   iosBackdrop(s);
   s.setTextWrap(false); s.setTextSize(1);
   s.setTextColor(T().accent); s.setCursor(10, 8); s.print("Pengaturan Kamera");
-  s.fillRoundRect(SCR_W - 54, 4, 48, 22, 6, T().accent); s.setTextColor(TFT_BLACK); camTextC(s, "Selesai", SCR_W - 30, 11);
+  nyxAaRR(s, SCR_W - 54, 4, 48, 22, 6, T().accent); s.setTextColor(TFT_BLACK); camTextC(s, "Selesai", SCR_W - 30, 11);
   for (int t = 0; t < 4; t++) {
     int x = 8 + t * 76; bool on = (t == camTab);
-    s.fillRoundRect(x, 28, 72, 17, 6, on ? (uint16_t)T().accent : (uint16_t)T().surface);
+    nyxAaRR(s, x, 28, 72, 17, 6, on ? (uint16_t)T().accent : (uint16_t)T().surface);
     s.setTextColor(on ? (uint16_t)TFT_BLACK : (uint16_t)T().text); camTextC(s, CAM_TAB_NAME[t], x + 36, 33);
   }
   int y = CAM_SET_Y0;
   for (int i = 0; i < 8; i++) {
     int r = CAM_TAB_ROWS[camTab][i]; if (r < 0) break;
-    s.fillRoundRect(8, y, SCR_W - 16, CAM_SET_RH - 3, 6, T().surface);
+    nyxAaRR(s, 8, y, SCR_W - 16, CAM_SET_RH - 3, 6, T().surface);
     s.setTextColor(T().text); s.setCursor(16, y + 8); s.print(CAM_ROW_LABEL[r]);
     if (r == 24) { s.setTextColor(T().danger); s.setCursor(SCR_W - 70, y + 8); s.print("Tekan"); }
     else {

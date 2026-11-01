@@ -1134,13 +1134,13 @@ static void ebkDrawMenu(LGFX_Sprite& s, int palIdx) {
   }
   // panel bawah
   int py = ebkPanelY();
-  s.fillRoundRect(4, py, SCR_W - 8, EBK_PANEL_H, 10, panel);
+  nyxAaRR(s, 4, py, SCR_W - 8, EBK_PANEL_H, 10, panel);
   int x0 = ebkSliderX0(), x1 = ebkSliderX1(), sy = ebkSliderY();
-  s.fillRoundRect(x0, sy - 2, x1 - x0, 4, 2, line);
+  nyxAaRR(s, x0, sy - 2, x1 - x0, 4, 2, line);
   float f = ebkPgN > 1 ? (float)ebkPage / (float)(ebkPgN - 1) : 0.0f;
   int kx = x0 + (int)((x1 - x0) * f);
-  s.fillRoundRect(x0, sy - 2, kx - x0, 4, 2, pal.head);
-  s.fillCircle(kx, sy, 6, pal.head);
+  nyxAaRR(s, x0, sy - 2, kx - x0, 4, 2, pal.head);
+  nyxAaCircle(s, kx, sy, 6, pal.head);
   char info[64];
   if (ebkBook.kind == EB_KIND_EPUB)
     snprintf(info, sizeof(info), "Bab %d/%d   Hal %u/%u   %d%%", ebkBook.curCh + 1, ebBookChapters(&ebkBook), (unsigned)ebkPage + 1, (unsigned)ebkPgN, ebkPercent());
@@ -1151,7 +1151,7 @@ static void ebkDrawMenu(LGFX_Sprite& s, int palIdx) {
   const char* lb[4] = { "Isi", "Aa", "Tema", "Tutup" };
   for (int i = 0; i < 4; i++) {
     int bx = ebkBtnX(0, i), by = ebkBtnY(0), bw = ebkBtnW(0);
-    s.fillRoundRect(bx, by, bw, 26, 8, i == 3 ? blend565(pal.bg, 0xF800, 110) : line);
+    nyxAaRR(s, bx, by, bw, 26, 8, i == 3 ? blend565(pal.bg, 0xF800, 110) : line);
     s.setTextColor(pal.text);
     s.setCursor(bx + (bw - s.textWidth(lb[i])) / 2, by + 9); s.print(lb[i]);
   }
@@ -1161,7 +1161,7 @@ static void ebkDrawMenu(LGFX_Sprite& s, int palIdx) {
   const char* l2p[2] = { l1, l2 };
   for (int i = 0; i < 2; i++) {
     int bx = ebkBtnX(1, i), by = ebkBtnY(1), bw = ebkBtnW(1);
-    s.fillRoundRect(bx, by, bw, 26, 8, line);
+    nyxAaRR(s, bx, by, bw, 26, 8, line);
     s.setTextColor(pal.text);
     s.setCursor(bx + (bw - s.textWidth(l2p[i])) / 2, by + 9); s.print(l2p[i]);
   }
@@ -1233,7 +1233,7 @@ static void ebkDrawCover(LGFX_Sprite& s, int x, int y, int libIdx) {
   uint16_t* px = e.cover ? ebkCvGet(e.key) : nullptr;
   if (px) { s.pushImage(x, y, EBK_CV_W, EBK_CV_H, (lgfx::swap565_t*)px); return; }
   static const uint16_t cols[6] = { 0x3A8B, 0xB2A5, 0x4D8A, 0x8B4F, 0xC5A3, 0x5B2D };
-  s.fillRoundRect(x, y, EBK_CV_W, EBK_CV_H, 4, cols[e.key % 6]);
+  nyxAaRR(s, x, y, EBK_CV_W, EBK_CV_H, 4, cols[e.key % 6]);
   char t[EBK_TITLE_LEN]; ebkEntryTitle(libIdx, t, sizeof(t));
   char ch[2] = { t[0] >= 'a' && t[0] <= 'z' ? (char)(t[0] - 32) : (t[0] ? t[0] : '?'), 0 };
   s.setTextSize(2); s.setTextColor(0xFFFF);
@@ -1252,7 +1252,7 @@ static void ebkDrawLibrary(LGFX_Sprite& s) {
   // ---- kepala: cari / urut ----
   uint16_t chip = blend565(T().bg, T().text, 28);
   if (ebkQueryBox()) {
-    s.fillRoundRect(84, 29, SCR_W - 84 - 10, 20, 10, chip);
+    nyxAaRR(s, 84, 29, SCR_W - 84 - 10, 20, 10, chip);
     char q[44]; strncpy(q, ebkQuery.c_str(), sizeof(q) - 1); q[sizeof(q) - 1] = 0;
     ebkFitText(s, q, SCR_W - 84 - 10 - 40);
     s.setTextColor(q[0] ? T().text : T().subtext);
@@ -1260,13 +1260,13 @@ static void ebkDrawLibrary(LGFX_Sprite& s) {
     s.setTextColor(T().subtext); s.setCursor(SCR_W - 10 - 16, 35); s.print("x");
   } else {
     int sx = SCR_W - 10 - EBK_SORT_W;
-    s.fillRoundRect(sx, 29, EBK_SORT_W, 20, 10, chip);
+    nyxAaRR(s, sx, 29, EBK_SORT_W, 20, 10, chip);
     const char* sn = ebkSortNames[ebkSortMode];
     s.setTextColor(T().text); s.setCursor(sx + (EBK_SORT_W - s.textWidth(sn)) / 2, 35); s.print(sn);
     int bx = sx - 6 - 28;
-    s.fillRoundRect(bx, 29, 28, 20, 10, chip);
-    s.fillCircle(bx + 12, 38, 5, T().text); s.fillCircle(bx + 12, 38, 3, chip);          // kaca pembesar
-    for (int k = 0; k < 4; k++) s.fillCircle(bx + 16 + k, 42 + k - 1, 1, T().text);
+    nyxAaRR(s, bx, 29, 28, 20, 10, chip);
+    nyxAaCircle(s, bx + 12, 38, 5, T().text); nyxAaCircle(s, bx + 12, 38, 3, chip);          // kaca pembesar
+    for (int k = 0; k < 4; k++) nyxAaCircle(s, bx + 16 + k, 42 + k - 1, 1, T().text);
   }
   int pend = ebkJobsPending();
   if (pend > 0 && ebkEpubTotal() > 0) {
@@ -1307,7 +1307,7 @@ static void ebkDrawLibrary(LGFX_Sprite& s) {
       s.setTextColor(T().subtext); s.setCursor(tx, ry + 36); s.print(info);
       if (e.pct == 100) {
         int pw = s.textWidth("Selesai") + 10;
-        s.fillRoundRect(SCR_W - 12 - pw, ry + 5, pw, 15, 7, T().accent);
+        nyxAaRR(s, SCR_W - 12 - pw, ry + 5, pw, 15, 7, T().accent);
         s.setTextColor(0xFFFF); s.setCursor(SCR_W - 12 - pw + 5, ry + 9); s.print("Selesai");
       } else if (e.pct > 0) {
         char pc[8]; snprintf(pc, sizeof(pc), "%u%%", (unsigned)e.pct);
@@ -1325,7 +1325,7 @@ static void ebkDrawLibrary(LGFX_Sprite& s) {
       int th = view * view / contentH; if (th < 12) th = 12;
       int mx = contentH - view;
       int ty = top + (int)((view - th) * (ebkScroll / (float)mx));
-      s.fillRoundRect(SCR_W - 4, ty, 2, th, 1, blend565(T().bg, T().text, 90));
+      nyxAaRR(s, SCR_W - 4, ty, 2, th, 1, blend565(T().bg, T().text, 90));
     }
   }
   if (kbVisible && kbTarget == &ebkQuery) drawKb(s); else drawBack(s);
@@ -1359,7 +1359,7 @@ static void ebkDrawToc(LGFX_Sprite& s) {
   for (int i = 0; i < n; i++) {
     int ry = y0 + i * EBK_TOC_ROW_H;
     if (ry + EBK_TOC_ROW_H < top || ry > bot) continue;
-    if (i == cur) s.fillRoundRect(6, ry + 1, SCR_W - 12, EBK_TOC_ROW_H - 2, 6, blend565(T().bg, T().accent, 70));
+    if (i == cur) nyxAaRR(s, 6, ry + 1, SCR_W - 12, EBK_TOC_ROW_H - 2, 6, blend565(T().bg, T().accent, 70));
     char t[96]; ebkFold(ebPoolStr(&ebkBook, ebkBook.toc[i].titleOff), t, sizeof(t));
     ebkFitText(s, t, SCR_W - 28);
     s.setTextColor(i == cur ? T().text : T().subtext);

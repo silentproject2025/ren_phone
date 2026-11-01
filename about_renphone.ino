@@ -214,12 +214,12 @@ void drawAbout(LGFX_Sprite& s) {
   if (ownerHasAvatar()) {
     ownerDrawAvatar(s, lx, ly, lr + 4);              // foto pemilik menggantikan logo
   } else {
-    s.fillCircle(lx, ly, lr, T().bg);
-    s.drawCircle(lx, ly, lr, T().accent);
-    s.drawCircle(lx, ly, lr - 3, T().accent2);
-    s.fillCircle(lx, ly, 5, T().bg);
+    nyxAaCircle(s, lx, ly, lr, T().bg);
+    nyxAaCircleRing(s, lx, ly, lr, T().accent);
+    nyxAaCircleRing(s, lx, ly, lr - 3, T().accent2);
+    nyxAaCircle(s, lx, ly, 5, T().bg);
     s.fillEllipse(lx, ly, lr + 4, 3, T().accent);   // cincin miring
-    s.fillCircle(lx, ly, 4, T().bg);
+    nyxAaCircle(s, lx, ly, 4, T().bg);
   }
 
   int tx = lx + lr + 12;
@@ -254,7 +254,7 @@ void drawAbout(LGFX_Sprite& s) {
     int trackH = bot - top;
     int thumbH = trackH * trackH / (trackH + aboutMaxScroll); if (thumbH < 12) thumbH = 12;
     int thumbY = top + (int)((trackH - thumbH) * (aboutScroll / (float)aboutMaxScroll));
-    s.fillRoundRect(SCR_W - 4, thumbY, 2, thumbH, 1, blend565(T().bg, T().text, 90));
+    nyxAaRR(s, SCR_W - 4, thumbY, 2, thumbH, 1, blend565(T().bg, T().text, 90));
   }
 
   drawBack(s);

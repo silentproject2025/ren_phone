@@ -284,11 +284,11 @@ void drawSw(LGFX_Sprite& s) {
     }
 
     int barY = timeY + 8 * ts + 10, barX = 16, barW = SCR_W - 32;
-    s.fillRoundRect(barX, barY, barW, 6, 3, blend565(T().surface, 0xFFFF, 45));
+    nyxAaRR(s, barX, barY, barW, 6, 3, blend565(T().surface, 0xFFFF, 45));
     float p = tmTotal ? 1.0f - (float)tmRemain / (float)tmTotal : 0.0f;
     if (p < 0) p = 0; if (p > 1) p = 1;
     int fw = (int)(barW * p);
-    if (fw > 0) s.fillRoundRect(barX, barY, max(fw, 6), 6, 3, tmRinging ? T().danger : T().accent);
+    if (fw > 0) nyxAaRR(s, barX, barY, max(fw, 6), 6, 3, tmRinging ? T().danger : T().accent);
 
     // chip penyesuaian durasi (cuma aktif saat belum jalan)
     const char* chipLb[4] = {"-1m", "+1m", "-10s", "+10s"};
@@ -641,13 +641,13 @@ void drawMemo(LGFX_Sprite& s) {
   if (busyRec) {
     float pulse = 0.5f + 0.5f * sinf(millis() / 220.0f);
     int pr = mlRecR + 3 + (int)(4.0f * pulse);
-    s.drawCircle(mlRecCx, mlRecCy, pr, blend565(T().bg, red, 140));
-    s.drawCircle(mlRecCx, mlRecCy, pr + 1, blend565(T().bg, red, 70));
+    nyxAaCircleRing(s, mlRecCx, mlRecCy, pr, blend565(T().bg, red, 140));
+    nyxAaCircleRing(s, mlRecCx, mlRecCy, pr + 1, blend565(T().bg, red, 70));
   }
   drawGlassCircle(s, mlRecCx, mlRecCy, mlRecR + 4, T().surface, 150);
-  s.fillCircle(mlRecCx, mlRecCy, mlRecR - 4, busyRec ? T().danger : red);
-  if (busyRec) s.fillRoundRect(mlRecCx - 9, mlRecCy - 9, 18, 18, 4, 0xFFFF);   // ikon stop
-  else         s.fillCircle(mlRecCx, mlRecCy, 8, 0xFFFF);                      // ikon rekam
+  nyxAaCircle(s, mlRecCx, mlRecCy, mlRecR - 4, busyRec ? T().danger : red);
+  if (busyRec) nyxAaRR(s, mlRecCx - 9, mlRecCy - 9, 18, 18, 4, 0xFFFF);   // ikon stop
+  else         nyxAaCircle(s, mlRecCx, mlRecCy, 8, 0xFFFF);                      // ikon rekam
 
   // ---- waktu + level ----
   char tb[24];
@@ -667,15 +667,15 @@ void drawMemo(LGFX_Sprite& s) {
   }
   s.setCursor(mlRecCx - s.textWidth(tb) / 2, mlTimeY); s.print(tb);
 
-  s.fillRoundRect(mlLvlX, mlLvlY, mlLvlW, 6, 3, blend565(T().surface, 0xFFFF, 45));
+  nyxAaRR(s, mlLvlX, mlLvlY, mlLvlW, 6, 3, blend565(T().surface, 0xFFFF, 45));
   if (busyRec) {
     int lw = (int)(mlLvlW * (memoLevel > 1.0f ? 1.0f : memoLevel));
-    if (lw > 0) s.fillRoundRect(mlLvlX, mlLvlY, max(lw, 6), 6, 3, memoLevel > 0.85f ? T().danger : T().good);
+    if (lw > 0) nyxAaRR(s, mlLvlX, mlLvlY, max(lw, 6), 6, 3, memoLevel > 0.85f ? T().danger : T().good);
   } else if (playing) {
     uint32_t dur = (memoSel >= 0 && memoSel < memoCount) ? memoDurMsOfSize(memoSizes[memoSel]) : 0;
     int pw = dur ? (int)((uint64_t)mlLvlW * memoPlayPosMs() / dur) : 0;
     if (pw > mlLvlW) pw = mlLvlW;
-    if (pw > 0) s.fillRoundRect(mlLvlX, mlLvlY, max(pw, 6), 6, 3, T().accent);
+    if (pw > 0) nyxAaRR(s, mlLvlX, mlLvlY, max(pw, 6), 6, 3, T().accent);
   }
 
   // ---- daftar rekaman ----
@@ -705,7 +705,7 @@ void drawMemo(LGFX_Sprite& s) {
     int trackH = mlRows * mlRowH - 2;
     int th = trackH * mlRows / memoCount; if (th < 8) th = 8;
     int ty = mlListY + (trackH - th) * memoScroll / (memoCount - mlRows);
-    s.fillRoundRect(mlListX + mlListW - 3, ty, 2, th, 1, T().divider);
+    nyxAaRR(s, mlListX + mlListW - 3, ty, 2, th, 1, T().divider);
   }
 
   // ---- tombol bawah ----
@@ -915,9 +915,9 @@ static const char* wxDesc(int c) {
 }
 
 static void wxCloud(LGFX_Sprite& s, int cx, int cy, int r, uint16_t col) {
-  s.fillCircle(cx - r / 2, cy + r / 6, r / 2, col);
-  s.fillCircle(cx + r / 3, cy + r / 6, (r * 3) / 5, col);
-  s.fillCircle(cx - r / 8, cy - r / 4, (r * 3) / 5, col);
+  nyxAaCircle(s, cx - r / 2, cy + r / 6, r / 2, col);
+  nyxAaCircle(s, cx + r / 3, cy + r / 6, (r * 3) / 5, col);
+  nyxAaCircle(s, cx - r / 8, cy - r / 4, (r * 3) / 5, col);
   s.fillRect(cx - r / 2, cy + r / 6, r + r / 3, r / 2, col);
 }
 
@@ -932,15 +932,15 @@ static void wxIcon(LGFX_Sprite& s, int cx, int cy, int r, int code, bool day) {
   bool storm = (code >= 95);
   if (clear) {
     if (day) {
-      s.fillCircle(cx, cy, r / 2 + 1, SUN);
+      nyxAaCircle(s, cx, cy, r / 2 + 1, SUN);
       for (int i = 0; i < 8; i++) {
         float a = i * 0.785398f + wms * 0.0007f;   // sinar matahari berputar pelan
         s.drawLine(cx + (int)(cosf(a) * (r * 0.75f)), cy + (int)(sinf(a) * (r * 0.75f)),
                    cx + (int)(cosf(a) * r), cy + (int)(sinf(a) * r), SUN);
       }
     } else {
-      s.fillCircle(cx, cy, r * 3 / 4, MOON);
-      s.fillCircle(cx + r / 3, cy - r / 4, r * 3 / 4, T().surface);   // potongan bulan sabit
+      nyxAaCircle(s, cx, cy, r * 3 / 4, MOON);
+      nyxAaCircle(s, cx + r / 3, cy - r / 4, r * 3 / 4, T().surface);   // potongan bulan sabit
     }
     if (code == 1) wxCloud(s, cx + r / 3, cy + r / 3 + bob, r * 2 / 3, CLOUD);
     return;
@@ -955,7 +955,7 @@ static void wxIcon(LGFX_Sprite& s, int cx, int cy, int r, int code, bool day) {
     }
   } else if (snow) {
     for (int i = -1; i <= 1; i++)                              // salju turun sambil melayang
-      s.fillCircle(cx + i * (r / 2) + (int)lroundf(sinf(wms * 0.003f + i * 1.7f) * 1.5f),
+      nyxAaCircle(s, cx + i * (r / 2) + (int)lroundf(sinf(wms * 0.003f + i * 1.7f) * 1.5f),
                    by + (int)(fmodf(wms * 0.0012f + (i + 1) * 0.31f, 1.0f) * (r / 2)), 1, 0xFFFF);
   } else if (storm && (wms / 300UL) % 5 != 4) {              // petir berkedip
     s.fillTriangle(cx + 1, by - 1, cx - 4, by + r / 2, cx, by + r / 2, SUN);
@@ -984,7 +984,7 @@ void drawWeatherWidget(LGFX_Sprite& s, int x, int y, int w, int h) {
     s.setCursor(txn + 1, icy - 8); s.print(tn);
     int twn = s.textWidth(tn);
     s.setTextSize(1);
-    s.drawCircle(txn + twn + 4, icy - 6, 2, T().text);
+    nyxAaCircleRing(s, txn + twn + 4, icy - 6, 2, T().text);
     s.setCursor(txn + twn + 9, icy - 8); s.print("C");
     uiText(s, x + 12, y + h - 30, wxDesc(wxCode), T().text, false, true);
     char dn[28]; snprintf(dn, sizeof(dn), "%d/%d C  Hujan %d%%", (int)lroundf(wxMax), (int)lroundf(wxMin), wxRain);
@@ -1002,7 +1002,7 @@ void drawWeatherWidget(LGFX_Sprite& s, int x, int y, int w, int h) {
   s.setCursor(tx + 1, cy - 8); s.print(tb);   // UI-POLISH-V2: suhu tebal
   int tw = s.textWidth(tb);
   s.setTextSize(1);
-  s.drawCircle(tx + tw + 4, cy - 6, 2, T().text);          // tanda derajat (font ASCII tidak punya)
+  nyxAaCircleRing(s, tx + tw + 4, cy - 6, 2, T().text);          // tanda derajat (font ASCII tidak punya)
   s.setCursor(tx + tw + 9, cy - 8); s.print("C");
 
   int dx = tx + tw + 9 + 6 + 14;
