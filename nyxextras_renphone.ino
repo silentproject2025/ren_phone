@@ -674,54 +674,70 @@ static void nyxSkelBox(LGFX_Sprite& s, int x, int y, int w, int h, int r, float 
   }
 }
 
-// kind: 0 = APOD (gambar + teks), 1 = daftar (NEO), 2 = EPIC (citra bulat + keterangan), 3 = galeri 2x2
+// Skeleton meniru PERSIS tata letak layar aslinya (posisi/ukuran diambil dari fungsi geometri
+// yang sama dgn layar asli, jadi ikut berubah saat orientasi portrait/landscape):
+//   kind 0 = APOD   1 = daftar NEO   2 = Bumi EPIC   3 = Galeri NASA
+// Teks setinggi 8 px (font bawaan, size 1) -> blok skeleton h = 7 supaya terasa sama.
+static void nyxSkelHeader(LGFX_Sprite& s, int w, float bandX) {
+  nyxSkelBox(s, 8, 27, w, 7, 3, bandX);                       // judul di (8,26)
+}
+
+static void nyxSkelNavRow(LGFX_Sprite& s, int navY, float bandX) {   // tombol < n/N > + keterangan
+  nyxSkelBox(s, 6, navY, 50, 20, 5, bandX);
+  nyxSkelBox(s, SCR_W - 56, navY, 50, 20, 5, bandX);
+  nyxSkelBox(s, SCR_W / 2 - 12, navY + 6, 24, 7, 3, bandX);
+}
+
 void nyxSkeleton(LGFX_Sprite& s, int kind) {
   const unsigned long ms = millis();
   float bandX = fmodf((float)ms, 1500.0f) / 1500.0f * (float)(SCR_W + 140) - 70.0f;
-  int top = STATUS_H + 4;
-  int bot = SCR_H - BACK_H - 8;
+  static const uint8_t lw[8] = {100, 94, 100, 88, 98, 100, 91, 100};   // lebar baris teks (% dari lebar penuh)
 
-  if (kind == 0) {
-    nyxSkelBox(s, 8, top + 2, 120, 9, 4, bandX);
-    nyxSkelBox(s, SCR_W - 4 - 28 - 4 - 28 - 4 - 44, top - 1, 44, 18, 4, bandX);
-    nyxSkelBox(s, SCR_W - 4 - 28 - 4 - 28, top - 1, 28, 18, 4, bandX);
-    nyxSkelBox(s, SCR_W - 4 - 28, top - 1, 28, 18, 4, bandX);
-    int imgTop = top + 22, imgH = (bot - imgTop) * 48 / 100;
+  if (kind == 0) {                                                       // ---- APOD ----
+    nyxSkelHeader(s, 104, bandX);
+    int btnW = 28, btnH = 18, gap = 4;
+    int xNext = SCR_W - 4 - btnW, xPrev = xNext - gap - btnW, xLang = xPrev - gap - 44;
+    nyxSkelBox(s, xLang, 24, 44, btnH, 4, bandX);
+    nyxSkelBox(s, xPrev, 24, btnW, btnH, 4, bandX);
+    nyxSkelBox(s, xNext, 24, btnW, btnH, 4, bandX);
+    nyxSkelBox(s, 0, apodImgTop(), SCR_W, apodImgAreaH(), 0, bandX); // kotak gambar
+    int tTop = apodTextTop(), tBot = apodTextBottom(), tH = tBot - tTop;
+    if (tH > 12) {
+      iosRR(s, 4, tTop, SCR_W - 8, tH, 6, T().surface);              // kartu teks (statis, seperti aslinya)
+      int innerW = SCR_W - 20, lineH = 10;
+      int rows = (tH - 8) / lineH;
+      for (int i = 0; i < rows; i++) {
+        if (i == 1) continue;                                        // baris kosong di bawah judul
+        int w = (i == 0) ? innerW * 48 / 100 : innerW * lw[i % 8] / 100;
+        if (i == rows - 1 || i == rows - 2) w = innerW * 62 / 100;   // baris terakhir lebih pendek
+        nyxSkelBox(s, 10, tTop + 4 + i * lineH + 1, w, 6, 3, bandX);
+      }
+    }
+  } else if (kind == 1) {                                                // ---- daftar NEO ----
+    nyxSkelHeader(s, 150, bandX);
+    nyxSkelBox(s, SCR_W - 4 - 22, 24, 22, 22, 11, bandX);            // ikon kaca pembesar
+    int top = neoListTop(), rowH = neoRowH();
+    for (int r = 0; r < NEO_PER_PAGE; r++) {
+      int ry = top + r * rowH;
+      iosRR(s, 6, ry + 2, SCR_W - 12, rowH - 6, 6, T().surface);
+      nyxSkelBox(s, 12, ry + 8, (SCR_W - 24) * (r == 1 ? 52 : (r == 2 ? 44 : 60)) / 100, 7, 3, bandX);
+      nyxSkelBox(s, 12, ry + rowH - 16, 84 + r * 10, 7, 3, bandX);
+    }
+  } else if (kind == 2) {                                                // ---- Bumi EPIC ----
+    nyxSkelHeader(s, 98, bandX);
+    int imgTop = epicImgTop(), imgH = epicImgAreaH();
     nyxSkelBox(s, 0, imgTop, SCR_W, imgH, 0, bandX);
-    int ty = imgTop + imgH + 8;
-    iosRR(s, 4, ty, SCR_W - 8, bot - ty + 4, 6, T().surface);
-    int ly = ty + 8;
-    nyxSkelBox(s, 12, ly, SCR_W * 55 / 100, 10, 4, bandX); ly += 18;
-    for (int i = 0; ly + 8 < bot && i < 6; i++, ly += 13)
-      nyxSkelBox(s, 12, ly, (i % 3 == 2) ? SCR_W * 60 / 100 : SCR_W - 32, 7, 3, bandX);
-  } else if (kind == 1) {
-    nyxSkelBox(s, 8, top, SCR_W - 16, 18, 6, bandX);
-    int y = top + 28;
-    for (int i = 0; y + 34 <= bot && i < 5; i++, y += 38) {
-      iosRR(s, 6, y, SCR_W - 12, 34, 7, T().surface);
-      nyxSkelBox(s, 14, y + 7, 20, 20, 10, bandX);
-      nyxSkelBox(s, 44, y + 8, SCR_W * 40 / 100, 8, 3, bandX);
-      nyxSkelBox(s, 44, y + 21, SCR_W * 28 / 100, 6, 3, bandX);
-      nyxSkelBox(s, SCR_W - 66, y + 10, 50, 14, 5, bandX);
-    }
-  } else if (kind == 2) {
-    nyxSkelBox(s, 8, top + 2, 110, 9, 4, bandX);
-    int side = (bot - top - 60);
-    if (side > SCR_W - 40) side = SCR_W - 40;
-    if (side < 60) side = 60;
-    nyxSkelBox(s, (SCR_W - side) / 2, top + 20, side, side, side / 2, bandX);
-    int ty = top + 20 + side + 10;
-    nyxSkelBox(s, 16, ty, SCR_W - 32, 8, 3, bandX);
-    nyxSkelBox(s, SCR_W / 4, ty + 14, SCR_W / 2, 7, 3, bandX);
-  } else {
-    nyxSkelBox(s, 8, top, SCR_W - 16, 18, 6, bandX);
-    int gy = top + 26, gw = (SCR_W - 8 * 3) / 2, gh = (bot - gy - 6) / 2;
-    if (gh > 90) gh = 90;
-    for (int r = 0; r < 2; r++) for (int c = 0; c < 2; c++) {
-      int gx = 8 + c * (gw + 8), yy = gy + r * (gh + 6);
-      nyxSkelBox(s, gx, yy, gw, gh - 12, 6, bandX);
-      nyxSkelBox(s, gx, yy + gh - 8, gw * 70 / 100, 6, 3, bandX);
-    }
+    int navY = imgTop + imgH + 6;
+    nyxSkelNavRow(s, navY, bandX);
+    nyxSkelBox(s, 8, navY + 27, 156, 7, 3, bandX);                   // "Diambil pukul .. UTC"
+  } else {                                                               // ---- Galeri NASA ----
+    nyxSkelHeader(s, 118, bandX);
+    int imgTop = imgLibImgTop(), imgH = imgLibImgAreaH();
+    nyxSkelBox(s, 0, imgTop, SCR_W, imgH, 0, bandX);
+    int navY = imgTop + imgH + 6;
+    nyxSkelNavRow(s, navY, bandX);
+    nyxSkelBox(s, 8, navY + 27, (SCR_W - 16) * 72 / 100, 7, 3, bandX);   // judul
+    nyxSkelBox(s, 8, navY + 38, 64, 7, 3, bandX);                        // tanggal
   }
 }
 
