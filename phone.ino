@@ -1258,6 +1258,14 @@ extern bool  battCharging; // v109: true = lagi di-charge (diisi dari pembacaan 
 // aslinya (dekat drawToast()) udah dibuang default-nya biar gak dobel
 // (C++ error kalau default value dikasih di declaration DAN definition).
 void showToast(const char* msg, int ms=1400);
+// NYX-EXTRAS-V1: prototipe fungsi nyxextras_renphone.ino & banner telepon (call_renphone.ino)
+bool callBannerActive(); void drawCallBanner(LGFX_Sprite&); bool callBannerTouch(bool,bool,int,int);
+void nyxExtrasLoopPoll(); void nyxAboutRows(); void nyxAppEnergyAdd(float);
+void nyxDrawAppEnergy(LGFX_Sprite&,int,int); void nyxAppEnergyTouch(int,int,int,int);
+String nyxVoiceInstruction(); bool nyxVoiceExtract(String&);
+void nyxShotThumbCapture(const char*); void nyxShotThumbHide(); bool nyxShotThumbActive();
+void drawShotThumb(LGFX_Sprite&); bool nyxShotThumbTouch(bool,bool,int,int);
+void nyxSkeleton(LGFX_Sprite&,int);
 
 // v47: WALLPAPER Home Screen -- didefinisikan penuh dekat drawHome()
 // (bagian HOME SCREEN & APP INTERFACE), di-extern di sini spy bisa
@@ -5502,14 +5510,6 @@ void chatEnter(); void chatExit(); void drawChat(LGFX_Sprite&); void chatTouch(i
 // ---- Telepon SIP/LAN: forward declarations (call_renphone.ino) ----
 void callEnter(); void callExit(); void drawCall(LGFX_Sprite&); void callTouch(int,int,bool,bool); void callLoopPoll();
 bool callOverlayActive(); void drawCallOverlay(LGFX_Sprite&); void callOverlayTouch(bool,int,int);
-// NYX-EXTRAS-V1: prototipe fungsi nyxextras_renphone.ino & banner telepon (call_renphone.ino)
-bool callBannerActive(); void drawCallBanner(LGFX_Sprite&); bool callBannerTouch(bool,bool,int,int);
-void nyxExtrasLoopPoll(); void nyxAboutRows(); void nyxAppEnergyAdd(float);
-void nyxDrawAppEnergy(LGFX_Sprite&,int,int); void nyxAppEnergyTouch(int,int,int,int);
-String nyxVoiceInstruction(); bool nyxVoiceExtract(String&);
-void nyxShotThumbCapture(const char*); void nyxShotThumbHide(); bool nyxShotThumbActive();
-void drawShotThumb(LGFX_Sprite&); bool nyxShotThumbTouch(bool,bool,int,int);
-void nyxSkeleton(LGFX_Sprite&,int);
 // ---- Kamera: forward declarations (camera_renphone.ino) ----
 void camEnter(); void camExit(); void drawCamera(LGFX_Sprite&); void camTouch(int,int,bool,bool); void camLoopPoll();
 // ---- Buku (ebook_renphone.ino): pembaca .txt / .epub ----
