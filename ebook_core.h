@@ -436,6 +436,37 @@ static int ebCpToAscii(uint32_t cp, char* d) {
   return n;
 }
 
+// ---------------------------------------------------------------------
+// v2: MODE UNICODE. ebKeepUni = 1 -> teks kanonik menyimpan UTF-8 asli untuk codepoint yang
+// dicakup font Unicode (ebUniKeep); sisanya tetap dilipat ke ASCII seperti dulu. Pelipatan
+// saat TAMPIL (font tanpa glyph) dilakukan oleh ebCharW / ebRunText. Bawaan 0 = perilaku lama.
+// ebUniKeep HARUS sama dengan cakupan font VLW buatan tools/make_vlw.py.
+// ---------------------------------------------------------------------
+static uint8_t ebKeepUni = 0;
+static bool ebUniKeep(uint32_t cp) {
+  if (cp <= 0xA0 || cp == 0xAD) return false;          // ASCII, NBSP (-> spasi), soft hyphen (-> buang)
+  if (cp <= 0x17F) return true;                        // Latin-1 Supplement + Latin Extended-A
+  if (cp >= 0x384 && cp <= 0x3CE) return cp != 0x38B && cp != 0x38D && cp != 0x3A2;   // Yunani modern (+ tonos)
+  if (cp >= 0x400 && cp <= 0x45F) return true;         // Kiril dasar (Rusia, Ukraina, Serbia, Bulgaria, Makedonia, ...)
+  if (cp == 0x490 || cp == 0x491) return true;         // Ukraina Ґ ґ
+  switch (cp) {
+    case 0x2010: case 0x2011: case 0x2012: case 0x2013: case 0x2014: case 0x2015:
+    case 0x2018: case 0x2019: case 0x201A: case 0x201C: case 0x201D: case 0x201E:
+    case 0x2020: case 0x2021: case 0x2022: case 0x2026: case 0x2030: case 0x2039: case 0x203A:
+    case 0x20AC: case 0x2122: case 0x2190: case 0x2192: case 0x2212:
+      return true;
+    default: return false;
+  }
+}
+// tulis codepoint sebagai UTF-8 ke d (maks 4 byte); mengembalikan panjang
+static int ebEncUtf8(uint32_t cp, char* d) {
+  if (cp < 0x80) { d[0] = (char)cp; return 1; }
+  if (cp < 0x800) { d[0] = (char)(0xC0 | (cp >> 6)); d[1] = (char)(0x80 | (cp & 0x3F)); return 2; }
+  if (cp < 0x10000) { d[0] = (char)(0xE0 | (cp >> 12)); d[1] = (char)(0x80 | ((cp >> 6) & 0x3F)); d[2] = (char)(0x80 | (cp & 0x3F)); return 3; }
+  d[0] = (char)(0xF0 | (cp >> 18)); d[1] = (char)(0x80 | ((cp >> 12) & 0x3F)); d[2] = (char)(0x80 | ((cp >> 6) & 0x3F)); d[3] = (char)(0x80 | (cp & 0x3F));
+  return 4;
+}
+
 // Windows-1252 0x80..0x9F -> codepoint Unicode (0 = tak terdefinisi)
 static uint32_t ebCp1252(uint8_t b) {
   static const uint16_t t[32] = {
@@ -481,10 +512,13 @@ struct EbOut {
   uint8_t headPend;    // judul menunggu teks pertama
   uint8_t unk;         // sedang dalam rentetan karakter tak dikenal
   uint8_t full;        // buffer penuh (keluaran terpotong)
+  int (*img)(void* ctx, const char* src, int srcLen);   // v2: daftarkan gambar, hasil = indeks (-1 = lewati); null = abaikan <img>
+  void* imgCtx;
 };
 static void ebOutInit(EbOut* o, char* buf, uint32_t cap) {
   o->buf = buf; o->len = 0; o->cap = cap;
   o->pendSp = 0; o->atStart = 1; o->headPend = 0; o->unk = 0; o->full = 0;
+  o->img = nullptr; o->imgCtx = nullptr;
 }
 static inline void ebRaw(EbOut* o, char c) {
   if (o->len + 1 >= o->cap) { o->full = 1; return; }
@@ -505,6 +539,13 @@ static void ebOutBreak(EbOut* o) {             // akhir paragraf (tidak pernah d
 }
 static void ebOutCp(EbOut* o, uint32_t cp) {
   char t[4];
+  if (ebKeepUni && ebUniKeep(cp)) {                  // v2: simpan UTF-8 asli
+    int k = ebEncUtf8(cp, t);
+    o->unk = 0;
+    ebOutChar(o, t[0]);                              // byte pertama mengurus spasi tertunda / penanda judul
+    for (int i = 1; i < k; i++) ebRaw(o, t[i]);
+    return;
+  }
   int n = ebCpToAscii(cp, t);
   if (n < 0) { if (!o->unk) { ebOutChar(o, '?'); o->unk = 1; } return; }
   o->unk = 0;
@@ -565,7 +606,7 @@ static uint32_t ebEntity(const uint8_t* in, uint32_t n, uint32_t i, uint32_t* cp
   return j + 1 - i;
 }
 
-enum { EB_K_OTHER = 0, EB_K_SKIP, EB_K_BLOCK, EB_K_BR, EB_K_HR, EB_K_HEAD, EB_K_LI, EB_K_PRE, EB_K_CELL };
+enum { EB_K_OTHER = 0, EB_K_SKIP, EB_K_BLOCK, EB_K_BR, EB_K_HR, EB_K_HEAD, EB_K_LI, EB_K_PRE, EB_K_CELL, EB_K_IMG };
 static int ebTagKind(const char* nm) {
   static const char* const skip[] = {"head", "script", "style", "title", "svg", "math", "rt", "rp", nullptr};
   static const char* const blk[] = {"p", "div", "section", "article", "header", "footer", "nav", "aside", "blockquote",
@@ -579,6 +620,7 @@ static int ebTagKind(const char* nm) {
   if (strcmp(nm, "li") == 0) return EB_K_LI;
   if (strcmp(nm, "pre") == 0) return EB_K_PRE;
   if (strcmp(nm, "td") == 0 || strcmp(nm, "th") == 0) return EB_K_CELL;
+  if (strcmp(nm, "img") == 0 || strcmp(nm, "image") == 0) return EB_K_IMG;
   return EB_K_OTHER;
 }
 
@@ -601,6 +643,33 @@ static uint32_t ebSkipElement(const uint8_t* in, uint32_t n, uint32_t from, cons
     }
   }
   return n;
+}
+
+static int ebDecodeVal(const char* v, int vl, char* out, int cap, bool stripFrag);   // definisi di bagian XML
+// Cari nilai atribut src / xlink:href / href di teks atribut mentah a[0..n). Hasil didekode (%XX, &amp;), tanpa #fragmen.
+static int ebAttrFromRaw(const char* a, int n, char* out, int cap) {
+  static const char* const keys[3] = { "src", "xlink:href", "href" };
+  for (int k = 0; k < 3; k++) {
+    int kl = (int)strlen(keys[k]);
+    int i = 0;
+    while (i < n) {
+      while (i < n && (uint8_t)a[i] <= ' ') i++;
+      int ns = i;
+      while (i < n && a[i] != '=' && (uint8_t)a[i] > ' ') i++;
+      int ne = i;
+      while (i < n && (uint8_t)a[i] <= ' ') i++;
+      if (i >= n || a[i] != '=') { if (i == ns) i++; continue; }
+      i++;
+      while (i < n && (uint8_t)a[i] <= ' ') i++;
+      if (i >= n) break;
+      int vs, ve; char q = a[i];
+      if (q == '"' || q == '\'') { i++; vs = i; while (i < n && a[i] != q) i++; ve = i; if (i < n) i++; }
+      else { vs = i; while (i < n && (uint8_t)a[i] > ' ') i++; ve = i; }
+      if (ne - ns == kl && ebEqCI(a + ns, keys[k], kl)) return ebDecodeVal(a + vs, ve - vs, out, cap, true);
+    }
+  }
+  if (cap > 0) out[0] = 0;
+  return 0;
 }
 
 // Ubah HTML jadi teks kanonik; hasil ditambahkan ke o.
@@ -634,7 +703,7 @@ static void ebHtmlToText(const uint8_t* in, uint32_t n, EbOut* o) {
       const char* nmp = nm;
       for (int q = nl - 1; q >= 0; q--) if (nm[q] == ':') { nmp = nm + q + 1; break; }
       // lewati atribut (hormati kutipan)
-      char qt = 0; bool selfClose = false;
+      char qt = 0; bool selfClose = false; uint32_t a0 = j;
       while (j < n) {
         uint8_t d = in[j];
         if (qt) { if (d == (uint8_t)qt) qt = 0; }
@@ -645,7 +714,26 @@ static void ebHtmlToText(const uint8_t* in, uint32_t n, EbOut* o) {
       if (j > i + 1 && j <= n && j > 0 && in[j - 1] == '/') selfClose = true;
       i = (j < n) ? j + 1 : n;
       int kind = ebTagKind(nmp);
+      if (kind == EB_K_SKIP && o->img && strcmp(nmp, "svg") == 0) kind = EB_K_OTHER;   // v2: halaman sampul EPUB sering <svg><image/></svg>
       switch (kind) {
+        case EB_K_IMG:
+          if (!closing && o->img) {
+            // atribut tag berada di in[a0..j): cari src / xlink:href / href
+            char src[200]; int sl = ebAttrFromRaw((const char*)in + a0, (int)(j - a0), src, sizeof(src));
+            if (sl > 0) {
+              int idx = o->img(o->imgCtx, src, sl);
+              if (idx >= 0) {
+                ebOutBreak(o);
+                char mk[16]; int mn = 0; mk[mn++] = 2;
+                char dg[12]; int dn = 0; int v = idx; if (v == 0) dg[dn++] = '0';
+                while (v > 0 && dn < 11) { dg[dn++] = (char)('0' + v % 10); v /= 10; }
+                while (dn) mk[mn++] = dg[--dn];
+                for (int q = 0; q < mn; q++) ebRaw(o, mk[q]);
+                ebRaw(o, '\n'); o->atStart = 1; o->pendSp = 0;
+              }
+            }
+          }
+          break;
         case EB_K_SKIP:
           if (!closing && !selfClose) i = ebSkipElement(in, n, i, nmp);
           break;
@@ -820,6 +908,12 @@ static void ebTxtCp(EbTxt* t, uint32_t cp) {
   if (cp == '\t') cp = ' ';
   if (cp < 0x20 || cp == 0x7F) return;
   char b[4];
+  if (ebKeepUni && ebUniKeep(cp)) {                  // v2: simpan UTF-8 asli
+    int k = ebEncUtf8(cp, b);
+    t->o->unk = 0;
+    for (int i = 0; i < k; i++) ebTxtPut(t, b[i]);
+    return;
+  }
   int n = ebCpToAscii(cp, b);
   if (n < 0) { if (!t->o->unk) { ebTxtPut(t, '?'); t->o->unk = 1; } return; }
   t->o->unk = 0;
@@ -1050,6 +1144,11 @@ static void ebResolve(const char* base, const char* rel, char* out, int cap) {
 // =====================================================================
 #define EB_KIND_TXT   1
 #define EB_KIND_EPUB  2
+#define EB_KIND_MD    3          // Markdown: dibuka sebagai TXT setelah dikonversi
+#define EB_MD_MAX     (1u * 1024u * 1024u)
+#define EB_MAX_CHIMG  64         // gambar per bab
+#define EB_IMG_MIN    3072u      // gambar lebih kecil = hiasan, dilewati
+#define EB_IMG_MAX    (3584u * 1024u)
 #define EB_MAX_SPINE  2000
 #define EB_MAX_TOC    400
 #define EB_TXT_MAX    (3u * 1024u * 1024u)
@@ -1057,6 +1156,7 @@ static void ebResolve(const char* base, const char* rel, char* out, int cap) {
 
 struct EbSpine { uint32_t pathOff, titleOff; };      // offset di pool (0 = kosong)
 struct EbToc   { uint32_t titleOff; int32_t ch; uint32_t off; };
+struct EbImg   { char path[148]; uint32_t usize; };
 struct EbBook {
   int kind;
   EbRd rd; EbZip zip;
@@ -1064,8 +1164,11 @@ struct EbBook {
   EbSpine* sp; int nSp;
   EbToc* toc; int nToc;
   char title[80];
+  char author[64];                                    // v2: dc:creator (UTF-8)
+  uint32_t coverOff;                                  // v2: offset jalur gambar sampul di pool (0 = tak ada)
   char* text; uint32_t textLen; int curCh;
   int truncated;                                      // TXT dipotong di EB_TXT_MAX
+  EbImg* imgs; int nImg; int loadCh;                  // v2: gambar bab yang sedang dimuat
 };
 
 static uint32_t ebPoolAdd(EbBook* b, const char* s, uint32_t n) {
@@ -1090,6 +1193,7 @@ static void ebBookInit(EbBook* b) {
   if (b->pool) { b->pool[0] = 0; b->poolLen = 1; } else b->poolCap = 0;
 }
 static void ebBookClose(EbBook* b) {
+  if (b->imgs) EB_FREE(b->imgs);
   if (b->text) EB_FREE(b->text);
   if (b->sp) EB_FREE(b->sp);
   if (b->toc) EB_FREE(b->toc);
@@ -1146,6 +1250,187 @@ static void ebTxtBuildToc(EbBook* b) {
   }
 }
 
+// ---- Markdown (.md) ----
+// Konversi ringan ke teks kanonik: judul (#), daftar, kutipan, blok kode, tabel, garis pemisah,
+// tebal/miring/kode-inline/tautan/gambar dibersihkan. Tidak lengkap (tanpa setext, tanpa HTML blok), tapi cukup untuk dibaca.
+static inline bool ebMdAlnum(uint8_t c) { return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c >= 0x80; }
+
+// keluarkan satu karakter (UTF-8 / ASCII) dari s[i] ke o dan majukan i
+static void ebMdPutCp(EbOut* o, const uint8_t* s, uint32_t n, uint32_t* i) {
+  uint8_t c = s[*i];
+  if (c < 0x80) {
+    if (c == ' ' || c == '\t') ebOutSpace(o);
+    else if (c >= 32 && c != 0x7F) ebOutChar(o, (char)c);
+    (*i)++; return;
+  }
+  uint32_t cp; bool bad;
+  int u = ebUtf8(s + *i, n - *i, &cp, &bad);
+  if (u == 0) { u = 1; bad = true; cp = c; }
+  if (bad && cp >= 0x80 && cp <= 0x9F) { uint32_t m = ebCp1252((uint8_t)cp); cp = m ? m : 0x20; }
+  ebOutCp(o, cp);
+  *i += (uint32_t)u;
+}
+
+static void ebMdInline(const uint8_t* s, uint32_t n, EbOut* o) {
+  uint32_t i = 0; bool code = false;
+  while (i < n) {
+    uint8_t c = s[i];
+    if (c == '`') { code = !code; while (i < n && s[i] == '`') i++; continue; }
+    if (code) { ebMdPutCp(o, s, n, &i); continue; }
+    if (c == '\\' && i + 1 < n && s[i + 1] > ' ' && s[i + 1] < 0x80 && !ebMdAlnum(s[i + 1])) { ebOutChar(o, (char)s[i + 1]); i += 2; continue; }
+    if (c == '*' || c == '_') {
+      uint32_t j = i; while (j < n && s[j] == c) j++;
+      uint8_t prev = i > 0 ? s[i - 1] : ' ', next = j < n ? s[j] : ' ';
+      bool literal = (c == '*' && prev <= ' ' && next <= ' ') || (c == '_' && ebMdAlnum(prev) && ebMdAlnum(next));
+      if (literal) { for (uint32_t q = i; q < j; q++) ebOutChar(o, (char)c); }
+      i = j; continue;
+    }
+    if (c == '~' && i + 1 < n && s[i + 1] == '~') { i += 2; continue; }
+    if ((c == '!' && i + 1 < n && s[i + 1] == '[') || c == '[') {
+      bool isImg = (c == '!');
+      uint32_t a = i + (isImg ? 2 : 1), e = a;
+      while (e < n && s[e] != ']') e++;
+      if (e < n && !(c == '[' && a < n && s[a] == '^')) {                 // [teks] ditemukan (bukan catatan kaki)
+        uint32_t after = e + 1;
+        if (after < n && s[after] == '(') {                              // (url)
+          uint32_t u = after + 1; int depth = 1;
+          while (u < n && depth > 0) { if (s[u] == '(') depth++; else if (s[u] == ')') depth--; if (depth > 0) u++; }
+          if (u < n) {
+            if (isImg) { if (e > a) { ebOutChar(o, '['); ebMdInline(s + a, e - a, o); ebOutChar(o, ']'); } }
+            else ebMdInline(s + a, e - a, o);
+            i = u + 1; continue;
+          }
+        } else if (after < n && s[after] == '[') {                       // [teks][ref]
+          uint32_t u = after + 1; while (u < n && s[u] != ']') u++;
+          if (u < n) { if (!isImg) ebMdInline(s + a, e - a, o); i = u + 1; continue; }
+        }
+      }
+      ebOutChar(o, (char)c); i++; continue;
+    }
+    if (c == '<') {
+      uint32_t e = i + 1; while (e < n && s[e] != '>' && e - i < 200) e++;
+      if (e < n && s[e] == '>') {
+        bool url = (e - i > 5 && (memcmp(s + i + 1, "http", 4) == 0 || memcmp(s + i + 1, "mailto", 6) == 0));
+        bool tag = (i + 1 < n && ((s[i + 1] >= 'a' && s[i + 1] <= 'z') || (s[i + 1] >= 'A' && s[i + 1] <= 'Z') || s[i + 1] == '/' || s[i + 1] == '!'));
+        if (url) { for (uint32_t q = i + 1; q < e; q++) ebOutChar(o, (char)s[q]); i = e + 1; continue; }
+        if (tag) { i = e + 1; continue; }
+      }
+      ebOutChar(o, '<'); i++; continue;
+    }
+    if (c == '&') {
+      uint32_t cp = 0; uint32_t used = ebEntity(s, n, i, &cp);
+      if (used) { if (cp) ebOutCp(o, cp); i += used; continue; }
+    }
+    ebMdPutCp(o, s, n, &i);
+  }
+}
+
+static void ebMdToText(const uint8_t* in, uint32_t n, EbOut* o) {
+  uint32_t pos = 0; bool fence = false, inPara = false;
+  if (n >= 3 && in[0] == 0xEF && in[1] == 0xBB && in[2] == 0xBF) pos = 3;
+  while (pos < n) {
+    uint32_t ls = pos; while (pos < n && in[pos] != '\n') pos++;
+    uint32_t le = pos; if (pos < n) pos++;
+    if (le > ls && in[le - 1] == '\r') le--;
+    const uint8_t* L = in + ls; uint32_t ln = le - ls;
+    uint32_t k = 0; while (k < ln && (L[k] == ' ' || L[k] == '\t')) k++;
+    if (ln - k >= 3 && ((L[k] == '`' && L[k + 1] == '`' && L[k + 2] == '`') || (L[k] == '~' && L[k + 1] == '~' && L[k + 2] == '~'))) {
+      fence = !fence; ebOutBreak(o); inPara = false; continue;
+    }
+    if (fence) { for (uint32_t i = 0; i < ln;) ebMdPutCp(o, L, ln, &i); ebOutBreak(o); continue; }
+    if (k == ln) { ebOutBreak(o); inPara = false; continue; }
+    while (k < ln && L[k] == '>') { k++; if (k < ln && L[k] == ' ') k++; }          // kutipan: buang penanda
+    if (k >= ln) { ebOutBreak(o); inPara = false; continue; }
+    // judul ATX
+    if (L[k] == '#') {
+      uint32_t h = 0; while (k + h < ln && L[k + h] == '#') h++;
+      if (h <= 6 && (k + h == ln || L[k + h] == ' ')) {
+        uint32_t a = k + h; while (a < ln && L[a] == ' ') a++;
+        uint32_t e = ln; while (e > a && L[e - 1] == ' ') e--;
+        while (e > a && L[e - 1] == '#') e--;
+        while (e > a && L[e - 1] == ' ') e--;
+        ebOutBreak(o); o->headPend = 1;
+        ebMdInline(L + a, e - a, o);
+        ebOutBreak(o); o->headPend = 0; inPara = false; continue;
+      }
+    }
+    // garis pemisah / garis bawah judul
+    {
+      uint8_t hc = L[k]; uint32_t cnt = 0; bool only = true;
+      for (uint32_t q = k; q < ln; q++) { if (L[q] == hc) cnt++; else if (L[q] != ' ') { only = false; break; } }
+      if (only && cnt >= 3 && (hc == '-' || hc == '*' || hc == '_')) {
+        ebOutBreak(o); o->headPend = 1;
+        ebOutChar(o, '*'); ebOutChar(o, ' '); ebOutChar(o, '*'); ebOutChar(o, ' '); ebOutChar(o, '*');
+        ebOutBreak(o); o->headPend = 0; inPara = false; continue;
+      }
+      if (only && cnt >= 2 && hc == '=' && inPara) continue;                       // garis bawah judul setext: abaikan
+    }
+    // butir daftar
+    if ((L[k] == '-' || L[k] == '*' || L[k] == '+') && k + 1 < ln && L[k + 1] == ' ') {
+      uint32_t a = k + 2; while (a < ln && L[a] == ' ') a++;
+      ebOutBreak(o); ebOutChar(o, '*'); ebOutChar(o, ' ');
+      ebMdInline(L + a, ln - a, o); inPara = true; goto hardbreak;
+    }
+    if (L[k] >= '0' && L[k] <= '9') {
+      uint32_t d = k; while (d < ln && L[d] >= '0' && L[d] <= '9' && d - k < 6) d++;
+      if (d < ln && (L[d] == '.' || L[d] == ')') && d + 1 < ln && L[d + 1] == ' ') {
+        uint32_t a = d + 2; while (a < ln && L[a] == ' ') a++;
+        ebOutBreak(o);
+        for (uint32_t q = k; q < d; q++) ebOutChar(o, (char)L[q]);
+        ebOutChar(o, '.'); ebOutChar(o, ' ');
+        ebMdInline(L + a, ln - a, o); inPara = true; goto hardbreak;
+      }
+    }
+    // tabel: baris berpipa; baris pemisah |---|---| dilewati
+    if (L[k] == '|') {
+      bool sep = true; for (uint32_t q = k; q < ln; q++) if (L[q] != '|' && L[q] != '-' && L[q] != ':' && L[q] != ' ') { sep = false; break; }
+      if (sep) continue;
+      ebOutBreak(o);
+      uint32_t cs = k + 1; bool firstCell = true;
+      while (cs <= ln) {
+        uint32_t ce = cs; while (ce < ln && L[ce] != '|') ce++;
+        uint32_t a = cs, e = ce; while (a < e && L[a] == ' ') a++; while (e > a && L[e - 1] == ' ') e--;
+        if (e > a || ce < ln) {
+          if (e > a) { if (!firstCell) { ebOutSpace(o); ebOutChar(o, '|'); ebOutSpace(o); } ebMdInline(L + a, e - a, o); firstCell = false; }
+        }
+        if (ce >= ln) break;
+        cs = ce + 1;
+      }
+      ebOutBreak(o); inPara = false; continue;
+    }
+    // paragraf biasa: baris berurutan disambung dengan spasi
+    if (inPara) ebOutSpace(o); else ebOutBreak(o);
+    ebMdInline(L + k, ln - k, o); inPara = true;
+  hardbreak:
+    if ((ln >= 2 && L[ln - 1] == ' ' && L[ln - 2] == ' ') || (ln >= 1 && L[ln - 1] == '\\')) { ebOutBreak(o); inPara = false; }
+  }
+  ebOutBreak(o);
+}
+
+static int ebMdLoad(EbBook* b) {
+  uint32_t size = b->rd.size;
+  if (size > EB_MD_MAX) { size = EB_MD_MAX; b->truncated = 1; }
+  uint8_t* in = (uint8_t*)EB_ALLOC((size_t)size + 1);
+  if (!in) return EB_E_NOMEM;
+  if (size && !ebRdAll(&b->rd, 0, in, size)) { EB_FREE(in); return EB_E_IO; }
+  in[size] = 0;
+  if (size >= 2 && ((in[0] == 0xFF && in[1] == 0xFE) || (in[0] == 0xFE && in[1] == 0xFF))) { EB_FREE(in); return ebTxtLoad(b); }   // UTF-16: perlakukan sebagai TXT
+  uint32_t cap = size + size / 8 + 4096;
+  char* out = (char*)EB_ALLOC(cap);
+  if (!out) { EB_FREE(in); return EB_E_NOMEM; }
+  EbOut o; ebOutInit(&o, out, cap);
+  ebMdToText(in, size, &o);
+  EB_FREE(in);
+  out[o.len] = 0;
+  b->text = out; b->textLen = o.len; b->curCh = 0;
+  if (o.len > 1 && out[0] == 1) {                                  // judul dokumen = judul pertama
+    uint32_t e = 1; while (e < o.len && out[e] != '\n' && e < sizeof(b->title)) e++;
+    uint32_t l = e - 1; if (l >= sizeof(b->title)) l = sizeof(b->title) - 1;
+    memcpy(b->title, out + 1, l); b->title[l] = 0;
+  }
+  return EB_OK;
+}
+
 // ---- EPUB ----
 static int ebZipGet(EbBook* b, const char* path, uint32_t maxLen, uint8_t** data, uint32_t* len) {
   int idx = ebZipFind(&b->zip, path);
@@ -1155,7 +1440,7 @@ static int ebZipGet(EbBook* b, const char* path, uint32_t maxLen, uint8_t** data
 }
 
 struct EbMan { uint32_t idOff; uint16_t idLen; uint32_t hrefOff; uint16_t hrefLen; uint8_t flags; };
-// flags: 1 = (x)html, 2 = ncx, 4 = nav
+// flags: 1 = (x)html, 2 = ncx, 4 = nav, 8 = properti cover-image, 16 = gambar jpeg/png
 
 static void ebDirOf(const char* path, char* dir, int cap) {
   int n = (int)strlen(path), s = n;
@@ -1255,7 +1540,8 @@ static int ebEpubOpen(EbBook* b) {
   if (!man || !b->sp) { if (man) EB_FREE(man); EB_FREE(d); return EB_E_NOMEM; }
   int nMan = 0; b->nSp = 0;
   char tocId[64]; tocId[0] = 0;
-  b->title[0] = 0;
+  char coverId[64]; coverId[0] = 0;
+  b->title[0] = 0; b->author[0] = 0; b->coverOff = 0;
   {
     EbTag t; uint32_t pos = 0;
     while (ebXmlNext(s, dl, &pos, &t)) {
@@ -1275,7 +1561,16 @@ static int ebEpubOpen(EbBook* b) {
         }
         if (ebAttrRaw(&t, "properties", &pr, &prl)) {
           for (int q = 0; q + 3 <= prl; q++) if ((q == 0 || pr[q - 1] == ' ') && memcmp(pr + q, "nav", 3) == 0 && (q + 3 == prl || pr[q + 3] == ' ')) m->flags |= 4;
+          for (int q = 0; q + 11 <= prl; q++) if ((q == 0 || pr[q - 1] == ' ') && memcmp(pr + q, "cover-image", 11) == 0 && (q + 11 == prl || pr[q + 11] == ' ')) m->flags |= 8;
         }
+        if (ebEndsCI(hr, hrl, ".jpg") || ebEndsCI(hr, hrl, ".jpeg") || ebEndsCI(hr, hrl, ".png")) m->flags |= 16;
+      } else if (strcmp(t.name, "meta") == 0) {
+        char mn[24]; ebAttrCopy(&t, "name", mn, sizeof(mn), false);
+        if (strcmp(mn, "cover") == 0) ebAttrCopy(&t, "content", coverId, sizeof(coverId), false);
+      } else if (strcmp(t.name, "creator") == 0 && !b->author[0] && !t.selfClose) {
+        const void* lt = memchr(s + pos, '<', dl - pos);
+        uint32_t e = lt ? (uint32_t)((const char*)lt - s) : dl;
+        ebSnippet(s + pos, e - pos, b->author, sizeof(b->author));
       } else if (strcmp(t.name, "spine") == 0) {
         ebAttrCopy(&t, "toc", tocId, sizeof(tocId), false);
       } else if (strcmp(t.name, "title") == 0 && !b->title[0] && !t.selfClose) {
@@ -1311,6 +1606,27 @@ static int ebEpubOpen(EbBook* b) {
       b->sp[b->nSp].pathOff = po; b->sp[b->nSp].titleOff = 0; b->nSp++;
     }
   }
+  // ---- sampul: properti cover-image > <meta name="cover"> > gambar bernama "cover" ----
+  {
+    int ci = -1;
+    for (int i = 0; i < nMan && ci < 0; i++) if (man[i].flags & 8) ci = i;
+    if (ci < 0 && coverId[0]) {
+      size_t cl = strlen(coverId);
+      for (int i = 0; i < nMan; i++) if (man[i].idLen == cl && memcmp(s + man[i].idOff, coverId, cl) == 0) { ci = i; break; }
+    }
+    if (ci < 0) {
+      for (int i = 0; i < nMan && ci < 0; i++) {
+        if (!(man[i].flags & 16)) continue;
+        for (int q = 0; q + 5 <= (int)man[i].hrefLen; q++) if (ebEqCI(s + man[i].hrefOff + q, "cover", 5)) { ci = i; break; }
+      }
+    }
+    if (ci >= 0) {
+      char href[200], path[256];
+      ebDecodeVal(s + man[ci].hrefOff, man[ci].hrefLen, href, sizeof(href), true);
+      ebResolve(opfDir, href, path, sizeof(path));
+      b->coverOff = ebPoolAdd(b, path, (uint32_t)strlen(path));
+    }
+  }
   // simpan path toc sebelum membebaskan OPF
   char tocPath[256]; tocPath[0] = 0; bool tocIsNav = false;
   {
@@ -1341,6 +1657,40 @@ static int ebEpubOpen(EbBook* b) {
   return EB_OK;
 }
 
+// v2: pengait <img>: selesaikan jalur relatif thd berkas bab, cek ukuran, daftarkan. Hasil = indeks (-1 = lewati).
+static int ebChImg(void* ctx, const char* src, int srcLen) {
+  EbBook* b = (EbBook*)ctx;
+  (void)srcLen;
+  if (!b->imgs || b->loadCh < 0 || b->loadCh >= b->nSp) return -1;
+  if (strncmp(src, "data:", 5) == 0 || strstr(src, "://")) return -1;
+  int sl = (int)strlen(src);
+  if (!(ebEndsCI(src, sl, ".jpg") || ebEndsCI(src, sl, ".jpeg") || ebEndsCI(src, sl, ".png"))) return -1;
+  char dir[200], path[256];
+  ebDirOf(ebPoolStr(b, b->sp[b->loadCh].pathOff), dir, sizeof(dir));
+  ebResolve(dir, src, path, sizeof(path));
+  if (strlen(path) >= sizeof(b->imgs[0].path)) return -1;
+  for (int i = 0; i < b->nImg; i++) if (strcmp(b->imgs[i].path, path) == 0) return i;
+  if (b->nImg >= EB_MAX_CHIMG) return -1;
+  int zi = ebZipFind(&b->zip, path);
+  if (zi < 0) return -1;
+  const EbZipEnt* e = &b->zip.ent[zi];
+  if (e->usize < EB_IMG_MIN || e->usize > EB_IMG_MAX) return -1;
+  EbImg* im = &b->imgs[b->nImg];
+  strcpy(im->path, path); im->usize = e->usize;
+  return b->nImg++;
+}
+
+// Ambil data gambar bab ke buffer baru (PSRAM). Pemanggil membebaskan dengan EB_FREE.
+static int ebBookImage(EbBook* b, int idx, uint8_t** data, uint32_t* len) {
+  if (!b->imgs || idx < 0 || idx >= b->nImg) return EB_E_NOENT;
+  return ebZipGet(b, b->imgs[idx].path, EB_IMG_MAX, data, len);
+}
+// Ambil gambar sampul (hanya EPUB yang punya sampul).
+static int ebBookCover(EbBook* b, uint8_t** data, uint32_t* len) {
+  if (b->kind != EB_KIND_EPUB || !b->coverOff) return EB_E_NOENT;
+  return ebZipGet(b, ebPoolStr(b, b->coverOff), 8u * 1024u * 1024u, data, len);
+}
+
 // Muat bab (EPUB: dari zip; TXT: sudah dimuat). Teks lama dibuang.
 static int ebBookLoadCh(EbBook* b, int ch) {
   if (b->kind == EB_KIND_TXT) return ch == 0 ? EB_OK : EB_E_NOENT;
@@ -1354,6 +1704,10 @@ static int ebBookLoadCh(EbBook* b, int ch) {
   char* out = (char*)EB_ALLOC(cap);
   if (!out) { EB_FREE(raw); return EB_E_NOMEM; }
   EbOut o; ebOutInit(&o, out, cap);
+  if (b->imgs) { EB_FREE(b->imgs); b->imgs = nullptr; }
+  b->nImg = 0; b->loadCh = ch;
+  b->imgs = (EbImg*)EB_ALLOC(sizeof(EbImg) * EB_MAX_CHIMG);
+  if (b->imgs) { o.img = ebChImg; o.imgCtx = b; }
   ebHtmlToText(raw, rl, &o);
   EB_FREE(raw);
   out[o.len] = 0;
@@ -1367,7 +1721,11 @@ static int ebBookOpen(EbBook* b, EbRd rd, int kind) {
   if (!b->pool) return EB_E_NOMEM;
   b->kind = kind; b->rd = rd;
   int r;
-  if (kind == EB_KIND_TXT) {
+  if (kind == EB_KIND_MD) {
+    b->kind = EB_KIND_TXT;                           // setelah dikonversi, md diperlakukan seperti TXT
+    r = ebMdLoad(b);
+    if (r == EB_OK) ebTxtBuildToc(b);
+  } else if (kind == EB_KIND_TXT) {
     r = ebTxtLoad(b);
     if (r == EB_OK) ebTxtBuildToc(b);
   } else {
@@ -1385,15 +1743,80 @@ struct EbLay {
   int16_t width;        // lebar area teks
   int16_t indent;       // indent baris pertama paragraf
   int16_t rows;         // baris per halaman
+  uint8_t uni;          // v2: 1 = font punya glyph Unicode (cpw valid)
+  int (*cpw)(uint32_t cp);   // v2: lebar piksel codepoint non-ASCII; <= 0 = font tak punya glyph -> dilipat ke ASCII
 };
 struct EbLine {
   uint32_t start, end, next;   // [start,end) teks yang digambar; next = awal baris berikut
   int16_t x, w;                // posisi x (relatif area teks) dan lebar teks
   uint8_t head, empty, nextHead;
+  uint8_t endPara;             // v2: baris terakhir paragraf (tidak di-justify)
+  uint8_t split;               // v2: baris dipotong di tengah kata (tidak di-justify)
+  int32_t img;                 // v2: >= 0 = penanda gambar nomor ini
 };
 
 static inline int ebAdv(const EbLay* L, char c) {
   uint8_t u = (uint8_t)c; return (u >= 32 && u < 127) ? L->adv[u] : 0;
+}
+
+// Lebar piksel karakter pada t[r] dan jumlah byte yang dipakai (*step). Mengenali UTF-8; byte rusak = '?'.
+static int ebCharW(const EbLay* L, const char* t, uint32_t r, uint32_t len, int* step) {
+  uint8_t u = (uint8_t)t[r];
+  if (u < 0x80) { *step = 1; return (u >= 32 && u < 127) ? L->adv[u] : 0; }
+  uint32_t cp; bool bad;
+  int n = ebUtf8((const uint8_t*)t + r, len - r, &cp, &bad);
+  if (n <= 0 || bad) { *step = 1; return L->adv['?']; }
+  *step = n;
+  if (L->uni && L->cpw && ebUniKeep(cp)) { int w = L->cpw(cp); if (w > 0) return w; }
+  char f[4]; int fn = ebCpToAscii(cp, f);
+  if (fn < 0) return L->adv['?'];
+  int w = 0; for (int i = 0; i < fn; i++) w += ebAdv(L, f[i]);
+  return w;
+}
+
+// Ubah teks t[a,b) (boleh UTF-8) menjadi string yang BISA digambar font aktif: codepoint yang dicakup
+// font Unicode dipertahankan, sisanya dilipat ke ASCII. *wpx = lebar piksel (sama dgn yang dipakai tata letak).
+static int ebRunText(const EbLay* L, const char* t, uint32_t a, uint32_t b, char* out, int cap, int* wpx) {
+  int w = 0, o = 0; uint32_t r = a;
+  while (r < b && o < cap - 5) {
+    uint8_t u = (uint8_t)t[r];
+    if (u < 0x80) {
+      if (u >= 32 && u < 127) { out[o++] = (char)u; w += L->adv[u]; }
+      r++; continue;
+    }
+    uint32_t cp; bool bad;
+    int n = ebUtf8((const uint8_t*)t + r, b - r, &cp, &bad);
+    if (n <= 0 || bad) { out[o++] = '?'; w += L->adv['?']; r++; continue; }   // rusak/terpotong: sama dgn ebCharW
+    r += (uint32_t)n;
+    if (L->uni && L->cpw && ebUniKeep(cp)) {
+      int cw = L->cpw(cp);
+      if (cw > 0) { o += ebEncUtf8(cp, out + o); w += cw; continue; }
+    }
+    char f[4]; int fn = ebCpToAscii(cp, f);
+    if (fn < 0) { out[o++] = '?'; w += L->adv['?']; continue; }
+    for (int i = 0; i < fn; i++) if ((uint8_t)f[i] >= 32 && (uint8_t)f[i] < 127) { out[o++] = f[i]; w += ebAdv(L, f[i]); }
+  }
+  out[o] = 0;
+  if (wpx) *wpx = w;
+  return o;
+}
+
+// Salin teks UTF-8 sebagai ASCII murni (judul/pengarang untuk UI berfont ASCII). Urutan terpotong dibuang.
+static void ebFoldAscii(const char* src, char* out, int cap) {
+  int o = 0; uint32_t n = (uint32_t)strlen(src), r = 0;
+  while (r < n && o < cap - 5) {
+    uint8_t u = (uint8_t)src[r];
+    if (u < 0x80) { if (u >= 32 && u != 0x7F) out[o++] = (char)u; r++; continue; }
+    uint32_t cp; bool bad;
+    int k = ebUtf8((const uint8_t*)src + r, n - r, &cp, &bad);
+    if (k <= 0) break;
+    if (bad) { out[o++] = '?'; r++; continue; }
+    r += (uint32_t)k;
+    char f[4]; int fn = ebCpToAscii(cp, f);
+    if (fn < 0) { out[o++] = '?'; continue; }
+    for (int i = 0; i < fn; i++) if ((uint8_t)f[i] >= 32 && (uint8_t)f[i] < 127) out[o++] = f[i];
+  }
+  out[o] = 0;
 }
 
 // apakah paragraf yang memuat pos adalah judul? (untuk halaman yang mulai di tengah paragraf)
@@ -1413,10 +1836,19 @@ static bool ebLine(const char* t, uint32_t len, uint32_t pos, bool head, const E
   bool para = (pos == 0 || t[pos - 1] == '\n');
   if (t[p] == 1) { head = true; p++; para = true; }
   else if (para) head = false;
-  o->head = head ? 1 : 0; o->empty = 0; o->nextHead = 0;
+  o->head = head ? 1 : 0; o->empty = 0; o->nextHead = 0; o->endPara = 0; o->split = 0; o->img = -1;
   o->start = p; o->x = 0; o->w = 0;
+  if (p < len && t[p] == 2 && para) {               // penanda gambar: \x02 <angka> \n
+    int32_t id = 0; uint32_t q = p + 1;
+    while (q < len && t[q] >= '0' && t[q] <= '9' && id < 100000) { id = id * 10 + (t[q] - '0'); q++; }
+    while (q < len && t[q] != '\n') q++;
+    o->end = q; o->next = (q < len) ? q + 1 : q; o->empty = 1; o->endPara = 1; o->img = id;
+    o->head = 0;
+    if (o->next <= pos) o->next = pos + 1;
+    return true;
+  }
   if (p >= len || t[p] == '\n') {
-    o->end = p; o->next = (p < len) ? p + 1 : p; o->empty = 1;
+    o->end = p; o->next = (p < len) ? p + 1 : p; o->empty = 1; o->endPara = 1;
     if (o->next <= pos) o->next = pos + 1;
     return true;
   }
@@ -1425,9 +1857,9 @@ static bool ebLine(const char* t, uint32_t len, uint32_t pos, bool head, const E
   int sp = ebAdv(L, ' ');
   int w = 0; uint32_t lineEnd = p, q = p, next = p;
   for (;;) {
-    if (q >= len || t[q] == '\n') { lineEnd = (w > 0) ? lineEnd : q; next = (q < len) ? q + 1 : q; o->nextHead = 0; break; }
-    uint32_t r = q; int ww = 0;
-    while (r < len && t[r] != ' ' && t[r] != '\n') { ww += ebAdv(L, t[r]); r++; }
+    if (q >= len || t[q] == '\n') { lineEnd = (w > 0) ? lineEnd : q; next = (q < len) ? q + 1 : q; o->nextHead = 0; o->endPara = 1; break; }
+    uint32_t r = q; int ww = 0, st = 1;
+    while (r < len && t[r] != ' ' && t[r] != '\n') { ww += ebCharW(L, t, r, len, &st); r += (uint32_t)st; }
     int add = ww + (w > 0 ? sp : 0);
     if (w + add <= avail) {
       w += add; lineEnd = r; q = r;
@@ -1435,10 +1867,15 @@ static bool ebLine(const char* t, uint32_t len, uint32_t pos, bool head, const E
       continue;
     }
     if (w == 0) {                                  // satu kata lebih lebar dari baris -> potong per huruf
-      uint32_t c = q; int cw = 0;
-      while (c < r && cw + ebAdv(L, t[c]) <= avail) { cw += ebAdv(L, t[c]); c++; }
-      if (c == q) { cw = ebAdv(L, t[c]); c++; }
-      lineEnd = c; w = cw; next = c; o->nextHead = head ? 1 : 0;
+      uint32_t c = q; int cw = 0, cs = 1;
+      for (;;) {
+        if (c >= r) break;
+        int w1 = ebCharW(L, t, c, len, &cs);
+        if (cw + w1 > avail) break;
+        cw += w1; c += (uint32_t)cs;
+      }
+      if (c == q) { cw = ebCharW(L, t, c, len, &cs); c += (uint32_t)cs; }
+      lineEnd = c; w = cw; next = c; o->nextHead = head ? 1 : 0; o->split = 1;
       break;
     }
     next = q; o->nextHead = head ? 1 : 0;           // bungkus sebelum kata ini
@@ -1452,6 +1889,7 @@ static bool ebLine(const char* t, uint32_t len, uint32_t pos, bool head, const E
 }
 
 // Paginasi seluruh teks. *pg = larik awal halaman (EB_REALLOC), *cap = kapasitas. Mengembalikan jumlah halaman.
+// v2: penanda gambar (\x02) selalu menempati satu halaman sendiri.
 static uint32_t ebPaginate(const char* t, uint32_t len, const EbLay* L, uint32_t** pg, uint32_t* cap) {
   uint32_t n = 0, pos = 0; bool head = false;
   int rows = L->rows < 1 ? 1 : L->rows;
@@ -1465,9 +1903,16 @@ static uint32_t ebPaginate(const char* t, uint32_t len, const EbLay* L, uint32_t
       *pg = np; *cap = nc;
     }
     (*pg)[n++] = pos;
+    if (t[pos] == 2) {                                // halaman gambar
+      EbLine il;
+      if (ebLine(t, len, pos, false, L, &il)) pos = il.next; else pos++;
+      if ((n & 255u) == 0) EB_YIELD();
+      continue;
+    }
     head = ebParaIsHead(t, len, pos);
     EbLine ln;
     for (int r = 0; r < rows && pos < len; r++) {
+      if (t[pos] == 2) break;                         // gambar memulai halaman baru
       if (!ebLine(t, len, pos, head, L, &ln)) break;
       pos = ln.next; head = ln.nextHead != 0;
     }

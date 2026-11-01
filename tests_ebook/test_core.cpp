@@ -138,6 +138,92 @@ static int cmdLayout(int argc, char** argv) {
   return bad ? 1 : 0;
 }
 
+
+// ---------------------------------------------------------------------
+// v2: perintah tambahan
+//   book <epub|txt|md> <in> <outdir> <keepUni 0/1>   buka buku, dump metadata + teks + gambar
+//   uilayout <text.txt> <width> <rows> <mode>       invarian tata letak UTF-8 (mode 0 = font ASCII, 1 = font Unicode, 2 = Unicode tanpa Yunani)
+//   fold <teks>                                     ebFoldAscii
+// ---------------------------------------------------------------------
+static int fakeCpw1(uint32_t cp) { (void)cp; return 7; }
+static int fakeCpw2(uint32_t cp) { return (cp >= 0x370 && cp <= 0x3FF) ? 0 : 7; }
+
+static int cmdBook(int argc, char** argv) {
+  if (argc < 6) return 2;
+  ebKeepUni = (uint8_t)atoi(argv[5]);
+  int kind = !strcmp(argv[2], "epub") ? EB_KIND_EPUB : !strcmp(argv[2], "md") ? EB_KIND_MD : EB_KIND_TXT;
+  FileCtx fc; fc.f = fopen(argv[3], "rb"); if (!fc.f) { printf("open gagal\n"); return 2; }
+  fseek(fc.f, 0, SEEK_END); EbRd rd; rd.size = (uint32_t)ftell(fc.f); rd.read = fileRead; rd.ctx = &fc;
+  EbBook b;
+  int r = ebBookOpen(&b, rd, kind);
+  if (r != EB_OK) { printf("ERR %d %s\n", r, ebErrStr(r)); fclose(fc.f); return 1; }
+  printf("TITLE\t%s\nAUTHOR\t%s\nCOVER\t%s\nCHAPTERS\t%d\nNTOC\t%d\n", b.title, b.author, b.coverOff ? ebPoolStr(&b, b.coverOff) : "", ebBookChapters(&b), b.nToc);
+  if (b.kind == EB_KIND_EPUB) {
+    uint8_t* d; uint32_t dl;
+    int cr = ebBookCover(&b, &d, &dl);
+    printf("COVERGET\t%d\t%u\n", cr, cr == EB_OK ? dl : 0);
+    if (cr == EB_OK) { char p[512]; snprintf(p, sizeof(p), "%s/cover.bin", argv[4]); writeFile(p, d, dl); EB_FREE(d); }
+  }
+  for (int i = 0; i < ebBookChapters(&b); i++) {
+    if (b.kind == EB_KIND_EPUB) { int lr = ebBookLoadCh(&b, i); if (lr != EB_OK) { printf("CHERR\t%d\t%d\n", i, lr); continue; } }
+    char p[512]; snprintf(p, sizeof(p), "%s/%03d.txt", argv[4], i);
+    writeFile(p, b.text, b.textLen);
+    for (int k = 0; k < b.nImg; k++) {
+      uint8_t* d; uint32_t dl; int ir = ebBookImage(&b, k, &d, &dl);
+      printf("IMG\t%d\t%d\t%s\t%u\t%d\t%u\n", i, k, b.imgs[k].path, b.imgs[k].usize, ir, ir == EB_OK ? dl : 0);
+      if (ir == EB_OK) EB_FREE(d);
+    }
+  }
+  ebBookClose(&b); fclose(fc.f);
+  return 0;
+}
+
+static int cmdUiLayout(int argc, char** argv) {
+  if (argc < 6) return 2;
+  uint32_t len; uint8_t* t = slurp(argv[2], &len); if (!t) return 2;
+  int width = atoi(argv[3]), rows = atoi(argv[4]), mode = atoi(argv[5]);
+  EbLay L; fakeLay(&L, width, rows);
+  L.uni = (mode >= 1); L.cpw = mode == 1 ? fakeCpw1 : mode == 2 ? fakeCpw2 : nullptr;
+  uint32_t* pg = nullptr; uint32_t cap = 0;
+  uint32_t n = ebPaginate((const char*)t, len, &L, &pg, &cap);
+  int bad = 0, imgPages = 0; uint32_t nonAscii = 0;
+  for (uint32_t pi = 0; pi < n; pi++) {
+    uint32_t pos = pg[pi], endp = (pi + 1 < n) ? pg[pi + 1] : len;
+    if (t[pos] == 2) {                                           // halaman gambar: tepat satu baris gambar
+      EbLine il; imgPages++;
+      if (!ebLine((const char*)t, len, pos, false, &L, &il) || il.img < 0) { printf("halaman gambar tanpa img\n"); bad++; }
+      else if (il.next != endp && !(il.next >= len)) { printf("halaman gambar %u memuat lebih dari satu paragraf\n", pi); bad++; }
+      continue;
+    }
+    bool head = ebParaIsHead((const char*)t, len, pos);
+    int lines = 0; EbLine ln;
+    while (lines < rows && pos < endp && ebLine((const char*)t, len, pos, head, &L, &ln)) {
+      if (ln.img >= 0) { printf("gambar di tengah halaman %u\n", pi); bad++; break; }
+      char buf[400]; int wpx = 0;
+      ebRunText(&L, (const char*)t, ln.start, ln.end, buf, sizeof(buf), &wpx);
+      for (const char* q = buf; *q; q++) {
+        if ((uint8_t)*q >= 0x80) nonAscii++;
+        else if ((uint8_t)*q < 32) { printf("kontrol di keluaran p%u\n", pi); bad++; }
+      }
+      if (mode == 0) for (const char* q = buf; *q; q++) if ((uint8_t)*q >= 0x80) { printf("font ASCII tapi keluaran non-ASCII\n"); bad++; break; }
+      int avail = width - ((ln.x == L.indent && !ln.head) ? L.indent : 0);
+      if (!ln.head && !ln.empty && wpx > avail && ln.end - ln.start > 1 && !ln.split) { printf("baris kelebaran %d>%d\n", wpx, avail); bad++; }
+      if (!ln.empty && wpx != ln.w) { printf("lebar ebRunText %d != ebLine %d (p%u)\n", wpx, ln.w, pi); bad++; }
+      pos = ln.next; head = ln.nextHead != 0; lines++;
+    }
+  }
+  printf("pages=%u imgPages=%d nonAscii=%u bad=%d\n", n, imgPages, nonAscii, bad);
+  free(pg); free(t);
+  return bad ? 1 : 0;
+}
+
+static int cmdFold(int argc, char** argv) {
+  if (argc < 3) return 2;
+  char out[512]; ebFoldAscii(argv[2], out, sizeof(out));
+  printf("%s\n", out);
+  return 0;
+}
+
 static uint32_t rngState = 1;
 static uint32_t rnd() { rngState = rngState * 1664525u + 1013904223u; return rngState >> 8; }
 
@@ -188,5 +274,8 @@ int main(int argc, char** argv) {
   if (!strcmp(argv[1], "txt")) return cmdTxt(argc, argv);
   if (!strcmp(argv[1], "layout")) return cmdLayout(argc, argv);
   if (!strcmp(argv[1], "fuzz")) return cmdFuzz(argc, argv);
+  if (!strcmp(argv[1], "book")) return cmdBook(argc, argv);
+  if (!strcmp(argv[1], "uilayout")) return cmdUiLayout(argc, argv);
+  if (!strcmp(argv[1], "fold")) return cmdFold(argc, argv);
   return 2;
 }

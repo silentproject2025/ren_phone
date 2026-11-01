@@ -73,7 +73,7 @@ NyxOS tidak berbasis Android maupun Linux. Peluncur aplikasi (launcher), pusat n
 | Baterai (INA219), Galeri, HWmonitor, Profil, dan lainnya | `OK` | |
 | **Telepon (SIP dan LAN)** | `SEBAGIAN` | Teruji dengan `sip2sip.info` melalui TCP. Penyedia lain, mode LAN, dan TURN belum terkonfirmasi. |
 | Kamera (OV2640 pada ESP32-CAM) | `OK` | Seluruh fitur telah diuji pemilik, termasuk link 3 Mbaud dengan kualitas JPEG 10. Lihat [`KAMERA.md`](./KAMERA.md). |
-| Buku (pembaca `.txt` dan `.epub`) | `BETA` | Logika inti (inflate, ZIP, EPUB, HTML ke teks, tata letak) diuji di komputer; antarmuka belum diuji pada perangkat. Lihat bagian *App Buku* di bawah. |
+| Buku (pembaca `.txt`, `.md` dan `.epub`) | `BETA` | Logika inti (inflate, ZIP, EPUB, HTML ke teks, tata letak) diuji di komputer; antarmuka belum diuji pada perangkat. Lihat bagian *App Buku* di bawah. |
 | SPI Overclock layar | `HW` | Hasil bergantung pada batas fisik kabel. |
 | NyxPPU (mesin piksel) | `EXP` | Fase 1; hanya tersedia pada aplikasi PPU Demo. |
 
@@ -924,19 +924,24 @@ Kode pihak ketiga mengikuti lisensinya masing-masing:
 
 ---
 
-## App Buku (pembaca `.txt` dan `.epub`) `BETA`
+## App Buku (pembaca `.txt`, `.md` dan `.epub`) `BETA`
 
-Salin file `.txt` atau `.epub` ke folder `/books` pada SD card (dibuat otomatis; file di root SD juga ikut terdaftar), lalu buka app **Buku**.
+Salin file `.txt`, `.md` atau `.epub` ke folder `/books` pada SD card (dibuat otomatis; file di root SD juga ikut terdaftar), lalu buka app **Buku**.
 
 | Aksi | Hasil |
 |---|---|
-| Ketuk sepertiga kanan / geser ke kiri | Halaman berikutnya |
+| Ketuk sepertiga kanan / geser ke kiri | Halaman berikutnya (dengan animasi geser) |
 | Ketuk sepertiga kiri / geser ke kanan | Halaman sebelumnya |
-| Ketuk tengah | Menu: slider halaman, **Isi** (daftar isi), **Aa** (ganti font), **Tema**, **Tutup** (kembali ke daftar buku) |
+| Ketuk tengah | Menu: slider halaman; **Isi**, **Aa** (font), **Tema**, **Tutup**; **Rata** (rata kiri-kanan) dan **Animasi** (hidup/mati) |
+| Ikon kaca pembesar (perpustakaan) | Cari judul / penulis dengan keyboard sistem; **x** membersihkan |
+| Chip Terakhir / Judul / Penulis | Ganti urutan daftar |
 
-- **Font:** Sans, Serif, Mono, Kecil, Sans+, Serif+. **Tema baca:** Terang, Sepia, Gelap, Hitam (terpisah dari tema sistem).
-- **Posisi baca** disimpan per buku di `/books/.nyxreader` (bab + offset teks, jadi tetap tepat setelah ganti font atau orientasi). Daftar buku mengurutkan buku terakhir dibaca di atas dan menampilkan persen terbaca.
+- **Perpustakaan:** sampul EPUB (thumbnail 36x48, disimpan di `/books/.covers`), judul + penulis dari metadata EPUB (cache di `/books/.nyxmeta`, EPUB diproses sekali di latar), persen terbaca, dan tanda **Selesai** saat buku dibaca sampai akhir. Garis tipis di bawah judul menunjukkan kemajuan menyiapkan sampul.
+- **Teks rata kiri-kanan** (bisa dimatikan lewat menu). Baris yang akan terlalu renggang dibiarkan rata kiri.
+- **Font:** Sans, Serif, Mono, Kecil, Sans+, Serif+ (font GFX bawaan, ASCII). **Font Unicode** `Sans U`, `Serif U`, `Mono U`, `Sans U+`, `Serif U+` muncul di tombol **Aa** bila file `.vlw` ada di `/books/fonts` (salin isi `sd_books_fonts/`). Mencakup Latin-1/Latin Extended-A (aksen), Yunani modern, Kiril dasar, kutip/strip melengkung, elipsis, euro. CJK, Arab, Thai, dll tetap tampil `?`. Tanpa file `.vlw`, huruf beraksen dilipat ke huruf dasar seperti sebelumnya. File dibuat ulang dengan `python3 tools/make_vlw.py`.
+- **Gambar di EPUB:** gambar JPEG (baseline) dan PNG di dalam bab tampil satu halaman penuh; hiasan < 3 KB dilewati; JPEG progresif, GIF, SVG, WebP tidak didukung (halaman diberi keterangan).
+- **Markdown (`.md`):** judul (`#`), daftar, kutipan, blok kode, tabel, garis pemisah, tebal/miring/kode/tautan dibersihkan menjadi teks; judul masuk daftar isi. Batas 1 MB. Gambar markdown tampil sebagai `[teks alt]`.
+- **Posisi baca** disimpan per buku di `/books/.nyxreader` (bab + offset teks, jadi tetap tepat setelah ganti font atau orientasi) bersama pilihan font, tema, rata, animasi dan urutan.
 - **EPUB 2 dan 3:** bab dibaca satu per satu dari ZIP (hemat RAM); daftar isi dari NCX atau `nav`. ZIP64 dan EPUB ber-DRM tidak didukung.
-- **TXT:** UTF-8, UTF-16 (dengan BOM), Latin-1/Windows-1252. Teks berbaris-keras (gaya Project Gutenberg) disambung ulang menjadi paragraf. Baris seperti `Chapter 1`, `BAB IV`, `Prolog` dikenali sebagai judul dan masuk daftar isi. Batas 3 MB per file (sisanya dipotong dengan pemberitahuan).
-- **Batasan layar:** font bawaan hanya ASCII. Huruf beraksen ditampilkan sebagai huruf dasar, tanda kutip dan strip melengkung diluruskan, dan aksara non-Latin (CJK, Arab, Kiril) tampil sebagai `?`. Gambar di dalam EPUB tidak ditampilkan.
-- **Pengujian:** `tests_ebook/` (jalankan `python3 tests_ebook/test_ebook.py`) menguji inflate terhadap zlib, EPUB 2/3 buatan, TXT berbagai penyandian, invarian tata letak, dan fuzz dengan AddressSanitizer. Sintaks antarmuka diperiksa dengan *mock API* (`tests_ebook/mock_arduino.h`). Antarmuka belum diuji pada perangkat.
+- **TXT:** UTF-8, UTF-16 (dengan BOM), Latin-1/Windows-1252. Teks berbaris-keras (gaya Project Gutenberg) disambung ulang menjadi paragraf. Baris seperti `Chapter 1`, `BAB IV`, `Prolog` dikenali sebagai judul dan masuk daftar isi. Batas 3 MB per file.
+- **Pengujian:** `tests_ebook/` — `python3 tests_ebook/test_ebook.py` (inflate, EPUB, TXT, tata letak, fuzz), `python3 tests_ebook/test_ebook_v2.py` (UTF-8 + lipat, gambar EPUB, sampul/metadata, Markdown) dan `python3 tests_ebook/run_ui_test.py` (alur antarmuka dengan *mock* LovyanGFX/SD/JPEGDEC/keyboard), semuanya dengan AddressSanitizer. Dekode JPEG/PNG, pemuatan VLW dan animasi pada layar sungguhan **belum diuji pada perangkat**.
