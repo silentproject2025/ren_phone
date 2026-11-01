@@ -29,7 +29,7 @@
 #define ABOUT_FW_VERSION   "v119"      // samakan dengan nomor versi terakhir di komentar phone.ino
 #define ABOUT_BOARD_NAME   "ESP32-S3 + ILI9341"
 
-#define ABOUT_MAX_ROWS     24
+#define ABOUT_MAX_ROWS     32
 #define ABOUT_KEY_LEN      18
 #define ABOUT_VAL_LEN      44
 
@@ -149,6 +149,7 @@ static void aboutRefresh() {
            (unsigned)(mac >> 24) & 0xFF, (unsigned)(mac >> 32) & 0xFF, (unsigned)(mac >> 40) & 0xFF);
   aboutAdd("MAC", a);
 
+  nyxAboutRows();   // NYX-EXTRAS-V1: reset terakhir, layar & RAM saat crash, backtrace
   aboutFmtUptime(a, sizeof(a), millis());
   aboutAdd("Waktu aktif", a);
 }

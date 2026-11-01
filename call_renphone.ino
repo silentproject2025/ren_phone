@@ -2506,6 +2506,9 @@ static bool callOvl = false;            // true = layar panggilan menimpa semua 
 static bool callOvlLocked = false;
 static uint8_t callPrevPhase = 0;
 static bool callPillShown = false;
+static bool callBanner = false;            // NYX-EXTRAS-V1: banner panggilan masuk (HP tidak terkunci)
+static uint32_t callBannerT0 = 0;
+static bool callBannerSupp = false;        // telan sisa sentuhan sampai jari lepas
 static uint32_t callPollMs = 0, callTimerMs = 0;
 
 static void callRecentSave() {
@@ -2673,6 +2676,68 @@ void callEnter() {
 }
 void callExit() { callCfgEdit = -1; }
 
+// ---------------------------------------------------------------------
+//  BANNER PANGGILAN MASUK (NYX-EXTRAS-V1)
+//  HP terbuka + ada panggilan: pil kecil di atas layar dgn tombol Tolak / Angkat,
+//  app yang sedang dipakai tidak terganggu. Ketuk badan banner = layar penuh.
+//  Terkunci -> tetap layar penuh seperti sebelumnya.
+// ---------------------------------------------------------------------
+static void callBannerRect(int& x, int& y, int& w, int& h) {
+  w = SCR_W - 16; h = 44; x = 8;
+  uint32_t age = millis() - callBannerT0;
+  float k = age >= 300 ? 1.0f : (float)age / 300.0f;
+  float q = 1.0f - k;
+  k = 1.0f - q * q * q;                                  // ease-out cubic
+  y = (int)(-h + (h + 6) * k);                           // turun dari atas layar sampai y = 6
+}
+
+bool callBannerActive() { return callBanner; }
+
+void drawCallBanner(LGFX_Sprite& s) {
+  if (!callBanner) return;
+  int x, y, w, h; callBannerRect(x, y, w, h);
+  char pe[44];
+  callLock(); callCopy(pe, sizeof(pe), callPeer); callUnlock();
+  iosRR(s, x + 1, y + 3, w, h, 14, blend565(T().bg, 0x0000, 150));          // bayangan
+  iosRR(s, x, y, w, h, 14, T().surface2);
+  s.drawRoundRect(x, y, w, h, 14, blend565(T().surface2, T().text, 46));    // garis tipis
+  int ax = x + 8 + 13, ay = y + h / 2;
+  s.fillCircle(ax, ay, 13, T().accent);
+  char ini[2] = { pe[0] ? (char)toupper((unsigned char)pe[0]) : '?', 0 };
+  s.setTextSize(2); s.setTextColor(T().bg); s.setCursor(ax - 5, ay - 7); s.print(ini);
+  int btnW = 50, gap = 6, bx2 = x + w - 8 - btnW, bx1 = bx2 - gap - btnW;
+  int tx = ax + 13 + 8;
+  s.setTextSize(1);
+  s.setTextColor(T().subtext); s.setCursor(tx, y + 9); s.print(callIsLan ? "Panggilan LAN" : "Panggilan masuk");
+  String nm = pe; int maxC = (bx1 - tx - 4) / 6;
+  if (maxC < 4) maxC = 4;
+  if ((int)nm.length() > maxC) nm = nm.substring(0, maxC);
+  s.setTextColor(T().text); s.setCursor(tx, y + 22); s.print(nm.c_str());
+  iosRR(s, bx1, y + 9, btnW, 26, 13, T().danger);
+  s.setTextColor(T().bg); s.setCursor(bx1 + (btnW - (int)s.textWidth("Tolak")) / 2, y + 18); s.print("Tolak");
+  iosRR(s, bx2, y + 9, btnW, 26, 13, T().good);
+  s.setTextColor(T().bg); s.setCursor(bx2 + (btnW - (int)s.textWidth("Angkat")) / 2, y + 18); s.print("Angkat");
+}
+
+// true = sentuhan ditelan banner (jangan diteruskan ke app di bawahnya)
+bool callBannerTouch(bool touched, bool newT, int tx, int ty) {
+  if (!callBanner) { callBannerSupp = false; return false; }
+  if (callBannerSupp) { if (!touched) callBannerSupp = false; return touched; }
+  if (!touched) return false;
+  int x, y, w, h; callBannerRect(x, y, w, h);
+  bool inside = tx >= x && tx <= x + w && ty <= y + h;
+  if (!inside) return false;
+  if (!newT) return true;
+  int btnW = 50, gap = 6, bx2 = x + w - 8 - btnW, bx1 = bx2 - gap - btnW;
+  if (tx >= bx2 - 4)      { callPost(CRQ_ANSWER, ""); callBanner = false; }
+  else if (tx >= bx1 - 4) { callPost(CRQ_REJECT, ""); callBanner = false; }
+  else                    { callBanner = false; callOvl = true; callOvlLocked = false; }
+  callBannerSupp = true;
+  vibTap();
+  needRedraw = true;
+  return true;
+}
+
 bool callOverlayActive() { return callOvl; }
 
 static bool callGameBusy() {
@@ -2698,7 +2763,12 @@ void callLoopPoll() {
       callDbgPush("-> ditolak: NES/DOOM jalan");
       callPost(CRQ_REJECT, "");
     } else {
-      callOvl = true; callOvlLocked = locked;
+      if (!locked && curScreen() != SCR_CALL) {          // NYX-EXTRAS-V1: terbuka -> banner kecil; ketuk badan banner = layar penuh
+        callBanner = true; callBannerT0 = millis(); callBannerSupp = false;
+        callOvl = false; callOvlLocked = false;
+      } else {
+        callOvl = true; callOvlLocked = locked;
+      }
       callMarkU(71);
       homeAodWake();
       callMarkU(72);
@@ -2707,7 +2777,7 @@ void callLoopPoll() {
     }
   }
   uint8_t ph = callPhase;
-  if (ph == CPH_INCOMING && callOvl && now - callLastRingVib > 2600) {
+  if (ph == CPH_INCOMING && (callOvl || callBanner) && now - callLastRingVib > 2600) {
     callLastRingVib = now;
     static const VibStep rp[] = { {1, 350}, {0, 150}, {1, 350}, {0, 1} };
     callMarkU(73);
@@ -2716,15 +2786,20 @@ void callLoopPoll() {
   }
   if (ph == CPH_ACTIVE && callPrevPhase != CPH_ACTIVE) {
     vibSuccess();
+    callBanner = false;
     if (callOvl && !callOvlLocked) {                  // diangkat saat tak terkunci -> jadi layar app biasa
       callOvl = false;
       if (curScreen() != SCR_CALL) navPush(SCR_CALL);
     }
   }
+  if (callBanner && ph == CPH_INCOMING && locked) {      // layar terkunci saat berdering -> layar penuh
+    callBanner = false; callOvl = true; callOvlLocked = true; needRedraw = true;
+  }
+  if (callBanner && ph != CPH_INCOMING) { callBanner = false; needRedraw = true; }
   callPrevPhase = ph;
   if (callEndedNew) {
     callEndedNew = false;
-    callOvl = false; callOvlLocked = false;
+    callOvl = false; callOvlLocked = false; callBanner = false;
     char st[44]; callLock(); callCopy(st, sizeof(st), callStatus); callUnlock();
     char pe[44]; callLock(); callCopy(pe, sizeof(pe), callPeer); callUnlock();
     if (callPillShown) { diHide(); callPillShown = false; }
@@ -2746,7 +2821,8 @@ void callLoopPoll() {
     callPillShown = true;
   }
   if (callToastFlag) { callToastFlag = false; showToast(callToastBuf, 2200); }
-  bool visible = callOvl || curScreen() == SCR_CALL;
+  bool visible = callOvl || callBanner || curScreen() == SCR_CALL;
+  if (callBanner && now - callBannerT0 < 360) needRedraw = true;   // animasi banner turun
   if (callDirty) { callDirty = false; if (visible) needRedraw = true; }
   if (visible && ph == CPH_ACTIVE && now - callTimerMs > 1000) { callTimerMs = now; needRedraw = true; }
   if (visible && callScanBusy && now - callTimerMs > 400) { callTimerMs = now; needRedraw = true; }

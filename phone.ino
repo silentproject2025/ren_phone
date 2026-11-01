@@ -2523,6 +2523,7 @@ void sendGeminiRequest(String promptText) {
     fullPrompt = promptText;
   }
 
+  fullPrompt = nyxVoiceInstruction() + fullPrompt; // NYX-EXTRAS-V1: Gemini boleh menulis baris @@CMD utk mengendalikan HP
   for (int attempt = 1; attempt <= MAX_ATTEMPTS && !aiSoftStopTriggered; attempt++) {
     if (attempt > 1) {
       Serial.printf("[Gemini] Percobaan %d gagal, retry ke-%d...\n", attempt - 1, attempt);
@@ -2552,6 +2553,7 @@ void sendGeminiRequest(String promptText) {
   // emang udah mepet duluan sblm AI Chat dipakai (app lain yg lg buka).
   delay(1200);
 
+  if(ok) nyxVoiceExtract(resp); // NYX-EXTRAS-V1: cabut @@CMD dari jawaban, eksekusi di loop utama
   aiResponse = resp;
   if(ok) appendAiMemory(promptText, resp); // cuma simpan tanya-jawab yg BERHASIL
   aiLoading = false;
@@ -5500,6 +5502,14 @@ void chatEnter(); void chatExit(); void drawChat(LGFX_Sprite&); void chatTouch(i
 // ---- Telepon SIP/LAN: forward declarations (call_renphone.ino) ----
 void callEnter(); void callExit(); void drawCall(LGFX_Sprite&); void callTouch(int,int,bool,bool); void callLoopPoll();
 bool callOverlayActive(); void drawCallOverlay(LGFX_Sprite&); void callOverlayTouch(bool,int,int);
+// NYX-EXTRAS-V1: prototipe fungsi nyxextras_renphone.ino & banner telepon (call_renphone.ino)
+bool callBannerActive(); void drawCallBanner(LGFX_Sprite&); bool callBannerTouch(bool,bool,int,int);
+void nyxExtrasLoopPoll(); void nyxAboutRows(); void nyxAppEnergyAdd(float);
+void nyxDrawAppEnergy(LGFX_Sprite&,int,int); void nyxAppEnergyTouch(int,int,int,int);
+String nyxVoiceInstruction(); bool nyxVoiceExtract(String&);
+void nyxShotThumbCapture(const char*); void nyxShotThumbHide(); bool nyxShotThumbActive();
+void drawShotThumb(LGFX_Sprite&); bool nyxShotThumbTouch(bool,bool,int,int);
+void nyxSkeleton(LGFX_Sprite&,int);
 // ---- Kamera: forward declarations (camera_renphone.ino) ----
 void camEnter(); void camExit(); void drawCamera(LGFX_Sprite&); void camTouch(int,int,bool,bool); void camLoopPoll();
 // ---- Buku (ebook_renphone.ino): pembaca .txt / .epub ----
@@ -11295,6 +11305,7 @@ void renderCurrentFrame(){
     if(!homeBandMode) drawDynamicIsland(canvas); // v14: overlay di atas semua layar (kecuali lock/CC/shade/App Switcher)
     if(diMenuOpen) drawDiMenu(canvas); // v90: context menu ketuk-lama, ditumpuk di atas pil DI
   }
+  if(!locked){ if(nyxShotThumbActive()) drawShotThumb(canvas); if(callBannerActive()) drawCallBanner(canvas); } // NYX-EXTRAS-V1
   if(powerMenuOpen && !callOverlayActive()) drawPowerMenu(canvas); // menu Daya: modal di atas semuanya
 }
 
@@ -16901,7 +16912,7 @@ int apodSearchRightX(){ return SCR_W-4; }
 int apodSearchTopY(){ return apodImgTop()+4; }
 
 void drawApodLoading(LGFX_Sprite& s){
-  drawLoadingRing(s,SCR_W/2,SCR_H/2-6,"Mengambil data APOD dari NASA...");
+  nyxSkeleton(s,0); // NYX-EXTRAS-V1
 }
 void drawApodError(LGFX_Sprite& s){
   s.setTextColor(T().danger); s.setTextSize(1);
@@ -17480,7 +17491,7 @@ void drawNeoDetail(LGFX_Sprite& s){
 }
 void drawNeo(LGFX_Sprite& s){
   s.fillSprite(T().bg); drawStatusBar(s);
-  if(neoPage==NEO_LOADING){ drawNasaLoading(s,"Mengambil data NEO dari NASA..."); return; }
+  if(neoPage==NEO_LOADING){ nyxSkeleton(s,1); return; }
   if(neoPage==NEO_ERROR){ drawNasaError(s,"Gagal memuat NEO Asteroid:",neoErrorMsg); return; }
   // v23: kolom cari TETAP digambar di atas keypad/keyboard (jgn ilang!),
   // biar user msh liat apa yg lg diketik & kolomnya gak keliatan "nutup".
@@ -17870,7 +17881,7 @@ void drawEpicView(LGFX_Sprite& s){
 }
 void drawEpic(LGFX_Sprite& s){
   s.fillSprite(T().bg); drawStatusBar(s);
-  if(epicPage==EPIC_LOADING){ drawNasaLoading(s,"Mengambil citra Bumi dari EPIC..."); return; }
+  if(epicPage==EPIC_LOADING){ nyxSkeleton(s,2); return; }
   if(epicPage==EPIC_ERROR){ drawNasaError(s,"Gagal memuat Bumi EPIC:",epicErrorMsg); return; }
   // v23: kolom cari TETAP kelihatan di atas keypad/keyboard.
   if(numPadVisible){ drawEpicView(s); drawNumPad(s); return; }
@@ -18268,7 +18279,7 @@ void drawImgLibView(LGFX_Sprite& s){
 }
 void drawImgLib(LGFX_Sprite& s){
   s.fillSprite(T().bg); drawStatusBar(s);
-  if(imgLibPage==ILIB_LOADING){ drawNasaLoading(s,"Mencari di NASA Image Library..."); return; }
+  if(imgLibPage==ILIB_LOADING){ nyxSkeleton(s,3); return; }
   if(imgLibPage==ILIB_ERROR){ drawNasaError(s,"Pencarian gagal:",imgLibErrorMsg); return; }
   // v23: kolom cari TETAP kelihatan di atas keyboard, jgn ilang (kata
   // kunci teks bebas -> tetap pakai keyboard QWERTY biasa, bukan keypad
@@ -19538,6 +19549,7 @@ void loop(){
   musicLoopPoll(); // Musik: toast/redraw/simpan prefs -- no-op kalau app belum pernah dibuka
   mjpegThumbPoll(); // Daftar video: bikin thumbnail yg belum ada, 1 per putaran -- no-op di luar app MJPEG
   featuresLoopPoll(); // Stopwatch/Timer tick, screenshot, Voice Memo, cuaca (features_renphone.ino)
+  nyxExtrasLoopPoll(); // NYX-EXTRAS-V1: log crash, energi per app, perintah suara, thumbnail SS
   appMemGuardTick(); // v92: "batas aman RAM" -- kill cache RAM app astronomi paling lama nganggur kalau RAM internal mepet, lihat definisinya dekat appOnEnter/appOnExit
   diUpdate();              // v14: urus animasi/auto-collapse Dynamic Island
   triviaPeriodicUpdate();  // v14: urus spinner loading & auto-lanjut soal Trivia
@@ -19582,6 +19594,11 @@ void loop(){
   // controlCenterOpen di bawah. Dicek SEBELUM locked cuma buat konsisten
   // urutan prioritas (praktiknya gak akan pernah true bareng locked, krn
   // gesture pembukanya cuma nyala selagi !locked -- lihat di bawah).
+  // NYX-EXTRAS-V1: banner telepon masuk & thumbnail screenshot menelan sentuhan yg mengenai dirinya
+  if(callBannerTouch(touched,newT,tx,ty) || nyxShotThumbTouch(touched,newT,tx,ty)){
+    if(needRedraw){ renderCurrentFrame(); push(); needRedraw=false; }
+    wasTouched=touched; delay(1); return;
+  }
   if(callOverlayActive()){
     callOverlayTouch(newT,tx,ty);
     if(needRedraw){ renderCurrentFrame(); push(); needRedraw=false; }

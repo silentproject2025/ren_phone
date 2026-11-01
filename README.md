@@ -62,6 +62,7 @@ NyxOS tidak berbasis Android maupun Linux. Peluncur aplikasi (launcher), pusat n
 | Antarmuka sistem (Home, Lock Screen, Control Center, dan lainnya) | `OK` | Digunakan sehari-hari. Termasuk tema Nyx, ikon squircle, widget bento, dan animasi buka/tutup app. |
 | Animasi mengisi daya (Lock Screen) | `OK` | Muncul saat charger dicolok dan HP terkunci. Syarat lengkap di [bagian 5.1](#51-antarmuka-sistem-ok). |
 | Gestur sistem baru (pull-to-refresh, swipe-back tepi kiri, panel mengikuti jari) | `BETA` | Kode sudah terpasang di build, belum diuji menyeluruh pada perangkat. |
+| Fitur tambahan NyxOS (perintah suara AI, energi per app, log crash, banner telepon, thumbnail screenshot, skeleton loading) | `BETA` | Kode sudah terpasang di build, belum diuji pada perangkat. Lihat bagian 5.5 dan 5.6. |
 | Chat melalui broker MQTT | `OK` | Diuji dengan broker sungguhan. |
 | Musik Bluetooth dan AVRCP | `OK` | Cover ID3, kontrol dari earbuds, mode acak AI. |
 | Pemutar AVI (seek, resume, zoom) | `OK` | |
@@ -560,6 +561,8 @@ Konsekuensinya, sistem mengenali **suara dan ucapan pemilik sendiri**, bukan sia
 
 Tanya jawab dengan Gemini melalui HTTPS, dengan masukan teks atau dikte suara. Memori percakapan disimpan di SD (`ai_memory.txt`). Membutuhkan `gemini_key.txt`.
 
+**Perintah suara `BETA`.** Gemini bisa mengendalikan HP: *buka app*, *timer*, *musik* (putar, jeda, lanjut, kembali, acak), *kecerahan*, *Home*, dan *kembali*. Di akhir jawabannya Gemini menulis baris `@@CMD {json}` (maksimal 3); baris itu dicabut dari teks yang tampil dan dijalankan oleh loop utama. Contoh: "Hei Nyx, setel timer 10 menit", "buka Musik lalu putar acak". Aksi hanya dijalankan saat HP tidak terkunci, dan hanya dari daftar aksi di atas (tidak ada hapus berkas atau matikan daya).
+
 #### Voice Memo
 
 Merekam melalui mikrofon INMP441 menjadi berkas WAV pada `/memo`, lalu diputar melalui jalur Musik BT.
@@ -568,13 +571,14 @@ Merekam melalui mikrofon INMP441 menjadi berkas WAV pada `/memo`, lalu diputar m
 
 #### Baterai (INA219) `OK`
 
-Daya dibaca dari sensor **INA219** melalui I2C. Aplikasi memiliki empat tab (Ringkas, Grafik, Sensor, Baterai) dengan kemampuan:
+Daya dibaca dari sensor **INA219** melalui I2C. Aplikasi memiliki lima tab (Ringkas, Grafik, Sensor, Baterai, Per App) dengan kemampuan:
 
 - tegangan, arus, dan daya waktu nyata, plus grafik 10 menit;
 - persentase baterai dari kurva tegangan Li-ion, kompensasi resistansi dalam, dan *coulomb counting*;
 - deteksi pengisian, mAh masuk dan keluar, estimasi sisa waktu atau waktu penuh, serta hitungan siklus;
 - pengaturan lengkap chip (shunt, PGA, resolusi ADC, *averaging*, mode operasi) yang tersimpan di NVS;
-- opsi **Arah arus** untuk membalik tanda arus jika pengkabelan shunt terbalik, dan status "Mengisi" yang memicu animasi di lock screen.
+- opsi **Arah arus** untuk membalik tanda arus jika pengkabelan shunt terbalik, dan status "Mengisi" yang memicu animasi di lock screen;
+- tab **Per App** `BETA`: mAh yang keluar dari baterai dicatat per app (app yang sedang di layar; kategori *Home* dan *Terkunci* terpisah), diurutkan dari yang paling boros. Statistik tersimpan di NVS dan direset otomatis saat baterai penuh (atau lewat tombol Reset). Ini estimasi: pemakaian latar belakang (mis. musik) ikut tercatat pada app yang sedang terbuka.
 
 **Pengkabelan:** VCC 3,3 V, GND, SDA 15, SCL 7. Resistor shunt dipasang seri pada kabel positif baterai. Nilai bawaan: shunt 100 mΩ, gain /8, kapasitas 2300 mAh, resistansi dalam 150 mΩ.
 
@@ -595,6 +599,10 @@ Memperbarui firmware dari GitHub tanpa kabel, dengan beberapa lapis pengaman.
 - Pengaman rollback baru aktif untuk pembaruan yang dilakukan oleh firmware yang sudah memuat kode ini.
 - Branch yang belum pernah di-build menampilkan pesan *Channel belum dipublikasikan*. Jalankan workflow build untuk branch tersebut satu kali agar Release `channel-<branch>` terbentuk.
 - Firmware lama yang belum memuat kode channel tidak memiliki pemilih branch; pasang satu kali melalui flasher atau SD.
+
+#### Log crash `BETA`
+
+Saat boot, NyxOS membaca alasan reset terakhir. Untuk reset tidak normal (panic, watchdog, brownout) satu baris ditulis ke `/crashlog.txt` di SD: waktu, alasan, layar yang sedang terbuka, sisa RAM internal (bebas, minimum, blok terbesar), lama menyala, dan, bila core dump flash aktif di build, task + alamat crash + backtrace (decode dengan `addr2line` terhadap berkas ELF dari CI). Detail terbaru tampil di **About Phone**. Berkas dirotasi di 32 KB (`/crashlog.old`).
 
 #### HWmonitor
 
@@ -889,6 +897,7 @@ phone_notif_center.ino          Notifikasi dan Dynamic Island
                                 wakeword, gamepad, power, doom, nes_*, features, dan lainnya)
 ppu_engine_renphone.ino         NyxPPU
 ptr_renphone.ino                Gestur sistem: pull-to-refresh, swipe-back tepi kiri, panel mengikuti jari
+nyxextras_renphone.ino          Log crash, energi per app, perintah suara Gemini, thumbnail screenshot, skeleton loading
 ryne_engine.h                   RYNE v2
 rplink.h  MjpegClass.h          Protokol link CAM dan parser MJPEG
 cam_rx.h  cam_avi.h             Penerima frame kamera dan penulis AVI (sisi S3)

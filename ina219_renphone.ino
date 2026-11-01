@@ -61,7 +61,7 @@ static const uint32_t INA_ADC_US[11]   = {84,148,276,532,1060,2130,4260,8510,170
 static const char*    INA_PGA_NAME[4]  = {"/1 40mV","/2 80mV","/4 160mV","/8 320mV"};
 static const char*    INA_MODE_NAME[8] = {"Power-down","Shunt trig","Bus trig","S+B trig","ADC off","Shunt kont","Bus kont","S+B kont"};
 static const uint16_t INA_SHUNT_PRESET[7] = {10,20,50,100,200,500,1000};
-static const char*    INA_TAB_NAME[4]  = {"Ringkas","Grafik","Sensor","Baterai"};
+static const char*    INA_TAB_NAME[5]  = {"Ringkas","Grafik","Sensor","Baterai","Per App"};
 
 // kurva tegangan-rest Li-ion 1 sel (OCV -> persen)
 static const float INA_OCV_V[22] = {3.00f,3.40f,3.61f,3.69f,3.71f,3.73f,3.75f,3.77f,3.79f,3.80f,3.82f,
@@ -404,6 +404,7 @@ void inaPoll() {
   if (dMah > 0) { inaMahOut += dMah; inaMahOutTot += dMah; inaMwhOut += dMwh; inaCycles += dMah / (float)inaCapMah; }
   else          { inaMahIn += -dMah; inaMahInTot += -dMah; inaMwhIn += -dMwh; if (inaLrnActive) inaLrnMah += -dMah; }
   if (dMah != 0) { inaCountersDirty = true; inaUnsavedMah += fabsf(dMah); }
+  if (dMah > 0) nyxAppEnergyAdd(dMah);   // NYX-EXTRAS-V1: catat mAh keluar per app
 
   // SoC: OCV (dikompensasi R dalam) + coulomb counting
   float ocv = vBat + (iMa / 1000.0f) * ((float)inaRintMohm / 1000.0f);
@@ -785,8 +786,8 @@ void drawBatteryApp(LGFX_Sprite& s) {
   iosRR(s, SCR_W - cw - 6, 24, cw, 13, 4, T().surface2);
   s.setTextColor(cc); s.setCursor(SCR_W - cw, 27); s.print(chip);
 
-  int tw = (SCR_W - 12) / 4;
-  for (int i = 0; i < 4; i++) {
+  int tw = (SCR_W - 12) / 5;
+  for (int i = 0; i < 5; i++) {
     int x = 6 + i * tw; bool act = (i == inaTab);
     iosRR(s, x + 1, INA_TAB_Y, tw - 2, INA_TAB_H, 5, act ? T().accent : T().surface2);
     s.setTextColor(act ? (uint16_t)0xFFFF : T().subtext);
@@ -796,6 +797,7 @@ void drawBatteryApp(LGFX_Sprite& s) {
   int top = INA_TOP, bottom = inaBottom();
   if (inaTab == 0) inaDrawSummary(s, top, bottom);
   else if (inaTab == 1) inaDrawGraph(s, top, bottom);
+  else if (inaTab == 4) nyxDrawAppEnergy(s, top, bottom);   // NYX-EXTRAS-V1
   else inaDrawList(s, inaTab, top);
 
   drawBack(s);
@@ -807,8 +809,8 @@ void battTouch(int x, int y, bool held, bool isNew) {
     inaRepRow = -1;
     if (isBack(x, y)) { navBack(); return; }
     if (y >= INA_TAB_Y && y < INA_TAB_Y + INA_TAB_H) {
-      int tw = (SCR_W - 12) / 4; int i = (x - 6) / tw;
-      if (x >= 6 && i >= 0 && i < 4 && inaTab != (uint8_t)i) { inaTab = (uint8_t)i; needRedraw = true; }
+      int tw = (SCR_W - 12) / 5; int i = (x - 6) / tw;
+      if (x >= 6 && i >= 0 && i < 5 && inaTab != (uint8_t)i) { inaTab = (uint8_t)i; needRedraw = true; }
       return;
     }
     int top = INA_TOP;
@@ -822,6 +824,7 @@ void battTouch(int x, int y, bool held, bool isNew) {
       }
       return;
     }
+    if (inaTab == 4) { nyxAppEnergyTouch(x, y, top, inaBottom()); needRedraw = true; return; }   // NYX-EXTRAS-V1
     if (inaTab >= 2) {
       int rh = inaRowH(inaTab), nr = inaRowsFor(inaTab), nb = inaBtnsFor(inaTab);
       if (y >= top && y < top + nr * rh) {

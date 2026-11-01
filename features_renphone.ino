@@ -50,6 +50,7 @@ void ccActScreenshot() {
   shotPending = true;
   shotReqMs = millis();
   shotArmedMs = 0;
+  nyxShotThumbHide();   // NYX-EXTRAS-V1: thumbnail lama jangan ikut terfoto
   closeControlCenter();   // panel CC menutup dulu supaya tidak ikut terfoto
   needRedraw = true;
 }
@@ -107,8 +108,8 @@ static bool screenshotSaveNow() {
   f.close();
   if (!ok) { SD_MMC.remove(path); showToast("Screenshot gagal (SD penuh?)"); vibError(); return false; }
 
-  showToast("Screenshot tersimpan di /screenshot", 1800);
-  vibSuccess();
+  nyxShotThumbCapture(path);   // NYX-EXTRAS-V1: thumbnail di pojok (ketuk = Galeri)
+  if (!nyxShotThumbActive()) { showToast("Screenshot tersimpan di /screenshot", 1800); vibSuccess(); }
   return true;
 }
 
