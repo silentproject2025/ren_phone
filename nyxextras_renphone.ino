@@ -522,8 +522,8 @@ static void nyxVoiceTick() {
 // =====================================================================
 #define NYX_TH_MIN_W    88          // lebar thumbnail = ±30% lebar layar, dijepit 88..124 px
 #define NYX_TH_MAX_W    124
-#define NYX_TH_BORDER   2
-#define NYX_TH_RADIUS   10          // radius luar bingkai
+#define NYX_TH_BORDER   3           // 2 px cincin terang + 1 px garis gelap di antara cincin & gambar
+#define NYX_TH_RADIUS   11          // radius luar bingkai
 #define NYX_TH_IN_MS    260
 #define NYX_TH_HOLD_MS  3800
 #define NYX_TH_OUT_MS   220
@@ -622,17 +622,27 @@ void drawShotThumb(LGFX_Sprite& s) {
       float d = nyxSdfRR(fp, fq, cx, scy, hw, hh, (float)ro);                 // jarak ke bayangan
       if (d >= (float)sp) continue;
       float k = d <= 0 ? 1.0f : 1.0f - d / (float)sp;
-      uint8_t a = (uint8_t)(125.0f * k * k);
-      if (a < 3) continue;
-      s.drawPixel(px, py, blend565((uint16_t)s.readPixel(px, py), 0x0000, a));
+      float kk = k * k;
+      uint16_t bgp = (uint16_t)s.readPixel(px, py);
+      int lum = ((((bgp >> 11) & 31) << 3) * 77 + (((bgp >> 5) & 63) << 2) * 150 + ((bgp & 31) << 3) * 29) >> 8;   // 0..255
+      float lt = (float)lum / 255.0f;                                          // 0 = gelap, 1 = terang
+      uint8_t aDark = (uint8_t)(150.0f * kk * lt);                              // latar terang: bayangan gelap
+      uint8_t aGlow = (uint8_t)(110.0f * kk * (1.0f - lt) * (1.0f - lt));      // latar gelap: cahaya halus warna aksen
+      if (aDark < 3 && aGlow < 3) continue;
+      uint16_t o = bgp;
+      if (aDark >= 3) o = blend565(o, 0x0000, aDark);
+      if (aGlow >= 3) o = blend565(o, T().accent, aGlow);
+      s.drawPixel(px, py, o);
     }
   }
 
-  // 2) bingkai putih membulat
-  iosRR(s, fx, fy, fw, fh, ro, T().text);
+  // 2) bingkai berlapis: cincin terang 2 px + garis gelap 1 px (memisahkan gambar dari bingkai)
+  const uint16_t hair = 0x1082;
+  iosRR(s, fx, fy, fw, fh, ro, blend565(T().text, T().bg, 22));
+  iosRR(s, fx + 2, fy + 2, fw - 4, fh - 4, ro - 2, hair);
 
   // 3) gambar dgn sudut membulat (anti-alias di tepi sudut, menyatu dgn bingkai)
-  uint16_t frameCol = T().text;
+  uint16_t frameCol = hair;
   for (int j = 0; j < nyxThH; j++) {
     for (int i = 0; i < nyxThW; i++) {
       uint16_t c = nyxThumb[j * nyxThW + i];
