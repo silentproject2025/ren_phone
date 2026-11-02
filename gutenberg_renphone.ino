@@ -61,7 +61,7 @@ static volatile uint8_t gutJob = GUT_JOB_NONE;
 static volatile uint8_t gutPhase = GUT_PH_IDLE;
 static volatile bool    gutCancel = false;
 static volatile uint32_t gutGot = 0, gutTot = 0;
-static volatile uint32_t gutLastReqMs = 0, gutEndMs = 0;
+static volatile uint32_t gutLastReqMs = 0, gutEndMs = 0, gutT0 = 0;   // gutT0 = awal data pertama (utk kecepatan)
 static char      gutMsg[64] = "";
 static char      gutDiag[56] = "";                // kode diagnosis utk layar kesalahan (+ Serial)
 static char      gutReqUrl[220] = "";
@@ -81,14 +81,35 @@ class GutSink : public Stream {                          // HTTPClient::writeToS
   int peek() override { return -1; }
   uint8_t* mem = nullptr; uint32_t cap = 0; File* file = nullptr; uint32_t limit = 0;
   uint32_t got = 0; bool over = false, sdFail = false; uint32_t lastDraw = 0;
+  // Tulis ke SD per blok besar: potongan jaringan cuma ~1,4 KB, dan SD card sangat lambat kalau ditulis sekecil itu.
+  uint8_t* wbuf = nullptr; uint32_t wlen = 0; static const uint32_t WCAP = 32768;
+  ~GutSink() { if (wbuf) heap_caps_free(wbuf); }
+  void useWriteBuffer() { if (file && !wbuf) wbuf = (uint8_t*)heap_caps_malloc(WCAP, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT); }   // gagal -> tulis langsung
+  bool flushSd() {
+    if (!file || !wbuf || !wlen) return true;
+    size_t w = file->write(wbuf, wlen);
+    bool ok = (w == wlen); wlen = 0;
+    if (!ok) sdFail = true;
+    return ok;
+  }
   size_t write(uint8_t b) override { return write(&b, 1); }
   size_t write(const uint8_t* p, size_t n) override {
     if (gutCancel) return 0;
     if (limit && got + n > limit) { over = true; return 0; }
     if (mem) { if (got + n > cap) { over = true; return 0; } memcpy(mem + got, p, n); }
-    else if (file) { size_t w = file->write(p, n); if (w != n) { sdFail = true; return 0; } }
+    else if (file) {
+      if (wbuf) {
+        size_t left = n; const uint8_t* q = p;
+        while (left) {
+          uint32_t room = WCAP - wlen;
+          uint32_t c = left < room ? (uint32_t)left : room;
+          memcpy(wbuf + wlen, q, c); wlen += c; q += c; left -= c;
+          if (wlen == WCAP && !flushSd()) return 0;
+        }
+      } else { size_t w = file->write(p, n); if (w != n) { sdFail = true; return 0; } }
+    }
     got += (uint32_t)n; gutGot = got;
-    if (gutPhase == GUT_PH_CONNECT) gutPhase = GUT_PH_DOWNLOAD;
+    if (gutPhase == GUT_PH_CONNECT) { gutPhase = GUT_PH_DOWNLOAD; gutT0 = millis(); }
     uint32_t now = millis();
     if (now - lastDraw > 180) { lastDraw = now; needRedraw = true; }
     return n;
@@ -125,7 +146,7 @@ static int gutFetch(const char* url, uint8_t* mem, uint32_t memCap, File* f, uin
   int len = http.getSize();
   if (len > 0) gutTot = (uint32_t)len;
   if (limit && len > 0 && (uint32_t)len > limit) { http.end(); return -4; }
-  GutSink sink; sink.mem = mem; sink.cap = memCap; sink.file = f; sink.limit = limit;
+  GutSink sink; sink.mem = mem; sink.cap = memCap; sink.file = f; sink.limit = limit; sink.useWriteBuffer();
   int wr = 0; bool idle = false;
   if (!manual) wr = http.writeToStream(&sink);
   else {
@@ -151,6 +172,7 @@ static int gutFetch(const char* url, uint8_t* mem, uint32_t memCap, File* f, uin
   }
   http.end();
   gutLastReqMs = millis();
+  if (f && !gutCancel && !sink.sdFail) sink.flushSd();      // sisa blok terakhir
   *outGot = sink.got;
   snprintf(gutDiag, sizeof(gutDiag), "%s wr=%d got=%u/%d%s", manual ? "http1.0" : "http1.1", wr, (unsigned)sink.got, len, idle ? " idle" : "");
   Serial.printf("[GUT] selesai: %s\n", gutDiag);
@@ -547,6 +569,16 @@ static void gutDrawProgress(LGFX_Sprite& s) {
   } else snprintf(line, sizeof(line), "%s", gutMsg);
   if (gutPhase == GUT_PH_ERROR) s.setTextColor(T().danger); else if (gutPhase == GUT_PH_DONE) s.setTextColor(T().good);
   s.setCursor(12, by + 18); s.print(line);
+  if (gutPhase == GUT_PH_DOWNLOAD) {
+    uint32_t el = millis() - gutT0;
+    if (el > 700 && got > 0) {
+      uint32_t bps = (uint32_t)((uint64_t)got * 1000 / el);
+      char sp[48];
+      if (tot > got && bps > 0) snprintf(sp, sizeof(sp), "%u KB/s   sisa ~%u dtk", (unsigned)(bps / 1024), (unsigned)((tot - got) / bps + 1));
+      else snprintf(sp, sizeof(sp), "%u KB/s", (unsigned)(bps / 1024));
+      s.setTextColor(T().subtext); s.setCursor(12, by + 32); s.print(sp);
+    }
+  }
   if (gutPhase == GUT_PH_ERROR && gutDiag[0]) { s.setTextColor(T().subtext); s.setCursor(12, by + 32); s.print(gutDiag); }
   if (gutPhase == GUT_PH_DONE)       gutDrawBtns(s, "Buka", "Kembali");
   else if (gutPhase == GUT_PH_ERROR) gutDrawBtns(s, "Coba lagi", "Kembali");
