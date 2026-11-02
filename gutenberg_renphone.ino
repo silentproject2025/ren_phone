@@ -63,7 +63,8 @@ static volatile bool    gutCancel = false;
 static volatile uint32_t gutGot = 0, gutTot = 0;
 static volatile uint32_t gutLastReqMs = 0, gutEndMs = 0, gutT0 = 0;   // gutT0 = awal data pertama (utk kecepatan)
 static char      gutMsg[64] = "";
-static char      gutDiag[56] = "";                // kode diagnosis utk layar kesalahan (+ Serial)
+static char      gutDiag[96] = "";
+static volatile uint32_t gutSdKBs = 0;                // kode diagnosis utk layar kesalahan (+ Serial)
 static char      gutReqUrl[220] = "";
 static bool      gutReqAppend = false;
 static int       gutDlIdx = -1;
@@ -83,13 +84,15 @@ class GutSink : public Stream {                          // HTTPClient::writeToS
   uint32_t got = 0; bool over = false, sdFail = false; uint32_t lastDraw = 0;
   // Tulis ke SD per blok besar: potongan jaringan cuma ~1,4 KB, dan SD card sangat lambat kalau ditulis sekecil itu.
   uint8_t* wbuf = nullptr; uint32_t wlen = 0, wcap = 0;
+  uint32_t flushMs = 0, flushBytes = 0, flushMax = 0;      // statistik tulis SD (utk diagnosis kecepatan)
   ~GutSink() { if (wbuf) heap_caps_free(wbuf); }
-  // Ukuran blok mengikuti sisa PSRAM: maks 512 KB, tapi selalu menyisakan >= 1,5 MB utk app lain (musik, kamera, dll).
+  // Ukuran blok: maks 128 KB (sisa PSRAM tetap disisakan >= 1,5 MB utk app lain). Blok yang terlalu besar justru buruk:
+  // jaringan BERHENTI dibaca selama blok ditulis ke SD, jadi blok 512 KB = jeda berdetik-detik. 128 KB = jeda ~0,1-0,4 dtk.
   // Gagal alokasi -> tulis langsung per potongan (cara lama).
   void useWriteBuffer() {
     if (!file || wbuf) return;
     size_t fb = heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM);
-    uint32_t want = 512u * 1024u;
+    uint32_t want = 128u * 1024u;
     while (want > 32768u && fb < (size_t)want + 1536u * 1024u) want >>= 1;
     wbuf = (uint8_t*)heap_caps_malloc(want, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     wcap = wbuf ? want : 0;
@@ -97,14 +100,17 @@ class GutSink : public Stream {                          // HTTPClient::writeToS
   }
   bool flushSd() {
     if (!file || !wbuf || !wlen) return true;
+    uint32_t t = millis();
     size_t w = file->write(wbuf, wlen);
+    uint32_t d = millis() - t;
+    flushMs += d; flushBytes += wlen; if (d > flushMax) flushMax = d;
     bool ok = (w == wlen); wlen = 0;
     if (!ok) sdFail = true;
     return ok;
   }
   size_t write(uint8_t b) override { return write(&b, 1); }
   size_t write(const uint8_t* p, size_t n) override {
-    if (gutCancel) return 0;
+    if (gutCancel || sdFail || over) return 0;                // sudah gagal: hentikan bersih (flag tetap menjelaskan sebabnya)
     if (limit && got + n > limit) { over = true; return 0; }
     if (mem) { if (got + n > cap) { over = true; return 0; } memcpy(mem + got, p, n); }
     else if (file) {
@@ -184,11 +190,14 @@ static int gutFetch(const char* url, uint8_t* mem, uint32_t memCap, File* f, uin
   gutLastReqMs = millis();
   if (f && !gutCancel && !sink.sdFail) sink.flushSd();      // sisa blok terakhir
   *outGot = sink.got;
-  snprintf(gutDiag, sizeof(gutDiag), "%s wr=%d got=%u/%d%s", manual ? "http1.0" : "http1.1", wr, (unsigned)sink.got, len, idle ? " idle" : "");
+  snprintf(gutDiag, sizeof(gutDiag), "%s wr=%d got=%u/%d%s%s%s%s fl=%u/%ums", manual ? "http1.0" : "http1.1", wr, (unsigned)sink.got, len,
+           idle ? " idle" : "", sink.sdFail ? " sd!" : "", sink.over ? " lim!" : "", gutCancel ? " batal" : "", (unsigned)sink.flushMax, (unsigned)sink.flushMs);
+  gutSdKBs = sink.flushMs ? (uint32_t)((uint64_t)sink.flushBytes * 1000 / sink.flushMs / 1024) : 0;
   Serial.printf("[GUT] selesai: %s\n", gutDiag);
   if (gutCancel) return -2;
   if (sink.over) return -4;
   if (sink.sdFail) return -5;
+  if (wr == -10) return -6;                          // HTTPClient: tulis ke penampung gagal (bukan SD/batas/batal)
   if (wr < 0 || idle || (len > 0 && sink.got < (uint32_t)len) || sink.got == 0) return -3;
   return 200;
 }
@@ -201,6 +210,7 @@ static void gutSetErr(int rc) {
     case -3: strcpy(gutMsg, "Koneksi terputus / timeout."); break;
     case -4: strcpy(gutMsg, "Berkas terlalu besar."); break;
     case -5: strcpy(gutMsg, "Gagal menulis ke SD (penuh?)."); break;
+    case -6: strcpy(gutMsg, "Gagal menulis data (kode -10)."); break;
     case 404: strcpy(gutMsg, "Berkas tidak tersedia (404)."); break;
     case 403: case 429: strcpy(gutMsg, "Ditolak server. Coba lagi nanti."); break;
     default: snprintf(gutMsg, sizeof(gutMsg), "Server membalas HTTP %d.", rc); break;
@@ -248,7 +258,6 @@ static void gutDoDownload() {
   uint32_t got = 0; int rc = -1;
   for (int attempt = 0; attempt < 2; attempt++) {
     const char* u = (attempt == 0 && light) ? lite : url;          // coba versi ringan dulu, lalu URL asli
-    if (attempt == 1 && !light) break;
     File f = SD_MMC.open(tmp, FILE_WRITE);
     if (!f) { rc = -5; break; }
     rc = gutFetch(u, nullptr, 0, &f, isEpub ? GUT_EPUB_MAX : GUT_TXT_MAX, &got, attempt == 1, 20000);
@@ -268,6 +277,8 @@ static void gutDoDownload() {
     if (SD_MMC.rename(tmp, path)) {
       strncpy(gutDoneName, name, sizeof(gutDoneName) - 1); gutDoneName[sizeof(gutDoneName) - 1] = 0;
       gutPhase = GUT_PH_DONE; strcpy(gutMsg, "Tersimpan di /books.");
+      uint32_t el = millis() - gutT0; uint32_t net = el ? (uint32_t)((uint64_t)got * 1000 / el / 1024) : 0;
+      snprintf(gutDiag, sizeof(gutDiag), "rata2 %u KB/s, tulis SD %u KB/s", (unsigned)net, (unsigned)gutSdKBs);
       return;
     }
     strcpy(gutMsg, "Gagal menyimpan berkas."); gutPhase = GUT_PH_ERROR; SD_MMC.remove(tmp); return;
@@ -589,7 +600,7 @@ static void gutDrawProgress(LGFX_Sprite& s) {
       s.setTextColor(T().subtext); s.setCursor(12, by + 32); s.print(sp);
     }
   }
-  if (gutPhase == GUT_PH_ERROR && gutDiag[0]) { s.setTextColor(T().subtext); s.setCursor(12, by + 32); s.print(gutDiag); }
+  if ((gutPhase == GUT_PH_ERROR || gutPhase == GUT_PH_DONE) && gutDiag[0]) { s.setTextColor(T().subtext); s.setCursor(12, by + 32); s.print(gutDiag); }
   if (gutPhase == GUT_PH_DONE)       gutDrawBtns(s, "Buka", "Kembali");
   else if (gutPhase == GUT_PH_ERROR) gutDrawBtns(s, "Coba lagi", "Kembali");
   else                               gutDrawBtns(s, "Batal", nullptr);
