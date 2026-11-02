@@ -6384,9 +6384,44 @@ uint8_t homeWMask = 0x0F;  // v132: home widget setting -- bit0 jam, bit1 musik,
 uint8_t homeWLayout = 1;   // 0 = Standar, 1 = Ringkas (baterai+cuaca satu baris, potret)
 uint8_t homeWBig = 1;      // 0 = jam Normal, 1 = jam Besar
 
+// ---- HOME-KATEGORI: chip kategori di atas grid Home ("Semua / Media / Game / Alat / NASA / Sistem") ----
+// homeVis[] tetap = SEMUA app yg tampil (dipakai Atur Home utk hitung "x tampil / y sembunyi").
+// homeShow[] = homeVis[] yg lolos filter kategori -> inilah yg dipakai grid Home (gambar, tap, scroll, zoom).
+// Pencarian tetap mencari SEMUA app (tidak ikut filter kategori). Pilihan kategori cuma di RAM (balik ke "Semua" tiap boot).
+// Ubah pembagian kategori di homeCatOfScreen() saja -- app baru yg belum didaftarkan otomatis masuk "Alat".
+#define HOME_CAT_N 6
+#define HOME_CAT_H 24   // ruang tambahan di atas grid utk baris chip (grid ikut turun segini)
+const char* const HOME_CAT_NAME[HOME_CAT_N] = { "Semua","Media","Game","Alat","NASA","Sistem" };
+uint8_t homeCat = 0;    // 0 = Semua
+int homeShow[APP_COUNT];
+int homeShowN = 0;
+uint8_t homeCatOfScreen(Screen sc){
+  switch(sc){
+    case SCR_MJPEG: case SCR_MUSIC: case SCR_GALLERY: case SCR_CAMERA: case SCR_MEMO: case SCR_EBOOK:
+      return 1; // Media
+    case SCR_SNAKE: case SCR_FLAPPY: case SCR_2048: case SCR_TTT: case SCR_BREAKOUT: case SCR_TRIVIA:
+    case SCR_MAZE: case SCR_INF: case SCR_NES: case SCR_DOOM: case SCR_PPU:
+      return 2; // Game
+    case SCR_APOD: case SCR_NEOWS: case SCR_EPIC: case SCR_NASAIMG:
+      return 4; // NASA
+    case SCR_SETTINGS: case SCR_BATTERY: case SCR_UPDATE: case SCR_HWMON: case SCR_SENSOR:
+    case SCR_MICLEVEL: case SCR_ABOUT: case SCR_OWNER: case SCR_HOMEEDIT: case SCR_REMOTE:
+      return 5; // Sistem
+    default:
+      return 3; // Alat (Jam, Kalkulator, Notepad, Canvas, AI Chat, Files, Neopixel, Pomodoro, Wake Word, Stopwatch, Chat, Telepon)
+  }
+}
+void homeShowRebuild(){
+  homeShowN=0;
+  for(int k=0;k<homeVisN;k++){
+    int i=homeVis[k];
+    if(homeCat==0 || homeCatOfScreen(apps[i].screen)==homeCat) homeShow[homeShowN++]=i;
+  }
+}
 void homeLayoutRebuildVis(){
   homeVisN=0;
   for(int k=0;k<APP_COUNT;k++){ int i=homeOrder[k]; if(!homeHide[i]) homeVis[homeVisN++]=i; }
+  homeShowRebuild(); // HOME-KATEGORI
 }
 void homeLayoutDefault(){
   homeWMask=0x0F; homeWLayout=1; homeWBig=1;   // v132: ikut kembali ke awal saat Reset
@@ -6492,7 +6527,7 @@ HomeRect homeWMusic(){ HomeRect c,m,b,w; int e; hwCompute(c,m,b,w,e); return m; 
 HomeRect homeWBatt(){ HomeRect c,m,b,w; int e; hwCompute(c,m,b,w,e); return b; }
 HomeRect homeWWeather(){ HomeRect c,m,b,w; int e; hwCompute(c,m,b,w,e); return w; }
 int homeWidgetsEnd(){ HomeRect c,m,b,w; int e; hwCompute(c,m,b,w,e); return e; }
-int homeGridTop(){ return homeWidgetsEnd()+30; } // UI-OVERHAUL: grid di bawah blok widget (+ ruang utk judul "Semua App")
+int homeGridTop(){ return homeWidgetsEnd()+30+HOME_CAT_H; } // UI-OVERHAUL: grid di bawah blok widget (+ ruang utk judul "Semua App")
 int homeResultsTop(){ return STATUS_H+34; }      // hasil pencarian dirender dari atas layar
 // v105: batas ATAS area grid yg boleh digambar/di-tap. Header (sapaan+jam+
 // tanggal) berakhir di sekitar STATUS_H+50, jadi ikon yg discroll ke atas
@@ -6600,6 +6635,55 @@ void homeDrawLabel(LGFX_Sprite& s,const char* name,int cx,int y,int maxW){
   s.setCursor(cx-w/2,y); s.print(buf);
 }
 
+// ---- HOME-KATEGORI: geometri, gambar & tap chip (koordinat RUANG KONTEN, ikut scroll bareng grid) ----
+// Home selalu Font0 ukuran 1 = 6px/huruf, jadi lebar chip bisa dihitung tanpa sprite (dipakai gambar DAN hit-test).
+int homeCatChipTop(){ return homeGridTop()-HOME_CAT_H-4; }
+void homeCatChipX(int i,int& x,int& w){
+  const int gap=3, tot=SCR_W-20;
+  int sumTxt=0; for(int k=0;k<HOME_CAT_N;k++) sumTxt+=(int)strlen(HOME_CAT_NAME[k])*6;
+  int pad=(tot-(HOME_CAT_N-1)*gap-sumTxt)/(2*HOME_CAT_N);
+  if(pad>8) pad=8; if(pad<2) pad=2;
+  int used=sumTxt+2*pad*HOME_CAT_N+(HOME_CAT_N-1)*gap;
+  x=10+(tot-used)/2;
+  for(int k=0;k<i;k++) x+=(int)strlen(HOME_CAT_NAME[k])*6+2*pad+gap;
+  w=(int)strlen(HOME_CAT_NAME[i])*6+2*pad;
+}
+void homeCatDraw(LGFX_Sprite& s,int top,bool wp,int clipTop,int contentBot){
+  if(top+20<clipTop || top>contentBot) return;
+  s.setTextSize(1);
+  for(int i=0;i<HOME_CAT_N;i++){
+    int x,w; homeCatChipX(i,x,w);
+    bool on=(i==homeCat);
+    if(on) nyxAaRR(s,x,top,w,20,10,T().accent);
+    else   drawGlassCard(s,x,top,w,20,10,T().surface2,wp?150:200);
+    int tw=s.textWidth(HOME_CAT_NAME[i]);
+    uint16_t tc = on ? T().bg : (wp?(uint16_t)0xFFFF:T().text);
+    uiText(s,x+(w-tw)/2,top+6,HOME_CAT_NAME[i],tc,(wp&&!on),false);
+  }
+}
+// index chip yg kena (0..HOME_CAT_N-1) atau -1. Tidak aktif selagi pencarian (chip memang tidak digambar).
+int homeCatHit(int x,int y,float sc){
+  if(homeSearchActive()) return -1;
+  if(y<homeGridClipTop() || y>=homeDockY()-4) return -1;
+  int top=homeCatChipTop()-homeScrollPx(sc);
+  if(y<top-3 || y>top+23) return -1;
+  for(int i=0;i<HOME_CAT_N;i++){
+    int cx,cw; homeCatChipX(i,cx,cw);
+    if(x>=cx-1 && x<=cx+cw+1) return i;
+  }
+  return -1;
+}
+void homeCatSelect(int c){
+  if(c<0||c>=HOME_CAT_N||c==homeCat) return;
+  homeCat=(uint8_t)c;
+  homeShowRebuild();
+  homeScrollVel=0; homeScrollSpringing=false; homeSpringMode=false;
+  float maxS=(float)homeMaxScroll();
+  if(homeScrollY>maxS) homeScrollY=maxS;
+  if(homeScrollY<0.0f) homeScrollY=0.0f;
+  needRedraw=true;
+}
+
 void drawHome(LGFX_Sprite& s,float sc){
   // UI-OVERHAUL home "Aurora Glass": widget dulu (jam, kartu musik, baterai), grid app di bawahnya.
   // Widget + grid scroll BARENG sbg satu konten (pakai mesin scroll v105 yg sudah ada). Cuma status bar
@@ -6657,12 +6741,17 @@ void drawHome(LGFX_Sprite& s,float sc){
 
     // ---- judul grid ----
     s.setTextSize(1);
-    uiText(s,14,gridTop-20-scPx,"Semua App",wp?(uint16_t)0xDEFB:T().subtext,wp,false);
+    { // HOME-KATEGORI: judul ikut kategori terpilih, lalu baris chip di bawahnya
+      char ttl[28];
+      if(homeCat==0) strcpy(ttl,"Semua App"); else snprintf(ttl,sizeof(ttl),"%s (%d)",HOME_CAT_NAME[homeCat],homeShowN);
+      uiText(s,14,gridTop-HOME_CAT_H-20-scPx,ttl,wp?(uint16_t)0xDEFB:T().subtext,wp,false);
+      homeCatDraw(s,homeCatChipTop()-scPx,wp,clipTop,contentBot);
+    }
 
     // ---- grid app ---- (HOME-LAYOUT: urutan & app tersembunyi dari homeVis[])
     homeLayoutEnsure();
-    for(int k=0;k<homeVisN;k++){
-      int i=homeVis[k];
+    for(int k=0;k<homeShowN;k++){ // HOME-KATEGORI: homeShow[] = homeVis[] yg lolos filter kategori
+      int i=homeShow[k];
       int col=k%cols, row=k/cols;
       int x=gap+col*(cw+gap), y=gridTop+row*(ch+gap)-scPx;
       if(y+ch<clipTop||y>contentBot)continue;
@@ -6682,6 +6771,11 @@ void drawHome(LGFX_Sprite& s,float sc){
         homeDrawLabel(s, apps[i].name, x+cw/2, y+ch-14, cw+6);
         if(homeJiggle){ int mx=cx-iconR+3, my=cy-iconR+3; nyxAaCircle(s, mx,my,8,T().bg); nyxAaCircle(s, mx,my,7,T().danger); s.fillRect(mx-4,my-1,9,3,0xFFFF); }
       }
+    }
+    if(homeShowN==0){ // HOME-KATEGORI: kategori kosong (semua appnya disembunyikan lewat Atur Home)
+      const char* em="Tidak ada app di kategori ini";
+      s.setTextColor(wp?(uint16_t)0xDEFB:T().subtext); s.setTextSize(1);
+      s.setCursor(SCR_W/2-s.textWidth(em)/2, gridTop+14-scPx); s.print(em);
     }
     if(homeJiggle){ // chip "Selesai" di baris judul (ikut scroll)
       int chy=STATUS_H+3-scPx;
@@ -6762,10 +6856,10 @@ Screen homeCheck(int x,int y,float sc){
   int cols=homeCols(), cw=homeCardW(), ch=homeCardH();
   int gap=10, gridTop=homeGridTop();
   homeLayoutEnsure();
-  for(int k=0;k<homeVisN;k++){ // HOME-LAYOUT
+  for(int k=0;k<homeShowN;k++){ // HOME-LAYOUT + HOME-KATEGORI
     int col=k%cols,row=k/cols;
     int ax=gap+col*(cw+gap), ay=gridTop+row*(ch+gap)-scPx;
-    if(x>=ax&&x<=ax+cw&&y>=ay&&y<=ay+ch) return apps[homeVis[k]].screen;
+    if(x>=ax&&x<=ax+cw&&y>=ay&&y<=ay+ch) return apps[homeShow[k]].screen;
   }
   return SCR_HOME;
 }
@@ -6773,7 +6867,7 @@ Screen homeCheck(int x,int y,float sc){
 int homeMaxScroll(){
   homeLayoutEnsure();
   int cols=homeCols();
-  int rows=(homeVisN+cols-1)/cols; // HOME-LAYOUT: hanya app yang tampil
+  int rows=(homeShowN+cols-1)/cols; // HOME-LAYOUT + HOME-KATEGORI: hanya app yang tampil di kategori terpilih
   int ch=homeCardH(), gap=10, gridTop=homeGridTop(); // v-baru: samain persis sama drawHome() -- gap 8->10
   int needed = gridTop + rows*(ch+gap) - homeDockY();
   return max(0, needed);
@@ -6861,10 +6955,10 @@ int homeIndexAt(int x,int y,float sc){
   if(y<homeGridClipTop()) return -1; // v105: tap di area header gak nembus ke ikon yg terpotong (gak kelihatan)
   int scPx=homeScrollPx(sc);
   homeLayoutEnsure();
-  for(int k=0;k<homeVisN;k++){ // HOME-LAYOUT
+  for(int k=0;k<homeShowN;k++){ // HOME-LAYOUT + HOME-KATEGORI
     int col=k%cols,row=k/cols;
     int ax=gap+col*(cw+gap), ay=gridTop+row*(ch+gap)-scPx;
-    if(x>=ax&&x<=ax+cw&&y>=ay&&y<=ay+ch) return homeVis[k];
+    if(x>=ax&&x<=ax+cw&&y>=ay&&y<=ay+ch) return homeShow[k];
   }
   return -1;
 }
@@ -6877,8 +6971,8 @@ void homeJiggleTap(int x,int y,int idx){
   int cols=homeCols(), cw=homeCardW(), ch=homeCardH(), gap=10, gridTop=homeGridTop();
   int iconR=min(cw,ch-16)/2-2; if(iconR>24) iconR=24; if(iconR<14) iconR=14;
   homeLayoutEnsure();
-  for(int k=0;k<homeVisN;k++){
-    int i=homeVis[k];
+  for(int k=0;k<homeShowN;k++){ // HOME-KATEGORI
+    int i=homeShow[k];
     int col=k%cols,row=k/cols;
     int ax=gap+col*(cw+gap), ay=gridTop+row*(ch+gap)-scPx;
     int mx=ax+cw/2-iconR+3, my=ay+(ch-16)/2-iconR+3;
@@ -6900,7 +6994,7 @@ bool homeIconGeom(int idx,float sc,int& ox,int& oy,int& ow,int& oh,int& orad){
   int iconR=min(cw,ch-16)/2-2; if(iconR>24) iconR=24; if(iconR<14) iconR=14;
   bool srch=homeSearchActive(); int k=-1;
   if(srch){ for(int q=0;q<homeFilteredCount;q++) if(homeFilteredIdx[q]==idx){ k=q; break; } }
-  else { homeLayoutEnsure(); for(int q=0;q<homeVisN;q++) if(homeVis[q]==idx){ k=q; break; } }
+  else { homeLayoutEnsure(); for(int q=0;q<homeShowN;q++) if(homeShow[q]==idx){ k=q; break; } } // HOME-KATEGORI
   if(k<0) return false;
   int col=k%cols, row=k/cols;
   int x=gap+col*(cw+gap);
@@ -20031,7 +20125,9 @@ void loop(){
         // homeIndexAt() sadar mode pencarian sendiri. Kalau gak kena grid
         // (mis. tap di dock), baru jatuh balik ke homeCheck() lama.
         int idx = homeIndexAt(touchStartX,touchStartY,homeScrollY);
-        Screen nx = (idx>=0)? apps[idx].screen : homeCheck(touchStartX,touchStartY,homeScrollY);
+        int catHit = homeJiggle ? -1 : homeCatHit(touchStartX,touchStartY,homeScrollY); // HOME-KATEGORI: ketuk chip
+        Screen nx = (catHit>=0)? SCR_HOME : ((idx>=0)? apps[idx].screen : homeCheck(touchStartX,touchStartY,homeScrollY));
+        if(catHit>=0) homeCatSelect(catHit);
         if(homeJiggle){ homeJiggleTap(touchStartX,touchStartY,idx); nx=SCR_HOME; } // HOME-JIGGLE: saat mode atur, ketukan tidak membuka app
         // v91: getar konfirmasi tap dipindah ke SINI (baru bunyi kalau
         // beneran kebuka app-nya) -- pasangan dr overHomeIcon di atas yg
