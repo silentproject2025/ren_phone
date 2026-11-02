@@ -29,6 +29,7 @@
 #define GUT_TXT_MAX    (3u * 1024u * 1024u)    // batas TXT pembaca Buku
 #define GUT_EPUB_MAX   (40u * 1024u * 1024u)
 #define GUT_GAP_MS     1500        // jeda minimum antar permintaan ke server
+#define GUT_MAX_TRY    40          // maks sambungan ulang per unduhan (berhenti lebih awal bila 3x tanpa kemajuan)
 
 enum { GUT_JOB_NONE = 0, GUT_JOB_SEARCH, GUT_JOB_DL };
 enum { GUT_V_LIST = 0, GUT_V_DETAIL, GUT_V_PROG };
@@ -66,6 +67,7 @@ static char      gutMsg[64] = "";
 static char      gutDiag[96] = "";
 static volatile uint32_t gutSdKBs = 0;                // kode diagnosis utk layar kesalahan (+ Serial)
 static char      gutReqUrl[220] = "";
+static char      gutPartUrl[GUT_URL_LEN + 8] = "";   // URL milik .part yang tertinggal (utk melanjutkan)
 static bool      gutReqAppend = false;
 static int       gutDlIdx = -1;
 static char      gutDoneName[96] = "";
@@ -136,8 +138,10 @@ class GutSink : public Stream {                          // HTTPClient::writeToS
 // manual=false: HTTPClient::writeToStream (mengurus chunked/Content-Length). manual=true: HTTP/1.0 + loop baca sendiri
 // (tanpa chunked; server menutup koneksi di akhir) -- jalur cadangan kalau yang pertama putus di tengah.
 // idleMs = batas diam menunggu data (Gutendex publik kadang lambat membalas, terutama urutan "Terbaru").
-static int gutFetch(const char* url, uint8_t* mem, uint32_t memCap, File* f, uint32_t limit, uint32_t* outGot, bool manual, uint32_t idleMs) {
-  *outGot = 0; gutGot = 0; gutTot = 0; gutDiag[0] = 0;
+// resumeFrom > 0: kirim "Range: bytes=N-" supaya melanjutkan (file harus dibuka FILE_APPEND). return -7 = server tak dukung Range (ulang dari 0).
+// *outGot = total byte yang sudah ada (termasuk resumeFrom).
+static int gutFetch(const char* url, uint8_t* mem, uint32_t memCap, File* f, uint32_t limit, uint32_t* outGot, bool manual, uint32_t idleMs, uint32_t resumeFrom) {
+  *outGot = resumeFrom; gutGot = resumeFrom; gutTot = 0; gutDiag[0] = 0;
   while ((uint32_t)(millis() - gutLastReqMs) < GUT_GAP_MS) { if (gutCancel) return -2; delay(40); }
   if (gutCancel) return -2;
   nasaWaitForHeap();                                   // beri waktu RAM internal lega sebelum TLS (pola APOD/NEO)
@@ -151,37 +155,41 @@ static int gutFetch(const char* url, uint8_t* mem, uint32_t memCap, File* f, uin
   http.setTimeout(idleMs > 60000 ? 60000 : idleMs); http.setConnectTimeout(15000);
   http.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
   if (manual) http.useHTTP10(true);
+  if (resumeFrom) { char rg[32]; snprintf(rg, sizeof(rg), "bytes=%u-", (unsigned)resumeFrom); http.addHeader("Range", rg); }
   uint32_t t0 = millis();
   int code = http.GET();
   gutLastReqMs = millis();
   Serial.printf("[GUT] GET %s%s -> %d (%lu ms)\n", manual ? "(1.0) " : "", url, code, (unsigned long)(millis() - t0));
-  if (code != 200) {
+  if (resumeFrom && code == 200) { http.end(); snprintf(gutDiag, sizeof(gutDiag), "server tak dukung Range"); return -7; }   // kirim ulang penuh: jangan ditempel
+  if (code != 200 && !(resumeFrom && code == 206)) {
     snprintf(gutDiag, sizeof(gutDiag), "GET=%d %s", code, manual ? "http1.0" : "http1.1");
     http.end(); return code > 0 ? code : (code == -11 ? -3 : -1);
   }
   int len = http.getSize();
-  if (len > 0) gutTot = (uint32_t)len;
-  if (limit && len > 0 && (uint32_t)len > limit) { http.end(); return -4; }
+  uint32_t want = (len > 0) ? resumeFrom + (uint32_t)len : 0;      // total byte akhir yang diharapkan
+  if (want) gutTot = want;
+  if (limit && want && want > limit) { http.end(); return -4; }
   GutSink sink; sink.mem = mem; sink.cap = memCap; sink.file = f; sink.limit = limit; sink.useWriteBuffer();
+  sink.got = resumeFrom;
   int wr = 0; bool idle = false;
   if (!manual) wr = http.writeToStream(&sink);
   else {
     WiFiClient* st = http.getStreamPtr();
-    uint8_t* chunk = (uint8_t*)heap_caps_malloc(4096, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    uint8_t* chunk = (uint8_t*)heap_caps_malloc(16384, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!chunk || !st) { if (chunk) heap_caps_free(chunk); http.end(); return -1; }
     uint32_t last = millis();
     while (!gutCancel) {
-      if (len > 0 && sink.got >= (uint32_t)len) break;
+      if (want && sink.got >= want) break;
       int av = st->available();
       if (av > 0) {
-        int n = st->readBytes(chunk, av > 4096 ? 4096 : av);
+        int n = st->readBytes(chunk, av > 16384 ? 16384 : av);
         if (n <= 0) continue;
         if (sink.write(chunk, (size_t)n) != (size_t)n) { wr = -10; break; }
         last = millis();
       } else {
         if (!st->connected()) break;                    // server menutup = akhir data (HTTP/1.0)
         if (millis() - last > idleMs) { idle = true; break; }
-        delay(2);
+        delay(1);
       }
     }
     heap_caps_free(chunk);
@@ -190,7 +198,7 @@ static int gutFetch(const char* url, uint8_t* mem, uint32_t memCap, File* f, uin
   gutLastReqMs = millis();
   if (f && !gutCancel && !sink.sdFail) sink.flushSd();      // sisa blok terakhir
   *outGot = sink.got;
-  snprintf(gutDiag, sizeof(gutDiag), "%s wr=%d got=%u/%d%s%s%s%s fl=%u/%ums", manual ? "http1.0" : "http1.1", wr, (unsigned)sink.got, len,
+  snprintf(gutDiag, sizeof(gutDiag), "%s wr=%d got=%u/%u%s%s%s%s fl=%u/%ums", manual ? "http1.0" : "http1.1", wr, (unsigned)sink.got, (unsigned)want,
            idle ? " idle" : "", sink.sdFail ? " sd!" : "", sink.over ? " lim!" : "", gutCancel ? " batal" : "", (unsigned)sink.flushMax, (unsigned)sink.flushMs);
   gutSdKBs = sink.flushMs ? (uint32_t)((uint64_t)sink.flushBytes * 1000 / sink.flushMs / 1024) : 0;
   Serial.printf("[GUT] selesai: %s\n", gutDiag);
@@ -198,7 +206,7 @@ static int gutFetch(const char* url, uint8_t* mem, uint32_t memCap, File* f, uin
   if (sink.over) return -4;
   if (sink.sdFail) return -5;
   if (wr == -10) return -6;                          // HTTPClient: tulis ke penampung gagal (bukan SD/batas/batal)
-  if (wr < 0 || idle || (len > 0 && sink.got < (uint32_t)len) || sink.got == 0) return -3;
+  if (wr < 0 || idle || (want && sink.got < want) || sink.got == 0) return -3;
   return 200;
 }
 
@@ -223,7 +231,7 @@ static void gutDoSearch() {
   uint32_t got = 0; int rc = -1;
   for (int attempt = 0; attempt < 3; attempt++) {       // galat sementara (timeout/putus/5xx) umum di Gutendex publik: ulangi
     if (attempt) { gutPhase = GUT_PH_CONNECT; needRedraw = true; }
-    rc = gutFetch(gutReqUrl, buf, GUT_JSON_CAP, nullptr, 0, &got, attempt > 0, 30000);
+    rc = gutFetch(gutReqUrl, buf, GUT_JSON_CAP, nullptr, 0, &got, attempt > 0, 30000, 0);
     if (rc == 200 || !(rc == -3 || rc == -1 || rc == 500 || rc == 502 || rc == 503 || rc == 504)) break;
   }
   if (rc != 200) { gutSetErr(rc); heap_caps_free(buf); return; }
@@ -253,27 +261,53 @@ static void gutDoDownload() {
   snprintf(tmp, sizeof(tmp), "%s.part", path);
   if (!SD_MMC.exists(EBK_DIR)) SD_MMC.mkdir(EBK_DIR);
   if (SD_MMC.exists(path)) { strncpy(gutDoneName, name, sizeof(gutDoneName) - 1); gutPhase = GUT_PH_DONE; strcpy(gutMsg, "Sudah ada di perpustakaan."); return; }
-  if (SD_MMC.exists(tmp)) SD_MMC.remove(tmp);
+  // .part sisa unduhan yang terputus: lanjutkan kalau URL-nya sama (tersimpan di RAM), kalau tidak buang.
+  uint32_t resume = 0; bool useLite = light;
+  if (SD_MMC.exists(tmp)) {
+    File g = SD_MMC.open(tmp, FILE_READ); uint32_t sz = g ? (uint32_t)g.size() : 0; if (g) g.close();
+    if (sz > 0 && useLite && !strcmp(gutPartUrl, lite)) resume = sz;
+    else if (sz > 0 && !strcmp(gutPartUrl, url)) { useLite = false; resume = sz; }
+    else SD_MMC.remove(tmp);
+  }
 
-  uint32_t got = 0; int rc = -1;
-  for (int attempt = 0; attempt < 2; attempt++) {
-    const char* u = (attempt == 0 && light) ? lite : url;          // coba versi ringan dulu, lalu URL asli
-    File f = SD_MMC.open(tmp, FILE_WRITE);
+  uint32_t got = 0; int rc = -1; int stall = 0, restarts = 0; bool keepPart = false;
+  uint32_t lim = isEpub ? GUT_EPUB_MAX : GUT_TXT_MAX;
+  // Unduhan sering putus di tengah (server/TLS): jangan mulai dari nol, sambung pakai Range dari byte terakhir yang sudah di SD.
+  for (int attempt = 0; attempt < GUT_MAX_TRY; attempt++) {
+    const char* u = useLite ? lite : url;
+    if (!resume) { strncpy(gutPartUrl, u, sizeof(gutPartUrl) - 1); gutPartUrl[sizeof(gutPartUrl) - 1] = 0; }
+    File f = SD_MMC.open(tmp, resume ? FILE_APPEND : FILE_WRITE);
     if (!f) { rc = -5; break; }
-    rc = gutFetch(u, nullptr, 0, &f, isEpub ? GUT_EPUB_MAX : GUT_TXT_MAX, &got, attempt == 1, 20000);
+    rc = gutFetch(u, nullptr, 0, &f, lim, &got, true, 20000, resume);
     f.close();
     if (rc == 200 || rc == -2 || rc == -5 || rc == -4) break;     // sukses / batal / SD / terlalu besar: jangan ulangi
-    SD_MMC.remove(tmp);
-    gutPhase = GUT_PH_CONNECT;
+    File g = SD_MMC.open(tmp, FILE_READ); uint32_t sz = g ? (uint32_t)g.size() : 0; if (g) g.close();
+    if (rc == -7 || (rc == 416 && resume)) {                      // server abaikan/tolak Range: ulang dari nol (maks 2x)
+      SD_MMC.remove(tmp); resume = 0; gutPartUrl[0] = 0;
+      if (++restarts > 2) { rc = -3; break; }
+      continue;
+    }
+    if (rc > 0 && sz == 0) {                                      // kode HTTP (404 dll) tanpa data
+      if (useLite) { useLite = false; resume = 0; continue; }     // versi ringan tak ada -> URL asli
+      break;
+    }
+    if (sz > resume) { resume = sz; stall = 0; }                  // ada kemajuan: sambung lagi
+    else if (++stall >= 3) break;                                 // 3x berturut tanpa kemajuan: menyerah
+    if (resume == 0) gutPhase = GUT_PH_CONNECT;
+  }
+  if (rc != 200) {                                                // simpan .part supaya "Coba lagi" melanjutkan
+    File g = SD_MMC.open(tmp, FILE_READ); uint32_t sz = g ? (uint32_t)g.size() : 0; if (g) g.close();
+    keepPart = (rc == -3 || (rc > 0 && sz > 0)) && sz > 0;
   }
   if (rc == 200 && got > 0 && isEpub) {                             // EPUB = ZIP: harus diawali "PK"
     File c = SD_MMC.open(tmp, FILE_READ);
     uint8_t sg[2] = { 0, 0 };
     if (c) { c.read(sg, 2); c.close(); }
-    if (sg[0] != 'P' || sg[1] != 'K') { rc = -3; strcpy(gutMsg, "Berkas bukan EPUB yang valid."); SD_MMC.remove(tmp); gutPhase = GUT_PH_ERROR; return; }
+    if (sg[0] != 'P' || sg[1] != 'K') { rc = -3; strcpy(gutMsg, "Berkas bukan EPUB yang valid."); SD_MMC.remove(tmp); gutPartUrl[0] = 0; gutPhase = GUT_PH_ERROR; return; }
   }
   if (rc == 200 && got > 0) {
     if (SD_MMC.exists(path)) SD_MMC.remove(path);
+    gutPartUrl[0] = 0;
     if (SD_MMC.rename(tmp, path)) {
       strncpy(gutDoneName, name, sizeof(gutDoneName) - 1); gutDoneName[sizeof(gutDoneName) - 1] = 0;
       gutPhase = GUT_PH_DONE; strcpy(gutMsg, "Tersimpan di /books.");
@@ -283,9 +317,10 @@ static void gutDoDownload() {
     }
     strcpy(gutMsg, "Gagal menyimpan berkas."); gutPhase = GUT_PH_ERROR; SD_MMC.remove(tmp); return;
   }
-  SD_MMC.remove(tmp);
+  if (!keepPart) { SD_MMC.remove(tmp); gutPartUrl[0] = 0; }
   gutSetErr(rc == 200 ? -3 : rc);
   if (rc == -4 && !isEpub) strcpy(gutMsg, "TXT > 3 MB: terlalu besar utk Buku.");
+  if (keepPart) strcpy(gutMsg, "Terputus. Ketuk Coba lagi = lanjut.");
 }
 
 static void gutTaskFunc(void*) {
