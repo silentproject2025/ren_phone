@@ -2851,6 +2851,7 @@ void notepadRequestConfirm(int act); // act: 1=Back, 2=Home -> tampilkan dialog 
 // Home  = geser TURUN (kesan "menutup/pulang", searah swipe unlock)
 // =============================================
 void renderCurrentFrame(); // forward decl - dipakai utk render frame BARU sblm animasi
+void swThumbCaptureCurrent(); // v133: preview App Switcher, definisi dekat blok APP SWITCHER
 extern bool panelPullActive; void panelPullBegin(bool shade,int startY); void panelPullHandle(bool touched,int tx,int ty); // ptr_renphone.ino: CC/shade mengikuti jari
 void ptrPointerTick(bool touched,bool wasT,int tx,int ty); void ptrDraw(LGFX_Sprite& s); // ptr_renphone.ino: pull-to-refresh + swipe-back tepi kiri
 // UI-OVERHAUL: API musik utk widget Home/Lock (definisi di musicbt_renphone.ino)
@@ -3117,6 +3118,7 @@ void playNavTransition(NavAnim anim){
 
 void ownerStatsOpen(int); // Profil v2: hitung berapa kali app dibuka
 void navPush(Screen s){
+  swThumbCaptureCurrent(); // v133: simpan preview layar yg DITINGGALKAN utk App Switcher
   appOnExit(curScreen());
   if(navDepth<NAV_MAX) navStack[navDepth++]=s;
   appOnEnter(s);
@@ -3134,6 +3136,7 @@ void navPush(Screen s){
 }
 void navGoHome(){
   if(notepadNeedsConfirm()){ notepadRequestConfirm(2); return; }
+  swThumbCaptureCurrent(); // v133
   appOnExit(curScreen());
   navDepth=0;
   kbVisible=false; kbTarget=nullptr;
@@ -3157,6 +3160,7 @@ void unlockZoomHome(){
 }
 void navBack(){
   if(notepadNeedsConfirm()){ notepadRequestConfirm(1); return; }
+  swThumbCaptureCurrent(); // v133
   appOnExit(curScreen());
   if(navDepth>0) navDepth--;
   if(navDepth>0){ appOnEnter(navStack[navDepth-1]); appMarkUsed(navStack[navDepth-1]); } // v92: lihat catatan appMarkUsed() di navPush()
@@ -5965,9 +5969,87 @@ bool switcherSuppressUntilRelease=false;
 // sentuh/interaksi ulang dgn panel-nya.
 bool switcherHasRealTouch=false;
 #define SWITCHER_ROW_TOP 34
-#define SWITCHER_ROW_H   44
-#define SWITCHER_ROW_GAP 10
+#define SWITCHER_ROW_H   58   // v133: dulu 44 -- kartu sekarang memuat preview 64x48
+#define SWITCHER_ROW_GAP 8
 #define SWITCHER_DISMISS_PX 70
+
+// ---------------------------------------------------------------
+// v133 PREVIEW APP SWITCHER -- thumbnail layar terakhir tiap app.
+// Diambil dari `canvas` (frame terakhir) tepat SEBELUM layar ditinggalkan
+// (navPush/navBack/navGoHome) atau saat Switcher dibuka. Diperkecil dgn
+// box-filter (sampel tiap 2 piksel) ke tinggi 48 px (lebar ikut orientasi:
+// 64 landscape / 36 portrait) = <=6 KB per app, disimpan di PSRAM, MAKS 8 slot
+// (yg tertua digusur). Murni di RAM: tidak ditulis ke SD, hilang saat reboot,
+// dibuang saat kartu ditutup dari Switcher. Matikan lewat -DSW_THUMB_ENABLE=0
+// kalau capture terasa menahan transisi (kartu jatuh ke placeholder ikon).
+// ---------------------------------------------------------------
+#ifndef SW_THUMB_ENABLE
+#define SW_THUMB_ENABLE 1
+#endif
+#define SW_THUMB_H     48
+#define SW_THUMB_MAXW  64
+#define SW_THUMB_SLOTS 8
+struct SwThumb { int app; uint16_t w, h; uint16_t* px; unsigned long ms; };
+SwThumb swThumb[SW_THUMB_SLOTS];   // px==nullptr -> slot kosong
+bool swLastFrameApp=false;         // true bila frame terakhir di canvas = layar app polos (tanpa overlay/Switcher/lock)
+
+int swThumbFind(int app){
+  for(int i=0;i<SW_THUMB_SLOTS;i++) if(swThumb[i].px && swThumb[i].app==app) return i;
+  return -1;
+}
+void swThumbFree(int slot){
+  if(slot<0 || slot>=SW_THUMB_SLOTS || !swThumb[slot].px) return;
+  heap_caps_free(swThumb[slot].px); swThumb[slot].px=nullptr;
+}
+void swThumbDrop(int app){ swThumbFree(swThumbFind(app)); }
+
+void swThumbCaptureCurrent(){
+  if(!SW_THUMB_ENABLE || !swLastFrameApp) return;
+  int ai=appIndexForScreen(curScreen()); if(ai<0) return;
+  int th=SW_THUMB_H;
+  int tw=(th*SCR_W)/SCR_H; if(tw>SW_THUMB_MAXW) tw=SW_THUMB_MAXW;
+  if(tw<8 || SCR_W<=0 || SCR_H<=0) return;
+  int slot=swThumbFind(ai);
+  if(slot>=0 && (swThumb[slot].w!=tw || swThumb[slot].h!=th)){ swThumbFree(slot); slot=-1; } // orientasi berubah
+  if(slot<0){
+    int oldest=0; unsigned long om=0xFFFFFFFFUL;
+    for(int i=0;i<SW_THUMB_SLOTS;i++){
+      if(!swThumb[i].px){ slot=i; break; }
+      if(swThumb[i].ms<om){ om=swThumb[i].ms; oldest=i; }
+    }
+    if(slot<0){ swThumbFree(oldest); slot=oldest; }
+    uint16_t* buf=(uint16_t*)heap_caps_malloc((size_t)tw*th*2, MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT);
+    if(!buf) return;                                   // PSRAM penuh/tak ada -> kartu pakai placeholder
+    swThumb[slot].px=buf; swThumb[slot].w=(uint16_t)tw; swThumb[slot].h=(uint16_t)th; swThumb[slot].app=ai;
+  }
+  uint16_t* out=swThumb[slot].px;
+  for(int ty=0;ty<th;ty++){
+    int sy0=(ty*SCR_H)/th, sy1=((ty+1)*SCR_H)/th; if(sy1<=sy0) sy1=sy0+1;
+    for(int tx=0;tx<tw;tx++){
+      int sx0=(tx*SCR_W)/tw, sx1=((tx+1)*SCR_W)/tw; if(sx1<=sx0) sx1=sx0+1;
+      uint32_t r=0,g=0,b=0; int c=0;
+      for(int y=sy0;y<sy1;y+=2) for(int x=sx0;x<sx1;x+=2){
+        uint16_t px=canvas.readPixel(x,y);
+        r+=(px>>11)&0x1F; g+=(px>>5)&0x3F; b+=px&0x1F; c++;
+      }
+      uint16_t v=(uint16_t)(((r/c)<<11)|((g/c)<<5)|(b/c));
+      out[ty*tw+tx]=(uint16_t)((v>>8)|(v<<8));         // big-endian (swap565_t), sama dgn thumbnail Galeri/AVI
+    }
+  }
+  swThumb[slot].ms=millis();
+  swLastFrameApp=false;                                // 1x per frame yg sama
+}
+
+// Tutup SEMUA kartu sekaligus (chip "Tutup semua"): sama dgn swipe-dismiss tiap kartu.
+void switcherCloseAll(){
+  for(int i=0;i<switcherN;i++){
+    int ai=switcherIdx[i];
+    if(apps[ai].onLowMem) apps[ai].onLowMem();
+    appLastUsedMs[ai]=0;
+    swThumbDrop(ai);
+  }
+  switcherN=0;
+}
 
 void switcherBuildList(){
   switcherN=0;
@@ -6006,6 +6088,7 @@ const float SW_ANIM_MS = 220.0f;
 
 void openAppSwitcher(){
   if(appSwitcherOpen) return;
+  swThumbCaptureCurrent(); // v133: app yg sedang aktif juga dapat preview utk kartu-nya nanti
   switcherBuildList();
   appSwitcherOpen=true; switcherDragIdx=-1; switcherDragDY=0;
   switcherSuppressUntilRelease=true; // v97 FIX: lihat catatan di deklarasi var-nya
@@ -6099,10 +6182,41 @@ void drawAppSwitcher(LGFX_Sprite& s){
     int chevY = by+dyOff+5;
     s.drawLine(bx+bw/2-4, chevY+3, bx+bw/2, chevY, T().subtext);
     s.drawLine(bx+bw/2, chevY, bx+bw/2+4, chevY+3, T().subtext);
-    drawAppIcon(s, apps[ai].sym, bx+26, by+dyOff+SWITCHER_ROW_H/2, 15, T().surface2);
+    // v133: PREVIEW KARTU -- thumbnail layar terakhir (64x48) di kiri; ikon kecil + nama + umur di kanan.
+    // Belum ada thumbnail (app belum pernah ditinggalkan / PSRAM penuh) -> placeholder ikon besar.
+    const int tbW=SW_THUMB_MAXW, tbH=SW_THUMB_H;
+    int tbx=bx+6, tby=by+dyOff+(SWITCHER_ROW_H-tbH)/2;
+    int tsl=swThumbFind(ai);
+    if(tsl>=0){
+      int tw2=swThumb[tsl].w, th2=swThumb[tsl].h;
+      int ix=tbx+(tbW-tw2)/2, iy=tby+(tbH-th2)/2;
+      s.pushImage(ix,iy,tw2,th2,(lgfx::swap565_t*)swThumb[tsl].px);
+      s.drawRect(ix-1,iy-1,tw2+2,th2+2,T().divider);
+    } else {
+      nyxAaRR(s, tbx,tby,tbW,tbH,6,T().surface);
+      drawAppIcon(s, apps[ai].sym, tbx+tbW/2, tby+tbH/2, 14, apps[ai].color);
+    }
+    int txx=tbx+tbW+10, midY=by+dyOff+SWITCHER_ROW_H/2;
+    drawAppIcon(s, apps[ai].sym, txx+8, midY-9, 8, T().surface2);
+    char nm[28]; strncpy(nm,apps[ai].name,sizeof(nm)-1); nm[sizeof(nm)-1]=0;
+    int nmMaxW=(bx+bw-8)-(txx+22);
+    while(strlen(nm)>2 && s.textWidth(nm)>nmMaxW) nm[strlen(nm)-1]=0;   // potong bila kepanjangan (portrait lebih sempit)
     s.setTextColor(T().text); s.setTextSize(1);
-    s.setCursor(bx+50, by+dyOff+SWITCHER_ROW_H/2-4);
-    s.print(apps[ai].name);
+    s.setCursor(txx+22, midY-13); s.print(nm);
+    unsigned long ago=millis()-appLastUsedMs[ai];
+    char ag[16];
+    if(ago<60000UL) snprintf(ag,sizeof(ag),"baru saja");
+    else if(ago<3600000UL) snprintf(ag,sizeof(ag),"%lu mnt lalu",ago/60000UL);
+    else snprintf(ag,sizeof(ag),"%lu jam lalu",ago/3600000UL);
+    s.setTextColor(T().subtext);
+    s.setCursor(txx, midY+4); s.print(ag);
+  }
+  // v133: chip "Tutup semua" di kanan atas judul (tap = buang semua kartu)
+  if(switcherN>0 && e>0.35f){
+    const char* lbl="Tutup semua";
+    int cw=s.textWidth(lbl)+16, cx0=SCR_W-16-cw;
+    nyxAaRR(s, cx0,6,cw,18,9,T().surface2);
+    s.setTextColor(T().text); s.setCursor(cx0+8,11); s.print(lbl);
   }
 }
 
@@ -6110,6 +6224,7 @@ void drawAppSwitcher(LGFX_Sprite& s){
 // controlCenterOpen/notifShadeOpen) -- selagi appSwitcherOpen==true.
 void switcherTouch(bool touched, bool newT, int tx, int ty){
   static int stx=0, sty=0; static bool moved=false;
+  static bool armedPrev=false; // v133: getar 1x saat drag kartu melewati ambang buang
   // v103 FIX: lihat catatan lengkap di deklarasi switcherHasRealTouch --
   // tolak proses SAMPAI ada newT sungguhan, biar event "jari diangkat"
   // palsu (nyusul abis switcherSuppressUntilRelease kelar) gak disalah-
@@ -6118,7 +6233,7 @@ void switcherTouch(bool touched, bool newT, int tx, int ty){
   if(!newT && !switcherHasRealTouch) return;
   if(newT){
     switcherHasRealTouch=true;
-    stx=tx; sty=ty; moved=false; switcherDragIdx=-1; switcherDragDY=0;
+    stx=tx; sty=ty; moved=false; switcherDragIdx=-1; switcherDragDY=0; armedPrev=false;
     for(int i=0;i<switcherN;i++){
       int by=SWITCHER_ROW_TOP+i*(SWITCHER_ROW_H+SWITCHER_ROW_GAP);
       if(ty>=by && ty<=by+SWITCHER_ROW_H){ switcherDragIdx=i; break; }
@@ -6132,6 +6247,9 @@ void switcherTouch(bool touched, bool newT, int tx, int ty){
     // ke bawah/samping diabaikan (switcherDragDY tetap 0), persis kelakuan
     // App Switcher iOS asli (kartu cuma bisa "dilempar" ke atas, gak ke arah lain).
     if(switcherDragIdx>=0 && dy<0 && abs(dy)>abs(dx)){ switcherDragDY=dy; needRedraw=true; }
+    bool armedNow = (switcherDragIdx>=0 && dy<0 && abs(dy)>abs(dx) && -dy>SWITCHER_DISMISS_PX);
+    if(armedNow && !armedPrev) vibExit(); // v133: 1 denyut halus = "lepas sekarang, kartu ditutup"
+    armedPrev=armedNow;
     return;
   }
   // jari diangkat -- putuskan aksinya
@@ -6143,6 +6261,10 @@ void switcherTouch(bool touched, bool newT, int tx, int ty){
         navZoomArm(16,cby,SCR_W-32,SWITCHER_ROW_H,12,apps[ai].color);
         navZoomCloseApp=ai; }
       navPush(apps[ai].screen);
+    } else if(switcherN>0 && sty<SWITCHER_ROW_TOP-6 && stx>SCR_W-104){
+      switcherCloseAll(); // v133: chip "Tutup semua"
+      vibTap();
+      closeAppSwitcher();
     } else {
       closeAppSwitcher(); // tap area kosong = tutup switcher, gak jadi pindah app
     }
@@ -6153,6 +6275,7 @@ void switcherTouch(bool touched, bool newT, int tx, int ty){
       int ai=switcherIdx[switcherDragIdx];
       if(apps[ai].onLowMem) apps[ai].onLowMem(); // v96: nutup dr switcher beneran lepas cache RAM app itu
       appLastUsedMs[ai]=0;
+      swThumbDrop(ai); // v133: preview ikut dibuang (RAM + privasi)
       // v125: kartu di bawahnya pindah 1 slot ke atas; offset-nya dimulai dari 1 slot (+ sisa offset lama) lalu meluruh -> naik halus
       for(int k=switcherDragIdx;k<switcherN-1;k++){
         switcherIdx[k]=switcherIdx[k+1];
@@ -11310,6 +11433,9 @@ void renderCurrentFrame(){
   }
   if(!locked){ if(nyxShotThumbActive()) drawShotThumb(canvas); if(callBannerActive()) drawCallBanner(canvas); } // NYX-EXTRAS-V1
   if(powerMenuOpen && !callOverlayActive()) drawPowerMenu(canvas); // menu Daya: modal di atas semuanya
+  // v133: canvas sekarang = layar app polos? (syarat capture preview App Switcher)
+  swLastFrameApp = !locked && !appSwitcherOpen && !callOverlayActive() && !powerMenuOpen && !controlCenterOpen &&
+                   !notifShadeOpen && !homeAodActive && !diMenuOpen && curScreen()!=SCR_HOME;
 }
 
 // v106: gambar & push HANYA pita grid Home (lihat catatan homeBandMode).

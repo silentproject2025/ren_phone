@@ -62,6 +62,7 @@ NyxOS tidak berbasis Android maupun Linux. Peluncur aplikasi (launcher), pusat n
 | Antarmuka sistem (Home, Lock Screen, Control Center, dan lainnya) | `OK` | Digunakan sehari-hari. Termasuk tema Nyx, ikon squircle, widget bento, dan animasi buka/tutup app. |
 | Animasi mengisi daya (Lock Screen) | `OK` | Muncul saat charger dicolok dan HP terkunci. Syarat lengkap di [bagian 5.1](#51-antarmuka-sistem-ok). |
 | Gestur sistem baru (pull-to-refresh, swipe-back tepi kiri, panel mengikuti jari) | `BETA` | Kode sudah terpasang di build, belum diuji menyeluruh pada perangkat. |
+| Notifikasi berkelompok, geser-hapus, aksi cepat; preview kartu App Switcher | `BETA` | Kode sudah terpasang di build, belum diuji pada perangkat. Lihat [bagian 5.1](#51-antarmuka-sistem-ok). |
 | Fitur tambahan NyxOS (perintah suara AI, energi per app, log crash, banner telepon, thumbnail screenshot, skeleton loading) | `BETA` | Kode sudah terpasang di build, belum diuji pada perangkat. Lihat bagian 5.5 dan 5.6. |
 | Chat melalui broker MQTT | `OK` | Diuji dengan broker sungguhan. |
 | Musik Bluetooth dan AVRCP | `OK` | Cover ID3, kontrol dari earbuds, mode acak AI. |
@@ -292,9 +293,9 @@ NyxOS menghadirkan pengalaman ponsel modern pada layar kecil 320×240.
 | **Lock Screen** | Jam, wallpaper kustom, geser untuk membuka kunci. Saat membuka, lock screen **naik mengikuti jari** dan menyingkap Home di bawahnya. |
 | **Home** | Grid ikon dengan pencarian, widget cuaca (Open-Meteo, tanpa API key), dan badge notifikasi pada ikon. |
 | **Control Center** | Tombol WiFi, Airplane, DND, Tema, Orientasi, Shake, Kunci, Neopixel, Senyap, Bluetooth, dan Tangkap layar, ditambah slider kecerahan. **Tahan lama** sebuah tombol untuk membuka pengaturan fitur itu (WiFi, Tema, Rotasi, Neopixel, Bluetooth, Galeri); tahan lama tombol **Kunci** membuka menu Daya. |
-| **Notification Shade** | Riwayat notifikasi. |
+| **Notification Shade** | Riwayat notifikasi, dikelompokkan per aplikasi (chip jumlah di kanan untuk membuka/menutup grup). Geser baris ke kiri/kanan untuk menghapus; **tahan lama** sebuah baris untuk aksi cepat (Buka / Hapus / Batal). `BETA` |
 | **Dynamic Island** | Elemen berbentuk pil di bagian atas layar yang berubah sesuai kejadian. |
-| **App Switcher** | Berpindah antaraplikasi. |
+| **App Switcher** | Berpindah antaraplikasi. Tiap kartu menampilkan **preview** layar terakhir app (disimpan di PSRAM, tidak ke SD), usap kartu ke atas untuk menutup, chip **Tutup semua** di kanan atas. `BETA` |
 | **Always-On Display** | Tampilan hemat daya saat layar diredupkan. |
 | **Keyboard layar** | Tersedia untuk seluruh aplikasi. |
 | **8 tema** | Aurora, Dark, AMOLED, Light, Pastel, iOS, Full Dark, dan **Nyx** (hitam keunguan dengan aksen violet dan teal; jadi tema bawaan, dapat diganti di Pengaturan). |
@@ -326,6 +327,18 @@ Saat charger dicolok, lock screen menampilkan lubang hitam kecil dengan cincin a
 | **Pull-to-refresh** | Tarik ke bawah dari strip atas layar (di kiri tombol cari) pada app yang punya aksi muat ulang: Update, NEO Asteroid, Bumi EPIC, dan Galeri NASA. Lingkaran penunjuk mengikuti jari dan terisi; lepas setelah penuh untuk memuat ulang. |
 | **Swipe-back tepi kiri** | Sentuh tepi kiri layar lalu geser ke kanan; gelembung "<" mengikuti jari, lepas setelah cukup jauh untuk kembali. Hanya aktif pada app non-game dan non-editor agar tidak mengganggu D-pad, kanvas gambar, atau pengetikan. |
 | **Panel mengikuti jari** | Control Center dan Notification Shade tumbuh mengikuti jari saat ditarik; lepas untuk membuka (dengan pantulan kecil) atau menutup. |
+
+**Notifikasi dan App Switcher (v133)** `BETA`
+
+| Fitur | Cara kerja |
+|---|---|
+| **Pengelompokan per app** | Notifikasi dari app yang sama digabung jadi satu baris (yang terbaru) dengan chip jumlah. Ketuk chip untuk membuka/menutup grup; baris di bawahnya bergeser halus. |
+| **Geser untuk menghapus** | Geser baris ke kiri/kanan lewat sepertiga lebar layar (atau lemparan cepat). Pada baris induk, seluruh grup terhapus; pada baris anak, hanya entri itu. Getaran halus muncul sekali saat melewati ambang. |
+| **Aksi cepat** | Tahan lama sebuah baris (±0,45 dtk, jari diam): **Buka** (bila notifikasi punya app tertaut), **Hapus**, **Batal**. Ketuk di luar baris untuk membatalkan. |
+| **Preview kartu Switcher** | Thumbnail 64×48 layar terakhir app, diambil dari kanvas tepat sebelum app ditinggalkan. Maks 8 thumbnail di PSRAM, hilang saat reboot atau saat kartu ditutup. Matikan dengan `-DSW_THUMB_ENABLE=0` bila capture terasa menahan transisi. |
+| **Tutup semua** | Chip di kanan atas Switcher; sama dengan usap-atas pada tiap kartu (cache RAM app ikut dilepas). |
+
+Catatan: panel Notification Shade kini menyesuaikan tingginya saat isi berubah, dan batas scroll dihitung dari tinggi panel sebenarnya. Sebelumnya di landscape dua baris terbawah tidak bisa dijangkau. Label umur notifikasi ("N jam lalu") juga diperbaiki; format lamanya tidak valid.
 
 **Perlindungan ghost touch.** Jika panel sentuh mengirim sentuhan palsu, sistem menolak titik di kotak mati, di luar layar, atau dengan tekanan rendah, lalu menahan seluruh input sampai layar benar-benar sepi. Saat boot, bila sentuhan palsu terdeteksi, wizard kalibrasi dilewati dan kalibrasi bawaan dipakai tanpa disimpan. Ambang dan kotak mati diatur lewat konstanta `TOUCH_*` pada `phone.ino`; sentuhan jari asli juga bisa ikut tertolak selama ghost terus-menerus aktif.
 
