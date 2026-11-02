@@ -71,7 +71,15 @@ static void* ebPsRealloc(void* q, size_t n) {
 #define EBK_VLW_MAX    (1100u * 1024u)
 #define EBK_NFONT      11
 
-enum { EBK_LIB = 0, EBK_LOADING, EBK_READ, EBK_TOC };
+enum { EBK_LIB = 0, EBK_LOADING, EBK_READ, EBK_TOC, EBK_GUT };
+
+// ---- Gutenberg (gutenberg_renphone.ino, dikompilasi SETELAH berkas ini) ----
+void gutEnter();
+void gutExit();
+void gutLoopPoll();
+void gutDraw(LGFX_Sprite& s);
+void gutTouch(int x, int y, bool held, bool isNew);
+void gutPointerTick(bool touched, bool wasT, int tx, int ty);
 enum { EBK_SORT_RECENT = 0, EBK_SORT_TITLE, EBK_SORT_AUTHOR };
 
 struct EbkEntry {
@@ -941,6 +949,7 @@ static void ebkBackToLibrary() {
 // siklus app
 // ---------------------------------------------------------------------
 static void ebkFreeAll() {
+  gutExit();                                                 // batalkan unduhan Gutenberg + lepas daftarnya
   ebkCloseBook();
   ebkVlwFree();
   ebkJpegFree();
@@ -972,6 +981,7 @@ void ebookExit() {
 
 // dipanggil dari loop(): membuka buku setelah layar "Membuka..." tampil + pekerjaan latar perpustakaan
 void ebookLoopPoll() {
+  if (ebkMode == EBK_GUT) { gutLoopPoll(); return; }
   if (ebkMode == EBK_LOADING && ebkPendingIdx >= 0 && (long)(millis() - ebkLoadDue) >= 0) ebkDoOpen();
   else if (ebkMode == EBK_LIB && ebkLib) ebkJobTick();
 }
@@ -1217,6 +1227,8 @@ static int ebkListBot() { return (kbVisible && kbTarget == &ebkQuery) ? kbY() - 
 // area sentuh header perpustakaan
 #define EBK_SORT_W 66
 static bool ebkHitSort(int x, int y)   { return y >= 28 && y <= 50 && x >= SCR_W - 10 - EBK_SORT_W && x <= SCR_W - 10; }
+#define EBK_GUT_W 66
+static bool ebkHitGut(int x, int y)    { int bx = SCR_W - 10 - EBK_SORT_W - 6 - 28; return y >= 28 && y <= 50 && x >= bx - 6 - EBK_GUT_W && x < bx - 2; }
 static bool ebkHitSearch(int x, int y) { return y >= 28 && y <= 50 && x >= SCR_W - 10 - EBK_SORT_W - 6 - 28 && x < SCR_W - 10 - EBK_SORT_W - 2; }
 static bool ebkHitBox(int x, int y)    { return y >= 26 && y <= 52 && x >= 84 && x <= SCR_W - 6; }
 static bool ebkHitClear(int x, int y)  { return ebkHitBox(x, y) && x >= SCR_W - 10 - 26; }
@@ -1264,6 +1276,9 @@ static void ebkDrawLibrary(LGFX_Sprite& s) {
     const char* sn = ebkSortNames[ebkSortMode];
     s.setTextColor(T().text); s.setCursor(sx + (EBK_SORT_W - s.textWidth(sn)) / 2, 35); s.print(sn);
     int bx = sx - 6 - 28;
+    { int gx = bx - 6 - EBK_GUT_W;                                                       // tombol Gutenberg (unduh buku gratis)
+      nyxAaRR(s, gx, 29, EBK_GUT_W, 20, 10, T().accent);
+      s.setTextColor(0xFFFF); s.setCursor(gx + (EBK_GUT_W - s.textWidth("Gutenberg")) / 2, 35); s.print("Gutenberg"); }
     nyxAaRR(s, bx, 29, 28, 20, 10, chip);
     nyxAaCircle(s, bx + 12, 38, 5, T().text); nyxAaCircle(s, bx + 12, 38, 3, chip);          // kaca pembesar
     for (int k = 0; k < 4; k++) nyxAaCircle(s, bx + 16 + k, 42 + k - 1, 1, T().text);
@@ -1281,6 +1296,8 @@ static void ebkDrawLibrary(LGFX_Sprite& s) {
     s.setTextColor(T().text);    s.setCursor(12, top + 10); s.print("Belum ada buku.");
     s.setTextColor(T().subtext); s.setCursor(12, top + 26); s.print("Salin file .txt / .md / .epub ke");
     s.setCursor(12, top + 38); s.print("folder /books pada SD card.");
+    s.setTextColor(T().accent);  s.setCursor(12, top + 56); s.print("Atau ketuk Gutenberg di atas untuk");
+    s.setCursor(12, top + 68); s.print("mengunduh buku gratis.");
   } else if (ebkViewN == 0) {
     s.setTextColor(T().subtext); s.setCursor(12, top + 10); s.print("Tidak ada hasil.");
   } else {
@@ -1389,6 +1406,7 @@ void drawEbook(LGFX_Sprite& s) {
     case EBK_LOADING: ebkDrawLoading(s); break;
     case EBK_READ:    ebkDrawReader(s);  break;
     case EBK_TOC:     ebkDrawToc(s);     break;
+    case EBK_GUT:     gutDraw(s);        break;
     default:          ebkDrawLibrary(s); break;
   }
 }
@@ -1398,6 +1416,7 @@ void drawEbook(LGFX_Sprite& s) {
 // ---------------------------------------------------------------------
 // Sentuhan generik (jari baru menyentuh): Kembali, kepala perpustakaan (cari/urut), keyboard cari.
 void ebookTouch(int x, int y, bool held, bool isNew) {
+  if (ebkMode == EBK_GUT) { gutTouch(x, y, held, isNew); return; }
   (void)held;
   if (!isNew) return;
   if (ebkMode == EBK_LIB) {
@@ -1411,6 +1430,8 @@ void ebookTouch(int x, int y, bool held, bool isNew) {
     if (ebkQueryBox()) {
       if (ebkHitClear(x, y)) { ebkQuery = ""; ebkViewDirty = true; ebkScroll = 0; needRedraw = true; }
       else if (ebkHitBox(x, y)) { kbTarget = &ebkQuery; kbVisible = true; kbMode = KB_LOWER; needRedraw = true; }
+    } else if (ebkHitGut(x, y)) {
+      vibTap(); gutEnter();
     } else if (ebkHitSearch(x, y)) {
       kbTarget = &ebkQuery; kbVisible = true; kbMode = KB_LOWER; ebkScroll = 0; needRedraw = true;
     } else if (ebkHitSort(x, y)) {
@@ -1518,6 +1539,7 @@ static void ebkListRelease() {
 
 // Dipanggil tiap putaran loop() selagi app terbuka: geser daftar / geser halaman, ketuk diproses saat LEPAS.
 void ebookPointerTick(bool touched, bool wasT, int tx, int ty) {
+  if (ebkMode == EBK_GUT) { gutPointerTick(touched, wasT, tx, ty); return; }
   if (ebkMode == EBK_LOADING) return;
   if (touched) ebkLastTouchMs = millis();
   bool listMode = (ebkMode == EBK_LIB || ebkMode == EBK_TOC);
