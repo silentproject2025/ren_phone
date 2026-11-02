@@ -29,6 +29,7 @@
 #define GUT_TXT_MAX    (3u * 1024u * 1024u)    // batas TXT pembaca Buku
 #define GUT_EPUB_MAX   (40u * 1024u * 1024u)
 #define GUT_GAP_MS     1500        // jeda minimum antar permintaan ke server
+#define GUT_IDLE_MS    8000        // diam selama ini = anggap macet, sambung ulang
 #define GUT_MAX_TRY    40          // maks sambungan ulang per unduhan (berhenti lebih awal bila 3x tanpa kemajuan)
 
 enum { GUT_JOB_NONE = 0, GUT_JOB_SEARCH, GUT_JOB_DL };
@@ -67,6 +68,8 @@ static char      gutMsg[64] = "";
 static char      gutDiag[96] = "";
 static volatile uint32_t gutSdKBs = 0;                // kode diagnosis utk layar kesalahan (+ Serial)
 static char      gutReqUrl[220] = "";
+static volatile uint32_t gutInstBps = 0, gutSpdT = 0, gutSpdB = 0, gutLastDataMs = 0;   // kecepatan SAAT INI (jendela ~2 dtk)
+static volatile uint16_t gutRetries = 0;               // jumlah sambung ulang unduhan berjalan
 static char      gutPartUrl[GUT_URL_LEN + 8] = "";   // URL milik .part yang tertinggal (utk melanjutkan)
 static bool      gutReqAppend = false;
 static int       gutDlIdx = -1;
@@ -127,6 +130,9 @@ class GutSink : public Stream {                          // HTTPClient::writeToS
       } else { size_t w = file->write(p, n); if (w != n) { sdFail = true; return 0; } }
     }
     got += (uint32_t)n; gutGot = got;
+    { uint32_t ns = millis(); gutLastDataMs = ns;
+      if (!gutSpdT) { gutSpdT = ns; gutSpdB = got; }
+      else if (ns - gutSpdT >= 2000) { gutInstBps = (uint32_t)((uint64_t)(got - gutSpdB) * 1000 / (ns - gutSpdT)); gutSpdT = ns; gutSpdB = got; } }
     if (gutPhase == GUT_PH_CONNECT) { gutPhase = GUT_PH_DOWNLOAD; gutT0 = millis(); }
     uint32_t now = millis();
     if (now - lastDraw > 180) { lastDraw = now; needRedraw = true; }
@@ -142,6 +148,7 @@ class GutSink : public Stream {                          // HTTPClient::writeToS
 // *outGot = total byte yang sudah ada (termasuk resumeFrom).
 static int gutFetch(const char* url, uint8_t* mem, uint32_t memCap, File* f, uint32_t limit, uint32_t* outGot, bool manual, uint32_t idleMs, uint32_t resumeFrom) {
   *outGot = resumeFrom; gutGot = resumeFrom; gutTot = 0; gutDiag[0] = 0;
+  gutInstBps = 0; gutSpdT = 0; gutSpdB = 0; gutLastDataMs = millis();
   while ((uint32_t)(millis() - gutLastReqMs) < GUT_GAP_MS) { if (gutCancel) return -2; delay(40); }
   if (gutCancel) return -2;
   nasaWaitForHeap();                                   // beri waktu RAM internal lega sebelum TLS (pola APOD/NEO)
@@ -271,14 +278,16 @@ static void gutDoDownload() {
   }
 
   uint32_t got = 0; int rc = -1; int stall = 0, restarts = 0; bool keepPart = false;
+  gutRetries = 0;
   uint32_t lim = isEpub ? GUT_EPUB_MAX : GUT_TXT_MAX;
   // Unduhan sering putus di tengah (server/TLS): jangan mulai dari nol, sambung pakai Range dari byte terakhir yang sudah di SD.
   for (int attempt = 0; attempt < GUT_MAX_TRY; attempt++) {
     const char* u = useLite ? lite : url;
+    if (attempt) { gutRetries = (uint16_t)attempt; needRedraw = true; }
     if (!resume) { strncpy(gutPartUrl, u, sizeof(gutPartUrl) - 1); gutPartUrl[sizeof(gutPartUrl) - 1] = 0; }
     File f = SD_MMC.open(tmp, resume ? FILE_APPEND : FILE_WRITE);
     if (!f) { rc = -5; break; }
-    rc = gutFetch(u, nullptr, 0, &f, lim, &got, true, 20000, resume);
+    rc = gutFetch(u, nullptr, 0, &f, lim, &got, true, GUT_IDLE_MS, resume);
     f.close();
     if (rc == 200 || rc == -2 || rc == -5 || rc == -4) break;     // sukses / batal / SD / terlalu besar: jangan ulangi
     File g = SD_MMC.open(tmp, FILE_READ); uint32_t sz = g ? (uint32_t)g.size() : 0; if (g) g.close();
@@ -628,10 +637,14 @@ static void gutDrawProgress(LGFX_Sprite& s) {
   if (gutPhase == GUT_PH_DOWNLOAD) {
     uint32_t el = millis() - gutT0;
     if (el > 700 && got > 0) {
-      uint32_t bps = (uint32_t)((uint64_t)got * 1000 / el);
-      char sp[48];
-      if (tot > got && bps > 0) snprintf(sp, sizeof(sp), "%u KB/s   sisa ~%u dtk", (unsigned)(bps / 1024), (unsigned)((tot - got) / bps + 1));
-      else snprintf(sp, sizeof(sp), "%u KB/s", (unsigned)(bps / 1024));
+      uint32_t nowD = millis();
+      uint32_t bps = (nowD - gutLastDataMs > 3000) ? 0 : gutInstBps;      // kecepatan saat ini; 0 bila macet >3 dtk
+      if (!bps && gutInstBps == 0 && nowD - gutLastDataMs <= 3000) bps = (uint32_t)((uint64_t)got * 1000 / el);   // jendela pertama belum terisi
+      char sp[64]; char rt[16] = "";
+      if (gutRetries) snprintf(rt, sizeof(rt), "  ulang %ux", (unsigned)gutRetries);
+      if (!bps) snprintf(sp, sizeof(sp), "menunggu data...%s", rt);
+      else if (tot > got) snprintf(sp, sizeof(sp), "%u KB/s  sisa ~%u dtk%s", (unsigned)(bps / 1024), (unsigned)((tot - got) / bps + 1), rt);
+      else snprintf(sp, sizeof(sp), "%u KB/s%s", (unsigned)(bps / 1024), rt);
       s.setTextColor(T().subtext); s.setCursor(12, by + 32); s.print(sp);
     }
   }
