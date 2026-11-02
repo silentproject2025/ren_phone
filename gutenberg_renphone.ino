@@ -82,9 +82,19 @@ class GutSink : public Stream {                          // HTTPClient::writeToS
   uint8_t* mem = nullptr; uint32_t cap = 0; File* file = nullptr; uint32_t limit = 0;
   uint32_t got = 0; bool over = false, sdFail = false; uint32_t lastDraw = 0;
   // Tulis ke SD per blok besar: potongan jaringan cuma ~1,4 KB, dan SD card sangat lambat kalau ditulis sekecil itu.
-  uint8_t* wbuf = nullptr; uint32_t wlen = 0; static const uint32_t WCAP = 32768;
+  uint8_t* wbuf = nullptr; uint32_t wlen = 0, wcap = 0;
   ~GutSink() { if (wbuf) heap_caps_free(wbuf); }
-  void useWriteBuffer() { if (file && !wbuf) wbuf = (uint8_t*)heap_caps_malloc(WCAP, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT); }   // gagal -> tulis langsung
+  // Ukuran blok mengikuti sisa PSRAM: maks 512 KB, tapi selalu menyisakan >= 1,5 MB utk app lain (musik, kamera, dll).
+  // Gagal alokasi -> tulis langsung per potongan (cara lama).
+  void useWriteBuffer() {
+    if (!file || wbuf) return;
+    size_t fb = heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM);
+    uint32_t want = 512u * 1024u;
+    while (want > 32768u && fb < (size_t)want + 1536u * 1024u) want >>= 1;
+    wbuf = (uint8_t*)heap_caps_malloc(want, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    wcap = wbuf ? want : 0;
+    Serial.printf("[GUT] buffer SD %u KB (PSRAM bebas terbesar %u KB)\n", (unsigned)(wcap / 1024), (unsigned)(fb / 1024));
+  }
   bool flushSd() {
     if (!file || !wbuf || !wlen) return true;
     size_t w = file->write(wbuf, wlen);
@@ -101,10 +111,10 @@ class GutSink : public Stream {                          // HTTPClient::writeToS
       if (wbuf) {
         size_t left = n; const uint8_t* q = p;
         while (left) {
-          uint32_t room = WCAP - wlen;
+          uint32_t room = wcap - wlen;
           uint32_t c = left < room ? (uint32_t)left : room;
           memcpy(wbuf + wlen, q, c); wlen += c; q += c; left -= c;
-          if (wlen == WCAP && !flushSd()) return 0;
+          if (wlen == wcap && !flushSd()) return 0;
         }
       } else { size_t w = file->write(p, n); if (w != n) { sdFail = true; return 0; } }
     }
