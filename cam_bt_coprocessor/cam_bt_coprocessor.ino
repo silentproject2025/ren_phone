@@ -632,10 +632,11 @@ static void linkRxTask(void* param) {
 //  [16] ... lihat di atas; flags b6 = decoder error (RAM)
 //  [17..18] ukuran ring MP3 dalam KB (u16 LE) -> S3 menyesuaikan ambang kredit
 //  [19] heap bebas RAM internal (KB, maks 255)  [20] blok kontigu terbesar (KB, maks 255)
-//  (v1 S3 cukup baca 13 byte; v2 baca 17 byte utk RYNE; v3 baca 21 byte)
+//  [21..22] jumlah frame RX rusak di CAM (u16 LE, melingkar) -> S3 turunkan baud kalau link cepat tidak bersih
+//  (v1 S3 cukup baca 13 byte; v2 baca 17 byte utk RYNE; v3 baca 21 byte; v4 baca 23 byte)
 // ----------------------------------------------------------
 static void sendStatus() {
-  uint8_t b[21];
+  uint8_t b[23];
   uint8_t fl = 0;
   if (btConnected)               fl |= 1;
   if (haveTrack && !paused)      fl |= 2;
@@ -664,6 +665,7 @@ static void sendStatus() {
   if (nowH - hAt >= 1000) { hAt = nowH; hkC = ESP.getFreeHeap() / 1024; mkC = ESP.getMaxAllocHeap() / 1024; }
   uint32_t hk = hkC, mk = mkC;
   b[19] = hk > 255 ? 255 : (uint8_t)hk; b[20] = mk > 255 ? 255 : (uint8_t)mk;
+  { uint32_t pe = parser.errors; b[21] = pe & 0xFF; b[22] = (pe >> 8) & 0xFF; }
   rpSend(Serial2, RP_STATUS, b, sizeof(b));
 }
 

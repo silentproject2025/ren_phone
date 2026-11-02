@@ -68,6 +68,18 @@ static volatile bool     musEnded = false;
 static volatile bool     musHello = false;
 static volatile uint32_t musCredit = 0, musSentSince = 0;
 static volatile uint32_t musRxBytes = 0, musRxFrames = 0, musRxErr = 0;   // diagnosa link CAM -> S3
+// ---- link cepat utk audio AVI (lihat musFastEnsure / musFastTick) ----
+// Baud link S3<->CAM naik ke MUS_FAST_BAUD selama video AVI diputar (kabel cuma terpakai ~17% di 921600, tapi burst 4 KB
+// menahan musTask 45 ms; di 2 Mbaud jadi 21 ms -> pause/seek/volume lebih cepat sampai ke CAM). Selalu ada jalan mundur ke 921600.
+#ifndef MUS_FAST_BAUD
+#define MUS_FAST_BAUD     2000000   // 0 = nonaktif (audio AVI tetap di RP_BAUD)
+#endif
+#define MUS_FAST_ERR_MAX  4         // frame rusak di CAM dlm 10 dtk -> turun ke RP_BAUD
+static volatile bool     musFastOn = false;      // sesi AVI minta link cepat (diset musExtFastLink)
+static bool              musFastFailed = false;  // ditolak/tdk stabil -> jangan dicoba lagi (reset kalau CAM restart)
+static volatile uint32_t musCamRxErr = 0;        // status v4: frame RX rusak di sisi CAM (u16 melingkar)
+static volatile bool     musCamRxErrOk = false;
+static uint32_t          musFastErr0 = 0, musFastErrAt = 0;
 static volatile uint32_t musRingKb = 0;                  // ukuran ring MP3 di CAM (KB), dari status v3 (0 = CAM versi lama)
 static volatile uint32_t musCamHeapKb = 0, musCamBlkKb = 0;   // RAM internal CAM: bebas & blok kontigu terbesar
 static char              musRstMsg[40] = {0};            // alasan restart CAM terakhir (crash/brownout/watchdog)
@@ -645,6 +657,12 @@ static void musHandleReq(uint8_t t, int32_t a, const char* s) {
       musExtReady = true;
       break;
     }
+    case 'L': {                                   // minta CAM ganti baud link (a = baud). musTask = pengirim tunggal UART
+      uint32_t b = (uint32_t)a;
+      uint8_t pl[4] = { (uint8_t)b, (uint8_t)(b >> 8), (uint8_t)(b >> 16), (uint8_t)(b >> 24) };
+      rpSend(Serial1, RP_CAM_BAUD, pl, 4);        // CAM menjawab RP_CAM_BAUDOK -> camRxFrame() memindahkan baud S3
+      break;
+    }
     case 'e':                                     // akhiri stream AVI
       musExt = false; musExtFinish = false; musExtReady = false;
       musLoaded = false; musStreaming = false; musPaused = false;
@@ -705,6 +723,34 @@ static void musOnKey(uint8_t code, uint8_t arg) {
 // =====================================================================
 //  TASK UTAMA LINK (core 0, stack PSRAM)
 // =====================================================================
+// Jaring pengaman link cepat (dipanggil tiap putaran musTask). App Kamera punya logika sendiri (camLinkTick) -> dilewati.
+static void musFastTick() {
+  if (camLinkBusy() || camBaudCur == RP_BAUD) return;
+  uint32_t now = millis();
+  if (camBaudSwitchedAt) {                           // baru pindah: harus ada frame valid dari CAM, kalau tidak mundur
+    if (camLastRxMs > camBaudSwitchedAt + 200) { camBaudSwitchedAt = 0; musFastErr0 = musCamRxErr; musFastErrAt = now; }
+    else if (now - camBaudSwitchedAt > 1500) {
+      Serial1.updateBaudRate(RP_BAUD); camBaudCur = RP_BAUD; camBaudSwitchedAt = 0; musFastFailed = true;
+      musToast("Link cepat gagal, pakai 921k");
+    }
+    return;
+  }
+  if (now - camLastRxMs > 1500) {                    // sudah terbukti jalan lalu sunyi (mis. CAM restart di baud awal)
+    Serial1.updateBaudRate(RP_BAUD); camBaudCur = RP_BAUD; musFastFailed = true;
+    return;
+  }
+  if (musFastOn && musCamRxErrOk) {                  // CAM menghitung frame rusak: kalau sering -> link cepat tidak bersih
+    if (now - musFastErrAt >= 10000) { musFastErr0 = musCamRxErr; musFastErrAt = now; }
+    else if ((uint16_t)(musCamRxErr - musFastErr0) >= MUS_FAST_ERR_MAX) {
+      musFastFailed = true;
+      uint8_t pl[4] = { (uint8_t)RP_BAUD, (uint8_t)(RP_BAUD >> 8), (uint8_t)(RP_BAUD >> 16), (uint8_t)(RP_BAUD >> 24) };
+      rpSend(Serial1, RP_CAM_BAUD, pl, 4);
+      musToast("Link cepat tdk stabil, pakai 921k");
+      musFastErr0 = musCamRxErr; musFastErrAt = now;
+    }
+  }
+}
+
 static void musTask(void* arg) {
   RpParser P;
   bool prevAlive = false, prevBt = false;
@@ -743,6 +789,7 @@ static void musTask(void* arg) {
               musCamHeapKb = P.payload[19];
               musCamBlkKb  = P.payload[20];
             }
+            if (P.len >= 23) { musCamRxErr = (uint32_t)P.payload[21] | ((uint32_t)P.payload[22] << 8); musCamRxErrOk = true; }   // status v4
             {   // decoder CAM mati (alokasi Helix gagal) -> berhenti, jangan loncat2 lagu diam-diam
               bool de = (fl & 64) != 0;
               if (de && !musCamDecErr && musLoaded) {
@@ -800,6 +847,7 @@ static void musTask(void* arg) {
      }
     }
     if (musCamAlive && millis() - musLastStatusMs > 1500) musCamAlive = false;
+    musFastTick();
     {   // keepalive ke CAM (utk LED diagnosa CAM)
       static uint32_t lastPing = 0;
       uint32_t np = millis();
@@ -809,6 +857,7 @@ static void musTask(void* arg) {
     // ---- 2. CAM baru nyala / baru terdeteksi -> kirim ulang volume ----
     if (musHello) {
       musHello = false;
+      musFastFailed = false;                      // CAM baru boot (mungkin baru di-flash): boleh coba link cepat lagi
       if (musLoaded) { musLoaded = false; musStreaming = false; musExt = false; if (musFile) musFile.close(); musToast("Modul BT restart"); }
       uint8_t v = (uint8_t)musVol; rpSend(Serial1, RP_VOLUME, &v, 1);
       if (!musBtOn) { uint8_t m = 0; rpSend(Serial1, RP_BTMODE, &m, 1); }
@@ -965,6 +1014,18 @@ static void musBegin() {
 // =====================================================================
 bool btCcEnabled();   // definisi di bawah (API tombol BT Control Center)
 // 0 = siap | 1 = BT dimatikan | 2 = modul CAM tdk terdeteksi | 3 = TWS belum terhubung | 4 = RAM kurang
+// minta link cepat (hanya kalau pemutar AVI meminta lewat musExtFastLink). Dipanggil dari thread utama; CAM firmware lama
+// tidak menjawab -> timeout 600 ms sekali saja, lalu ditandai gagal (tetap 921600, audio normal).
+static void musFastEnsure() {
+#if MUS_FAST_BAUD
+  if (!musFastOn || musFastFailed || camLinkBusy() || camBaudCur != RP_BAUD) return;
+  musPost('L', (int32_t)MUS_FAST_BAUD, nullptr);
+  uint32_t t0 = millis();
+  while (camBaudCur == RP_BAUD && millis() - t0 < 600) delay(5);
+  if (camBaudCur == RP_BAUD) { musFastFailed = true; Serial.println("[MUS] CAM tak menjawab RP_CAM_BAUD (firmware lama?) -> tetap 921600"); }
+  else { musFastErr0 = musCamRxErr; musFastErrAt = millis(); Serial.printf("[MUS] link audio %lu baud\n", (unsigned long)camBaudCur); delay(30); }
+#endif
+}
 int musExtBegin() {
   btCcEnabled();                                   // muat saklar BT dari NVS (kalau belum)
   musBegin();                                      // nyalakan link ke CAM kalau belum (no-op kalau sudah)
@@ -973,6 +1034,7 @@ int musExtBegin() {
   while (millis() - t0 < 2500 && !(musCamAlive && musBtConn)) delay(10);
   if (!musCamAlive) return 2;
   if (!musBtConn)   return 3;
+  musFastEnsure();                                 // no-op kalau tdk diminta AVI / sudah cepat / pernah gagal
   if (!musExtRing) {
     musExtRing = (uint8_t*)heap_caps_malloc(MUS_EXT_RING, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!musExtRing) return 4;
@@ -1014,6 +1076,12 @@ uint32_t musExtClockMs() {
   uint32_t age = millis() - musLastStatusMs;
   if (age > 120) age = 120;
   return base + age;
+}
+// Pemutar AVI: true = minta link cepat utk sesi ini (dieksekusi di musExtBegin pertama; seek tidak menegosiasi ulang),
+// false = sesi selesai -> turunkan lagi ke RP_BAUD (musTask memprosesnya SETELAH 'e'/RP_STOP, urutan antrean terjaga).
+void musExtFastLink(bool on) {
+  musFastOn = on;
+  if (!on && musStarted && camBaudCur != RP_BAUD && !camLinkBusy()) musPost('L', (int32_t)RP_BAUD, nullptr);
 }
 void musExtPause(bool p) { musPost('q', p ? 1 : 0, nullptr); }
 void musExtEnd()         { musPost('e', 0, nullptr); }

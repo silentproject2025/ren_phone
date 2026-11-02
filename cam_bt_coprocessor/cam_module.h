@@ -244,6 +244,23 @@ static void camDoShot(uint8_t res, uint8_t q, uint8_t flash, uint8_t flags) {
   camSendStat();
 }
 
+// RP_CAM_BAUD: ganti baud link S3<->CAM. Kalau kamera lagi terbuka, perintah lewat camQ (camTask = satu2nya
+// pengirim frame kamera, jadi baud tidak berubah di tengah frame). Kalau kamera TIDAK terbuka (mis. audio AVI
+// minta link 2 Mbaud), dikerjakan langsung di task link -- dulu perintah ini dibuang diam2 kalau camTask belum ada.
+static void camDoBaud(const uint8_t* d, uint16_t len) {
+  if (len < 4) return;
+  uint32_t b = (uint32_t)d[0] | ((uint32_t)d[1] << 8) | ((uint32_t)d[2] << 16) | ((uint32_t)d[3] << 24);
+  if (b < 115200 || b > 4000000) b = RP_BAUD;
+  uint8_t o[4] = { (uint8_t)b, (uint8_t)(b >> 8), (uint8_t)(b >> 16), (uint8_t)(b >> 24) };
+  rpSend(Serial2, RP_CAM_BAUDOK, o, 4);        // jawaban masih di baud lama
+  Serial2.flush();
+  vTaskDelay(pdMS_TO_TICKS(15));
+  Serial2.updateBaudRate(b);
+  camBaudNow = b;
+  camLastRxMs = millis();
+  Serial.printf("[CAM] link -> %u baud\n", (unsigned)b);
+}
+
 static void camHandleCmd(const CamCmd& c) {
   switch (c.type) {
     case RP_CAM_OPEN: {
@@ -263,20 +280,7 @@ static void camHandleCmd(const CamCmd& c) {
     case RP_CAM_SET:   if (c.len >= 2) camApplySet(c.d[0], (int8_t)c.d[1]); break;
     case RP_CAM_SHOT:  if (c.len >= 3) camDoShot(c.d[0] > RPR_QXGA ? RPR_SVGA : c.d[0], c.d[1] < 4 ? 4 : c.d[1], c.d[2], c.len >= 4 ? c.d[3] : 0); break;
     case RP_CAM_FLASH: if (c.len >= 1) camFlashSet(c.d[0]); camSendStat(); break;
-    case RP_CAM_BAUD: {
-      if (c.len < 4) break;
-      uint32_t b = (uint32_t)c.d[0] | ((uint32_t)c.d[1] << 8) | ((uint32_t)c.d[2] << 16) | ((uint32_t)c.d[3] << 24);
-      if (b < 115200 || b > 4000000) b = RP_BAUD;
-      uint8_t o[4] = { (uint8_t)b, (uint8_t)(b >> 8), (uint8_t)(b >> 16), (uint8_t)(b >> 24) };
-      rpSend(Serial2, RP_CAM_BAUDOK, o, 4);        // jawaban masih di baud lama
-      Serial2.flush();
-      vTaskDelay(pdMS_TO_TICKS(15));
-      Serial2.updateBaudRate(b);
-      camBaudNow = b;
-      camLastRxMs = millis();
-      Serial.printf("[CAM] link -> %u baud\n", (unsigned)b);
-      break;
-    }
+    case RP_CAM_BAUD: camDoBaud(c.d, c.len); break;
     default: break;
   }
 }
@@ -317,6 +321,7 @@ static inline void camModNoteRx() { camLastRxMs = millis(); }
 
 // task link: frame yang bukan milik audio. Return true kalau frame kamera.
 static bool camModHandle(uint8_t type, const uint8_t* p, uint16_t len) {
+  if (type == RP_CAM_BAUD && !camTaskH) { camDoBaud(p, len); return true; }   // kamera tertutup (audio AVI): langsung
   switch (type) {
     case RP_CAM_ACK: {
       int c = camCredit.load();

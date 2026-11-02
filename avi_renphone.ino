@@ -46,6 +46,7 @@ bool     musExtEnded();
 uint32_t musExtClockMs();
 void     musExtPause(bool p);
 void     musExtEnd();
+void     musExtFastLink(bool on);   // true = audio AVI boleh naik ke baud link cepat; false = sesi selesai, turunkan lagi
 int      musExtGetVol();
 void     musExtSetVol(int v);   // 0..127
 extern int brightness;          // phone.ino (10..255)
@@ -1475,6 +1476,7 @@ void aviPlayFile(const String& filename) {
       audMsg = "Audio bukan MP3: tanpa suara";
     } else {
       aviSplashStatus("Menyambung audio ke TWS...");
+      musExtFastLink(true);
       int rc = musExtBegin();
       if (rc == 0) aviAudioOn = true;
       else if (rc == 1) audMsg = "Bluetooth mati: tanpa suara";
@@ -1642,6 +1644,7 @@ void aviPlayFile(const String& filename) {
   aviResumeStore(finished ? 0 : aviCurMs);
 
   if (aviAudioOn || aviAudioClk) musExtEnd();     // idempotent; juga membersihkan buffer CAM kalau berhenti dini
+  musExtFastLink(false);                          // link ke CAM balik ke baud dasar (urutan dgn musExtEnd terjaga di antrean musTask)
   aviAudioOn = false; aviAudioClk = false;
   aviFile.close();
   aviFreeAll();
