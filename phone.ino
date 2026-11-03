@@ -3385,7 +3385,8 @@ void drawKb(LGFX_Sprite& s){
     nyxAaRR(s, nmX+in,cy+in,nmW-2*in,kh-2*in,kr,pr?fnP:fnC);
     const char* nl=(kbMode==KB_NUM||emo)?"ABC":"123";
     s.setTextColor(T().text);
-    s.setCursor(nmX+(nmW-s.textWidth(nl))/2,cy+kh/2-4+in); s.print(nl);
+    int nlw = emo ? (int)strlen(nl)*6 : s.textWidth(nl);   // KB_EMO_LABEL_FIX: di halaman emoji hitung lebar sendiri (Font0 = 6 px/karakter)
+    s.setCursor(nmX+(nmW-nlw)/2,cy+kh/2-4+in); s.print(nl);
   }
   { // emoji (wajah kecil digambar manual, tanpa font)
     bool pr=(kbPressKey==104); int in=pr?1:0;
@@ -3399,8 +3400,9 @@ void drawKb(LGFX_Sprite& s){
     bool pr=(kbPressKey==102); int in=pr?1:0;
     nyxAaRR(s, spX+in,cy+in,spW-2*in,kh-2*in,kr,pr?keyP:keyC);
     s.setTextColor(T().text);
-    char spl[24]; if(emo) snprintf(spl,sizeof(spl),"spasi  %d/%d",kbEmoPage+1,emjKbPages()); else strcpy(spl,"spasi");
-    s.setCursor(spX+(spW-s.textWidth(spl))/2,cy+kh/2-4+in); s.print(spl);
+    char spl[24]; if(emo) snprintf(spl,sizeof(spl),"spasi %d/%d",kbEmoPage+1,emjKbPages()); else strcpy(spl,"spasi");
+    int splw = emo ? (int)strlen(spl)*6 : s.textWidth(spl);   // KB_EMO_LABEL_FIX
+    s.setCursor(spX+(spW-splw)/2,cy+kh/2-4+in); s.print(spl);
   }
   { // hapus
     bool pr=(kbPressKey==103); int in=pr?1:0;

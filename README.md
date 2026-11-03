@@ -64,6 +64,7 @@ NyxOS tidak berbasis Android maupun Linux. Peluncur aplikasi (launcher), pusat n
 | Gestur sistem baru (pull-to-refresh, swipe-back tepi kiri, panel mengikuti jari) | `BETA` | Kode sudah terpasang di build, belum diuji menyeluruh pada perangkat. |
 | Notifikasi berkelompok, geser-hapus, aksi cepat; preview kartu App Switcher | `BETA` | Kode sudah terpasang di build, belum diuji pada perangkat. Lihat [bagian 5.1](#51-antarmuka-sistem-ok). |
 | Fitur tambahan NyxOS (perintah suara AI, energi per app, log crash, banner telepon, thumbnail screenshot, skeleton loading) | `BETA` | Kode sudah terpasang di build, belum diuji pada perangkat. Lihat bagian 5.5 dan 5.6. |
+| Emoji (set bawaan dan set lengkap dari SD) | `BETA` | Emoji berwarna di seluruh teks NyxOS dan keyboard. Set bawaan 54 sprite; set lengkap dibuat dari Noto Emoji atau Twemoji menjadi `/emoji.bin`. Hanya emoji tunggal; ZWJ, bendera, dan keycap belum didukung. Lihat [bagian 5.1](#51-antarmuka-sistem-ok). |
 | Chat melalui broker MQTT | `OK` | Diuji dengan broker sungguhan. |
 | Musik Bluetooth dan AVRCP | `OK` | Cover ID3, kontrol dari earbuds, mode acak AI. |
 | Pemutar AVI (seek, resume, zoom) | `OK` | |
@@ -73,10 +74,10 @@ NyxOS tidak berbasis Android maupun Linux. Peluncur aplikasi (launcher), pusat n
 | Remote Control (web) | `OK` | |
 | Gamepad web untuk NES dan DOOM | `OK` | |
 | Baterai (INA219), Galeri, HWmonitor, Profil, dan lainnya | `OK` | |
-| **Telepon (SIP dan LAN)** | `SEBAGIAN` | Teruji dengan `sip2sip.info` melalui TCP. Penyedia lain, mode LAN, dan TURN belum terkonfirmasi. |
+| **Telepon (SIP dan LAN)** | `SEBAGIAN` | Teruji dan berjalan normal dengan `sip2sip.info` melalui TCP. Akun `sip.linphone.org` hanya berfungsi satu jalur (sebagai penerima). Mode LAN dan TURN belum terkonfirmasi. |
 | Kamera (OV2640 pada ESP32-CAM) | `OK` | Seluruh fitur telah diuji pemilik, termasuk link 3 Mbaud dengan kualitas JPEG 10. Lihat [`KAMERA.md`](./KAMERA.md). |
-| Buku (pembaca `.txt`, `.md` dan `.epub`) | `BETA` | Logika inti (inflate, ZIP, EPUB, HTML ke teks, tata letak) diuji di komputer; antarmuka belum diuji pada perangkat. Lihat bagian *App Buku* di bawah. |
-| Buku: unduh dari Project Gutenberg | `BETA` | Logika inti (URL, CRC32, struktur ZIP, pembaca JSON/OPDS, registry) dan alur unduh/verifikasi diuji di komputer (`tests_gutenberg/`). Pemilik mencoba unduh EPUB dari ±0,1 sampai ±2,9 MB di perangkat dan berhasil; sumber OPDS dan format TXT belum dikonfirmasi pada perangkat. Lihat *Unduh dari Project Gutenberg* di bawah. |
+| Buku (pembaca `.txt`, `.md` dan `.epub`) | `OK` | Diuji pemilik di perangkat dan berjalan baik. Logika inti (inflate, ZIP, EPUB, HTML ke teks, tata letak) juga diuji di komputer (`tests_ebook/`). Lihat bagian *App Buku* di bawah. |
+| Buku: unduh dari Project Gutenberg | `OK` | Diuji pemilik di perangkat: unduh ±5 buku EPUB dengan gambar (sampai ±2,9 MB) berhasil. Logika inti dan alur unduh/verifikasi juga diuji di komputer (`tests_gutenberg/`). Sumber OPDS dan format TXT belum dikonfirmasi secara khusus. Lihat *Unduh dari Project Gutenberg* di bawah. |
 | SPI Overclock layar | `HW` | Hasil bergantung pada batas fisik kabel. |
 | NyxPPU (mesin piksel) | `EXP` | Fase 1; hanya tersedia pada aplikasi PPU Demo. |
 
@@ -350,6 +351,35 @@ Catatan: panel Notification Shade kini menyesuaikan tingginya saat isi berubah, 
 - **Profil.** Kartu avatar dan nama pemilik di bagian atas Pengaturan; foto dipilih dari kartu SD.
 - **About Phone.** Informasi perangkat dan sistem.
 
+**Emoji** `BETA`
+
+Emoji tampil di seluruh teks NyxOS (keyboard, Notepad, Chat, AI Chat/Gemini, dan lainnya) sebagai sprite berwarna 10, 16, atau 24 px, mengikuti tinggi baris. Font bawaan LovyanGFX hanya menerima kode karakter 16-bit, sehingga emoji disimpan di dalam firmware sebagai kode privat (PUA, `U+E000` + nomor sprite) dan semua `setFont()` dibungkus `emjF()`. Batas antara firmware dan dunia luar dijaga `emjNormalize()` (saat membaca) dan `emjToWire()` (saat menulis atau mengirim), jadi berkas `.txt` di SD dan pesan Chat tetap berupa UTF-8 standar yang bisa dibuka di HP atau PC biasa.
+
+| Set | Keterangan |
+|---|---|
+| **Bawaan** | 54 sprite gambar sendiri (`emoji_data.h`, dibuat `tools/gen_emoji.py`). Selalu ada sebagai cadangan. |
+| **Dari SD** | Berkas `/emoji.bin` di root kartu SD, dibuat `tools/make_emoji_bin.py` dari PNG Noto Emoji atau Twemoji. Dimuat sekali saat boot ke PSRAM dan menggantikan set bawaan. Mengganti berkas cukup dengan restart. |
+
+**Membuat `emoji.bin`** (contoh di Termux; butuh Pillow: `pkg install python-pillow`, atau `pip install pillow`)
+
+```
+git clone --depth 1 https://github.com/googlefonts/noto-emoji ~/noto-emoji
+python3 tools/make_emoji_bin.py ~/noto-emoji ~/storage/downloads/emoji.bin
+```
+
+Sumber yang dikenali (folder hasil `git clone`, dicari rekursif, atau berkas zip-nya): Noto (`png/128/emoji_u1f600.png`) dan Twemoji (`assets/72x72/1f600.png`, repo `jdecked/twemoji`). Salin hasilnya ke root kartu SD sebagai `/emoji.bin`, lalu restart HP.
+
+**Keyboard emoji.** Halaman emoji dibuka dari tombol smiley di samping `123`: 30 emoji per halaman (3 baris × 10), tombol `<` dan `>` berganti halaman, dan penanda `spasi n/N` menunjukkan halaman aktif. Urutannya wajah populer, hati, dan simbol umum lebih dulu, sisanya menurut kodepoint. Backspace membuang satu emoji utuh.
+
+**Batasan set emoji**
+
+- **Hanya emoji tunggal (satu kodepoint) dari `U+231A` ke atas.** Urutan multi-kodepoint tidak punya sprite sendiri. Penanda warna kulit, ZWJ, `VS-16`, dan keycap dibuang saat tampil: 👍🏽 tampil sebagai 👍, 👨‍💻 tampil sebagai dua sprite terpisah (👨 dan 💻), dan `1️⃣` tampil sebagai `1`. Bendera tampil sebagai kotak `?`.
+- Emoji yang tidak ada di set digambar sebagai kotak `?` (bukan hilang atau merusak teks).
+- **Maksimal 4000 sprite** (slot PUA `E000` sampai `EF9F`; `EFFF` dicadangkan untuk kotak `?`). Batas ini hampir tidak tercapai karena Noto hanya punya sekitar seribu empat ratusan emoji tunggal.
+- **Memori.** Seluruh berkas dibaca ke PSRAM saat boot (kartu SD tidak dipakai lagi sesudahnya). Satu emoji memakan ±1,8 KB untuk tiga ukuran, jadi 1000 emoji ≈ 1,8 MB dan 4000 emoji ≈ 7,5 MB, hampir seluruh PSRAM 8 MB. Set yang jauh di bawah batas itu lebih aman.
+- Berkas tidak ada, kartu SD tidak terbaca, header atau ukuran tidak cocok, ukuran berkas kurang, atau PSRAM tidak cukup: set bawaan dipakai tanpa pesan galat.
+- **Chat:** nama pengguna hanya ASCII (emoji pada nama tidak dikirim). Emoji pada pesan dikirim sebagai UTF-8 standar.
+
 ### 5.2 Komunikasi
 
 #### 5.2.1 Chat melalui MQTT `OK`
@@ -366,7 +396,7 @@ Fitur ini menyediakan pesan pribadi antarperangkat **tanpa server buatan sendiri
 
 **Pemilihan broker.** Paket gratis HiveMQ Cloud Serverless telah dihentikan. Alternatif gratis yang dibahas pada [`chat-mqtt/README.md`](./chat-mqtt/README.md) adalah EMQX Cloud Serverless, tetapi firmware tidak terikat pada satu penyedia; berpindah broker cukup dengan mengganti isi konfigurasi.
 
-**Batasan:** tidak ada notifikasi saat aplikasi tertutup; dua perangkat yang mengirim pada detik yang sama dapat bertabrakan di satu slot; layar hanya menampilkan ASCII; dan sertifikat broker tidak diverifikasi (lihat [bagian 9](#9-keamanan-dan-privasi)).
+**Batasan:** tidak ada notifikasi saat aplikasi tertutup; dua perangkat yang mengirim pada detik yang sama dapat bertabrakan di satu slot; layar menampilkan ASCII dan emoji (huruf lain tampil `?`); dan sertifikat broker tidak diverifikasi (lihat [bagian 9](#9-keamanan-dan-privasi)).
 
 #### 5.2.2 Telepon (SIP dan LAN) `SEBAGIAN`
 
@@ -388,7 +418,7 @@ Aplikasi panggilan suara melalui WiFi dengan dua mode operasi:
 | Pemetaan alamat publik | STUN (`stun.l.google.com:19302`), hanya untuk panggilan melalui internet. |
 | Relay (opsional) | TURN melalui UDP untuk jaringan CGNAT atau NAT ketat (lihat di bawah). |
 
-**Status pengujian.** Telah diuji pada perangkat nyata dengan akun `sip2sip.info` (SIP melalui TCP): pendaftaran akun berhasil, serta panggilan keluar dan masuk antara Ren Phone dan ponsel Android (aplikasi Linphone) tersambung. Hal yang **belum** terkonfirmasi: penyedia SIP lain, mode LAN antara dua perangkat NyxOS, TURN, dan variasi kondisi NAT.
+**Status pengujian.** Telah diuji pada perangkat nyata dengan akun `sip2sip.info` (SIP melalui TCP): pendaftaran akun berhasil, serta panggilan keluar dan masuk antara Ren Phone dan ponsel Android (aplikasi Linphone) tersambung dan berjalan normal. Akun `sip.linphone.org` sudah dicoba dan hanya berfungsi satu jalur (sebagai penerima), sehingga `sip2sip.info` yang disarankan. Hal yang **belum** terkonfirmasi: mode LAN antara dua perangkat NyxOS, TURN, dan variasi kondisi NAT.
 
 **Alur suara**
 
@@ -406,7 +436,7 @@ Karena perangkat **tidak memiliki speaker**, suara lawan bicara hanya dapat dide
 1. Pasang fitur dengan `python3 apply_call_patch.py` (aman dijalankan ulang).
 2. Sambungkan TWS terlebih dahulu melalui aplikasi **Musik**.
 3. **Mode SIP**
-   - Buat akun gratis. Yang sudah teruji: <https://www.sip2sip.info> (isi Server dengan `sip2sip.info`). Alternatif: <https://subscribe.linphone.org> (Server `sip.linphone.org`, belum terkonfirmasi).
+   - Buat akun gratis. Yang sudah teruji: <https://www.sip2sip.info> (isi Server dengan `sip2sip.info`). Akun <https://subscribe.linphone.org> (Server `sip.linphone.org`) sudah dicoba dan hanya bisa sebagai penerima, jadi tidak disarankan.
    - Buka aplikasi Telepon, pilih *Atur*, lalu isi Server, username, password, dan nama. Sebagai alternatif, letakkan `/sip.cfg` pada kartu SD.
    - Pada tab SIP, ketik alamat tujuan (misalnya `teman` atau `teman@sip2sip.info`) lalu tekan **Panggil**.
 4. **Mode LAN**
@@ -670,7 +700,7 @@ Screenshot (BMP ke `/screenshot`), Stopwatch dan Timer (tetap berjalan di latar)
 
 ```
 /
-├── gemini_key.txt   nasa_key.txt   wallpaper.jpg
+├── gemini_key.txt   nasa_key.txt   wallpaper.jpg   emoji.bin
 ├── chat.cfg         sip.cfg        turn.cfg
 ├── ai_memory.txt    ryne2.bin      notepad.txt
 ├── music/   memo/   screenshot/   update/   Kamera/   .thumbs/
@@ -688,6 +718,7 @@ Screenshot (BMP ke `/screenshot`), Stopwatch dan Timer (tetap berjalan di latar)
 | `/sip.cfg` | Telepon (SIP) | `host=`, `user=`, `pass=`, `name=`, dan opsional `transport=tcp` atau `transport=udp` (default `tcp`). |
 | `/turn.cfg` | Telepon (relay TURN) | `host=`, `port=` (default 3478), `user=`, `pass=` |
 | `wallpaper.jpg` | Home dan Lock Screen | Nama berkas harus persis `wallpaper.jpg`. |
+| `/emoji.bin` | Emoji (semua teks dan keyboard) | Opsional. Dibuat `tools/make_emoji_bin.py` dari Noto Emoji atau Twemoji. Tanpa berkas ini dipakai set bawaan 54 sprite. Lihat [bagian 5.1](#51-antarmuka-sistem-ok). |
 
 **Contoh `chat.cfg`**
 
@@ -737,6 +768,7 @@ RAM internal hanya **±162 KB**, sedangkan satu koneksi HTTPS membutuhkan blok *
 | Aplikasi jaringan dapat "dikorbankan" | **App Memory Guard** melepas cache aplikasi latar saat RAM menipis. |
 | mbedTLS diperkecil | *Build flag* pada [bagian 4.3](#43-jalur-c-build-manual-untuk-esp32-s3). |
 | Buffer mbedTLS di PSRAM | Library core kustom (`CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC`), lihat [bagian 4.5](#45-library-core-kustom-mbedtls-di-psram). |
+| Set emoji dari SD di PSRAM | `emjInit()` membaca `/emoji.bin` sekali saat boot; kodepoint, indeks pencarian, dan piksel semuanya dialokasikan di PSRAM (±1,8 KB per emoji). |
 
 ### 8.2 Pembagian task
 
@@ -825,7 +857,7 @@ Proyek ini ditujukan sebagai perangkat pribadi dan eksperimental. Pertimbangkan 
 
 **Telepon**
 
-- Teruji terbatas: berhasil dengan `sip2sip.info` melalui TCP; penyedia lain, mode LAN, dan TURN belum terkonfirmasi.
+- Teruji terbatas: berjalan normal dengan `sip2sip.info` melalui TCP; akun `sip.linphone.org` hanya berfungsi satu jalur (sebagai penerima); mode LAN dan TURN belum terkonfirmasi.
 - Belum ada ICE; TURN hanya melalui UDP.
 - Tidak mendukung panggilan ke nomor PSTN melalui layanan gratis.
 
@@ -835,7 +867,8 @@ Proyek ini ditujukan sebagai perangkat pribadi dan eksperimental. Pertimbangkan 
 
 **Fitur lain**
 
-- **Chat:** layar hanya ASCII; tidak ada notifikasi saat aplikasi tertutup.
+- **Chat:** layar menampilkan ASCII dan emoji (huruf lain tampil `?`); tidak ada notifikasi saat aplikasi tertutup.
+- **Emoji:** hanya emoji tunggal (satu kodepoint). Bendera, urutan ZWJ, keycap, dan varian warna kulit tidak punya sprite sendiri; maksimal 4000 sprite, dan set besar memakan PSRAM (±1,8 KB per emoji). Rinciannya ada di [bagian 5.1](#51-antarmuka-sistem-ok).
 - **Baterai:** persentase adalah estimasi. Jika INA219 tidak terdeteksi, persentase dan tegangan berhenti diperbarui (tidak ada *fallback* ADC).
 - **Unduh Gutenberg:** TXT maks 3 MB dan EPUB maks 40 MB; daftar memuat paling banyak 96 buku; satu unduhan sekaligus. Filter bahasa hanya untuk sumber Gutendex. Pilihan sumber (Gutendex/OPDS) tidak tersimpan setelah restart (bawaan: Gutendex). Unduhan dua koneksi paralel tersedia di kode tetapi dimatikan (`GUT_PARALLEL 0`).
 - **PNG:** maksimal 4 MB dan 8 juta piksel; di atas 2 MB tidak memiliki thumbnail.
@@ -860,6 +893,9 @@ Proyek ini ditujukan sebagai perangkat pribadi dan eksperimental. Pertimbangkan 
 | Panggilan tersambung tetapi bisu atau satu arah | NAT atau CGNAT tanpa relay | Konfigurasikan TURN, atau gunakan mode LAN. |
 | Pendaftaran SIP gagal | Transport tidak sesuai penyedia, atau kredensial salah | Coba `transport=udp` pada `sip.cfg`; periksa Server, username, dan password. |
 | Tidak mendengar lawan bicara saat menelepon | TWS belum tersambung | Sambungkan TWS terlebih dahulu. |
+| Telepon dengan akun `sip.linphone.org` hanya bisa menerima | Akun tersebut hanya berfungsi satu jalur pada firmware ini | Gunakan akun `sip2sip.info`. |
+| Emoji tampil sebagai kotak `?` | Emoji tidak ada di set aktif (bendera, urutan ZWJ, atau emoji di luar `emoji.bin`) | Gunakan emoji tunggal, atau buat ulang `emoji.bin` dari sumber yang lebih lengkap. |
+| Emoji yang tampil hanya 54 sprite bawaan | `/emoji.bin` tidak dipakai: tidak ada di root SD, SD tidak terbaca, header atau ukuran tidak cocok, atau PSRAM tidak cukup | Salin ulang `emoji.bin` ke root SD, buat ulang dengan `tools/make_emoji_bin.py`, kurangi jumlah emoji, lalu restart. |
 | Aplikasi Kamera menampilkan "CAM belum mendukung kamera" | Firmware CAM belum diperbarui | Flash ulang firmware `cam_bt_coprocessor`. |
 | Pesan "RAM CAM kurang" | Kamera, A2DP, dan MP3 berjalan bersamaan | Matikan Bluetooth atau musik sebelum membuka Kamera. |
 | ESP32-CAM sering restart | *Brownout* akibat catu daya lemah | Gunakan pin 5V dengan catu yang kuat. |
@@ -881,7 +917,7 @@ Proyek ini ditujukan sebagai perangkat pribadi dan eksperimental. Pertimbangkan 
 Kontribusi berupa hasil uji pada perangkat nyata sangat membantu, terutama untuk fitur berikut (urut dari yang paling bernilai):
 
 1. **Telepon, mode LAN** antara dua perangkat NyxOS (variabel paling sedikit).
-2. **Telepon, mode SIP** ke penyedia selain `sip2sip.info` (misalnya akun Linphone lain).
+2. **Telepon, mode SIP** ke penyedia selain `sip2sip.info` (`sip.linphone.org` sudah dicoba dan hanya satu jalur).
 3. **Telepon dengan TURN** pada jaringan CGNAT atau NAT ketat.
 4. **Kamera** pada unit lain, terutama dengan sensor selain OV2640 dan kabel UART yang lebih panjang.
 
@@ -912,6 +948,10 @@ phone_notif_center.ino          Notifikasi dan Dynamic Island
                                 call, camera, ina219, about, owner, homeedit, ota,
                                 wakeword, gamepad, power, doom, nes_*, features, dan lainnya)
 ppu_engine_renphone.ino         NyxPPU
+emoji_renphone.ino              Dukungan emoji (pembungkus font, keyboard emoji, pemuat /emoji.bin dari SD)
+emoji_data.h                    54 sprite emoji bawaan (cadangan bila /emoji.bin tidak ada)
+tools/                          gen_emoji.py (sprite bawaan), make_emoji_bin.py (emoji.bin dari Noto/Twemoji),
+                                make_vlw.py (font Unicode untuk app Buku)
 ptr_renphone.ino                Gestur sistem: pull-to-refresh, swipe-back tepi kiri, panel mengikuti jari
 nyxextras_renphone.ino          Log crash, energi per app, perintah suara Gemini, thumbnail screenshot, skeleton loading
 ryne_engine.h                   RYNE v2
@@ -952,7 +992,7 @@ Kode pihak ketiga mengikuti lisensinya masing-masing:
 
 ---
 
-## App Buku (pembaca `.txt`, `.md` dan `.epub`) `BETA`
+## App Buku (pembaca `.txt`, `.md` dan `.epub`) `OK`
 
 Salin file `.txt`, `.md` atau `.epub` ke folder `/books` pada SD card (dibuat otomatis; file di root SD juga ikut terdaftar), lalu buka app **Buku**.
 
@@ -972,9 +1012,9 @@ Salin file `.txt`, `.md` atau `.epub` ke folder `/books` pada SD card (dibuat ot
 - **Posisi baca** disimpan per buku di `/books/.nyxreader` (bab + offset teks, jadi tetap tepat setelah ganti font atau orientasi) bersama pilihan font, tema, rata, animasi dan urutan.
 - **EPUB 2 dan 3:** bab dibaca satu per satu dari ZIP (hemat RAM); daftar isi dari NCX atau `nav`. ZIP64 dan EPUB ber-DRM tidak didukung.
 - **TXT:** UTF-8, UTF-16 (dengan BOM), Latin-1/Windows-1252. Teks berbaris-keras (gaya Project Gutenberg) disambung ulang menjadi paragraf. Baris seperti `Chapter 1`, `BAB IV`, `Prolog` dikenali sebagai judul dan masuk daftar isi. Batas 3 MB per file.
-- **Pengujian:** `tests_ebook/` — `python3 tests_ebook/test_ebook.py` (inflate, EPUB, TXT, tata letak, fuzz), `python3 tests_ebook/test_ebook_v2.py` (UTF-8 + lipat, gambar EPUB, sampul/metadata, Markdown) dan `python3 tests_ebook/run_ui_test.py` (alur antarmuka dengan *mock* LovyanGFX/SD/JPEGDEC/keyboard), semuanya dengan AddressSanitizer. Dekode JPEG/PNG, pemuatan VLW dan animasi pada layar sungguhan **belum diuji pada perangkat**.
+- **Pengujian:** `tests_ebook/` — `python3 tests_ebook/test_ebook.py` (inflate, EPUB, TXT, tata letak, fuzz), `python3 tests_ebook/test_ebook_v2.py` (UTF-8 + lipat, gambar EPUB, sampul/metadata, Markdown) dan `python3 tests_ebook/run_ui_test.py` (alur antarmuka dengan *mock* LovyanGFX/SD/JPEGDEC/keyboard), semuanya dengan AddressSanitizer. Pemilik juga sudah menguji app Buku langsung di perangkat dan berjalan baik.
 
-### Unduh dari Project Gutenberg `BETA`
+### Unduh dari Project Gutenberg `OK`
 
 Buka lewat tombol **Gutenberg** di kepala perpustakaan Buku. Butuh WiFi dan SD card.
 
@@ -994,7 +1034,7 @@ Alur: daftar populer atau hasil cari, ketuk buku, layar **Detail**, **Unduh**, b
 - **Verifikasi sebelum jadi buku:** ukuran di SD, kepala `PK`, SD dibaca balik dan CRC32-nya dicocokkan dengan data yang masuk dari jaringan (berkas sampai 16 MB), serta pemeriksaan ujung dan daftar isi ZIP. Berkas yang gagal disimpan sebagai `<nama>.bad` untuk diperiksa di komputer.
 - **Salah tulis SD:** bila data di SD tidak cocok dengan jaringan, unduhan diulang sekali dari awal dengan cara tulis lain (buffer atau langsung). Gagal dua kali menampilkan *Tulis SD rusak 2x. Cek SD card.*
 - **Sudah ada?** Sebelum mengunduh, `/books` dicari berdasarkan nomor `[PGnnn]`. Buku yang sudah utuh tidak diunduh ulang; berkas lama yang rusak dipindah ke `.bad`.
-- **Pengujian:** `g++ -std=c++11 -o t tests_gutenberg/test_gutendex.cpp && ./t` dan `g++ -std=c++11 -o t tests_gutenberg/test_gutdl.cpp && ./t` (logika murni), serta `python3 tests_gutenberg/run_sim.py` (alur unduh/verifikasi dari kode `.ino` asli dengan stub Arduino). Alur ini diuji sebagian di perangkat (lihat tabel status).
+- **Pengujian:** `g++ -std=c++11 -o t tests_gutenberg/test_gutendex.cpp && ./t` dan `g++ -std=c++11 -o t tests_gutenberg/test_gutdl.cpp && ./t` (logika murni), serta `python3 tests_gutenberg/run_sim.py` (alur unduh/verifikasi dari kode `.ino` asli dengan stub Arduino). Alur ini sudah diuji pemilik di perangkat (unduh ±5 buku EPUB dengan gambar berhasil); sumber OPDS dan format TXT belum dikonfirmasi secara khusus.
 
 
 ## Build layar ST7796 3,5 inci (sentuh FT6236)
@@ -1017,3 +1057,5 @@ FT6236 berbagi bus I2C dengan MPU6050 (SDA 15, SCL 7, alamat 0x38); RST/INT tida
 
 **Kalau setelah flash:** warna negatif -> `RP_ST7796_INVERT 1`; merah/biru tertukar -> `RP_ST7796_RGB_ORDER 1`;
 sentuhan terbalik -> `RP_TOUCH_SWAP_XY` / `RP_TOUCH_FLIP_X` / `RP_TOUCH_FLIP_Y`. Sentuh kapasitif tidak memakai wizard kalibrasi.
+
+**Multi-touch (2 jari).** FT6236 melaporkan dua jari. Jari kedua dipakai game (DOOM, NES, Inferno) sehingga joystick dan tombol aksi atau arah pandang bisa dipakai bersamaan. Aktif secara bawaan; matikan dengan `-DRP_MULTITOUCH=0`.
