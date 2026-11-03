@@ -297,6 +297,35 @@ static bool gutProbeSize(const char* url, uint32_t* total) {
   return good;
 }
 
+// Ikuti SATU pengalihan (302) secara manual dan kembalikan URL tujuannya (mis. /ebooks/N.epub3.images -> /cache/epub/N/pgN-images-3.epub).
+// Dipakai utk menyambung ulang (Range) langsung ke URL akhir: hemat satu handshake TLS (~2 dtk) tiap sambung ulang. false = tak ada pengalihan / gagal.
+static bool gutResolveUrl(const char* url, char* out, int cap) {
+  while ((uint32_t)(millis() - gutLastReqMs) < GUT_GAP_MS) { if (gutCancel) return false; delay(40); }
+  if (gutCancel) return false;
+  nasaWaitForHeap();
+  WiFiClientSecure sc; WiFiClient pc; HTTPClient http; bool ok = false;
+  gutOpenSession(http, sc, pc, url, &ok);
+  if (!ok) return false;
+  http.setFollowRedirects(HTTPC_DISABLE_FOLLOW_REDIRECTS);
+  const char* hk[1] = { "Location" };
+  http.collectHeaders(hk, 1);
+  int code = http.GET();
+  gutLastReqMs = millis();
+  bool good = false;
+  if (code == 301 || code == 302 || code == 303 || code == 307 || code == 308) {
+    String loc = http.header("Location");
+    if (loc.startsWith("https://")) { if ((int)loc.length() < cap) { snprintf(out, (size_t)cap, "%s", loc.c_str()); good = true; } }
+    else if (loc.startsWith("/")) {                                   // relatif: pakai skema+host URL asal
+      const char* h = strstr(url, "://");
+      if (h) { h += 3; const char* sl = strchr(h, '/'); int hl = (int)((sl ? sl : url + strlen(url)) - url);
+               if (hl + (int)loc.length() < cap) { snprintf(out, (size_t)cap, "%.*s%s", hl, url, loc.c_str()); good = true; } }
+    }
+  }
+  Serial.printf("[GUT] resolve %s -> %d %s\n", url, code, good ? out : "(tanpa URL akhir)");
+  http.end();
+  return good;
+}
+
 // satu koneksi: ambil byte [from, to] (inklusif) dan tulis ke f dari awal berkas itu.
 // return: 200 ok | >0 HTTP lain | -1 gagal konek/RAM | -2 batal | -3 putus/timeout/kurang | -5 gagal tulis SD | -7 server abaikan Range
 static int gutFetchRange(const char* url, File* f, uint32_t from, uint32_t to, uint8_t lane, uint32_t* outGot) {
@@ -551,6 +580,7 @@ static void gutDoDownload() {
   }
 
   uint32_t got = 0; int rc = -1; int stall = 0, restarts = 0; bool keepPart = false;
+  char fin[GUT_URL_LEN + 8]; fin[0] = 0; bool finOk = false, finTried = false;   // URL akhir setelah pengalihan (utk sambung ulang)
   gutRetries = 0;
   uint32_t lim = isEpub ? GUT_EPUB_MAX : GUT_TXT_MAX;
   bool parDone = false;
@@ -578,10 +608,11 @@ static void gutDoDownload() {
   for (int attempt = 0; attempt < GUT_MAX_TRY && !parDone; attempt++) {
     const char* u = useLite ? lite : url;
     if (attempt) { gutRetries = (uint16_t)attempt; needRedraw = true; gutWaitTlsHeap(10000); }   // sambung ulang butuh RAM TLS: tunggu lega dulu
+    if (attempt && resume && !finTried) { finTried = true; finOk = gutResolveUrl(u, fin, sizeof(fin)); }   // sekali saja: sambungan berikutnya langsung ke URL akhir
     if (!resume) { strncpy(gutPartUrl, u, sizeof(gutPartUrl) - 1); gutPartUrl[sizeof(gutPartUrl) - 1] = 0; }
     File f = SD_MMC.open(tmp, resume ? FILE_APPEND : FILE_WRITE);
     if (!f) { rc = -5; break; }
-    rc = gutFetch(u, nullptr, 0, &f, lim, &got, true, GUT_IDLE_MS, resume);
+    rc = gutFetch((finOk && resume) ? fin : u, nullptr, 0, &f, lim, &got, true, GUT_IDLE_MS, resume);
     f.close();
     if (rc == 200 || rc == -2 || rc == -5 || rc == -4) break;     // sukses / batal / SD / terlalu besar: jangan ulangi
     File g = SD_MMC.open(tmp, FILE_READ); uint32_t sz = g ? (uint32_t)g.size() : 0; if (g) g.close();
@@ -591,7 +622,7 @@ static void gutDoDownload() {
       continue;
     }
     if (rc > 0 && sz == 0) {                                      // kode HTTP (404 dll) tanpa data
-      if (useLite) { useLite = false; resume = 0; continue; }     // versi ringan tak ada -> URL asli
+      if (useLite) { useLite = false; resume = 0; finOk = false; finTried = false; continue; }     // versi ringan tak ada -> URL asli
       break;
     }
     if (rc == -1 || rc == -3) {                                   // data berhenti / gagal konek
