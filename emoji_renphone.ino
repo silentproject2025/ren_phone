@@ -20,6 +20,14 @@
 //   4. Keyboard virtual punya halaman emoji (tombol smiley di sebelah 123), hapus (backspace)
 //      sadar UTF-8 supaya satu ketukan membuang satu emoji utuh.
 //
+//  SET EMOJI DARI SD: kalau /emoji.bin ada di SD (dibuat tools/make_emoji_bin.py dari Twemoji), emjInit()
+//  memuatnya ke PSRAM dan set itu menggantikan set bawaan (55 sprite di emoji_data.h, jadi cadangan).
+//  Penomoran PUA = urutan sprite di file; hanya tersimpan di RAM (file/jaringan selalu emoji sungguhan),
+//  jadi mengganti emoji.bin cukup restart. emjInit() dipanggil SEKALI di setup() sesudah initSD().
+//
+//  Format emoji.bin (little-endian): "NYXE", u16 versi=1, u16 jumlah N, u8 ukuran[3]={10,16,24}, 5 byte nol;
+//  lalu N x u32 kodepoint; lalu blok piksel RGB565 per ukuran (N*n*n u16, 0x0000 = transparan).
+//
 //  Emoji yang belum punya sprite digambar sebagai kotak "?" (bukan hilang/rusak).
 //  Sprite digambar sendiri (gen_emoji.py, gaya flat) -- bukan font emoji berwarna.
 //
@@ -29,7 +37,19 @@
 // =====================================================================
 #include "emoji_data.h"
 
-#define EMJ_PUA0 0xE000
+#define EMJ_PUA0     0xE000
+#define EMJ_PUA_UNK  0xEFFF          // slot tetap utk kotak "?" (selalu sprite bawaan)
+#define EMJ_SD_MAX   4000            // maks sprite dari SD (E000..EF9F), tetap berlead-byte 0xEE
+#define EMJ_FILE     "/emoji.bin"
+
+static bool      emjInited = false;
+static uint16_t  emjSdN = 0;                         // >0 = set dari SD aktif
+static uint32_t* emjSdCp = nullptr;                  // kodepoint kanonik per sprite
+static uint16_t* emjSdPx[3] = { nullptr, nullptr, nullptr };
+static uint64_t* emjSdKey = nullptr;                 // (cp<<16 | idx) terurut, utk pencarian biner
+
+static inline int  emjCount() { return emjSdN ? (int)emjSdN : (int)EMJ_UNKNOWN; }   // sprite bawaan: 54 (+ kotak "?")
+static inline bool emjIsPuaCp(uint32_t cp) { return (cp >= EMJ_PUA0 && cp < EMJ_PUA0 + (uint32_t)emjCount()) || cp == EMJ_PUA_UNK; }
 
 // ---------------------------------------------------------------------
 // pembungkus font
@@ -42,7 +62,7 @@ struct EmojiFont : public lgfx::IFont {
   void getDefaultMetric(lgfx::FontMetrics* m) const override { base->getDefaultMetric(m); }
   bool unloadFont(void) override { return false; }      // font dasar bersifat statis, jangan dilepas
 
-  static inline bool isEmoji(uint16_t u) { return u >= EMJ_PUA0 && u < EMJ_PUA0 + EMJ_COUNT; }
+  static inline bool isEmoji(uint16_t u) { return emjIsPuaCp(u); }
   // sisi emoji (px, sebelum dikali ukuran teks) = tinggi baris + 2; maju kursor = sisi + 2
   static inline int unitE(const lgfx::FontMetrics& dm) { int h = dm.height < 6 ? 6 : dm.height; return h + 2; }
 
@@ -57,14 +77,19 @@ struct EmojiFont : public lgfx::IFont {
 
   // nearest-neighbour dari sumber 10/16/24 px terdekat ke sisi t. 0x0000 = transparan.
   static void blit(lgfx::LGFXBase* g, int x, int y, int idx, int t) {
-    if (idx < 0 || idx >= EMJ_COUNT || t < 4) return;
+    if (t < 4) return;                                        // idx < 0 = kotak "?" bawaan
     int bi = 0, bd = 9999;
     for (int i = 0; i < 3; i++) {
       int d = (int)emjSizes[i] - t; if (d < 0) d = -d;
       if (d < bd || (d == bd && emjSizes[i] > emjSizes[bi])) { bd = d; bi = i; }
     }
     int n = emjSizes[bi];
-    const uint16_t* src = (bi == 0) ? emjPx10[idx] : (bi == 1 ? emjPx16[idx] : emjPx24[idx]);
+    const uint16_t* src;
+    if (idx >= 0 && emjSdN) src = emjSdPx[bi] + (size_t)idx * n * n;
+    else {
+      int k = idx < 0 ? EMJ_UNKNOWN : idx;
+      src = (bi == 0) ? emjPx10[k] : (bi == 1 ? emjPx16[k] : emjPx24[k]);
+    }
     for (int dy = 0; dy < t; dy++) {
       const uint16_t* row = src + (dy * n / t) * n;
       for (int dx = 0; dx < t; dx++) {
@@ -87,7 +112,7 @@ struct EmojiFont : public lgfx::IFont {
       gfx->fillRect(x, y, adv, (int)(dm.height * sy), st->back_rgb888);
       filled_x = x + adv;
     }
-    blit(gfx, x + (int)(1 * sx + 0.5f), y + (int)(((h - E) * 0.5f) * sy), (int)c - EMJ_PUA0, t);
+    blit(gfx, x + (int)(1 * sx + 0.5f), y + (int)(((h - E) * 0.5f) * sy), (c == EMJ_PUA_UNK) ? -1 : (int)c - EMJ_PUA0, t);
     return (size_t)adv;
   }
 };
@@ -113,7 +138,17 @@ const lgfx::IFont* emjF(const lgfx::IFont* base) {
 // UTF-8 <-> PUA
 // ---------------------------------------------------------------------
 static int emjFindCp(uint32_t cp) {
-  int lo = 0, hi = EMJ_PAIRS - 1;
+  if (emjSdN) {                                               // set dari SD
+    int lo = 0, hi = (int)emjSdN - 1;
+    while (lo <= hi) {
+      int mid = (lo + hi) >> 1;
+      uint32_t v = (uint32_t)(emjSdKey[mid] >> 16);
+      if (v == cp) return (int)(emjSdKey[mid] & 0xFFFF);
+      if (v < cp) lo = mid + 1; else hi = mid - 1;
+    }
+    return -1;
+  }
+  int lo = 0, hi = EMJ_PAIRS - 1;                             // set bawaan
   while (lo <= hi) {
     int mid = (lo + hi) >> 1;
     uint32_t v = emjPairs[mid].cp;
@@ -121,6 +156,11 @@ static int emjFindCp(uint32_t cp) {
     if (v < cp) lo = mid + 1; else hi = mid - 1;
   }
   return -1;
+}
+static uint32_t emjCanonOf(uint32_t puaCp) {
+  if (puaCp == EMJ_PUA_UNK) return 0x2753;
+  uint32_t i = puaCp - EMJ_PUA0;
+  return emjSdN ? emjSdCp[i] : emjCanon[i];
 }
 
 static void emjPutUtf8(String& o, uint32_t cp) {
@@ -151,7 +191,7 @@ static bool emjIgnorable(uint32_t cp) {
 }
 // kodepoint emoji yang tidak punya sprite -> digambar sebagai kotak "?"
 static bool emjLooksEmoji(uint32_t cp) {
-  return cp >= 0x1F000 || (cp >= 0x2600 && cp <= 0x27BF) || (cp >= 0x2B00 && cp <= 0x2BFF) || (cp >= 0x2190 && cp <= 0x21FF && cp != 0x2190 && cp != 0x2192);
+  return cp >= 0x1F000 || (cp >= 0x231A && cp <= 0x23FF) || (cp >= 0x2600 && cp <= 0x27BF) || (cp >= 0x2B00 && cp <= 0x2BFF);
 }
 
 // emoji sungguhan -> PUA. ASCII & karakter lain tidak diubah. Aman dipanggil berulang.
@@ -164,10 +204,10 @@ String emjNormalize(const String& s) {
     if (cp == 0xFFFFFFFFUL) { o += '?'; i += bl; continue; }
     i += bl;
     if (emjIgnorable(cp)) continue;
-    if (cp >= EMJ_PUA0 && cp < EMJ_PUA0 + EMJ_COUNT) { emjPutUtf8(o, cp); continue; }
+    if (emjIsPuaCp(cp)) { emjPutUtf8(o, cp); continue; }
     int k = emjFindCp(cp);
     if (k >= 0) { emjPutUtf8(o, EMJ_PUA0 + k); continue; }
-    if (emjLooksEmoji(cp)) { emjPutUtf8(o, EMJ_PUA0 + EMJ_UNKNOWN); continue; }
+    if (emjLooksEmoji(cp)) { emjPutUtf8(o, EMJ_PUA_UNK); continue; }
     emjPutUtf8(o, cp);
   }
   return o;
@@ -181,7 +221,7 @@ String emjToWire(const String& s) {
     if (p[i] < 0x80) { o += (char)p[i]; i++; continue; }
     uint32_t cp; int bl = emjDecode(p + i, n - i, &cp);
     if (cp == 0xFFFFFFFFUL) { o += '?'; i += bl; continue; }
-    if (cp >= EMJ_PUA0 && cp < EMJ_PUA0 + EMJ_COUNT) emjPutUtf8(o, emjCanon[cp - EMJ_PUA0]);
+    if (emjIsPuaCp(cp)) emjPutUtf8(o, emjCanonOf(cp));
     else { for (int k = 0; k < bl; k++) o += (char)p[i + k]; }
     i += bl;
   }
@@ -198,7 +238,7 @@ void emjSanitizeBuf(char* dst, int dstSize, const char* src, int len) {
     uint8_t c = p[i];
     if (c < 0x80) { dst[o++] = (c >= 32 && c <= 126) ? (char)c : '?'; i++; continue; }
     uint32_t cp; int bl = emjDecode(p + i, n - i, &cp);
-    if (cp >= EMJ_PUA0 && cp < EMJ_PUA0 + EMJ_COUNT && bl == 3) {
+    if (emjIsPuaCp(cp) && bl == 3) {
       if (o + 3 > dstSize - 1) break;                          // tidak muat utuh: berhenti, jangan potong tengah
       dst[o++] = (char)p[i]; dst[o++] = (char)p[i + 1]; dst[o++] = (char)p[i + 2];
     } else dst[o++] = '?';
@@ -269,4 +309,68 @@ int emjCells(const char* p, int len) {
     else { cells += 1; i++; }
   }
   return cells;
+}
+
+// ---------------------------------------------------------------------
+// set emoji dari SD (/emoji.bin) -> PSRAM
+// ---------------------------------------------------------------------
+static int emjCmpKey(const void* a, const void* b) {
+  uint64_t x = *(const uint64_t*)a, y = *(const uint64_t*)b;
+  return x < y ? -1 : (x > y ? 1 : 0);
+}
+static bool emjReadAll(File& f, void* dst, size_t bytes) {
+  uint8_t* p = (uint8_t*)dst;
+  while (bytes) {
+    size_t n = bytes > 16384 ? 16384 : bytes;
+    if (f.read(p, n) != n) return false;
+    p += n; bytes -= n; yield();
+  }
+  return true;
+}
+static void emjFreeSd() {
+  if (emjSdCp) { free(emjSdCp); emjSdCp = nullptr; }
+  if (emjSdKey) { free(emjSdKey); emjSdKey = nullptr; }
+  for (int i = 0; i < 3; i++) if (emjSdPx[i]) { free(emjSdPx[i]); emjSdPx[i] = nullptr; }
+}
+// Panggil SEKALI di setup(), sesudah initSD() dan SEBELUM teks apa pun dinormalisasi.
+// Tanpa SD / tanpa file / file rusak / PSRAM kurang: tetap pakai set bawaan (aman).
+void emjInit() {
+  if (emjInited) return;
+  emjInited = true;
+  if (!sdReady) return;
+  File f = SD_MMC.open(EMJ_FILE, FILE_READ);
+  if (!f) return;
+  uint8_t h[16];
+  bool ok = (f.read(h, 16) == 16) && memcmp(h, "NYXE", 4) == 0 && h[4] == 1 && h[5] == 0 &&
+            h[8] == emjSizes[0] && h[9] == emjSizes[1] && h[10] == emjSizes[2];
+  uint32_t n = ok ? ((uint32_t)h[6] | ((uint32_t)h[7] << 8)) : 0;
+  if (!ok || n < 1 || n > EMJ_SD_MAX) { f.close(); return; }
+  size_t szPx[3];
+  size_t total = 16 + (size_t)n * 4;
+  for (int i = 0; i < 3; i++) { szPx[i] = (size_t)n * emjSizes[i] * emjSizes[i] * 2; total += szPx[i]; }
+  if ((size_t)f.size() < total) { f.close(); return; }
+  uint32_t caps = MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT;
+  emjSdCp  = (uint32_t*)heap_caps_malloc((size_t)n * 4, caps);
+  emjSdKey = (uint64_t*)heap_caps_malloc((size_t)n * 8, caps);
+  for (int i = 0; i < 3; i++) emjSdPx[i] = (uint16_t*)heap_caps_malloc(szPx[i], caps);
+  bool good = emjSdCp && emjSdKey && emjSdPx[0] && emjSdPx[1] && emjSdPx[2] && emjReadAll(f, emjSdCp, (size_t)n * 4);
+  for (int i = 0; good && i < 3; i++) good = emjReadAll(f, emjSdPx[i], szPx[i]);
+  f.close();
+  if (!good) { emjFreeSd(); return; }                          // set bawaan tetap dipakai
+  for (uint32_t i = 0; i < n; i++) emjSdKey[i] = ((uint64_t)emjSdCp[i] << 16) | i;
+  qsort(emjSdKey, n, sizeof(uint64_t), emjCmpKey);
+  emjSdN = (uint16_t)n;                                        // terakhir: baru sekarang set SD aktif
+}
+
+// ---------------------------------------------------------------------
+// halaman emoji keyboard virtual: 30 emoji per halaman (3 baris x 10)
+// ---------------------------------------------------------------------
+int emjKbPages() { int n = emjCount(); return n < 1 ? 1 : (n + 29) / 30; }
+// Label (3 byte UTF-8 PUA + NUL) tuts ke-slot (0..29) di halaman page. false = tuts kosong.
+bool emjKbLabel(int page, int slot, char* out) {
+  int k = page * 30 + slot;
+  if (slot < 0 || slot >= 30 || k < 0 || k >= emjCount()) return false;
+  uint32_t cp = EMJ_PUA0 + k;
+  out[0] = (char)(0xE0 | (cp >> 12)); out[1] = (char)(0x80 | ((cp >> 6) & 0x3F)); out[2] = (char)(0x80 | (cp & 0x3F)); out[3] = 0;
+  return true;
 }

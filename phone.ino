@@ -1149,6 +1149,10 @@ String emjHead(const String& s, int maxBytes);
 String emjTail(const String& s, int maxBytes);
 void   emjCutZ(char* s, int maxBytes);
 int    emjCells(const char* p, int len);
+void   emjInit();                                      // muat /emoji.bin dari SD (sekali, di setup sesudah initSD)
+int    emjKbPages();
+bool   emjKbLabel(int page, int slot, char* out);      // label tuts emoji (3 byte UTF-8 PUA)
+int    kbEmoPage = 0;                                  // halaman emoji keyboard yg sedang tampil
 enum KbMode { KB_LOWER, KB_UPPER, KB_NUM, KB_EMO1, KB_EMO2 };
 
 // v95: clock SPI ke display -- dulu tetap 40MHz (aman, terbukti jalan).
@@ -3347,6 +3351,8 @@ void drawKb(LGFX_Sprite& s){
       int in=pr?1:0;                                           // ditekan: mengecil 1px tiap sisi
       nyxAaRR(s, kx+in,ry+in,kw-2*in,kh-2*in,kr,pr?keyP:keyC);
       const char* lb=lay[r][c];
+      char elb[4];
+      if(emo) lb = emjKbLabel(kbEmoPage, r*10+c, elb) ? elb : "";   // halaman emoji: dinamis dari set aktif
       s.setTextSize(2); s.setTextColor(T().text);
       int tw=s.textWidth(lb);
       s.setCursor(kx+(kw-tw)/2,ry+(kh-16)/2+in);
@@ -3367,8 +3373,8 @@ void drawKb(LGFX_Sprite& s){
     nyxAaRR(s, shX+in,cy+in,shW-2*in,kh-2*in,kr,bg);
     int acx=shX+shW/2, acy=cy+kh/2;
     if(emo){                                            // halaman emoji: tombol ini = ganti halaman
-      const char* pg=(kbMode==KB_EMO1)?"1/2":"2/2";
-      s.setTextColor(T().text); s.setCursor(shX+(shW-s.textWidth(pg))/2,cy+kh/2-4+in); s.print(pg);
+      s.fillTriangle(shX+8,acy, shX+14,acy-5, shX+14,acy+5, T().text);                  // < halaman sebelumnya
+      s.fillTriangle(shX+shW-8,acy, shX+shW-14,acy-5, shX+shW-14,acy+5, T().text);      // > halaman berikutnya
     } else {
       s.fillTriangle(acx,acy-6, acx-6,acy+2, acx+6,acy+2, ic);
     s.fillRect(acx-3,acy+2,6,4,ic);
@@ -3393,7 +3399,8 @@ void drawKb(LGFX_Sprite& s){
     bool pr=(kbPressKey==102); int in=pr?1:0;
     nyxAaRR(s, spX+in,cy+in,spW-2*in,kh-2*in,kr,pr?keyP:keyC);
     s.setTextColor(T().text);
-    s.setCursor(spX+(spW-s.textWidth("spasi"))/2,cy+kh/2-4+in); s.print("spasi");
+    char spl[24]; if(emo) snprintf(spl,sizeof(spl),"spasi  %d/%d",kbEmoPage+1,emjKbPages()); else strcpy(spl,"spasi");
+    s.setCursor(spX+(spW-s.textWidth(spl))/2,cy+kh/2-4+in); s.print(spl);
   }
   { // hapus
     bool pr=(kbPressKey==103); int in=pr?1:0;
@@ -3416,7 +3423,7 @@ void kbTouch(int x,int y){
     int dlX=R-84;
     bool emo=(kbMode==KB_EMO1||kbMode==KB_EMO2);
     if(x<nmX-2){
-      if(emo) kbMode=(kbMode==KB_EMO1?KB_EMO2:KB_EMO1);       // di halaman emoji: ganti halaman 1/2
+      if(emo){ int np=emjKbPages(); kbEmoPage = (x<shX+shW/2) ? (kbEmoPage+np-1)%np : (kbEmoPage+1)%np; }   // < / >
       else    kbMode=(kbMode==KB_UPPER?KB_LOWER:KB_UPPER);
       kbPressKey=100;
     }
@@ -3436,7 +3443,8 @@ void kbTouch(int x,int y){
   int c=(x-L)/(kw+2);
   if(x<L||c<0||c>9) return;
   auto* lay=kbMaps[(int)kbMode];
-  *kbTarget+=lay[r][c];
+  if(kbMode==KB_EMO1||kbMode==KB_EMO2){ char elb[4]; if(emjKbLabel(kbEmoPage,r*10+c,elb)) *kbTarget+=elb; }
+  else *kbTarget+=lay[r][c];
   kbPressKey=r*10+c; kbPressUntil=millis()+KB_PRESS_MS;
   if(kbMode==KB_UPPER)kbMode=KB_LOWER;
   needRedraw=true;
@@ -19678,6 +19686,7 @@ void setup(){
   drawColor=T().text;
   initSD();
   initFfat(); // v47: siapin fallback wallpaper (flash internal) pas SD Card gak kedetek
+  emjInit();  // emoji: muat set dari SD (/emoji.bin) SEBELUM teks apa pun dinormalisasi (loadNote dst)
   loadNote();
   loadGeminiKey();
   loadWallpaper(); // v47: muat wallpaper custom kalau ada (fallback warna solid tema kalau gak ada)
