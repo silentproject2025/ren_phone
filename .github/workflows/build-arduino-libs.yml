@@ -22,6 +22,11 @@ on:
         description: "Taruh buffer WiFi/lwIP di PSRAM (hemat RAM internal, throughput WiFi bisa sedikit turun)"
         type: boolean
         default: true
+      tcp_window_kb:
+        description: "EKSPERIMEN: window TCP lwIP (KB) utk unduhan lebih cepat di jaringan latensi tinggi. default = bawaan IDF (~5,6 KB). Makin besar makin boros RAM"
+        type: choice
+        options: [ "default", "16", "32", "64" ]
+        default: "default"
 
 permissions:
   contents: write
@@ -105,6 +110,19 @@ jobs:
             if [ "${{ inputs.wifi_lwip_psram }}" = "true" ]; then
               echo 'CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y'
             fi
+            # Window TCP: throughput 1 koneksi <= window / RTT. Window bawaan kecil -> lambat di RTT tinggi.
+            # RECVMBOX harus >= window / MSS (~1440 B): 16KB=12, 32KB=23, 64KB=45 segmen.
+            case "${{ inputs.tcp_window_kb }}" in
+              16) W=16384; MB=16 ;;
+              32) W=32768; MB=32 ;;
+              64) W=65535; MB=48 ;;
+              *)  W=0; MB=0 ;;
+            esac
+            if [ "$W" != "0" ]; then
+              echo "CONFIG_LWIP_TCP_WND_DEFAULT=$W"
+              echo "CONFIG_LWIP_TCP_SND_BUF_DEFAULT=$W"
+              echo "CONFIG_LWIP_TCP_RECVMBOX_SIZE=$MB"
+            fi
           } >> "$F"
           tail -n 10 "$F"
 
@@ -144,6 +162,8 @@ jobs:
           for OPT in CONFIG_MBEDTLS_DYNAMIC_BUFFER CONFIG_MBEDTLS_DYNAMIC_FREE_CONFIG_DATA CONFIG_FREERTOS_TASK_CREATE_ALLOW_EXT_MEM CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP; do
             if grep -q "^$OPT=y" "$OUT/sdkconfig"; then echo "OK   $OPT=y"; else echo "::warning::$OPT tidak aktif di sdkconfig hasil build (dependensi Kconfig tidak terpenuhi atau dimatikan lewat input)"; fi
           done
+          echo "=== window TCP lwIP di sdkconfig hasil ==="
+          grep -E '^CONFIG_LWIP_TCP_(WND_DEFAULT|SND_BUF_DEFAULT|RECVMBOX_SIZE)=' "$OUT/sdkconfig" || echo "::warning::opsi window TCP tidak ditemukan di sdkconfig hasil"
           mkdir -p "$HOME/pkg"
           tar -czf "$HOME/pkg/esp32s3-libs.tar.gz" -C "$(dirname "$OUT")" esp32s3
           cp "$RUNNER_TEMP/core-version.txt" "$HOME/pkg/core-version.txt"
