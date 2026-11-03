@@ -33,7 +33,7 @@
 #define GUT_IDLE_MS    8000        // diam selama ini = anggap macet, sambung ulang
 #define GUT_MAX_STALL  6           // sambung ulang berturut-turut tanpa kemajuan sebelum menyerah (dengan jeda makin panjang)
 #define GUT_MAX_TRY    40          // maks sambungan ulang per unduhan (berhenti lebih awal bila 3x tanpa kemajuan)
-#define GUT_PARALLEL   1           // 1 = unduh dgn 2 koneksi paralel (Range, tiap koneksi separuh berkas); 0 = satu koneksi saja
+#define GUT_PARALLEL   0           // 1 = unduh dgn 2 koneksi paralel (Range, tiap koneksi separuh berkas); 0 = satu koneksi saja
 #define GUT_TLS_MIN_BLOCK 24000u        // blok RAM internal terbesar yg diminta sebelum (sambung ulang); mbedTLS sudah di PSRAM, jadi ambang rendah. TEBAKAN, sesuaikan dari log
 #define GUT_PAR_MIN_BLOCK 30000u        // paralel hanya dicoba bila blok internal terbesar >= ini ... (TEBAKAN)
 #define GUT_PAR_MIN_FREE  60000u        // ... dan total RAM internal bebas >= ini (TEBAKAN)
@@ -594,7 +594,12 @@ static void gutDoDownload() {
       if (useLite) { useLite = false; resume = 0; continue; }     // versi ringan tak ada -> URL asli
       break;
     }
-    if (rc == -1 || rc == -3) { gutWifiDiag("putus"); gutWifiRecover(); }   // data berhenti / gagal konek: segarkan WiFi dulu, bukan cuma soket
+    if (rc == -1 || rc == -3) {                                   // data berhenti / gagal konek
+      gutWifiDiag("putus");
+      bool wifiOk = WiFi.status() == WL_CONNECTED && !(WiFi.localIP() == IPAddress((uint32_t)0));
+      if (!wifiOk) gutWifiRecover();                              // WiFi benar2 lepas: pulihkan
+      else for (uint32_t w = 0; w < 1500 && !gutCancel; w += 100) delay(100);   // WiFi sehat (server/jaringan yg menutup soket): JANGAN reconnect, cukup jeda lalu sambung (Range)
+    }
     if (sz > resume) { resume = sz; stall = 0; }                  // ada kemajuan: sambung lagi
     else {
       if (++stall >= GUT_MAX_STALL) break;                        // berturut-turut tanpa kemajuan: menyerah
