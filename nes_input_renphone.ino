@@ -24,11 +24,22 @@ extern "C" {
 
 // --- Titik tengah & radius tiap zona (sesuaikan kalau tangan kamu
 //     lebih nyaman geser posisinya) ---
-static const int DPAD_CX = 55,  DPAD_CY = 175, DPAD_R = 45;
-static const int BTN_A_CX = 275, BTN_A_CY = 185, BTN_A_R = 24;
-static const int BTN_B_CX = 235, BTN_B_CY = 155, BTN_B_R = 24;
-static const int BTN_START_CX = 175, BTN_START_CY = 20, BTN_R_SMALL = 14;
-static const int BTN_SELECT_CX = 145, BTN_SELECT_CY = 20;
+// Posisi tombol virtual MENGIKUTI ukuran layar (di 320x240 hasilnya sama persis dgn nilai lama:
+// d-pad 55,175 | A 275,185 | B 235,155 | Start 175,20 | Select 145,20).
+#define DPAD_CX 55
+#define DPAD_CY (SCR_H-65)
+#define DPAD_R  45
+#define BTN_A_CX (SCR_W-45)
+#define BTN_A_CY (SCR_H-55)
+#define BTN_A_R  24
+#define BTN_B_CX (SCR_W-85)
+#define BTN_B_CY (SCR_H-85)
+#define BTN_B_R  24
+#define BTN_START_CX (SCR_W/2+15)
+#define BTN_START_CY 20
+#define BTN_R_SMALL  14
+#define BTN_SELECT_CX (SCR_W/2-15)
+#define BTN_SELECT_CY 20
 
 // Bitmask status tombol NES saat ini (di-update tiap ada event touch).
 static volatile uint8_t nesBtnState = 0;
@@ -68,7 +79,9 @@ void nesFpsReset(){
 // (bukan cuma nambahin bit) supaya begitu jari diangkat / geser keluar
 // zona, tombol otomatis "lepas" -- gak perlu deteksi touch-up manual.
 // -----------------------------------------------------------------
-void nesInput_touch(int tx, int ty, bool held, bool newT) {
+static uint8_t nesSlotMask[2] = {0, 0};   // bitmask tombol tiap jari; nesBtnState = gabungan (OR)
+
+static void nesInput_slot(int slot, int tx, int ty, bool held, bool newT) {
   uint8_t s = 0;
   bool touching = held || newT;
 
@@ -85,8 +98,11 @@ void nesInput_touch(int tx, int ty, bool held, bool newT) {
     if (inCircle(tx,ty,BTN_START_CX,BTN_START_CY,BTN_R_SMALL)) s |= NB_START;
     if (inCircle(tx,ty,BTN_SELECT_CX,BTN_SELECT_CY,BTN_R_SMALL)) s |= NB_SELECT;
   }
-  nesBtnState = s;
+  nesSlotMask[slot] = s;
+  nesBtnState = nesSlotMask[0] | nesSlotMask[1];
 }
+void nesInput_touch(int tx, int ty, bool held, bool newT)  { nesInput_slot(0, tx, ty, held, newT); }
+void nesInput_touch2(int tx, int ty, bool held, bool newT) { nesInput_slot(1, tx, ty, held, newT); }
 
 // -----------------------------------------------------------------
 // osd_getinput(): DIPANGGIL LANGSUNG oleh core nofrendo, SEKALI PER

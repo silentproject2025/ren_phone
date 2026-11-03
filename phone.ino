@@ -1237,28 +1237,21 @@ public:
   }
   bool touchOk() const { return _touchOk; }
 
-  // 1 titik. Mengembalikan true kalau jari menempel.
-  bool getTouch(lgfx::touch_point_t* tp){
-    if(!_touchOk) return false;
-    uint32_t now=millis();
-    if(now-_tLastMs < 4){                      // jangan banjiri bus I2C: pakai hasil terakhir
-      if(_tDown){ *tp=_tLast; return true; }
-      return false;
-    }
-    _tLastMs=now;
-    uint8_t b[7];
-    Wire.beginTransmission(RP_TOUCH_ADDR); Wire.write((uint8_t)0x02);
-    if(Wire.endTransmission(false)!=0){ _tDown=false; return false; }
-    if(Wire.requestFrom((int)RP_TOUCH_ADDR,7)!=7){ _tDown=false; return false; }
-    for(int i=0;i<7;i++) b[i]=Wire.read();
-    uint8_t n=b[0]&0x0F;
-    if(n==0||n>2){ _tDown=false; return false; }
-    int rx=((b[1]&0x0F)<<8)|b[2];              // koordinat NATIVE (portrait, rotasi 0)
-    int ry=((b[3]&0x0F)<<8)|b[4];
+  // ---- 2 jari ----
+  // Slot LOGIS 0/1 dikelola di sini (bukan id mentah chip): jari yg MENYENTUH PERTAMA = slot 0,
+  // jari berikutnya = slot 1; slot dibebaskan saat jarinya diangkat. Jari tunggal SELALU masuk
+  // slot 0 -> semua app lama (yg cuma baca 1 titik via getTouch) berperilaku sama seperti sebelumnya.
+  bool getTouch(lgfx::touch_point_t* tp){ return touchSlot(0,tp); }
+  bool touchSlot(int s, lgfx::touch_point_t* tp){
+    touchPoll();
+    if(s<0||s>1||!_sDown[s]) return false;
+    *tp=_sPt[s]; return true;
+  }
+  // koordinat NATIVE -> koordinat layar pada rotasi aktif (+ koreksi RP_TOUCH_*)
+  void touchMap(int rx,int ry,int&x,int&y){
     const int W=RP_DISP_NATIVE_W, H=RP_DISP_NATIVE_H;
     if(rx>=W) rx=W-1;
     if(ry>=H) ry=H-1;
-    int x,y;
     switch(getRotation()&3){
       case 1:  x=ry;       y=W-1-rx;  break;   // landscape
       case 2:  x=W-1-rx;   y=H-1-ry;  break;
@@ -1268,14 +1261,57 @@ public:
     if(RP_TOUCH_SWAP_XY){ int t=x; x=y; y=t; }
     if(RP_TOUCH_FLIP_X)  x=width()-1-x;
     if(RP_TOUCH_FLIP_Y)  y=height()-1-y;
-    _tLast.x=x; _tLast.y=y; _tLast.size=64; _tLast.id=0;
-    _tDown=true; *tp=_tLast;
-    return true;
+  }
+  void touchPoll(){
+    if(!_touchOk) return;
+    uint32_t now=millis();
+    if(now-_tPollMs < 4) return;               // jangan banjiri bus I2C: pakai hasil terakhir
+    _tPollMs=now;
+    uint8_t b[13];
+    Wire.beginTransmission(RP_TOUCH_ADDR); Wire.write((uint8_t)0x02);
+    bool ok = (Wire.endTransmission(false)==0) && (Wire.requestFrom((int)RP_TOUCH_ADDR,13)==13);
+    int n=0; int rid[2]={0,1}, rx[2]={0,0}, ry[2]={0,0};
+    if(ok){
+      for(int i=0;i<13;i++) b[i]=Wire.read();
+      n=b[0]&0x0F; if(n>2) n=0;
+      for(int i=0;i<n;i++){
+        const uint8_t* q=b+1+i*6;              // XH XL YH YL weight misc
+        rx[i]=((q[0]&0x0F)<<8)|q[1];
+        ry[i]=((q[2]&0x0F)<<8)|q[3];
+        rid[i]=(q[2]>>4)&0x0F;
+      }
+      if(n==2 && rid[0]==rid[1]) rid[1]=rid[0]^1;
+    }
+#if !RP_MULTITOUCH
+    if(n>1) n=1;
+#endif
+    // 1) slot yg sudah ada: cari titik dgn id yg sama
+    bool used[2]={false,false};
+    for(int s=0;s<2;s++){
+      if(!_sDown[s]) continue;
+      int found=-1;
+      for(int i=0;i<n;i++) if(!used[i] && rid[i]==_sHw[s]){ found=i; break; }
+      if(found<0){ _sDown[s]=false; continue; }   // jari diangkat
+      used[found]=true;
+      int x,y; touchMap(rx[found],ry[found],x,y);
+      _sPt[s].x=x; _sPt[s].y=y; _sPt[s].size=64; _sPt[s].id=s;
+    }
+    // 2) titik baru -> slot kosong pertama
+    for(int i=0;i<n;i++){
+      if(used[i]) continue;
+      int s=!_sDown[0]?0:(!_sDown[1]?1:-1);
+      if(s<0) break;
+      _sDown[s]=true; _sHw[s]=rid[i];
+      int x,y; touchMap(rx[i],ry[i],x,y);
+      _sPt[s].x=x; _sPt[s].y=y; _sPt[s].size=64; _sPt[s].id=s;
+    }
   }
 private:
-  bool _touchOk=false, _tDown=false;
-  uint32_t _tLastMs=0;
-  lgfx::touch_point_t _tLast;
+  bool _touchOk=false;
+  bool _sDown[2]={false,false};
+  int  _sHw[2]={0,0};
+  uint32_t _tPollMs=0;
+  lgfx::touch_point_t _sPt[2];
 public:
 #endif
 
@@ -5641,7 +5677,7 @@ void mazeEnter(); void mazeExit();
 void drawMaze(LGFX_Sprite&); void mazeTouch(int,int,bool,bool);
 // v74: game baru "Inferno" (FPS raycaster tema gothic/neraka, permintaan user)
 void infEnter(); void infExit();
-void drawInf(LGFX_Sprite&); void infTouch(int,int,bool,bool);
+void drawInf(LGFX_Sprite&); void infTouch(int,int,bool,bool); void infTouch2(int,int,bool,bool); void infPlayTouch(int,int,int,bool,bool); void doomTouch2(int,int,bool,bool); void nesTouch2(int,int,bool,bool);
 // v86: app baru "NES" (emulator NES, core Nofrendo -- lihat file
 // nes_video/nes_osd/nes_input/nes_app_renphone.ino terpisah)
 void nesEnter(); void nesExit();
@@ -10400,7 +10436,7 @@ bool mjpegEnsureBuffer(){
 int mjpegClassifyTouch(lgfx::touch_point_t startTp){
   // Rotasi sudah dipaksa portrait (0) selama playback, jadi tinggi panel
   // native SELALU 320 -- gak perlu display.height() (yg lagi dikunci portrait).
-  bool startedNearBottom = startTp.y > 320 - 40;
+  bool startedNearBottom = startTp.y > RP_DISP_NATIVE_H - 40; // ILI9341: 320-40 (sama spt dulu); ST7796: 480-40
   unsigned long t0 = millis();
   lgfx::touch_point_t tp = startTp;
   while(getInputPoint(tp)){
@@ -15912,6 +15948,17 @@ void infTouch(int x,int y,bool held,bool isNew){
     return;
   }
   if(infState!=INF_PLAYING) return;
+  infPlayTouch(0,x,y,held,isNew);
+}
+
+// Jari kedua (layar kapasitif): hanya aksi main (joystick/tembak/ganti senjata/noleh).
+void infTouch2(int x,int y,bool held,bool isNew){
+  if(infState!=INF_PLAYING) return;
+  infPlayTouch(1,x,y,held,isNew);
+}
+
+static bool infSlotJoy[2]={false,false};   // peran tiap jari: true = joystick, false = noleh
+void infPlayTouch(int slot,int x,int y,bool held,bool isNew){
   // Tombol TEMBAK diperiksa PALING DULU & terpisah dari joystick/look di
   // bawah -- layar ini cuma bisa baca 1 titik sentuh, jadi titik yg
   // jatuh di lingkaran tombol ini TIDAK ikut jadi basis joystick/look
@@ -15942,16 +15989,16 @@ void infTouch(int x,int y,bool held,bool isNew){
   // tiap frame, gerakan bakal "loncat" mode di tengah gestur & kerasa aneh.
   if(isNew){
     if(x < SCR_W/2){
-      infTouchIsJoy=true; infJoyActive=true; infJoyLastMs=millis();
+      infSlotJoy[slot]=true; infTouchIsJoy=true; infJoyActive=true; infJoyLastMs=millis();
       infJoyAnchorX=x; infJoyAnchorY=y; infJoyCurX=x; infJoyCurY=y;
     } else {
-      infTouchIsJoy=false; infLookActive=true;
+      infSlotJoy[slot]=false; infTouchIsJoy=false; infLookActive=true;
       infLookLastX=x; infLookLastY=y; infLastLookTouchMs=millis();
     }
     return;
   }
 
-  if(infTouchIsJoy){
+  if(infSlotJoy[slot]){
     // v75: INTI PERBAIKANNYA -- offset dihitung DARI JANGKAR (titik
     // sentuh pertama, TETAP), BUKAN direset ke posisi jari tiap frame spt
     // skema lama. Selama jari msh nempel & ditahan miring ke suatu arah,
@@ -20368,6 +20415,17 @@ void loop(){
         if(newT) apps[idx].touch(tx,ty,false,true);
         else if(touched && held) apps[idx].touch(tx,ty,true,false);
       }
+#if RP_TOUCH_CAPACITIVE && RP_MULTITOUCH
+      // Jari KEDUA (slot 1) -- cuma utk game kontrol virtual (joystick + tembak/tombol bareng).
+      { static bool prev2=false;
+        lgfx::touch_point_t p2; bool d2=display.touchSlot(1,&p2);
+        bool new2=d2&&!prev2, held2=d2&&prev2;
+        int x2=d2?(int)p2.x:0, y2=d2?(int)p2.y:0;
+        if(curScreen()==SCR_NES)       nesTouch2(x2,y2,held2,new2);   // dipanggil terus (utk melepas tombol)
+        else if(curScreen()==SCR_DOOM) doomTouch2(x2,y2,held2,new2);  // idem
+        else if(curScreen()==SCR_INF){ if(new2) infTouch2(x2,y2,false,true); else if(held2) infTouch2(x2,y2,true,false); }
+        prev2=d2; }
+#endif
     }
     if(curScreen()==SCR_CLOCK && millis()-lastClk>500){ needRedraw=true; lastClk=millis(); }
     if(curScreen()==SCR_SENSOR && millis()-lastSen>50){ needRedraw=true; lastSen=millis(); }

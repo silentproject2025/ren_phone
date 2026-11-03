@@ -54,6 +54,11 @@
   #define RP_TOUCH_FLIP_Y     0            // 1 = balik sumbu Y
   #endif
 
+  // Multi-touch: FT6236 melaporkan 2 jari. 1 = jari kedua dipakai game (DOOM/NES/Inferno).
+  #ifndef RP_MULTITOUCH
+  #define RP_MULTITOUCH       1
+  #endif
+
   // DOOM: render 1:1 (320x200) di tengah layar 480x320, tanpa scaling.
   #define RP_DOOM_PANEL_W     480
   #define RP_DOOM_PANEL_H     320
@@ -67,6 +72,7 @@
   #define RP_DISP_NATIVE_W    240
   #define RP_DISP_NATIVE_H    320
   #define RP_TOUCH_CAPACITIVE 0
+  #define RP_MULTITOUCH       0
   #define RP_CH_SUFFIX        ""
   #define RP_DISP_SPI_FREQ    60000000
   #define RP_DOOM_PANEL_W     320

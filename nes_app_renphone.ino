@@ -288,3 +288,10 @@ void nesTouch(int tx, int ty, bool held, bool newT) {
 
   nesInput_touch(tx, ty, held, newT);
 }
+
+// Jari kedua (layar kapasitif): hanya tombol game, tidak untuk picker/error.
+void nesInput_touch2(int tx, int ty, bool held, bool newT);
+void nesTouch2(int tx, int ty, bool held, bool newT) {
+  if (nesRomError || nesShowingPicker) return;
+  nesInput_touch2(tx, ty, held, newT);
+}

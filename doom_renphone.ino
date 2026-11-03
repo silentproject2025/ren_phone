@@ -390,54 +390,65 @@ void doomDrawOverlay(){
 // yg sama dipakai semua app lain). Skema & gaya persis reuse dari
 // infTouch() (game "Inferno") yg sudah ada duluan di phone.ino.
 // -----------------------------------------------------------------
-static bool doomZoneIsLeft=false;
-static int  doomAnchorX=0, doomAnchorY=0;
+// 2 jari (layar kapasitif): tiap jari punya zona/jangkar/bitmask tombol SENDIRI;
+// doomInput.raw[] = gabungan (OR) kedua jari -> bisa jalan + tembak bersamaan.
+static bool    doomSlotLeft[2]={false,false};
+static int     doomSlotAX[2]={0,0}, doomSlotAY[2]={0,0};
+static uint8_t doomSlotMask[2]={0,0};
 #define DOOM_JOY_RADIUS 46
+#define DOOM_DIR_MASK ((1u<<DBTN_UP)|(1u<<DBTN_DOWN)|(1u<<DBTN_LEFT)|(1u<<DBTN_RIGHT))
 
+static void doomApplyMasks(){
+  uint8_t m = doomSlotMask[0] | doomSlotMask[1];
+  for(int i=0;i<DBTN_COUNT;i++) doomInput.raw[i] = (m>>i)&1;
+}
 static void doomReleaseAll(){
-  for(int i=0;i<DBTN_COUNT;i++) doomInput.raw[i]=false;
+  doomSlotMask[0]=doomSlotMask[1]=0;
+  doomApplyMasks();
 }
 
-void doomTouch(int x,int y,bool held,bool isNew){
-  if(!held && !isNew){ doomReleaseAll(); return; }
+static void doomTouchSlot(int s,int x,int y,bool held,bool isNew){
+  if(!held && !isNew){ doomSlotMask[s]=0; doomApplyMasks(); return; }
 
   if(isNew && isBack(x,y)){ navBack(); return; } // keluar app -> doomExit() lewat appOnExit()
 
-  // Tombol bulat tetap diperiksa DULU (pola sama persis dgn tombol
-  // tembak/ganti-senjata Inferno) supaya ketukan di areanya TIDAK ikut
-  // jadi basis d-pad/turn di bawah.
+  uint8_t &m = doomSlotMask[s];
+  // Tombol bulat tetap diperiksa DULU supaya ketukan di areanya TIDAK ikut jadi basis d-pad/turn.
   int dx,dy;
   dx=x-doomFireCx(); dy=y-doomFireCy();
-  if(dx*dx+dy*dy <= 22*22){ doomInput.raw[DBTN_FIRE] = true; return; }
+  if(dx*dx+dy*dy <= 22*22){ m |= (1u<<DBTN_FIRE); doomApplyMasks(); return; }
   dx=x-doomUseCx(); dy=y-doomUseCy();
-  if(dx*dx+dy*dy <= 16*16){ if(isNew) doomInput.raw[DBTN_USE]=true; return; }
+  if(dx*dx+dy*dy <= 16*16){ if(isNew) m |= (1u<<DBTN_USE); doomApplyMasks(); return; }
   dx=x-doomOkCx(); dy=y-doomOkCy();
-  if(dx*dx+dy*dy <= 14*14){ if(isNew) doomInput.raw[DBTN_START]=true; return; }
+  if(dx*dx+dy*dy <= 14*14){ if(isNew) m |= (1u<<DBTN_START); doomApplyMasks(); return; }
   if(x>=doomPauseX()-16 && x<=doomPauseX()+16 && y>=doomPauseY()-14 && y<=doomPauseY()+14){
-    if(isNew) doomInput.raw[DBTN_SELECT]=true; return;
+    if(isNew) m |= (1u<<DBTN_SELECT);
+    doomApplyMasks(); return;
   }
 
   if(isNew){
-    doomZoneIsLeft = (x < SCR_W/2);
-    doomAnchorX=x; doomAnchorY=y;
+    doomSlotLeft[s] = (x < SCR_W/2);
+    doomSlotAX[s]=x; doomSlotAY[s]=y;
     return;
   }
 
-  int ox=x-doomAnchorX, oy=y-doomAnchorY;
+  int ox=x-doomSlotAX[s], oy=y-doomSlotAY[s];
   const int DEAD=10;
-  if(doomZoneIsLeft){
-    // Kiri: maju/mundur dari offset VERTIKAL jangkar (spt Snake/Inferno --
-    // ditahan miring, bukan digeser berkali-kali, biar jalan terus).
-    doomInput.raw[DBTN_UP]   = (oy < -DEAD);
-    doomInput.raw[DBTN_DOWN] = (oy >  DEAD);
-    doomInput.raw[DBTN_LEFT] = false; doomInput.raw[DBTN_RIGHT] = false;
+  m &= ~DOOM_DIR_MASK;
+  if(doomSlotLeft[s]){
+    // Kiri: maju/mundur dari offset VERTIKAL jangkar (ditahan miring -> jalan terus).
+    if(oy < -DEAD) m |= (1u<<DBTN_UP);
+    if(oy >  DEAD) m |= (1u<<DBTN_DOWN);
   } else {
     // Kanan: noleh dari offset HORIZONTAL jangkar.
-    doomInput.raw[DBTN_LEFT]  = (ox < -DEAD);
-    doomInput.raw[DBTN_RIGHT] = (ox >  DEAD);
-    doomInput.raw[DBTN_UP] = false; doomInput.raw[DBTN_DOWN] = false;
+    if(ox < -DEAD) m |= (1u<<DBTN_LEFT);
+    if(ox >  DEAD) m |= (1u<<DBTN_RIGHT);
   }
+  doomApplyMasks();
 }
+
+void doomTouch(int x,int y,bool held,bool isNew){  doomTouchSlot(0,x,y,held,isNew); }
+void doomTouch2(int x,int y,bool held,bool isNew){ doomTouchSlot(1,x,y,held,isNew); }
 
 // -----------------------------------------------------------------
 // DRAW (fallback) -- HANYA kepanggil selagi doomPlaying==false, yaitu:
