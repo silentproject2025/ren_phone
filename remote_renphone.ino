@@ -61,6 +61,10 @@
 #define RC_EV_MAX      64
 #define RC_VIEW_TTL_MS 4000UL     // dianggap "ada penonton" kalau poll terakhir < ini
 #define RC_FREE_MS     30000UL    // lepas buffer PSRAM kalau penonton hilang selama ini
+#define RC_AP_OFF_ON_STA 1        // 1 = AP remote otomatis MATI begitu HP tersambung ke WiFi rumah/hotspot (mode radio jadi STA saja,
+                                  //     jauh lebih stabil: AP_STA berbagi satu radio & satu kanal). 0 = perilaku lama.
+                                  //     Remote tetap bisa dibuka lewat IP WiFi rumah bila "Izinkan via WiFi rumah" menyala.
+#define RC_STA_SETTLE_MS 3000UL   // STA harus tersambung stabil selama ini dulu sebelum AP dimatikan (hindari flap sesaat)
 
 struct RcCfg {
   bool autoStart;   // nyalakan AP otomatis beberapa detik setelah boot
@@ -180,6 +184,7 @@ static void rcLoadCfg() {
 // =====================================================================
 void padRegisterRoutes(); void padLoopPoll(); // gamepad_renphone.ino
 bool rcApIsUp() { return rcApUp; }
+static bool rcStaUp() { return wifiConnected && WiFi.status() == WL_CONNECTED; }   // tersambung ke WiFi rumah/hotspot (STA)
 
 static bool rcViewerActive() {
   return rcLastViewMs != 0 && (millis() - rcLastViewMs) < RC_VIEW_TTL_MS;
@@ -1041,10 +1046,27 @@ void rcLoopPoll() {
   rcAnnounceIp(now);
   padLoopPoll(); // Gamepad: WebSocket + watchdog tombol (jalan terus, juga selagi NES/DOOM main)
 
+  // AP otomatis mati begitu STA (WiFi rumah/hotspot) tersambung stabil -- SEKALI per sesi sambungan.
+  // AP yang dinyalakan manual SESUDAH itu (selagi STA masih tersambung) dibiarkan hidup.
+  {
+    static unsigned long staSince = 0; static bool staOffDone = false;
+    bool sta = rcStaUp();
+    if (!sta) { staSince = 0; staOffDone = false; }
+    else if (!staSince) staSince = now ? now : 1;
+    if (RC_AP_OFF_ON_STA && sta && !staOffDone && staSince && (now - staSince) >= RC_STA_SETTLE_MS) {
+      staOffDone = true;
+      if (rcApUp) {
+        rcApStop();
+        diNotify('I', "AP remote mati (WiFi tersambung)", T().subtext, 2500, false);
+        Serial.println("[remote] STA tersambung -> AP dimatikan (mode STA saja)");
+      }
+    }
+  }
+
   // mulai otomatis
   // Percobaan ulang tiap 10 dtk (maks 6x) + getar sebagai umpan balik tanpa layar:
   //   getar 2x pendek = AP berhasil nyala, getar 1x panjang = gagal nyala (akan dicoba lagi)
-  if (!rcApUp && rcAutoTries < 6 && now >= rcAutoNextMs) {
+  if (!rcApUp && rcAutoTries < 6 && now >= rcAutoNextMs && !(RC_AP_OFF_ON_STA && rcStaUp())) {   // STA sudah tersambung -> AP tak perlu dinyalakan
     rcLoadCfg();
     if (rcCfg.autoStart && !airplaneMode) {
       rcAutoTries++;
