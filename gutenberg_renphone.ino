@@ -73,6 +73,8 @@ static volatile uint32_t gutGot = 0, gutTot = 0;
 static volatile uint32_t gutLastReqMs = 0, gutEndMs = 0, gutT0 = 0;   // gutT0 = awal data pertama (utk kecepatan)
 static char      gutMsg[64] = "";
 static char      gutDiag[96] = "";
+static uint8_t   gutHead[8] = {0}; static uint8_t gutHeadN = 0;   // 8 byte pertama yg DITERIMA dari jaringan (utk diagnosis "bukan EPUB")
+static char      gutCT[64] = "";                                 // Content-Type (+ Content-Encoding) balasan server
 static volatile uint32_t gutSdKBs = 0;                // kode diagnosis utk layar kesalahan (+ Serial)
 static char      gutReqUrl[220] = "";
 static volatile uint32_t gutInstBps = 0, gutSpdT = 0, gutSpdB = 0, gutLastDataMs = 0;   // kecepatan SAAT INI (jendela ~2 dtk)
@@ -106,6 +108,7 @@ class GutSink : public Stream {                          // HTTPClient::writeToS
   int peek() override { return -1; }
   uint8_t* mem = nullptr; uint32_t cap = 0; File* file = nullptr; uint32_t limit = 0;
   uint32_t got = 0; bool over = false, sdFail = false; uint32_t lastDraw = 0;
+  uint8_t head[8] = {0}; uint8_t headN = 0;                // 8 byte pertama yg masuk (sebelum ke SD)
   uint8_t lane = 0xFF;                                     // 0xFF = unduhan tunggal; 0/1 = koneksi paralel (gutLaneGot[lane])
   // Tulis ke SD per blok besar: potongan jaringan cuma ~1,4 KB, dan SD card sangat lambat kalau ditulis sekecil itu.
   uint8_t* wbuf = nullptr; uint32_t wlen = 0, wcap = 0;
@@ -137,6 +140,7 @@ class GutSink : public Stream {                          // HTTPClient::writeToS
   size_t write(const uint8_t* p, size_t n) override {
     if (gutCancel || sdFail || over || (lane == 1 && gutLaneAbort)) return 0;                // sudah gagal: hentikan bersih (flag tetap menjelaskan sebabnya)
     if (limit && got + n > limit) { over = true; return 0; }
+    if (headN < 8 && got < 8) { size_t k = 8 - headN; if (k > n) k = n; memcpy(head + headN, p, k); headN += (uint8_t)k; }
     if (mem) { if (got + n > cap) { over = true; return 0; } memcpy(mem + got, p, n); }
     else if (file) {
       if (wbuf) {
@@ -186,6 +190,7 @@ static int gutFetch(const char* url, uint8_t* mem, uint32_t memCap, File* f, uin
   http.setTimeout(idleMs > 60000 ? 60000 : idleMs); http.setConnectTimeout(15000);
   http.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
   if (manual) http.useHTTP10(true);
+  { const char* hk[2] = { "Content-Type", "Content-Encoding" }; http.collectHeaders(hk, 2); }
   if (resumeFrom) { char rg[32]; snprintf(rg, sizeof(rg), "bytes=%u-", (unsigned)resumeFrom); http.addHeader("Range", rg); }
   uint32_t t0 = millis();
   int code = http.GET();
@@ -198,6 +203,10 @@ static int gutFetch(const char* url, uint8_t* mem, uint32_t memCap, File* f, uin
     Serial.printf("[GUT] GET gagal %d (%s), RAM internal: blok terbesar %u B, bebas %u B\n", code, HTTPClient::errorToString(code).c_str(),
                   (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL), (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
     http.end(); return code > 0 ? code : (code == -11 ? -3 : -1);
+  }
+  if (!resumeFrom) {
+    String ct = http.header("Content-Type"), ce = http.header("Content-Encoding");
+    snprintf(gutCT, sizeof(gutCT), "%.40s%s%.12s", ct.c_str(), ce.length() ? " enc=" : "", ce.c_str());
   }
   int len = http.getSize();
   uint32_t want = (len > 0) ? resumeFrom + (uint32_t)len : 0;      // total byte akhir yang diharapkan
@@ -232,6 +241,7 @@ static int gutFetch(const char* url, uint8_t* mem, uint32_t memCap, File* f, uin
   gutLastReqMs = millis();
   if (f && !gutCancel && !sink.sdFail) sink.flushSd();      // sisa blok terakhir
   *outGot = sink.got;
+  if (!resumeFrom) { gutHeadN = sink.headN; memcpy(gutHead, sink.head, 8); }
   snprintf(gutDiag, sizeof(gutDiag), "%s wr=%d got=%u/%u%s%s%s%s fl=%u/%ums", manual ? "http1.0" : "http1.1", wr, (unsigned)sink.got, (unsigned)want,
            idle ? " idle" : "", sink.sdFail ? " sd!" : "", sink.over ? " lim!" : "", gutCancel ? " batal" : "", (unsigned)sink.flushMax, (unsigned)sink.flushMs);
   gutSdKBs = sink.flushMs ? (uint32_t)((uint64_t)sink.flushBytes * 1000 / sink.flushMs / 1024) : 0;
@@ -336,6 +346,7 @@ static int gutFetchRange(const char* url, File* f, uint32_t from, uint32_t to, u
   gutLastReqMs = millis();
   if (!gutCancel && !sink.sdFail) sink.flushSd();
   *outGot = sink.got;
+  if (lane == 0) { gutHeadN = sink.headN; memcpy(gutHead, sink.head, 8); }
   Serial.printf("[GUT] L%u selesai got=%u/%u%s%s fl=%u/%ums\n", (unsigned)lane, (unsigned)sink.got, (unsigned)want,
                 idle ? " idle" : "", sink.sdFail ? " sd!" : "", (unsigned)sink.flushMax, (unsigned)sink.flushMs);
   if (lane == 0) gutSdKBs = sink.flushMs ? (uint32_t)((uint64_t)sink.flushBytes * 1000 / sink.flushMs / 1024) : 0;
@@ -517,6 +528,7 @@ static void gutDoDownload() {
   if (gutDlIdx < 0 || gutDlIdx >= gutN) { strcpy(gutMsg, "Buku tidak valid."); gutPhase = GUT_PH_ERROR; return; }
   GutItem it = gutItems[gutDlIdx];                      // salinan: daftar boleh berubah selama unduh
   bool isEpub = it.epub[0] != 0;
+  gutHeadN = 0; gutCT[0] = 0;
   const char* orig = isEpub ? it.epub : it.txt;
   char url[GUT_URL_LEN + 8]; strncpy(url, orig, sizeof(url) - 1); url[sizeof(url) - 1] = 0;
   bool light = false;
@@ -596,9 +608,22 @@ static void gutDoDownload() {
   }
   if (rc == 200 && got > 0 && isEpub) {                             // EPUB = ZIP: harus diawali "PK"
     File c = SD_MMC.open(tmp, FILE_READ);
-    uint8_t sg[2] = { 0, 0 };
-    if (c) { c.read(sg, 2); c.close(); }
-    if (sg[0] != 'P' || sg[1] != 'K') { rc = -3; strcpy(gutMsg, "Berkas bukan EPUB yang valid."); SD_MMC.remove(tmp); gutPartUrl[0] = 0; gutPhase = GUT_PH_ERROR; return; }
+    uint8_t sg[8] = { 0, 0, 0, 0, 0, 0, 0, 0 }; int nr = 0; uint32_t csz = 0;
+    if (c) { csz = (uint32_t)c.size(); nr = c.read(sg, 8); c.close(); }
+    if (nr < 2 || sg[0] != 'P' || sg[1] != 'K') {
+      bool netPK = gutHeadN >= 2 && gutHead[0] == 'P' && gutHead[1] == 'K';
+      char nh[24] = "?", sh[24] = "?";
+      if (gutHeadN) { int o = 0; for (int i = 0; i < 6 && i < gutHeadN; i++) o += snprintf(nh + o, sizeof(nh) - o, i ? " %02X" : "%02X", gutHead[i]); }
+      if (nr > 0)   { int o = 0; for (int i = 0; i < 6 && i < nr; i++)      o += snprintf(sh + o, sizeof(sh) - o, i ? " %02X" : "%02X", sg[i]); }
+      Serial.printf("[GUT] BUKAN ZIP: jaringan=[%s] SD=[%s] ukuranSD=%u unduh=%u CT=%s\n", nh, sh, (unsigned)csz, (unsigned)got, gutCT[0] ? gutCT : "-");
+      char bad[140]; snprintf(bad, sizeof(bad), "%s.bad", path);       // simpan utk diperiksa di PC (buka dgn editor teks / hex)
+      if (SD_MMC.exists(bad)) SD_MMC.remove(bad);
+      if (!SD_MMC.rename(tmp, bad)) SD_MMC.remove(tmp);
+      snprintf(gutDiag, sizeof(gutDiag), "net:%s sd:%s", nh, sh);
+      if (netPK) strcpy(gutMsg, "Rusak saat ditulis ke SD (bukan ZIP).");
+      else snprintf(gutMsg, sizeof(gutMsg), "Server kirim: %.38s", gutCT[0] ? gutCT : "(tanpa Content-Type)");
+      rc = -3; gutPartUrl[0] = 0; gutPhase = GUT_PH_ERROR; return;
+    }
   }
   if (rc == 200 && got > 0) {
     if (SD_MMC.exists(path)) SD_MMC.remove(path);
