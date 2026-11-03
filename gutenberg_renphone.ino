@@ -73,6 +73,7 @@ static volatile uint32_t gutGot = 0, gutTot = 0;
 static volatile uint32_t gutLastReqMs = 0, gutEndMs = 0, gutT0 = 0;   // gutT0 = awal data pertama (utk kecepatan)
 static char      gutMsg[64] = "";
 static char      gutDiag[96] = "";
+static bool      gutNoWbuf = false;     // true = tanpa buffer besar (tulis SD langsung per potongan): mode aman setelah data rusak saat ditulis
 static uint8_t   gutHead[8] = {0}; static uint8_t gutHeadN = 0;   // 8 byte pertama yg DITERIMA dari jaringan (utk diagnosis "bukan EPUB")
 static char      gutCT[64] = "";                                 // Content-Type (+ Content-Encoding) balasan server
 static volatile uint32_t gutSdKBs = 0;                // kode diagnosis utk layar kesalahan (+ Serial)
@@ -118,11 +119,11 @@ class GutSink : public Stream {                          // HTTPClient::writeToS
   // jaringan BERHENTI dibaca selama blok ditulis ke SD, jadi blok 512 KB = jeda berdetik-detik. 128 KB = jeda ~0,1-0,4 dtk.
   // Gagal alokasi -> tulis langsung per potongan (cara lama).
   void useWriteBuffer() {
-    if (!file || wbuf) return;
+    if (!file || wbuf || gutNoWbuf) return;
     size_t fb = heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM);
     uint32_t want = 128u * 1024u;
     while (want > 32768u && fb < (size_t)want + 1536u * 1024u) want >>= 1;
-    wbuf = (uint8_t*)heap_caps_malloc(want, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    wbuf = (uint8_t*)heap_caps_aligned_alloc(64, want, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);   // rata 64 B: DMA SD dari PSRAM S3 butuh alamat rata cache-line
     wcap = wbuf ? want : 0;
     Serial.printf("[GUT] buffer SD %u KB (PSRAM bebas terbesar %u KB)\n", (unsigned)(wcap / 1024), (unsigned)(fb / 1024));
   }
@@ -386,7 +387,7 @@ static bool gutAppendFile(const char* dst, const char* src) {
   File d = SD_MMC.open(dst, FILE_APPEND);
   if (!d) { s.close(); return false; }
   const size_t CH = 32768;
-  uint8_t* b = (uint8_t*)heap_caps_malloc(CH, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  uint8_t* b = (uint8_t*)heap_caps_aligned_alloc(64, CH, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
   bool ok = (b != nullptr);
   while (ok && !gutCancel) {
     int n = s.read(b, CH);
@@ -620,7 +621,7 @@ static void gutDoDownload() {
       if (SD_MMC.exists(bad)) SD_MMC.remove(bad);
       if (!SD_MMC.rename(tmp, bad)) SD_MMC.remove(tmp);
       snprintf(gutDiag, sizeof(gutDiag), "net:%s sd:%s", nh, sh);
-      if (netPK) strcpy(gutMsg, "Rusak saat ditulis ke SD (bukan ZIP).");
+      if (netPK) { gutNoWbuf = true; strcpy(gutMsg, "Rusak saat tulis SD. Coba lagi = mode aman."); }
       else snprintf(gutMsg, sizeof(gutMsg), "Server kirim: %.38s", gutCT[0] ? gutCT : "(tanpa Content-Type)");
       rc = -3; gutPartUrl[0] = 0; gutPhase = GUT_PH_ERROR; return;
     }
