@@ -128,6 +128,7 @@ static void chatCfgLoad() {
 
 static void chatCfgSave() {
   chatHost.trim(); chatUser.trim(); chatPass.trim(); chatName.trim();
+  chatName = emjAsciiOnly(chatName);            // nama pengguna: ASCII saja (emoji di nama tidak dikirim)
   if (chatName.length() > 16) chatName = chatName.substring(0, 16);
   if (!chatName.length()) chatName = "HP";
   Preferences p;
@@ -223,7 +224,7 @@ static void chatInsert(uint32_t seq, uint32_t ts, const char* user, int ulen, co
       ChatMsg& m = chatMsgs[pos];
       m.seq = seq; m.ts = ts;
       chatCopyAscii(m.user, CHAT_USER_LEN, user, ulen);
-      chatCopyAscii(m.text, CHAT_TEXT_LEN, text, tlen);
+      emjSanitizeBuf(m.text, CHAT_TEXT_LEN, text, tlen);          // ASCII + emoji (PUA); selain itu '?'
       m.born = (chatConn == 1) ? millis() : 0;          // riwayat (sebelum "siap") tidak dianimasikan
       if (chatConn == 1 && m.born == 0) m.born = 1;
       if (chatOutState != 0 && strcmp(chatOutName, m.user) == 0 && strcmp(chatOutText, m.text) == 0) chatOutState = 0;   // pesan kita sudah kembali dari broker
@@ -238,7 +239,7 @@ static void chatInsert(uint32_t seq, uint32_t ts, const char* user, int ulen, co
 
 // payload "<seq>|<ts>|<nama>|<pesan>" -- pesan boleh mengandung '|'
 static void chatOnPayload(const char* payload, unsigned int len) {
-  char buf[300];
+  char buf[420];                                  // emoji di kabel 4 byte (di firmware 3 byte)
   if (len == 0 || len >= sizeof(buf)) return;
   memcpy(buf, payload, len);
   buf[len] = 0;
@@ -324,6 +325,7 @@ static void chatTaskFunc(void*) {
             String nm = nl >= 0 ? body.substring(0, nl) : String("HP");
             String tx = nl >= 0 ? body.substring(nl + 1) : body;
             tx.replace("\n", " ");
+            tx = emjToWire(tx);                          // emoji: kirim UTF-8 standar (HP lama/PC tetap bisa baca)
             time_t nowT = time(nullptr);
             uint32_t ts = (nowT > 1700000000) ? (uint32_t)nowT : 0;
             char topic[40];
@@ -463,12 +465,21 @@ void chatLoopPoll() {
 // gambar
 // ---------------------------------------------------------------------
 static int chatWrap(const char* t, int maxCh, int* st, int* ln, int maxL) {
+  // maxCh dlm "sel" 6 px: ASCII 1 sel, emoji (PUA, 3 byte) 2 sel. st/ln tetap dlm BYTE (dipakai utk memotong teks).
   int n = 0, i = 0, L = (int)strlen(t);
   while (i < L && n < maxL) {
-    int rem = L - i;
-    if (rem <= maxCh) { st[n] = i; ln[n] = rem; n++; break; }
-    int cut = maxCh;
-    for (int k = maxCh; k > maxCh / 2; k--) { if (t[i + k] == ' ') { cut = k; break; } }
+    int j = i, cells = 0, lastSp = -1;
+    while (j < L) {
+      int bl = 1, cw = 1;
+      if ((unsigned char)t[j] == 0xEE && j + 2 < L) { bl = 3; cw = 2; }
+      if (cells + cw > maxCh) break;
+      if (t[j] == ' ') lastSp = j;
+      cells += cw; j += bl;
+    }
+    if (j >= L) { st[n] = i; ln[n] = L - i; n++; break; }
+    int cut = j - i;
+    if (lastSp > i && (lastSp - i) * 2 > cut) cut = lastSp - i;   // putus di spasi bila tidak terlalu jauh ke belakang
+    if (cut < 1) cut = ((unsigned char)t[i] == 0xEE && i + 2 < L) ? 3 : 1;
     st[n] = i; ln[n] = cut; n++;
     i += cut;
     while (i < L && t[i] == ' ') i++;
@@ -503,7 +514,7 @@ static int chatMsgLayout(int idx, int maxCh, int* nLines, int* maxLen, int* gap,
   int n = chatWrap(body, maxCh, st, ln, 8);
   int ml = 0;
   if (n < 1) n = 1;
-  else for (int k = 0; k < n; k++) if (ln[k] > ml) ml = ln[k];
+  else for (int k = 0; k < n; k++) { int cl = emjCells(body + st[k], ln[k]); if (cl > ml) ml = cl; }
   if (hq) { int ql = (int)strlen(qn) + 2 + (int)strlen(qt); if (ql > maxCh) ql = maxCh; if (ql > ml) ml = ql; }
   bool mine = strcmp(chatName.c_str(), chatMsgs[idx].user) == 0;
   bool newGroup = (idx == 0) || strcmp(chatMsgs[idx].user, chatMsgs[idx - 1].user) != 0;
@@ -537,7 +548,7 @@ static void chatDrawCfg(LGFX_Sprite& s) {
     iosRR(s, 6, 62, SCR_W - 12, 22, 5, T().surface);
     String v = *chatCfgField(chatCfgEdit);
     int maxC = (SCR_W - 28) / 6;
-    if ((int)v.length() > maxC - 1) v = String("..") + v.substring(v.length() - (maxC - 3));
+    if ((int)v.length() > maxC - 1) v = String("..") + emjTail(v, maxC - 3);
     v += "_";
     s.setTextColor(T().text); s.setCursor(12, 69); s.print(v.c_str());
     s.setTextColor(T().subtext); s.setCursor(10, 92); s.print("Ketuk area di atas keyboard = selesai");
@@ -551,7 +562,7 @@ static void chatDrawCfg(LGFX_Sprite& s) {
     if (i == 2) { for (size_t k = 0; k < chatPass.length(); k++) v += '*'; }
     else v = *chatCfgField(i);
     int maxC = (SCR_W - 28) / 6;
-    if ((int)v.length() > maxC) v = String("..") + v.substring(v.length() - (maxC - 2));
+    if ((int)v.length() > maxC) v = String("..") + emjTail(v, maxC - 2);
     s.setTextColor(v.length() ? T().text : T().subtext);
     s.setCursor(12, ly + 14); s.print(v.length() ? v.c_str() : "ketuk untuk mengisi...");
   }
@@ -611,7 +622,7 @@ void drawChat(LGFX_Sprite& s) {
       chatParseReply(chatOutText, oqn, sizeof(oqn), oqt, sizeof(oqt), &obody);
       outN = chatWrap(obody, maxCh, ost, oln, 8);
       if (outN < 1) outN = 1;
-      else for (int k = 0; k < outN; k++) if (oln[k] > outMl) outMl = oln[k];
+      else for (int k = 0; k < outN; k++) { int cl = emjCells(obody + ost[k], oln[k]); if (cl > outMl) outMl = cl; }
       if (chatCount > 0 && strcmp(chatMsgs[chatCount - 1].user, chatName.c_str()) == 0) outGap = CB_GAP_SAME;
       outH = outGap + CB_PADT + outN * CB_LINE + CB_TIMEH + CB_PADB;
     }
@@ -717,7 +728,7 @@ void drawChat(LGFX_Sprite& s) {
         s.fillRect(bx + 5, by + 4, 2, CB_QUOTE_H - 3, mine ? (uint16_t)T().bg : (uint16_t)T().accent);
         char ql[60]; int qmax = (bw - 10 - 8) / 6;
         snprintf(ql, sizeof(ql), "%s: %s", qn, qt);
-        if ((int)strlen(ql) > qmax && qmax > 3) { ql[qmax - 2] = 0; strcat(ql, ".."); }
+        if ((int)strlen(ql) > qmax && qmax > 3) { emjCutZ(ql, qmax - 2); strcat(ql, ".."); }
         s.setTextColor(mine ? (uint16_t)T().bg : (uint16_t)T().subtext);
         s.setCursor(bx + 10, by + 8); s.print(ql);
       }
@@ -759,7 +770,7 @@ void drawChat(LGFX_Sprite& s) {
     s.fillRect(8, ry + 3, 2, 10, T().accent);
     char rl[72]; int rmax = (SCR_W - 52) / 6; if (rmax > 70) rmax = 70;
     snprintf(rl, sizeof(rl), "Membalas %s: %s", chatReplyName, chatReplyQuote);
-    if ((int)strlen(rl) > rmax && rmax > 3) { rl[rmax - 2] = 0; strcat(rl, ".."); }
+    if ((int)strlen(rl) > rmax && rmax > 3) { emjCutZ(rl, rmax - 2); strcat(rl, ".."); }
     s.setTextColor(T().subtext); s.setCursor(14, ry + 4); s.print(rl);
     s.setTextColor(T().danger); s.setCursor(SCR_W - 18, ry + 4); s.print("x");
   }
@@ -769,7 +780,7 @@ void drawChat(LGFX_Sprite& s) {
   bool typing = kbVisible && kbTarget == &chatInput;
   String shown = chatInput;
   int maxIn = (boxW - 12) / 6;
-  if ((int)shown.length() > maxIn) shown = String("..") + shown.substring(shown.length() - (maxIn - 2));
+  if ((int)shown.length() > maxIn) shown = String("..") + emjTail(shown, maxIn - 2);
   if (typing) shown += "_";
   s.setTextColor(chatInput.length() || typing ? T().text : T().subtext);
   s.setCursor(10, inputY + 7); s.print(shown.length() ? shown.c_str() : "Ketik pesan...");
@@ -815,14 +826,14 @@ static void chatDoSend() {
     pf.replace("|", "/");
     int room = 200 - (int)pf.length();
     if (room < 10) { pf = ""; room = 200; }
-    if ((int)t.length() > room) t = t.substring(0, room);
+    if ((int)t.length() > room) t = emjHead(t, room);
     t = pf + t;
     chatReplyOn = false;
   }
-  if (t.length() > 200) t = t.substring(0, 200);
+  if (t.length() > 200) t = emjHead(t, 200);
   xSemaphoreTake(chatMx, portMAX_DELAY);
   chatSendQ = chatName + "\n" + t;
-  chatCopyAscii(chatOutText, CHAT_TEXT_LEN, t.c_str(), (int)t.length());     // salinan yg sudah disanitasi = persis yg nanti kembali
+  emjSanitizeBuf(chatOutText, CHAT_TEXT_LEN, t.c_str(), (int)t.length());     // salinan yg sudah disanitasi = persis yg nanti kembali
   chatCopyAscii(chatOutName, CHAT_USER_LEN, chatName.c_str(), (int)chatName.length());
   chatOutState = 1; chatOutMs = millis();
   xSemaphoreGive(chatMx);
@@ -935,6 +946,7 @@ void chatTouch(int x, int y, bool held, bool isNew) {
               strncpy(chatReplyName, who, sizeof(chatReplyName) - 1); chatReplyName[sizeof(chatReplyName) - 1] = 0;
               for (char* q = chatReplyName; *q; q++) if (*q == ':' || *q == '}' || *q == '{') *q = '_';
               strncpy(chatReplyQuote, body, sizeof(chatReplyQuote) - 1); chatReplyQuote[sizeof(chatReplyQuote) - 1] = 0;
+              emjCutZ(chatReplyQuote, (int)sizeof(chatReplyQuote) - 1);   // jangan simpan emoji terpotong
               for (char* q = chatReplyQuote; *q; q++) if (*q == '}' || *q == '{' || *q == '|') *q = ' ';
               chatReplyOn = true;
             }

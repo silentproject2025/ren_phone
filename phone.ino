@@ -1137,7 +1137,19 @@ void loadFontPref(){
   if(uiFontIdx<0||uiFontIdx>=UI_FONT_COUNT) uiFontIdx=0;
 }
 
-enum KbMode { KB_LOWER, KB_UPPER, KB_NUM };
+// ---- EMOJI (emoji_renphone.ino; sprite di emoji_data.h) ----
+#include "emoji_data.h"
+const lgfx::IFont* emjF(const lgfx::IFont* base);       // bungkus font: print() di mana pun bisa menggambar emoji
+String emjNormalize(const String& s);                   // emoji sungguhan -> kode privat (PUA) firmware
+String emjToWire(const String& s);                      // PUA -> emoji sungguhan (utk file/jaringan)
+String emjAsciiOnly(const String& s);
+void   emjSanitizeBuf(char* dst, int dstSize, const char* src, int len);
+void   emjBackspace(String& s);                         // hapus 1 karakter UTF-8 terakhir
+String emjHead(const String& s, int maxBytes);
+String emjTail(const String& s, int maxBytes);
+void   emjCutZ(char* s, int maxBytes);
+int    emjCells(const char* p, int len);
+enum KbMode { KB_LOWER, KB_UPPER, KB_NUM, KB_EMO1, KB_EMO2 };
 
 // v95: clock SPI ke display -- dulu tetap 40MHz (aman, terbukti jalan).
 // Naikkan ke 60000000 (60MHz) dulu; ILI9341 modul umumnya kuat sampai
@@ -1663,12 +1675,12 @@ String noteText="";
 void loadNote(){
   if(!sdReady) return;
   File f=SD_MMC.open(NOTE_FILE,FILE_READ);
-  if(f){noteText=f.readString();f.close();}
+  if(f){noteText=emjNormalize(f.readString());f.close();}
 }
 void saveNote(){
   if(!sdReady) return;
   File f=SD_MMC.open(NOTE_FILE,FILE_WRITE);
-  if(f){f.print(noteText);f.close();}
+  if(f){f.print(emjToWire(noteText));f.close();}
 }
 
 String sanitizeKeyLine(String line) {
@@ -2598,6 +2610,7 @@ bool doGeminiHttpRequest(const String& promptText, String& outResponse) {
 }
 
 void sendGeminiRequest(String promptText) {
+  promptText = emjToWire(promptText);   // emoji: kirim UTF-8 standar ke API
   if (WiFi.status() != WL_CONNECTED) {
     wifiConnected = false;
     aiResponse = "Error: WiFi belum terhubung!";
@@ -2673,7 +2686,7 @@ void sendGeminiRequest(String promptText) {
   delay(1200);
 
   if(ok) nyxVoiceExtract(resp); // NYX-EXTRAS-V1: cabut @@CMD dari jawaban, eksekusi di loop utama
-  aiResponse = resp;
+  aiResponse = emjNormalize(resp);       // emoji dari Gemini -> kode privat firmware (digambar sbg sprite)
   if(ok) appendAiMemory(promptText, resp); // cuma simpan tanya-jawab yg BERHASIL
   aiLoading = false;
   aiRequestStartMillis = 0;
@@ -3298,7 +3311,7 @@ const char* kbN[3][10]={
   {"1","2","3","4","5","6","7","8","9","0"},
   {"-","=","[","]","/","'","\"","<",">","\\"},
   {"~","!","@","#","$","%","^","&","*","("}};
-const char* (*kbMaps[3])[10]={kbL,kbU,kbN};
+const char* (*kbMaps[5])[10]={kbL,kbU,kbN,kbE1,kbE2};
 
 // KB-FIX: semua baris 10 tuts, grid rata & di-tengah.
 int kbKeyW(){ return (SCR_W-8-18)/10; }
@@ -3318,6 +3331,8 @@ void drawKb(LGFX_Sprite& s){
   s.fillRect(0,y0-3,SCR_W,SCR_H-y0+3,blend565(T().bg,T().surface,175));
   s.drawFastHLine(0,y0-3,SCR_W,T().divider);
   auto* lay=kbMaps[(int)kbMode];
+  bool emo=(kbMode==KB_EMO1||kbMode==KB_EMO2);
+  if(emo) s.setFont(emjF(&lgfx::fonts::Font0));          // halaman emoji: Font0 + sprite (lihat emoji_renphone.ino)
   int kw=kbKeyW(), kh=kbKeyH(), L=kbLeft(), R=SCR_W-L;
   const int kr=9;                                              // radius tuts (dulu 6)
   const uint16_t keyC = blend565(T().surface2,0xFFFF,40);      // tuts huruf/angka (datar, tanpa bayangan)
@@ -3340,7 +3355,7 @@ void drawKb(LGFX_Sprite& s){
   }
   s.setTextSize(1);
   int cy=y0+3*(kh+2);
-  int shX=L, shW=40, nmX=shX+shW+4, nmW=44, spX=nmX+nmW+4;
+  int shX=L, shW=40, nmX=shX+shW+4, nmW=44, emX=nmX+nmW+4, emW=34, spX=emX+emW+4;
   int dlW=84, dlX=R-dlW;
   int spW=max(40, dlX-4-spX);
   bool up = (kbMode==KB_UPPER);
@@ -3351,15 +3366,28 @@ void drawKb(LGFX_Sprite& s){
     uint16_t ic = up ? inkAcc : T().text;
     nyxAaRR(s, shX+in,cy+in,shW-2*in,kh-2*in,kr,bg);
     int acx=shX+shW/2, acy=cy+kh/2;
-    s.fillTriangle(acx,acy-6, acx-6,acy+2, acx+6,acy+2, ic);
+    if(emo){                                            // halaman emoji: tombol ini = ganti halaman
+      const char* pg=(kbMode==KB_EMO1)?"1/2":"2/2";
+      s.setTextColor(T().text); s.setCursor(shX+(shW-s.textWidth(pg))/2,cy+kh/2-4+in); s.print(pg);
+    } else {
+      s.fillTriangle(acx,acy-6, acx-6,acy+2, acx+6,acy+2, ic);
     s.fillRect(acx-3,acy+2,6,4,ic);
+    }
   }
   { // 123 / ABC
     bool pr=(kbPressKey==101); int in=pr?1:0;
     nyxAaRR(s, nmX+in,cy+in,nmW-2*in,kh-2*in,kr,pr?fnP:fnC);
-    const char* nl=(kbMode==KB_NUM)?"ABC":"123";
+    const char* nl=(kbMode==KB_NUM||emo)?"ABC":"123";
     s.setTextColor(T().text);
     s.setCursor(nmX+(nmW-s.textWidth(nl))/2,cy+kh/2-4+in); s.print(nl);
+  }
+  { // emoji (wajah kecil digambar manual, tanpa font)
+    bool pr=(kbPressKey==104); int in=pr?1:0;
+    nyxAaRR(s, emX+in,cy+in,emW-2*in,kh-2*in,kr, emo?(uint16_t)T().accent:(pr?fnP:fnC));
+    uint16_t fc = emo ? inkAcc : (uint16_t)T().text;
+    int fx=emX+emW/2, fy=cy+kh/2;
+    s.drawCircle(fx,fy,7,fc); s.fillCircle(fx-3,fy-2,1,fc); s.fillCircle(fx+3,fy-2,1,fc);
+    s.drawLine(fx-3,fy+2,fx-1,fy+4,fc); s.drawLine(fx-1,fy+4,fx+1,fy+4,fc); s.drawLine(fx+1,fy+4,fx+3,fy+2,fc);
   }
   { // spasi (tuts huruf)
     bool pr=(kbPressKey==102); int in=pr?1:0;
@@ -3384,13 +3412,19 @@ void kbTouch(int x,int y){
   int cell=kh+2;
   int cy=y0+3*cell;
   if(y>=cy){
-    int shX=L, shW=40, nmX=shX+shW+4, nmW=44, spX=nmX+nmW+4;
+    int shX=L, shW=40, nmX=shX+shW+4, nmW=44, emX=nmX+nmW+4, emW=34, spX=emX+emW+4;
     int dlX=R-84;
-    if(x<nmX-2){            kbMode=(kbMode==KB_UPPER?KB_LOWER:KB_UPPER); kbPressKey=100; }
-    else if(x<spX-2){       kbMode=(kbMode==KB_NUM?KB_LOWER:KB_NUM);     kbPressKey=101; }
+    bool emo=(kbMode==KB_EMO1||kbMode==KB_EMO2);
+    if(x<nmX-2){
+      if(emo) kbMode=(kbMode==KB_EMO1?KB_EMO2:KB_EMO1);       // di halaman emoji: ganti halaman 1/2
+      else    kbMode=(kbMode==KB_UPPER?KB_LOWER:KB_UPPER);
+      kbPressKey=100;
+    }
+    else if(x<emX-2){       kbMode=((kbMode==KB_NUM||emo)?KB_LOWER:KB_NUM); kbPressKey=101; }
+    else if(x<spX-2){       kbMode=(emo?KB_LOWER:KB_EMO1);               kbPressKey=104; }
     else if(x<dlX-2){       *kbTarget+=" ";                              kbPressKey=102; }
     else {
-      if(kbTarget->length()>0) *kbTarget=kbTarget->substring(0,kbTarget->length()-1);
+      emjBackspace(*kbTarget);                                 // hapus 1 karakter UTF-8 utuh (emoji = 3 byte)
       kbPressKey=103;
     }
     kbPressUntil=millis()+KB_PRESS_MS;
@@ -3622,7 +3656,7 @@ void drawClockCard(LGFX_Sprite& s,int x,int y,int w,int h){
     char db[24]; snprintf(db,sizeof(db),"%s, %d %s",days[t.tm_wday],t.tm_mday,mons[t.tm_mon]);
     s.setTextColor(T().subtext); s.setCursor(x+w-16-s.textWidth(db),y+10); s.print(db);
   }
-  s.setFont(&lgfx::fonts::FreeSansBold9pt7b);
+  s.setFont(emjF(&lgfx::fonts::FreeSansBold9pt7b));
   // angka jam: tinggi dari tinggi kartu (ruang atas utk sapaan/tanggal), lalu dikecilkan sampai muat lebar
   float sz=(float)(h-34)/14.0f; if(sz>4.5f) sz=4.5f; sz=floorf(sz*4.0f)/4.0f; if(sz<1.5f) sz=1.5f;
   s.setTextSize(sz);
@@ -3652,7 +3686,7 @@ void drawClockCard(LGFX_Sprite& s,int x,int y,int w,int h){
     if(animC) needRedraw=true;
   }
   s.setTextDatum(lgfx::textdatum_t::top_left);
-  s.setFont(&lgfx::fonts::Font0); // Home selalu Font0 (lihat renderCurrentFrame)
+  s.setFont(emjF(&lgfx::fonts::Font0)); // Home selalu Font0 (lihat renderCurrentFrame)
   s.setTextSize(1);
 }
 
@@ -4294,13 +4328,13 @@ void drawHomeAod(LGFX_Sprite& s){
   struct tm t; bool ok=ntpSynced&&getLocalTime(&t);
   char tb[6]; if(ok) sprintf(tb,"%02d:%02d",t.tm_hour,t.tm_min); else strcpy(tb,"--:--");
   s.fillSprite(0x0000);
-  s.setFont(&lgfx::fonts::FreeSansBold9pt7b);
+  s.setFont(emjF(&lgfx::fonts::FreeSansBold9pt7b));
   s.setTextSize(2);
   int tw=s.textWidth(tb);
   s.setTextColor(0x39C7); // abu redup -- konsisten sama AOD lock screen
   s.setCursor(SCR_W/2-tw/2, SCR_H/2-16);
   s.print(tb);
-  s.setFont(&lgfx::fonts::Font0);
+  s.setFont(emjF(&lgfx::fonts::Font0));
 }
 
 // v111: IP WiFi ditampilkan langsung di lock screen (& AOD versi redup)
@@ -4384,7 +4418,7 @@ void drawChargeAnim(LGFX_Sprite& s){
   chgDiskHalf(s,cx,cy,erx,ery,0.0f,blend565(0x0000,AMB,(uint8_t)((150.0f+90.0f*beat)*a)));
 
   // persen + keterangan
-  s.setFont(&lgfx::fonts::Font0);
+  s.setFont(emjF(&lgfx::fonts::Font0));
   s.setTextSize(2);
   char pb[8]; snprintf(pb,sizeof(pb),"%d%%",pct);
   int tw=(int)s.textWidth(pb);
@@ -4407,13 +4441,13 @@ void drawLockScreen(LGFX_Sprite& s){
   // membangunkan ke lock screen penuh (lihat lockScreenInput()).
   if(aodActive){
     s.fillSprite(0x0000);
-    s.setFont(&lgfx::fonts::FreeSansBold9pt7b);
+    s.setFont(emjF(&lgfx::fonts::FreeSansBold9pt7b));
     s.setTextSize(2);
     int tw=s.textWidth(tb);
     s.setTextColor(0x39C7); // abu redup -- sengaja gak putih penuh, senada semangat "hemat/AOD"
     s.setCursor(SCR_W/2-tw/2, SCR_H/2-16);
     s.print(tb);
-    s.setFont(&lgfx::fonts::Font0);
+    s.setFont(emjF(&lgfx::fonts::Font0));
     {
       char ipb[20];
       if(lockIpString(ipb,sizeof(ipb))){
@@ -4456,7 +4490,7 @@ void drawLockScreen(LGFX_Sprite& s){
   }
 
   // jam besar (font sans tebal) + bayangan lembut
-  s.setFont(&lgfx::fonts::FreeSansBold9pt7b);
+  s.setFont(emjF(&lgfx::fonts::FreeSansBold9pt7b));
   s.setTextSize(3);
   int tw = s.textWidth(tb);
   int fh = s.fontHeight();
@@ -4470,7 +4504,7 @@ void drawLockScreen(LGFX_Sprite& s){
   }
   s.setTextColor(fg); s.setCursor(tx,ty); s.print(tb);
   s.setTextSize(1);
-  s.setFont(&lgfx::fonts::Font0); // lock screen selalu Klasik (bukan font custom pilihan user)
+  s.setFont(emjF(&lgfx::fonts::Font0)); // lock screen selalu Klasik (bukan font custom pilihan user)
 
   // gembok kecil + tanggal di atas jam
   int lockIconY = ty-22;
@@ -5036,7 +5070,7 @@ void drawControlCenter(LGFX_Sprite& s){
       uint16_t icC = lerpColor565(T().text, T().bg, a);
       int ir = iconR>14 ? 14 : iconR;
       drawCCIcon(s, i, ccx, ty+th2/2-7, ir, a>0.5f, icC, fillC);
-      s.setFont(&lgfx::fonts::Font0); s.setTextSize(1);
+      s.setFont(emjF(&lgfx::fonts::Font0)); s.setTextSize(1);
       s.setTextColor(lerpColor565(T().subtext, T().bg, a));
       s.setCursor(ccx-s.textWidth(ccLbl[i])/2, ty+th2-13);
       s.print(ccLbl[i]);
@@ -5046,7 +5080,7 @@ void drawControlCenter(LGFX_Sprite& s){
   // Slider Brightness: label + persen (v109), garis tebal + knob.
   if(openP>0.7f){
     char bp[8]; sprintf(bp,"%d%%",(int)(brightness*100/255));
-    s.setFont(&lgfx::fonts::Font0); s.setTextSize(1);
+    s.setFont(emjF(&lgfx::fonts::Font0)); s.setTextSize(1);
     s.setTextColor(T().subtext); s.setCursor(gx,ccSliderLabelY()); s.print("Kecerahan");
     s.setTextColor(T().text);    s.setCursor(gx+(pw-gap*2)-s.textWidth(bp),ccSliderLabelY()); s.print(bp);
   }
@@ -8029,13 +8063,13 @@ void drawClock(LGFX_Sprite& s){
     // jam digital besar (font sama dgn lock screen) -- ukuran dikecilkan otomatis sampai muat
     const int wAvail = land ? (SCR_W-x0-8) : (SCR_W-24);
     char hm[6]; sprintf(hm,"%02d:%02d",t.tm_hour,t.tm_min);
-    s.setFont(&lgfx::fonts::FreeSansBold9pt7b);
+    s.setFont(emjF(&lgfx::fonts::FreeSansBold9pt7b));
     int sz=3; s.setTextSize(sz);
     while(sz>1 && s.textWidth(hm)>wAvail){ sz--; s.setTextSize(sz); }
     int tw=s.textWidth(hm), fh=s.fontHeight();
     int tx = land ? x0 : (SCR_W/2-tw/2);
     s.setTextColor(T().text); s.setCursor(tx,y0); s.print(hm);
-    s.setFont(&lgfx::fonts::Font0);
+    s.setFont(emjF(&lgfx::fonts::Font0));
     // detik kecil di kanan jam
     char ss[4]; sprintf(ss,":%02d",t.tm_sec);
     s.setTextSize(2); s.setTextColor(T().accent);
@@ -8057,7 +8091,7 @@ void drawClock(LGFX_Sprite& s){
     s.setCursor(land?(cx+R+18):(SCR_W/2-60), land?cy-8:(cy+R+14)); s.print("Tidak sync");
     s.setTextSize(1);
   }
-  s.setFont(&lgfx::fonts::Font0); s.setTextSize(1);
+  s.setFont(emjF(&lgfx::fonts::Font0)); s.setTextSize(1);
   drawBack(s);drawToast(s);
 }
 void clockTouch(int x,int y,bool held,bool isNew){
@@ -8903,7 +8937,7 @@ void drawSettings(LGFX_Sprite& s){
   const int cx=10, cw=SCR_W-20;
   const int oy=top-(int)lroundf(settScroll);
   s.setClipRect(0,top,SCR_W,bot-top);
-  s.setFont(&lgfx::fonts::Font0);
+  s.setFont(emjF(&lgfx::fonts::Font0));
   s.setTextSize(1);
 
   // 1) kartu kaca per grup + garis pemisah antar baris
@@ -9448,6 +9482,7 @@ int aiWrapAppend(AiLine* buf,int cap,int count,const String& text,uint16_t color
         int cut = maxChars, sp = -1;
         for(int k=maxChars;k>0;k--){ if(seg[k]==' '){ sp=k; break; } }
         if(sp>0) cut=sp;
+        while(cut>1 && (((unsigned char)seg[cut])&0xC0)==0x80) cut--;   // jangan belah emoji (UTF-8)
         buf[count].text = seg.substring(0,cut); buf[count].color=color; count++;
         seg = seg.substring(cut);
         while(seg.length() && seg[0]==' ') seg = seg.substring(1);
@@ -11609,7 +11644,7 @@ void renderCurrentFrame(){
   // dll) TETAP paksa Klasik biar gak ada yg kepotong. Kalau nanti mau nambah
   // layar lain ke daftar ini (misal APOD/Trivia), tinggal tambah di sini.
   bool screenAllowsCustomFont = (curScreen()==SCR_NOTEPAD || curScreen()==SCR_AICHAT);
-  canvas.setFont(screenAllowsCustomFont ? uiFontList[uiFontIdx] : &lgfx::fonts::Font0);
+  canvas.setFont(emjF(screenAllowsCustomFont ? uiFontList[uiFontIdx] : &lgfx::fonts::Font0));
   canvas.setTextWrap(false); // reset state teks tiap frame: app yg lupa/bocorin wrap gak bikin layar lain numpuk
   if(callOverlayActive()){
     drawCallOverlay(canvas); // panggilan masuk / panggilan saat terkunci menimpa semua layar
@@ -12246,7 +12281,7 @@ void bootToLockReveal(){
   const char* nm="NyxOS"; const char* tag="Beyond the Event Horizon";
   const int twTag=(int)strlen(tag)*6;
   display.setBrightness(255);
-  transShot.setFont(&lgfx::fonts::Font0); transShot.setTextWrap(false);
+  transShot.setFont(emjF(&lgfx::fonts::Font0)); transShot.setTextWrap(false);
   unsigned long t0=millis();
   for(;;){
     float u=(float)(millis()-t0)/P1; if(u>1.0f) u=1.0f;
