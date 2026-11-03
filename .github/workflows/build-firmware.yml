@@ -219,6 +219,7 @@ jobs:
           cp ebook_core.h build_sketch/
           cp gutenberg_renphone.ino build_sketch/
           cp gutendex_core.h build_sketch/
+          cp gutdl_core.h build_sketch/
           cp hw_conf.h         build_sketch/
 
           mkdir -p build_sketch/src

@@ -22,6 +22,7 @@
 // =====================================================================
 
 #include "gutendex_core.h"
+#include "gutdl_core.h"             // URL langsung, registry unduhan, CRC32, cek ZIP, sumber ke-2 (OPDS)
 
 #define GUT_CAP        96          // maks buku di daftar (3 halaman Gutendex)
 #define GUT_ROW_H      46
@@ -41,7 +42,9 @@
 
 enum { GUT_JOB_NONE = 0, GUT_JOB_SEARCH, GUT_JOB_DL };
 enum { GUT_V_LIST = 0, GUT_V_DETAIL, GUT_V_PROG };
-enum { GUT_PH_IDLE = 0, GUT_PH_CONNECT, GUT_PH_DOWNLOAD, GUT_PH_DONE, GUT_PH_ERROR };
+enum { GUT_PH_IDLE = 0, GUT_PH_CONNECT, GUT_PH_DOWNLOAD, GUT_PH_VERIFY, GUT_PH_DONE, GUT_PH_ERROR };   // VERIFY harus < DONE (tombol: fase >= DONE = 2 tombol)
+enum { GUT_SS_NONE = 0, GUT_SS_PART, GUT_SS_HAVE, GUT_SS_BUSY };   // status buku terpilih: belum ada | sisa unduhan | sudah ada & utuh | sedang diunduh
+#define GUT_VERIFY_MAX (16u * 1024u * 1024u)   // berkas <= ini: dibaca balik dari SD & dicocokkan CRC dgn data jaringan; lebih besar: cek struktur ZIP saja
 
 static const char* const gutLangs[9]  = { "", "en", "id", "fr", "de", "es", "nl", "pt", "it" };
 static const char* const gutLangUp[9] = { "Semua", "EN", "ID", "FR", "DE", "ES", "NL", "PT", "IT" };
@@ -84,6 +87,13 @@ static char      gutPartUrl[GUT_URL_LEN + 8] = "";   // URL milik .part yang ter
 static bool      gutReqAppend = false;
 static int       gutDlIdx = -1;
 static char      gutDoneName[96] = "";
+static GutReg    gutReg[GUT_REG_N];                  // registry unduhan per nomor buku (satu buku tak bisa dimulai 2x)
+static uint32_t  gutRegId = 0;                       // nomor buku yang sedang berjalan
+static uint8_t   gutSrc = 0;                         // sumber pencarian: 0 Gutendex | 1 OPDS Gutenberg (otomatis pindah bila gagal)
+static uint8_t   gutSelState = GUT_SS_NONE;          // status buku di layar Detail
+static uint8_t   gutHave[GUT_CAP];                   // 1 = baris daftar ini sudah ada di /books
+static volatile uint32_t gutNetCrc = 0, gutNetCrcLen = 0, gutNetCrcId = 0;   // CRC32 data yang MASUK dari jaringan (utk dibandingkan dgn isi SD)
+static uint8_t   gutAutoRetry = 0;                   // ulang otomatis 1x bila data SD tak cocok dgn jaringan
 static StackType_t* gutStack = nullptr; static StaticTask_t gutTCB; static TaskHandle_t gutTaskH = NULL;
 // unduhan paralel: koneksi 0 jalan di task unduh utama, koneksi 1 di task pembantu (stack PSRAM juga)
 static StackType_t* gutStack2 = nullptr; static StaticTask_t gutTCB2; static TaskHandle_t gutTaskH2 = NULL;
@@ -109,6 +119,7 @@ class GutSink : public Stream {                          // HTTPClient::writeToS
   int peek() override { return -1; }
   uint8_t* mem = nullptr; uint32_t cap = 0; File* file = nullptr; uint32_t limit = 0;
   uint32_t got = 0; bool over = false, sdFail = false; uint32_t lastDraw = 0;
+  uint32_t crc = 0; bool crcOn = false;                    // CRC32 byte yang diterima (hanya utk unduhan ke berkas)
   uint8_t head[8] = {0}; uint8_t headN = 0;                // 8 byte pertama yg masuk (sebelum ke SD)
   uint8_t lane = 0xFF;                                     // 0xFF = unduhan tunggal; 0/1 = koneksi paralel (gutLaneGot[lane])
   // Tulis ke SD per blok besar: potongan jaringan cuma ~1,4 KB, dan SD card sangat lambat kalau ditulis sekecil itu.
@@ -154,6 +165,7 @@ class GutSink : public Stream {                          // HTTPClient::writeToS
         }
       } else { size_t w = file->write(p, n); if (w != n) { sdFail = true; return 0; } }
     }
+    if (crcOn) crc = gutCrc32(crc, p, n);
     got += (uint32_t)n;
     if (lane == 0xFF) gutGot = got; else { gutLaneGot[lane] = got; gutGot = gutLaneGot[0] + gutLaneGot[1]; }
     { uint32_t ns = millis(); uint32_t tg = gutGot;          // kecepatan dihitung dari TOTAL kedua koneksi
@@ -215,6 +227,7 @@ static int gutFetch(const char* url, uint8_t* mem, uint32_t memCap, File* f, uin
   if (limit && want && want > limit) { http.end(); return -4; }
   GutSink sink; sink.mem = mem; sink.cap = memCap; sink.file = f; sink.limit = limit; sink.useWriteBuffer();
   sink.got = resumeFrom;
+  sink.crcOn = (f != nullptr); sink.crc = resumeFrom ? (uint32_t)gutNetCrc : 0;   // lanjutan: teruskan rantai CRC dari unduhan sebelumnya
   int wr = 0; bool idle = false;
   if (!manual) wr = http.writeToStream(&sink);
   else {
@@ -242,6 +255,7 @@ static int gutFetch(const char* url, uint8_t* mem, uint32_t memCap, File* f, uin
   gutLastReqMs = millis();
   if (f && !gutCancel && !sink.sdFail) sink.flushSd();      // sisa blok terakhir
   *outGot = sink.got;
+  if (f) { gutNetCrc = sink.crc; gutNetCrcLen = sink.got; }
   if (!resumeFrom) { gutHeadN = sink.headN; memcpy(gutHead, sink.head, 8); }
   snprintf(gutDiag, sizeof(gutDiag), "%s wr=%d got=%u/%u%s%s%s%s fl=%u/%ums", manual ? "http1.0" : "http1.1", wr, (unsigned)sink.got, (unsigned)want,
            idle ? " idle" : "", sink.sdFail ? " sd!" : "", sink.over ? " lim!" : "", gutCancel ? " batal" : "", (unsigned)sink.flushMax, (unsigned)sink.flushMs);
@@ -533,54 +547,250 @@ static void gutSetErr(int rc) {
   }
 }
 
+// ---------------------------------------------------------------------
+// CEK BERKAS -- dipanggil SEBELUM unduhan dimulai dan di layar Detail.
+//   * ada / utuh / rusak / sebagian  ditentukan SISTEM, bukan hanya "file dengan nama ini ada".
+//   * pencarian lewat nomor [PGnnn]: judul dari Gutendex & OPDS bisa beda tulisan, nomornya sama.
+// ---------------------------------------------------------------------
+static void gutMakeReqUrl(uint8_t src) {
+  if (src == 1) gutBuildOpdsQuery(gutReqUrl, sizeof(gutReqUrl), gutQApplied, gutSortIdx, gutPage);
+  else gutBuildQuery(gutReqUrl, sizeof(gutReqUrl), gutQApplied, gutLangs[gutLangIdx], gutSortIdx, gutPage);
+}
+
+// cari berkas buku di /books lewat nomor "[PGnnn]." (EPUB/TXT jadi; .part/.bad tidak dihitung)
+static bool gutFindById(uint32_t id, char* out, int cap) {
+  if (!sdReady || !id) return false;
+  char tag[24]; snprintf(tag, sizeof(tag), "[PG%u].", (unsigned)id);
+  File dir = SD_MMC.open(EBK_DIR);
+  if (!dir) return false;
+  if (!dir.isDirectory()) { dir.close(); return false; }
+  bool found = false;
+  File f = dir.openNextFile();
+  while (f) {
+    if (!f.isDirectory()) {
+      char nm[100]; ebkBaseName(f.name(), nm, sizeof(nm));
+      if (strstr(nm, tag) && (ebkEndsCI(nm, ".epub") || ebkEndsCI(nm, ".txt"))) { snprintf(out, (size_t)cap, "%s", nm); found = true; }
+    }
+    f.close();
+    if (found) break;
+    f = dir.openNextFile();
+    yield();
+  }
+  dir.close();
+  return found;
+}
+
+// tandai di gutHave[] buku mana (dari base, sebanyak k) yang sudah ada di /books. SATU kali baca direktori utk semua baris.
+static void gutMarkHave(int base, int k) {
+  for (int i = base; i < base + k && i < GUT_CAP; i++) gutHave[i] = 0;
+  if (!sdReady || k <= 0) return;
+  File dir = SD_MMC.open(EBK_DIR);
+  if (!dir) return;
+  if (!dir.isDirectory()) { dir.close(); return; }
+  File f = dir.openNextFile();
+  while (f) {
+    if (!f.isDirectory()) {
+      char nm[100]; ebkBaseName(f.name(), nm, sizeof(nm));
+      if (ebkEndsCI(nm, ".epub") || ebkEndsCI(nm, ".txt")) {
+        const char* t = strstr(nm, "[PG");
+        if (t) {
+          char* endp = nullptr; unsigned long v = strtoul(t + 3, &endp, 10);
+          if (endp && endp[0] == ']' && endp[1] == '.')
+            for (int i = base; i < base + k && i < GUT_CAP; i++) if (gutItems[i].id == (uint32_t)v) gutHave[i] = 1;
+        }
+      }
+    }
+    f.close();
+    f = dir.openNextFile();
+    yield();
+  }
+  dir.close();
+}
+
+// berkas di SD terlihat utuh? EPUB: kepala "PK" + End-Of-Central-Directory + Central Directory. TXT: tidak kosong & tanpa byte NUL di awal.
+static bool gutFileLooksOk(const char* path, bool isEpub, char* why, int whyCap) {
+  why[0] = 0;
+  File c = SD_MMC.open(path, FILE_READ);
+  if (!c) { snprintf(why, (size_t)whyCap, "tak terbaca"); return false; }
+  uint32_t sz = (uint32_t)c.size();
+  if (sz == 0) { c.close(); snprintf(why, (size_t)whyCap, "kosong"); return false; }
+  uint8_t h[4] = { 0, 0, 0, 0 };
+  int hn = c.read(h, 4);
+  bool ok = true;
+  if (!isEpub) {
+    if (hn <= 0) ok = false;
+    for (int i = 0; i < hn; i++) if (h[i] == 0) ok = false;
+    if (!ok) snprintf(why, (size_t)whyCap, "TXT berisi data biner");
+  } else if (!gutZipHasPK(h, hn)) {
+    ok = false; snprintf(why, (size_t)whyCap, "kepala bukan ZIP");
+  } else {
+    int tn = sz < 4096u ? (int)sz : 4096;
+    uint8_t* tail = (uint8_t*)heap_caps_malloc(4096, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (tail) {
+      uint32_t co = 0, cs = 0;
+      c.seek(sz - (uint32_t)tn);
+      int nr = c.read(tail, (size_t)tn);
+      if (nr != tn || !gutZipEocd(tail, tn, sz, &co, &cs)) { ok = false; snprintf(why, (size_t)whyCap, "ujung ZIP hilang (terpotong?)"); }
+      else {
+        uint8_t sg[4] = { 0, 0, 0, 0 };
+        c.seek(co); c.read(sg, 4);
+        if (!gutZipCdSig(sg)) { ok = false; snprintf(why, (size_t)whyCap, "daftar isi ZIP rusak"); }
+      }
+      heap_caps_free(tail);
+    }
+  }
+  c.close();
+  return ok;
+}
+
+// Status buku daftar[idx]:  GUT_SS_BUSY sedang diunduh | HAVE sudah ada & utuh | PART sisa unduhan yang bisa dilanjut | NONE belum ada.
+//   deep=true  : baca SD (validasi berkas yang ada; berkas rusak dipindah ke ".bad"; sisa .part basi dibuang).
+//   deep=false : JANGAN sentuh SD (task unduh bisa sedang menulis) -> pakai tanda gutHave[].
+//   skipReg    : true bila dipanggil dari task unduh itu sendiri (registry sudah menandai buku ini RUN).
+static int gutCheckBook(int idx, bool deep, bool skipReg, char* have, int haveCap) {
+  have[0] = 0;
+  if (idx < 0 || idx >= gutN || !gutItems) return GUT_SS_NONE;
+  uint32_t id = gutItems[idx].id;
+  if (!skipReg && gutRegActive(gutReg, id)) return GUT_SS_BUSY;
+  if (!sdReady) return GUT_SS_NONE;
+  if (!deep) return gutHave[idx] ? GUT_SS_HAVE : GUT_SS_NONE;
+  if (gutFindById(id, have, haveCap)) {
+    char path[140]; snprintf(path, sizeof(path), EBK_DIR "/%s", have);
+    char why[64];
+    if (gutFileLooksOk(path, ebkEndsCI(have, ".epub"), why, sizeof(why))) { gutHave[idx] = 1; return GUT_SS_HAVE; }
+    char bad[150]; snprintf(bad, sizeof(bad), "%s.bad", path);          // berkas lama tidak utuh: jangan dibuka sebagai buku, unduh ulang boleh
+    if (SD_MMC.exists(bad)) SD_MMC.remove(bad);
+    SD_MMC.rename(path, bad);
+    Serial.printf("[GUT] berkas lama tidak utuh (%s): %s -> .bad\n", why, have);
+    have[0] = 0; gutHave[idx] = 0;
+  }
+  GutItem it = gutItems[idx];
+  char nm[96]; gutMakeFileName(it, it.epub[0] ? "epub" : "txt", nm, sizeof(nm));
+  char tmp[140]; snprintf(tmp, sizeof(tmp), EBK_DIR "/%s.part", nm);
+  if (SD_MMC.exists(tmp)) {
+    File g = SD_MMC.open(tmp, FILE_READ); uint32_t sz = g ? (uint32_t)g.size() : 0; if (g) g.close();
+    if (sz > 0 && gutPartUrl[0] && gutNetCrcId == id && gutNetCrcLen == sz) return GUT_SS_PART;   // rantai CRC masih utuh: aman dilanjut
+    SD_MMC.remove(tmp);                                                                          // tak bisa dibuktikan utuh: buang
+  }
+  return GUT_SS_NONE;
+}
+
+// Verifikasi akhir berkas .part SEBELUM diganti nama jadi buku.
+// return 0 utuh | 1 ukuran SD beda | 2 kepala bukan ZIP | 3 CRC SD != CRC jaringan | 4 ujung/daftar isi ZIP rusak | 5 dibatalkan
+static int gutVerifyFile(const char* path, uint32_t expect, bool crcOk, uint32_t netCrc, bool isEpub, char* why, int whyCap) {
+  why[0] = 0;
+  File c = SD_MMC.open(path, FILE_READ);
+  if (!c) { snprintf(why, (size_t)whyCap, "tak bisa dibuka"); return 1; }
+  uint32_t sz = (uint32_t)c.size();
+  if (sz != expect) { c.close(); snprintf(why, (size_t)whyCap, "ukuran SD %u != %u", (unsigned)sz, (unsigned)expect); return 1; }
+  uint8_t h[4] = { 0, 0, 0, 0 };
+  int hn = c.read(h, 4);
+  if (isEpub && !gutZipHasPK(h, hn)) { c.close(); snprintf(why, (size_t)whyCap, "kepala SD bukan ZIP"); return 2; }
+  if (crcOk && sz <= GUT_VERIFY_MAX) {                  // baca balik seluruh berkas dari SD, bandingkan dgn CRC data yang MASUK dari jaringan
+    const size_t CH = 32768;
+    uint8_t* b = (uint8_t*)heap_caps_aligned_alloc(64, CH, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (b) {
+      gutPhase = GUT_PH_VERIFY; gutGot = 0; gutTot = sz; needRedraw = true;
+      c.seek(0);
+      uint32_t crc = 0, done = 0, lastDraw = millis();
+      while (done < sz) {
+        if (gutCancel) { heap_caps_free(b); c.close(); return 5; }
+        int n = c.read(b, CH);
+        if (n <= 0) break;
+        crc = gutCrc32(crc, b, (size_t)n); done += (uint32_t)n; gutGot = done;
+        if (millis() - lastDraw > 500) { lastDraw = millis(); needRedraw = true; }
+        yield();
+      }
+      heap_caps_free(b);
+      if (done != sz || crc != netCrc) { c.close(); snprintf(why, (size_t)whyCap, "CRC SD %08X != jaringan %08X", (unsigned)crc, (unsigned)netCrc); return 3; }
+    }
+  }
+  c.close();
+  if (isEpub) { char w2[64]; if (!gutFileLooksOk(path, true, w2, sizeof(w2))) { snprintf(why, (size_t)whyCap, "%s", w2); return 4; } }
+  return 0;
+}
+
+// ---------------------------------------------------------------------
+// pencarian: sumber utama (chip) + otomatis pindah ke sumber cadangan bila gagal (Gutendex <-> OPDS Gutenberg)
+// ---------------------------------------------------------------------
 static void gutDoSearch() {
   uint8_t* buf = (uint8_t*)heap_caps_malloc(GUT_JSON_CAP + 1, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
   if (!buf) { strcpy(gutMsg, "RAM tidak cukup."); gutPhase = GUT_PH_ERROR; return; }
-  uint32_t got = 0; int rc = -1;
-  for (int attempt = 0; attempt < 3; attempt++) {       // galat sementara (timeout/putus/5xx) umum di Gutendex publik: ulangi
-    if (attempt) { gutPhase = GUT_PH_CONNECT; needRedraw = true; }
-    rc = gutFetch(gutReqUrl, buf, GUT_JSON_CAP, nullptr, 0, &got, attempt > 0, 30000, 0);
-    if (rc == 200 || !(rc == -3 || rc == -1 || rc == 500 || rc == 502 || rc == 503 || rc == 504)) break;
+  int base = gutN, room = GUT_CAP - base, next = 0, total = 0, k = -1, lastRc = -1;
+  for (int pass = 0; pass < 2 && k < 0; pass++) {
+    if (pass) {                                          // sumber utama gagal: coba yang satunya
+      gutSrc = (uint8_t)(1 - gutSrc);
+      gutMakeReqUrl(gutSrc);
+      gutPhase = GUT_PH_CONNECT; needRedraw = true;
+      Serial.printf("[GUT] sumber cadangan: %s\n", gutSrc ? "OPDS" : "Gutendex");
+    }
+    uint32_t got = 0; int rc = -1;
+    for (int attempt = 0; attempt < (pass ? 2 : 3); attempt++) {   // galat sementara (timeout/putus/5xx) umum: ulangi
+      if (attempt) { gutPhase = GUT_PH_CONNECT; needRedraw = true; }
+      rc = gutFetch(gutReqUrl, buf, GUT_JSON_CAP, nullptr, 0, &got, attempt > 0, 30000, 0);
+      if (rc == 200 || !(rc == -3 || rc == -1 || rc == 500 || rc == 502 || rc == 503 || rc == 504)) break;
+    }
+    lastRc = rc;
+    if (rc == 200) {
+      buf[got] = 0;
+      if (gutSrc) {
+        k = gutParseOpds((const char*)buf, (int)got, gutItems + base, room, &next);
+        Serial.printf("[GUT] OPDS: %d buku dari %u byte; awal: %.60s\n", k, (unsigned)got, (const char*)buf);
+      } else k = gutParsePage((const char*)buf, (int)got, gutItems + base, room, &next, &total);
+      if (k < 0) lastRc = 0;                             // 0 = balasan tak dikenali
+    }
   }
-  if (rc != 200) { gutSetErr(rc); heap_caps_free(buf); return; }
-  buf[got] = 0;
-  int base = gutN, room = GUT_CAP - base, next = 0, total = 0;
-  int k = gutParsePage((const char*)buf, (int)got, gutItems + base, room, &next, &total);
   heap_caps_free(buf);
-  if (k < 0) { strcpy(gutMsg, "Balasan server tidak dikenali."); gutPhase = GUT_PH_ERROR; return; }
+  if (k < 0) {
+    if (lastRc == 0) { strcpy(gutMsg, "Balasan server tidak dikenali."); gutPhase = GUT_PH_ERROR; }
+    else gutSetErr(lastRc);
+    return;
+  }
+  gutMarkHave(base, k);                                  // tandai yang sudah ada di /books
   gutTotal = total;
   gutN = base + k;                                      // terbitkan SETELAH semua item utuh
   gutHasNext = (next != 0) && (gutN < GUT_CAP);
   gutPhase = GUT_PH_IDLE;
 }
 
+// ---------------------------------------------------------------------
+// unduh: CEK dulu -> URL langsung -> tulis .part (+CRC dari jaringan) -> VERIFIKASI -> baru jadi buku
+// ---------------------------------------------------------------------
 static void gutDoDownload() {
   if (gutDlIdx < 0 || gutDlIdx >= gutN) { strcpy(gutMsg, "Buku tidak valid."); gutPhase = GUT_PH_ERROR; return; }
   GutItem it = gutItems[gutDlIdx];                      // salinan: daftar boleh berubah selama unduh
   bool isEpub = it.epub[0] != 0;
   gutHeadN = 0; gutCT[0] = 0;
-  const char* orig = isEpub ? it.epub : it.txt;
-  char url[GUT_URL_LEN + 8]; strncpy(url, orig, sizeof(url) - 1); url[sizeof(url) - 1] = 0;
-  bool light = false;
-  char lite[GUT_URL_LEN + 8];
-  if (isEpub && gutLight) light = gutLightUrl(orig, lite, sizeof(lite));
+  if (!SD_MMC.exists(EBK_DIR)) SD_MMC.mkdir(EBK_DIR);
+  // 1) CEK: buku ini sudah ada & utuh (dicari lewat nomor PG, apa pun judul/sumbernya)? -> tidak diunduh lagi.
+  {
+    char have[100];
+    if (gutCheckBook(gutDlIdx, true, true, have, sizeof(have)) == GUT_SS_HAVE) {
+      strncpy(gutDoneName, have, sizeof(gutDoneName) - 1); gutDoneName[sizeof(gutDoneName) - 1] = 0;
+      gutPhase = GUT_PH_DONE; strcpy(gutMsg, "Sudah ada di perpustakaan."); return;
+    }
+  }
+  // 2) URL: langsung dari nomor buku (tanpa 302); URL dari API hanya cadangan terakhir.
+  char tiers[3][GUT_URL_LEN + 8];
+  int tier = gutBuildTiers(it, isEpub, gutLight, tiers);
   char name[96]; gutMakeFileName(it, isEpub ? "epub" : "txt", name, sizeof(name));
   char path[120], tmp[130];
   snprintf(path, sizeof(path), EBK_DIR "/%s", name);
   snprintf(tmp, sizeof(tmp), "%s.part", path);
-  if (!SD_MMC.exists(EBK_DIR)) SD_MMC.mkdir(EBK_DIR);
-  if (SD_MMC.exists(path)) { strncpy(gutDoneName, name, sizeof(gutDoneName) - 1); gutPhase = GUT_PH_DONE; strcpy(gutMsg, "Sudah ada di perpustakaan."); return; }
-  // .part sisa unduhan yang terputus: lanjutkan kalau URL-nya sama (tersimpan di RAM), kalau tidak buang.
-  uint32_t resume = 0; bool useLite = light;
+  { char bad0[140]; snprintf(bad0, sizeof(bad0), "%s.bad", path); if (SD_MMC.exists(bad0)) SD_MMC.remove(bad0); }   // sisa gagal lama
+  // .part sisa unduhan terputus: lanjutkan HANYA kalau URL-nya sama dan rantai CRC jaringan masih cocok dgn ukuran .part; kalau tidak, buang.
+  uint32_t resume = 0;
   if (SD_MMC.exists(tmp)) {
     File g = SD_MMC.open(tmp, FILE_READ); uint32_t sz = g ? (uint32_t)g.size() : 0; if (g) g.close();
-    if (sz > 0 && useLite && !strcmp(gutPartUrl, lite)) resume = sz;
-    else if (sz > 0 && !strcmp(gutPartUrl, url)) { useLite = false; resume = sz; }
+    int pt = -1;
+    for (int t = 0; t < 3; t++) if (tiers[t][0] && gutPartUrl[0] && !strcmp(gutPartUrl, tiers[t])) pt = t;
+    if (sz > 0 && pt >= 0 && gutNetCrcId == it.id && gutNetCrcLen == sz) { resume = sz; tier = pt; }
     else SD_MMC.remove(tmp);
   }
+  if (!resume) { gutNetCrc = 0; gutNetCrcLen = 0; gutNetCrcId = it.id; gutPartUrl[0] = 0; }
 
   uint32_t got = 0; int rc = -1; int stall = 0, restarts = 0; bool keepPart = false;
-  char fin[GUT_URL_LEN + 8]; fin[0] = 0; bool finOk = false, finTried = false;   // URL akhir setelah pengalihan (utk sambung ulang)
+  char fin[GUT_URL_LEN + 8]; fin[0] = 0; bool finOk = false, finTried = false;   // URL akhir setelah pengalihan (hanya perlu utk URL dari API)
   gutRetries = 0;
   uint32_t lim = isEpub ? GUT_EPUB_MAX : GUT_TXT_MAX;
   bool parDone = false;
@@ -591,14 +801,14 @@ static void gutDoDownload() {
     Serial.printf("[GUT] RAM internal kurang utk 2 koneksi (blok %u, bebas %u): satu koneksi\n", (unsigned)parBlk, (unsigned)parFree);
   else if (!resume) {
     uint32_t total = 0;
-    const char* pu = useLite ? lite : url;
+    const char* pu = tiers[tier];
     if (gutProbeSize(pu, &total) && total >= GUT_PAR_MIN && total <= lim) {
       int pr = gutDownloadParallel(pu, tmp, total);
-      if (pr == 200) { rc = 200; got = total; parDone = true; }
+      if (pr == 200) { rc = 200; got = total; parDone = true; gutNetCrcLen = 0; }   // paralel: tak ada CRC jaringan (verifikasi struktur saja)
       else if (pr == -2) { rc = -2; parDone = true; }
       else {
         File g = SD_MMC.open(tmp, FILE_READ); uint32_t sz = g ? (uint32_t)g.size() : 0; if (g) g.close();
-        if (sz > 0 && sz < total) resume = sz; else { SD_MMC.remove(tmp); gutPartUrl[0] = 0; }   // awalan utuh dari koneksi 0 dilanjutkan satu-koneksi
+        SD_MMC.remove(tmp); gutPartUrl[0] = 0; (void)sz;                          // tanpa rantai CRC: mulai bersih
         gutPhase = GUT_PH_DOWNLOAD;
       }
     } else if (gutCancel) { rc = -2; parDone = true; }
@@ -606,10 +816,13 @@ static void gutDoDownload() {
 #endif
   // Unduhan sering putus di tengah (server/TLS): jangan mulai dari nol, sambung pakai Range dari byte terakhir yang sudah di SD.
   for (int attempt = 0; attempt < GUT_MAX_TRY && !parDone; attempt++) {
-    const char* u = useLite ? lite : url;
+    const char* u = tiers[tier];
     if (attempt) { gutRetries = (uint16_t)attempt; needRedraw = true; gutWaitTlsHeap(10000); }   // sambung ulang butuh RAM TLS: tunggu lega dulu
-    if (attempt && resume && !finTried) { finTried = true; finOk = gutResolveUrl(u, fin, sizeof(fin)); }   // sekali saja: sambungan berikutnya langsung ke URL akhir
-    if (!resume) { strncpy(gutPartUrl, u, sizeof(gutPartUrl) - 1); gutPartUrl[sizeof(gutPartUrl) - 1] = 0; }
+    if (attempt && resume && !finTried) {                         // sekali saja; URL langsung (cache/epub) tak punya pengalihan -> lewati
+      finTried = true;
+      if (!strstr(u, "/cache/epub/")) finOk = gutResolveUrl(u, fin, sizeof(fin));
+    }
+    if (!resume) { strncpy(gutPartUrl, u, sizeof(gutPartUrl) - 1); gutPartUrl[sizeof(gutPartUrl) - 1] = 0; gutNetCrc = 0; gutNetCrcLen = 0; }
     File f = SD_MMC.open(tmp, resume ? FILE_APPEND : FILE_WRITE);
     if (!f) { rc = -5; break; }
     rc = gutFetch((finOk && resume) ? fin : u, nullptr, 0, &f, lim, &got, true, GUT_IDLE_MS, resume);
@@ -617,12 +830,15 @@ static void gutDoDownload() {
     if (rc == 200 || rc == -2 || rc == -5 || rc == -4) break;     // sukses / batal / SD / terlalu besar: jangan ulangi
     File g = SD_MMC.open(tmp, FILE_READ); uint32_t sz = g ? (uint32_t)g.size() : 0; if (g) g.close();
     if (rc == -7 || (rc == 416 && resume)) {                      // server abaikan/tolak Range: ulang dari nol (maks 2x)
-      SD_MMC.remove(tmp); resume = 0; gutPartUrl[0] = 0;
+      SD_MMC.remove(tmp); resume = 0; gutPartUrl[0] = 0; gutNetCrc = 0; gutNetCrcLen = 0;
       if (++restarts > 2) { rc = -3; break; }
       continue;
     }
-    if (rc > 0 && sz == 0) {                                      // kode HTTP (404 dll) tanpa data
-      if (useLite) { useLite = false; resume = 0; finOk = false; finTried = false; continue; }     // versi ringan tak ada -> URL asli
+    if (rc > 0 && sz == 0) {                                      // kode HTTP tanpa data
+      if (rc == 404 || rc == 410) {                               // URL ini tak ada: coba URL berikutnya (langsung -> API)
+        int nt = tier + 1; while (nt < 3 && !tiers[nt][0]) nt++;
+        if (nt < 3) { Serial.printf("[GUT] HTTP %d utk tier %d -> coba tier %d\n", rc, tier, nt); tier = nt; resume = 0; finOk = false; finTried = false; continue; }
+      }
       break;
     }
     if (rc == -1 || rc == -3) {                                   // data berhenti / gagal konek
@@ -641,40 +857,60 @@ static void gutDoDownload() {
   }
   if (rc != 200) {                                                // simpan .part supaya "Coba lagi" melanjutkan
     File g = SD_MMC.open(tmp, FILE_READ); uint32_t sz = g ? (uint32_t)g.size() : 0; if (g) g.close();
-    keepPart = sz > 0 && rc != -2 && rc != -4 && rc != -5;        // ada data sebagian & bukan batal/terlalu besar/SD: boleh dilanjut
+    keepPart = sz > 0 && rc != -2 && rc != -4 && rc != -5 && gutNetCrcLen == sz;   // ada data sebagian, rantai CRC utuh, bukan batal/terlalu besar/SD
   }
-  if (rc == 200 && got > 0 && isEpub) {                             // EPUB = ZIP: harus diawali "PK"
-    File c = SD_MMC.open(tmp, FILE_READ);
-    uint8_t sg[8] = { 0, 0, 0, 0, 0, 0, 0, 0 }; int nr = 0; uint32_t csz = 0;
-    if (c) { csz = (uint32_t)c.size(); nr = c.read(sg, 8); c.close(); }
-    if (nr < 2 || sg[0] != 'P' || sg[1] != 'K') {
+  // 3) VERIFIKASI sebelum jadi buku: ukuran, kepala, CRC (SD dibaca balik vs data jaringan), struktur ZIP.
+  bool crcOk = false;
+  if (rc == 200 && got > 0) {
+    char why[64] = "";
+    crcOk = (gutNetCrcId == it.id && gutNetCrcLen == got);
+    gutRegEnd(gutReg, it.id, GUT_S_VERIFY);
+    gutPhase = GUT_PH_VERIFY; strcpy(gutMsg, "Memeriksa berkas..."); needRedraw = true;
+    int vr = gutVerifyFile(tmp, got, crcOk, gutNetCrc, isEpub, why, sizeof(why));
+    if (vr == 5) { SD_MMC.remove(tmp); gutPartUrl[0] = 0; gutNetCrcLen = 0; gutSetErr(-2); return; }
+    if (vr != 0) {
       bool netPK = gutHeadN >= 2 && gutHead[0] == 'P' && gutHead[1] == 'K';
+      uint8_t sg[8] = { 0, 0, 0, 0, 0, 0, 0, 0 }; int nr = 0; uint32_t csz = 0;
+      { File c = SD_MMC.open(tmp, FILE_READ); if (c) { csz = (uint32_t)c.size(); nr = c.read(sg, 8); c.close(); } }
       char nh[24] = "?", sh[24] = "?";
       if (gutHeadN) { int o = 0; for (int i = 0; i < 6 && i < gutHeadN; i++) o += snprintf(nh + o, sizeof(nh) - o, i ? " %02X" : "%02X", gutHead[i]); }
       if (nr > 0)   { int o = 0; for (int i = 0; i < 6 && i < nr; i++)      o += snprintf(sh + o, sizeof(sh) - o, i ? " %02X" : "%02X", sg[i]); }
-      Serial.printf("[GUT] BUKAN ZIP: jaringan=[%s] SD=[%s] ukuranSD=%u unduh=%u CT=%s\n", nh, sh, (unsigned)csz, (unsigned)got, gutCT[0] ? gutCT : "-");
-      char bad[140]; snprintf(bad, sizeof(bad), "%s.bad", path);       // simpan utk diperiksa di PC (buka dgn editor teks / hex)
+      Serial.printf("[GUT] VERIFIKASI GAGAL (%d): %s | jaringan=[%s] SD=[%s] ukuranSD=%u unduh=%u CT=%s\n", vr, why, nh, sh, (unsigned)csz, (unsigned)got, gutCT[0] ? gutCT : "-");
+      char bad[140]; snprintf(bad, sizeof(bad), "%s.bad", path);       // simpan utk diperiksa di PC (editor hex)
       if (SD_MMC.exists(bad)) SD_MMC.remove(bad);
       if (!SD_MMC.rename(tmp, bad)) SD_MMC.remove(tmp);
-      snprintf(gutDiag, sizeof(gutDiag), "net:%s sd:%s", nh, sh);
-      if (netPK) { gutNoWbuf = true; strcpy(gutMsg, "Rusak saat tulis SD. Coba lagi = mode aman."); }
-      else snprintf(gutMsg, sizeof(gutMsg), "Server kirim: %.38s", gutCT[0] ? gutCT : "(tanpa Content-Type)");
-      rc = -3; gutPartUrl[0] = 0; gutPhase = GUT_PH_ERROR; return;
+      gutPartUrl[0] = 0; gutNetCrcLen = 0;
+      // data jaringan benar tapi yang tertulis di SD beda = kesalahan TULIS SD (bukan server)
+      bool sdSide = (vr == 1 || vr == 3 || (vr == 2 && netPK));
+      if (sdSide && gutAutoRetry == 0) {
+        gutAutoRetry = 1; gutNoWbuf = !gutNoWbuf;                      // ulang SEKALI dgn cara tulis lain
+        Serial.printf("[GUT] data SD tidak cocok dgn jaringan -> ulang 1x (mode tulis: %s)\n", gutNoWbuf ? "langsung" : "buffer");
+        gutPhase = GUT_PH_CONNECT; gutMsg[0] = 0; needRedraw = true;
+        gutDoDownload();
+        return;
+      }
+      snprintf(gutDiag, sizeof(gutDiag), "%s", why);
+      if (sdSide) strcpy(gutMsg, "Tulis SD rusak 2x. Cek SD card.");
+      else if (vr == 2) snprintf(gutMsg, sizeof(gutMsg), "Server kirim: %.38s", gutCT[0] ? gutCT : "(tanpa Content-Type)");
+      else strcpy(gutMsg, "Berkas dari server tidak utuh.");
+      gutPhase = GUT_PH_ERROR; return;
     }
   }
   if (rc == 200 && got > 0) {
     if (SD_MMC.exists(path)) SD_MMC.remove(path);
-    gutPartUrl[0] = 0;
+    gutPartUrl[0] = 0; gutNetCrcLen = 0;
     if (SD_MMC.rename(tmp, path)) {
       strncpy(gutDoneName, name, sizeof(gutDoneName) - 1); gutDoneName[sizeof(gutDoneName) - 1] = 0;
       gutPhase = GUT_PH_DONE; strcpy(gutMsg, "Tersimpan di /books.");
+      gutAutoRetry = 0;
+      if (gutDlIdx >= 0 && gutDlIdx < gutN && gutItems[gutDlIdx].id == it.id) gutHave[gutDlIdx] = 1;
       uint32_t el = millis() - gutT0; uint32_t net = el ? (uint32_t)((uint64_t)got * 1000 / el / 1024) : 0;
-      snprintf(gutDiag, sizeof(gutDiag), "rata2 %u KB/s%s, tulis SD %u KB/s", (unsigned)net, (parDone && rc == 200) ? " (2 koneksi)" : "", (unsigned)gutSdKBs);
+      snprintf(gutDiag, sizeof(gutDiag), "rata2 %u KB/s%s, SD %u KB/s, CRC %s", (unsigned)net, (parDone && rc == 200) ? " (2 koneksi)" : "", (unsigned)gutSdKBs, crcOk ? "cocok" : "-");
       return;
     }
     strcpy(gutMsg, "Gagal menyimpan berkas."); gutPhase = GUT_PH_ERROR; SD_MMC.remove(tmp); return;
   }
-  if (!keepPart) { SD_MMC.remove(tmp); gutPartUrl[0] = 0; }
+  if (!keepPart) { SD_MMC.remove(tmp); gutPartUrl[0] = 0; gutNetCrcLen = 0; }
   gutSetErr(rc == 200 ? -3 : rc);
   if (rc == -4 && !isEpub) strcpy(gutMsg, "TXT > 3 MB: terlalu besar utk Buku.");
   if (keepPart) strcpy(gutMsg, rc == -1 ? "Gagal sambung ulang. Coba lagi = lanjut." : "Terputus. Ketuk Coba lagi = lanjut.");
@@ -682,7 +918,7 @@ static void gutDoDownload() {
 
 static void gutTaskFunc(void*) {
   if (gutJob == GUT_JOB_SEARCH) gutDoSearch();
-  else if (gutJob == GUT_JOB_DL) gutDoDownload();
+  else if (gutJob == GUT_JOB_DL) { gutDoDownload(); gutRegEnd(gutReg, gutRegId, gutPhase == GUT_PH_DONE ? GUT_S_DONE : GUT_S_FAIL); }
   gutJob = GUT_JOB_NONE;
   needRedraw = true;
   gutEndMs = millis();
@@ -696,6 +932,7 @@ static bool gutStartJob(uint8_t job) {
   if (!nasaHeapReadyForTask()) { showToast("RAM internal padat, coba lagi"); return false; }
   while ((uint32_t)(millis() - gutEndMs) < 80) delay(10);     // beri idle task waktu membereskan task sebelumnya (TCB statis dipakai ulang)
   gutBusy = true; gutJob = job; gutCancel = false; gutPhase = GUT_PH_CONNECT; gutMsg[0] = 0;
+  if (job == GUT_JOB_DL) gutAutoRetry = 0;
   if (createTaskPsramStack(gutTaskFunc, "gutTask", 16384, nullptr, &gutStack, &gutTCB, &gutTaskH, 1) != pdPASS) {
     gutBusy = false; gutJob = GUT_JOB_NONE; gutPhase = GUT_PH_IDLE;
     showToast("Gagal memulai proses");
@@ -707,12 +944,28 @@ static bool gutStartJob(uint8_t job) {
 // ---------------------------------------------------------------------
 // aksi
 // ---------------------------------------------------------------------
+// Mulai unduhan buku daftar[idx]. Registry menolak: buku yang sama sedang berjalan, atau ada unduhan lain. (Pengecekan "sudah ada / utuh?" dilakukan task, sebelum jaringan dipakai.)
+static void gutBeginDownload(int idx) {
+  if (idx < 0 || idx >= gutN) return;
+  uint32_t id = gutItems[idx].id;
+  int b = gutRegBegin(gutReg, id);
+  if (b == GUT_BEGIN_SAME) {
+    showToast(gutCancel ? "Menghentikan unduhan..." : "Buku ini sedang diunduh");
+    if (!gutCancel) { gutDlIdx = idx; gutView = GUT_V_PROG; }
+    needRedraw = true; return;
+  }
+  if (b == GUT_BEGIN_OTHER) { showToast("Tunggu unduhan lain selesai"); return; }
+  gutRegId = id; gutDlIdx = idx; gutView = GUT_V_PROG; gutGot = 0; gutTot = 0;
+  if (!gutStartJob(GUT_JOB_DL)) { gutRegEnd(gutReg, id, GUT_S_NONE); gutView = GUT_V_DETAIL; }
+  needRedraw = true;
+}
+
 static void gutStartSearch(bool append) {
   if (gutBusy) { showToast("Tunggu sebentar..."); return; }
   if (!gutItems) return;
-  if (!append) { gutN = 0; gutPage = 1; gutHasNext = false; gutScroll = 0; gutTotal = 0; }
+  if (!append) { gutN = 0; gutPage = 1; gutHasNext = false; gutScroll = 0; gutTotal = 0; memset(gutHave, 0, sizeof(gutHave)); }
   else gutPage++;
-  gutBuildQuery(gutReqUrl, sizeof(gutReqUrl), gutQApplied, gutLangs[gutLangIdx], gutSortIdx, gutPage);
+  gutMakeReqUrl(gutSrc);
   gutReqAppend = append;
   if (!gutStartJob(GUT_JOB_SEARCH)) { if (append) gutPage--; }
   needRedraw = true;
@@ -725,9 +978,10 @@ static void gutSubmit() {
 
 static void gutChipTap(int c) {
   if (gutBusy) { showToast("Tunggu sebentar..."); return; }
-  if (c == 0) gutLangIdx = (uint8_t)((gutLangIdx + 1) % 9);
+  if (c == 0) { if (gutSrc) { showToast("Bahasa hanya utk Gutendex"); return; } gutLangIdx = (uint8_t)((gutLangIdx + 1) % 9); }
   else if (c == 1) { gutLight = !gutLight; showToast(gutLight ? "EPUB tanpa gambar (ringan)" : "EPUB dengan gambar (besar)"); needRedraw = true; return; }
-  else gutSortIdx = (uint8_t)((gutSortIdx + 1) % 2);
+  else if (c == 2) gutSortIdx = (uint8_t)((gutSortIdx + 1) % 2);
+  else { gutSrc = gutSrc ? 0 : 1; showToast(gutSrc ? "Sumber: OPDS Gutenberg" : "Sumber: Gutendex"); }
   gutStartSearch(false);
 }
 
@@ -736,9 +990,11 @@ static void gutOpenDetail(int idx) {
   gutSel = idx; gutView = GUT_V_DETAIL;
   const GutItem& it = gutItems[idx];
   char nm[96]; gutMakeFileName(it, it.epub[0] ? "epub" : "txt", nm, sizeof(nm));
-  char p[120]; snprintf(p, sizeof(p), EBK_DIR "/%s", nm);
   strncpy(gutSelName, nm, sizeof(gutSelName) - 1); gutSelName[sizeof(gutSelName) - 1] = 0;
-  gutSelExists = sdReady && SD_MMC.exists(p);
+  char have[100];                                       // dicek SISTEM: sedang diunduh / sudah ada & utuh / sisa unduhan / belum ada
+  gutSelState = (uint8_t)gutCheckBook(idx, !gutBusy, false, have, sizeof(have));   // sedang sibuk: SD tidak disentuh
+  if (gutSelState == GUT_SS_HAVE && have[0]) { strncpy(gutSelName, have, sizeof(gutSelName) - 1); gutSelName[sizeof(gutSelName) - 1] = 0; }
+  gutSelExists = (gutSelState == GUT_SS_HAVE);
   needRedraw = true;
 }
 
@@ -779,6 +1035,7 @@ void gutEnter() {
 void gutExit() {                                        // app Buku ditutup
   if (gutBusy) { gutCancel = true; uint32_t t0 = millis(); while (gutBusy && millis() - t0 < 3000) delay(10); }
   if (kbVisible && kbTarget == &gutQuery) { kbVisible = false; kbTarget = nullptr; }
+  if (!gutBusy) { memset(gutReg, 0, sizeof(gutReg)); memset(gutHave, 0, sizeof(gutHave)); }
   if (!gutBusy && gutItems) { free(gutItems); gutItems = nullptr; }   // masih sibuk -> biarkan (dipakai task), dipakai ulang saat masuk lagi
   if (!gutItems) { gutN = 0; gutHasNext = false; }
   gutQuery = ""; gutQApplied[0] = 0; gutView = GUT_V_LIST; gutAutoLoad = false; gutDown = false;
@@ -801,11 +1058,11 @@ static int  gutBottom()  { return SCR_H - BACK_H - 3 - 6; }
 static int  gutListBot() { return (kbVisible && kbTarget == &gutQuery) ? kbY() - 4 : gutBottom(); }
 static bool gutHitBox(int x, int y) { return y >= 26 && y <= 52 && x >= 70 && x <= SCR_W - 10 - GUT_GO_W - 4; }
 static bool gutHitGo(int x, int y)  { return y >= 26 && y <= 52 && x > SCR_W - 10 - GUT_GO_W - 4 && x <= SCR_W - 6; }
-static int  gutChipW()  { return (SCR_W - 20 - 12) / 3; }
+static int  gutChipW()  { return (SCR_W - 20 - 18) / 4; }   // 4 chip: bahasa | gambar | urutan | sumber
 static int  gutChipX(int i) { return 10 + i * (gutChipW() + 6); }
 static int  gutHitChip(int x, int y) {
   if (y < 54 || y > 76) return -1;
-  for (int i = 0; i < 3; i++) if (x >= gutChipX(i) - 2 && x <= gutChipX(i) + gutChipW() + 2) return i;
+  for (int i = 0; i < 4; i++) if (x >= gutChipX(i) - 2 && x <= gutChipX(i) + gutChipW() + 2) return i;
   return -1;
 }
 static int  gutBtnY() { return gutBottom() - 28 - 4; }
@@ -871,11 +1128,12 @@ static void gutDrawList(LGFX_Sprite& s) {
   nyxAaRR(s, SCR_W - 10 - GUT_GO_W, 29, GUT_GO_W, 20, 10, T().accent);
   s.setTextColor(0xFFFF); s.setCursor(SCR_W - 10 - GUT_GO_W + (GUT_GO_W - s.textWidth("Cari")) / 2, 35); s.print("Cari");
   // chip: bahasa / format / urutan
-  char lb[3][20];
+  char lb[4][20];
   if (gutLangIdx) snprintf(lb[0], sizeof(lb[0]), "Bhs: %s", gutLangUp[gutLangIdx]); else strcpy(lb[0], "Semua bhs");
   strcpy(lb[1], gutLight ? "Tanpa gbr" : "Dgn gbr");
   strcpy(lb[2], gutSortIdx ? "Terbaru" : "Populer");
-  for (int i = 0; i < 3; i++) {
+  strcpy(lb[3], gutSrc ? "OPDS" : "Gutendex");
+  for (int i = 0; i < 4; i++) {
     nyxAaRR(s, gutChipX(i), 54, gutChipW(), 20, 10, chip);
     ebkFitText(s, lb[i], gutChipW() - 8);
     s.setTextColor(T().text); s.setCursor(gutChipX(i) + (gutChipW() - s.textWidth(lb[i])) / 2, 60); s.print(lb[i]);
@@ -921,7 +1179,8 @@ static void gutDrawList(LGFX_Sprite& s) {
     s.setTextColor(T().text); s.setCursor(12, ry + 7); s.print(tt);
     if (au[0]) { ebkFitText(s, au, SCR_W - 24); s.setTextColor(T().subtext); s.setCursor(12, ry + 21); s.print(au); }
     gutFmtCount(cnt, sizeof(cnt), it.dl);
-    snprintf(info, sizeof(info), "%s  %s  %s unduhan", it.epub[0] ? "EPUB" : "TXT", it.lang[0] ? it.lang : "--", cnt);
+    if (it.dl) snprintf(info, sizeof(info), "%s%s  %s  %s unduhan", gutHave[v] ? "ADA  " : "", it.epub[0] ? "EPUB" : "TXT", it.lang[0] ? it.lang : "--", cnt);
+    else       snprintf(info, sizeof(info), "%s%s  %s", gutHave[v] ? "ADA  " : "", it.epub[0] ? "EPUB" : "TXT", it.lang[0] ? it.lang : "--");
     s.setTextColor(T().accent); s.setCursor(12, ry + 34); s.print(info);
     s.drawFastHLine(12, ry + GUT_ROW_H - 2, SCR_W - 24, T().divider);
   }
@@ -956,11 +1215,13 @@ static void gutDrawDetail(LGFX_Sprite& s) {
   s.setCursor(12, y + 48); s.print("Sumber: gutenberg.org (domain publik)");
   if (!sdReady) { s.setTextColor(T().danger); s.setCursor(12, y + 62); s.print("SD card tidak terdeteksi."); }
   else if (gutSelExists) { s.setTextColor(T().good); s.setCursor(12, y + 62); s.print("Sudah ada di perpustakaan."); }
-  gutDrawBtns(s, gutSelExists ? "Buka di Buku" : "Unduh", nullptr);
+  else if (gutSelState == GUT_SS_BUSY) { s.setTextColor(T().accent); s.setCursor(12, y + 62); s.print("Sedang diunduh..."); }
+  else if (gutSelState == GUT_SS_PART) { s.setTextColor(T().subtext); s.setCursor(12, y + 62); s.print("Unduhan sebagian tersimpan."); }
+  gutDrawBtns(s, gutSelExists ? "Buka di Buku" : (gutSelState == GUT_SS_BUSY ? "Lihat progres" : (gutSelState == GUT_SS_PART ? "Lanjutkan" : "Unduh")), nullptr);
 }
 
 static void gutDrawProgress(LGFX_Sprite& s) {
-  const char* head = gutPhase == GUT_PH_DONE ? "Selesai" : (gutPhase == GUT_PH_ERROR ? "Gagal" : "Mengunduh");
+  const char* head = gutPhase == GUT_PH_DONE ? "Selesai" : (gutPhase == GUT_PH_ERROR ? "Gagal" : (gutPhase == GUT_PH_VERIFY ? "Memeriksa" : "Mengunduh"));
   iosTitle(s, 8, 26, head);
   if (gutDlIdx >= 0 && gutDlIdx < gutN) {
     char tt[GUT_TITLE_LEN]; ebkFold(gutItems[gutDlIdx].title, tt, sizeof(tt));
@@ -1051,8 +1312,7 @@ static void gutRelease() {                              // ketukan (jari lepas t
       vibTap();
       if (gutSelExists) gutOpenBook(gutSelName);
       else if (!sdReady) showToast("SD card tidak terdeteksi");
-      else if (gutBusy) showToast("Tunggu sebentar...");
-      else { gutDlIdx = gutSel; gutView = GUT_V_PROG; gutGot = 0; gutTot = 0; if (!gutStartJob(GUT_JOB_DL)) gutView = GUT_V_DETAIL; needRedraw = true; }
+      else gutBeginDownload(gutSel);
     }
   } else {                                              // progres
     if (gutPhase == GUT_PH_DONE) {
@@ -1062,8 +1322,8 @@ static void gutRelease() {                              // ketukan (jari lepas t
       if (gutHitBtn(gutSx, gutSy, 0)) {
         vibTap();
         if (gutBusy) showToast("Tunggu sebentar...");
-        else { gutGot = 0; gutTot = 0; if (!gutStartJob(GUT_JOB_DL)) gutView = GUT_V_DETAIL; needRedraw = true; }
-      } else if (gutHitBtn(gutSx, gutSy, 1)) { vibTap(); gutView = GUT_V_DETAIL; needRedraw = true; }
+        else gutBeginDownload(gutDlIdx);
+      } else if (gutHitBtn(gutSx, gutSy, 1)) { vibTap(); gutOpenDetail(gutSel); }
     } else if (gutHitBtn(gutSx, gutSy, 0)) {            // Batal
       vibTap(); gutCancel = true; gutView = GUT_V_DETAIL; needRedraw = true;
     }
