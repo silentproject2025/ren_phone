@@ -1073,6 +1073,9 @@ static bool gutHitBtn(int x, int y, int which) {         // which: 0 = kiri / tu
   int half = SCR_W / 2;
   return which == 0 ? (x >= 12 && x < half - 2) : (x >= half + 2 && x <= SCR_W - 12);
 }
+static bool gutHitBtn1(int x, int y) {                   // tombol tunggal selebar layar (layar Detail), tak tergantung gutPhase
+  return y >= gutBtnY() - 2 && y <= gutBtnY() + 30 && x >= 12 && x <= SCR_W - 12;
+}
 
 // ---------------------------------------------------------------------
 // gambar
@@ -1308,7 +1311,7 @@ static void gutRelease() {                              // ketukan (jari lepas t
     else if (v == n && gutHasNext && !gutBusy) { vibTap(); gutStartSearch(true); }
     else if (n == 0 && !gutBusy) { /* daftar kosong: tombol Cari yang memuat */ }
   } else if (gutView == GUT_V_DETAIL) {
-    if (gutHitBtn(gutSx, gutSy, 0)) {
+    if (gutHitBtn1(gutSx, gutSy)) {
       vibTap();
       if (gutSelExists) gutOpenBook(gutSelName);
       else if (!sdReady) showToast("SD card tidak terdeteksi");
