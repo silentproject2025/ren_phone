@@ -741,9 +741,11 @@ static void nyxVoiceTick() {
 #define NYX_TH_MAX_W    124
 #define NYX_TH_BORDER   3           // 2 px cincin terang + 1 px garis gelap di antara cincin & gambar
 #define NYX_TH_RADIUS   11          // radius luar bingkai
-#define NYX_TH_IN_MS    260
+#define NYX_TH_IN_MS    420          // NYX_TH_SMOOTH_V2 (dulu 260)
 #define NYX_TH_HOLD_MS  3800
-#define NYX_TH_OUT_MS   220
+#define NYX_TH_OUT_MS   320          // (dulu 220)
+#define NYX_TH_SH_SP    9            // bayangan memudar sejauh ini (px)
+#define NYX_TH_SH_OY    4            // bayangan turun sekian px
 static uint16_t* nyxThumb = nullptr;
 static int  nyxThW = 0, nyxThH = 0;
 static bool nyxThOn = false;
@@ -751,9 +753,14 @@ static uint32_t nyxThT0 = 0, nyxThOutT0 = 0;
 static char nyxThPath[64] = "";
 static bool nyxThDown = false, nyxThDrag = false;
 static int  nyxThX0 = 0;
+static uint8_t* nyxThShMask = nullptr;   // kekuatan bayangan per piksel (0..255), dihitung sekali per screenshot
+static int  nyxThShW = 0, nyxThShH = 0;
+static void nyxThBuildShadow();
 
 static void nyxThFree() {
   if (nyxThumb) { free(nyxThumb); nyxThumb = nullptr; }
+  if (nyxThShMask) { free(nyxThShMask); nyxThShMask = nullptr; }
+  nyxThShW = 0; nyxThShH = 0;
   nyxThOn = false; nyxThDown = false; nyxThDrag = false; nyxThOutT0 = 0;
 }
 
@@ -785,6 +792,7 @@ void nyxShotThumbCapture(const char* path) {
     }
   }
   nyxThW = tw; nyxThH = th;
+  nyxThBuildShadow();
   strncpy(nyxThPath, path ? path : "", sizeof(nyxThPath) - 1);
   nyxThPath[sizeof(nyxThPath) - 1] = 0;
   nyxThOn = true; nyxThT0 = millis(); nyxThOutT0 = 0;
@@ -795,17 +803,19 @@ void nyxShotThumbHide() { if (nyxThOn || nyxThumb) { nyxThFree(); needRedraw = t
 bool nyxShotThumbActive() { return nyxThOn && nyxThumb; }
 
 static float nyxEaseOut(float k) { if (k < 0) k = 0; if (k > 1) k = 1; float q = 1.0f - k; return 1.0f - q * q * q; }
+// ease-in-out kosinus: awal & akhir lembut, gerak tengah merata (tidak "melompat" di frame pertama)
+static float nyxEaseIO(float k) { if (k < 0) k = 0; if (k > 1) k = 1; return 0.5f - 0.5f * cosf(3.14159265f * k); }
 
 // posisi x thumbnail saat ini (animasi masuk / keluar)
 static int nyxThCurX() {
   const int restX = 12;
   uint32_t now = millis();
   if (nyxThOutT0) {
-    float k = nyxEaseOut((float)(now - nyxThOutT0) / (float)NYX_TH_OUT_MS);
-    return (int)(restX - (nyxThW + restX + 12) * k);
+    float k = nyxEaseIO((float)(now - nyxThOutT0) / (float)NYX_TH_OUT_MS);
+    return (int)lroundf((float)restX - (float)(nyxThW + restX + 12) * k);
   }
-  float k = nyxEaseOut((float)(now - nyxThT0) / (float)NYX_TH_IN_MS);
-  return (int)(-(nyxThW + 12) + (restX + nyxThW + 12) * k);
+  float k = nyxEaseIO((float)(now - nyxThT0) / (float)NYX_TH_IN_MS);
+  return (int)lroundf((float)(-(nyxThW + 12)) + (float)(restX + nyxThW + 12) * k);
 }
 static int nyxThCurY() { return SCR_H - BACK_H - nyxThH - 18; }
 
@@ -817,39 +827,67 @@ static float nyxSdfRR(float px, float py, float cx, float cy, float hw, float hh
   return sqrtf(ox * ox + oy * oy) + inside - r;
 }
 
+// hitung sekali: kekuatan bayangan tiap piksel relatif terhadap bingkai (0 = tanpa bayangan / tertutup bingkai)
+static void nyxThBuildShadow() {
+  if (nyxThShMask) { free(nyxThShMask); nyxThShMask = nullptr; }
+  nyxThShW = 0; nyxThShH = 0;
+  if (nyxThW <= 0 || nyxThH <= 0) return;
+  const int bw = NYX_TH_BORDER, ro = NYX_TH_RADIUS, sp = NYX_TH_SH_SP, soy = NYX_TH_SH_OY;
+  int fw = nyxThW + bw * 2, fh = nyxThH + bw * 2;
+  int mw = fw + sp * 2, mh = fh + sp * 2;
+  uint8_t* m = (uint8_t*)heap_caps_malloc((size_t)mw * mh, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  if (!m) m = (uint8_t*)malloc((size_t)mw * mh);
+  if (!m) return;                                   // tanpa mask: bayangan dilewati, thumbnail tetap tampil
+  float cx = fw * 0.5f, cy = fh * 0.5f, hw = cx, hh = cy;
+  for (int my = 0; my < mh; my++) {
+    for (int mx = 0; mx < mw; mx++) {
+      float fp = (float)(mx - sp) + 0.5f, fq = (float)(my - sp + soy) + 0.5f;
+      uint8_t v = 0;
+      if (nyxSdfRR(fp, fq, cx, cy, hw, hh, (float)ro) > 0.0f) {                 // di luar bingkai
+        float d = nyxSdfRR(fp, fq, cx, cy + (float)soy, hw, hh, (float)ro);     // jarak ke bayangan
+        if (d < (float)sp) {
+          float k = d <= 0 ? 1.0f : 1.0f - d / (float)sp;
+          v = (uint8_t)(k * k * 255.0f + 0.5f);
+        }
+      }
+      m[(size_t)my * mw + mx] = v;
+    }
+  }
+  nyxThShMask = m; nyxThShW = mw; nyxThShH = mh;
+}
+
 void drawShotThumb(LGFX_Sprite& s) {
   if (!nyxShotThumbActive()) return;
   const int bw = NYX_TH_BORDER, ro = NYX_TH_RADIUS, ri = ro - bw;
+  const int sp = NYX_TH_SH_SP, soy = NYX_TH_SH_OY;
   int x = nyxThCurX(), y = nyxThCurY();
   int fx = x - bw, fy = y - bw, fw = nyxThW + bw * 2, fh = nyxThH + bw * 2;
-  float cx = fx + fw * 0.5f, cy = fy + fh * 0.5f, hw = fw * 0.5f, hh = fh * 0.5f;
+  if (fx + fw + sp <= 0) return;                    // masih sepenuhnya di luar layar (awal animasi)
 
-  // 1) bayangan lembut: gelapkan piksel latar di sekitar bingkai (turun 4 px, memudar ±9 px)
-  const int sp = 9, soy = 4;
-  float scy = cy + soy;
-  int y0 = fy - sp + soy, y1 = fy + fh + sp + soy, x0 = fx - sp, x1 = fx + fw + sp;
-  if (y0 < 0) y0 = 0;
-  if (y1 > SCR_H) y1 = SCR_H;
-  if (x0 < 0) x0 = 0;
-  if (x1 > SCR_W) x1 = SCR_W;
-  for (int py = y0; py < y1; py++) {
-    for (int px = x0; px < x1; px++) {
-      float fp = (float)px + 0.5f, fq = (float)py + 0.5f;
-      if (nyxSdfRR(fp, fq, cx, cy, hw, hh, (float)ro) <= 0.0f) continue;      // bagian ini ditutup bingkai
-      float d = nyxSdfRR(fp, fq, cx, scy, hw, hh, (float)ro);                 // jarak ke bayangan
-      if (d >= (float)sp) continue;
-      float k = d <= 0 ? 1.0f : 1.0f - d / (float)sp;
-      float kk = k * k;
-      uint16_t bgp = (uint16_t)s.readPixel(px, py);
-      int lum = ((((bgp >> 11) & 31) << 3) * 77 + (((bgp >> 5) & 63) << 2) * 150 + ((bgp & 31) << 3) * 29) >> 8;   // 0..255
-      float lt = (float)lum / 255.0f;                                          // 0 = gelap, 1 = terang
-      uint8_t aDark = (uint8_t)(150.0f * kk * lt);                              // latar terang: bayangan gelap
-      uint8_t aGlow = (uint8_t)(110.0f * kk * (1.0f - lt) * (1.0f - lt));      // latar gelap: cahaya halus warna aksen
-      if (aDark < 3 && aGlow < 3) continue;
-      uint16_t o = bgp;
-      if (aDark >= 3) o = blend565(o, 0x0000, aDark);
-      if (aGlow >= 3) o = blend565(o, T().accent, aGlow);
-      s.drawPixel(px, py, o);
+  // 1) bayangan lembut dari mask (tanpa sqrt per frame)
+  if (nyxThShMask) {
+    const uint16_t acc = (uint16_t)T().accent;
+    int ox = fx - sp, oy = fy - sp + soy;
+    for (int my = 0; my < nyxThShH; my++) {
+      int py = oy + my;
+      if (py < 0 || py >= SCR_H) continue;
+      const uint8_t* mrow = nyxThShMask + (size_t)my * nyxThShW;
+      for (int mx = 0; mx < nyxThShW; mx++) {
+        uint32_t m = mrow[mx];
+        if (!m) continue;
+        int px = ox + mx;
+        if (px < 0 || px >= SCR_W) continue;
+        uint16_t bgp = (uint16_t)s.readPixel(px, py);
+        uint32_t lum = ((((bgp >> 11) & 31) << 3) * 77 + (((bgp >> 5) & 63) << 2) * 150 + ((bgp & 31) << 3) * 29) >> 8;   // 0..255
+        uint32_t il = 255u - lum;
+        uint32_t aDark = (150u * m * lum) / 65025u;                // latar terang: bayangan gelap
+        uint32_t aGlow = (110u * m * il * il) / 16581375u;         // latar gelap: cahaya halus warna aksen
+        if (aDark < 3 && aGlow < 3) continue;
+        uint16_t o = bgp;
+        if (aDark >= 3) o = blend565(o, 0x0000, (uint8_t)aDark);
+        if (aGlow >= 3) o = blend565(o, acc, (uint8_t)aGlow);
+        s.drawPixel(px, py, o);
+      }
     }
   }
 
@@ -858,19 +896,24 @@ void drawShotThumb(LGFX_Sprite& s) {
   iosRR(s, fx, fy, fw, fh, ro, blend565(T().text, T().bg, 22));
   iosRR(s, fx + 2, fy + 2, fw - 4, fh - 4, ro - 2, hair);
 
-  // 3) gambar dgn sudut membulat (anti-alias di tepi sudut, menyatu dgn bingkai)
+  // 3) gambar; matematika sudut membulat (anti-alias) hanya dipakai di 4 sudut
   uint16_t frameCol = hair;
   for (int j = 0; j < nyxThH; j++) {
+    bool cornerRow = (j < ri) || (j >= nyxThH - ri);
+    const uint16_t* row = nyxThumb + (size_t)j * nyxThW;
+    int yy = y + j;
     for (int i = 0; i < nyxThW; i++) {
-      uint16_t c = nyxThumb[j * nyxThW + i];
-      float ddx = fmaxf(fmaxf((float)ri - (i + 0.5f), (i + 0.5f) - (float)(nyxThW - ri)), 0.0f);
-      float ddy = fmaxf(fmaxf((float)ri - (j + 0.5f), (j + 0.5f) - (float)(nyxThH - ri)), 0.0f);
-      if (ddx > 0.0f && ddy > 0.0f) {                                         // hanya area sudut
-        float d = sqrtf(ddx * ddx + ddy * ddy) - (float)ri;
-        if (d > 0.5f) continue;
-        if (d > -0.5f) c = blend565(frameCol, c, (uint8_t)((0.5f - d) * 255.0f));
+      uint16_t c = row[i];
+      if (cornerRow && ((i < ri) || (i >= nyxThW - ri))) {
+        float ddx = fmaxf(fmaxf((float)ri - (i + 0.5f), (i + 0.5f) - (float)(nyxThW - ri)), 0.0f);
+        float ddy = fmaxf(fmaxf((float)ri - (j + 0.5f), (j + 0.5f) - (float)(nyxThH - ri)), 0.0f);
+        if (ddx > 0.0f && ddy > 0.0f) {
+          float d = sqrtf(ddx * ddx + ddy * ddy) - (float)ri;
+          if (d > 0.5f) continue;
+          if (d > -0.5f) c = blend565(frameCol, c, (uint8_t)((0.5f - d) * 255.0f));
+        }
       }
-      s.drawPixel(x + i, y + j, c);
+      s.drawPixel(x + i, yy, c);
     }
   }
 }
