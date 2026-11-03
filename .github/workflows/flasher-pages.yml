@@ -41,6 +41,8 @@ jobs:
           DEVICES = [
               {"key": "s3", "prefix": "build-", "asset": "ren_phone_s3_merged.bin", "chip": "ESP32-S3", "esp": "esp32s3",
                "title": "Ren Phone", "sub": "ESP32-S3 &middot; HP utama", "short": "Ren Phone"},
+              {"key": "s3_st7796", "prefix": "st7796-", "asset": "ren_phone_s3_st7796_merged.bin", "chip": "ESP32-S3", "esp": "esp32s3",
+               "title": "Ren Phone (layar 3,5 inci)", "sub": "ESP32-S3 &middot; ST7796 + sentuh FT6236", "short": "Ren Phone 3,5 inci"},
               {"key": "cam", "prefix": "cam-", "asset": "cam_merged.bin", "chip": "ESP32", "esp": "esp32",
                "title": "Co-prosesor Bluetooth", "sub": "ESP32-CAM &middot; board kamera", "short": "Co-prosesor BT"},
           ]

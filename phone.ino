@@ -471,6 +471,7 @@ struct HomeRect{ int x,y,w,h; }; // harus paling atas: prototype otomatis Arduin
 #include <esp_ota_ops.h> // OTA guard/rollback (ota_check_renphone.ino): tipe esp_partition_t dipakai di prototype
 #include <math.h>     // dipakai boot sequence (cosf/sinf utk animasi logo) + sensor 3D
 #include <Wire.h>     // I2C utk MPU6050 (accel+gyro)
+#include "display_conf.h" // profil layar: ILI9341 (default) / ST7796 (-DRP_DISPLAY_ST7796)
 #include "esp_bt.h"   // v29 FIX: buat esp_bt_controller_mem_release()
 #include <esp_system.h> // v125: esp_reset_reason() utk bedain restart dari menu Daya vs cold boot
 #include "esp_freertos_hooks.h" // v31: idle hook per-core buat app HWmonitor
@@ -1152,16 +1153,22 @@ enum KbMode { KB_LOWER, KB_UPPER, KB_NUM };
 // (bukan 75 bekas eksperimen manual) krn ini sekarang jadi DEFAULT
 // paling aman utk first-boot/abis NVS kereset -- pilihan lbh tinggi
 // jadi keputusan sadar user lewat UI, bukan hardcoded di source lagi.
-#define DISPLAY_SPI_FREQ_EXPERIMENTAL 60000000
+#define DISPLAY_SPI_FREQ_EXPERIMENTAL RP_DISP_SPI_FREQ
 
 // =============================================
 // LGFX CONFIG
 // =============================================
 class LGFX : public lgfx::LGFX_Device {
+#if defined(RP_DISPLAY_ST7796)
+  lgfx::Panel_ST7796  _panel_instance;
+#else
   lgfx::Panel_ILI9341 _panel_instance;
+#endif
   lgfx::Bus_SPI       _bus_instance;
   lgfx::Light_PWM     _light_instance;
+#if !RP_TOUCH_CAPACITIVE
   lgfx::Touch_XPT2046 _touch_instance;
+#endif
 public:
   LGFX(void) {
     { auto cfg = _bus_instance.config();
@@ -1183,12 +1190,17 @@ public:
       _panel_instance.setBus(&_bus_instance); }
     { auto cfg = _panel_instance.config();
       cfg.pin_cs=10; cfg.pin_rst=14; cfg.pin_busy=-1;
-      cfg.memory_width=240; cfg.memory_height=320;
-      cfg.panel_width=240;  cfg.panel_height=320;
+      cfg.memory_width=RP_DISP_NATIVE_W; cfg.memory_height=RP_DISP_NATIVE_H;
+      cfg.panel_width=RP_DISP_NATIVE_W;  cfg.panel_height=RP_DISP_NATIVE_H;
       cfg.offset_x=0; cfg.offset_y=0; cfg.offset_rotation=0;
       cfg.dummy_read_pixel=8; cfg.dummy_read_bits=1;
-      cfg.readable=true; cfg.invert=false;
-      cfg.rgb_order=false; cfg.dlen_16bit=false;
+      cfg.readable=true;
+#if defined(RP_DISPLAY_ST7796)
+      cfg.invert=(RP_ST7796_INVERT!=0); cfg.rgb_order=(RP_ST7796_RGB_ORDER!=0);
+#else
+      cfg.invert=false; cfg.rgb_order=false;
+#endif
+      cfg.dlen_16bit=false;
       cfg.bus_shared=false;
       _panel_instance.config(cfg); }
     { auto cfg = _light_instance.config();
@@ -1196,6 +1208,7 @@ public:
       cfg.freq=44100; cfg.pwm_channel=7;
       _light_instance.config(cfg);
       _panel_instance.setLight(&_light_instance); }
+#if !RP_TOUCH_CAPACITIVE
     { auto cfg = _touch_instance.config();
       cfg.pin_int=-1; cfg.bus_shared=false;
       cfg.offset_rotation=0; cfg.spi_host=SPI3_HOST;
@@ -1204,8 +1217,67 @@ public:
       cfg.pin_miso=4; cfg.pin_cs=9;
       _touch_instance.config(cfg);
       _panel_instance.setTouch(&_touch_instance); }
+#endif
     setPanel(&_panel_instance);
   }
+
+#if RP_TOUCH_CAPACITIVE
+  // ---- FT6236 (I2C) lewat Wire: SATU driver I2C dgn MPU6050 -> tidak bentrok ----
+  // Method ini MENYEMBUNYIKAN LGFXBase::getTouch() (display bertipe LGFX, bukan pointer
+  // ke base), jadi semua pemanggil display.getTouch(&tp) otomatis pakai ini. Output:
+  // koordinat layar pada rotasi aktif (sama seperti hasil getTouch XPT2046 terkalibrasi).
+  bool touchBegin(){
+    if(RP_TOUCH_RST>=0){ pinMode(RP_TOUCH_RST,OUTPUT); digitalWrite(RP_TOUCH_RST,LOW); delay(10); digitalWrite(RP_TOUCH_RST,HIGH); delay(60); }
+    Wire.begin(RP_TOUCH_SDA, RP_TOUCH_SCL);   // aman dipanggil ulang dgn pin sama (mpuInit juga memanggilnya)
+    Wire.setClock(400000);
+    Wire.beginTransmission(RP_TOUCH_ADDR);
+    _touchOk = (Wire.endTransmission()==0);
+    Serial.printf("[touch] FT6236 @0x%02X %s (SDA=%d SCL=%d)\n", RP_TOUCH_ADDR, _touchOk?"TERDETEKSI":"TIDAK ADA", RP_TOUCH_SDA, RP_TOUCH_SCL);
+    return _touchOk;
+  }
+  bool touchOk() const { return _touchOk; }
+
+  // 1 titik. Mengembalikan true kalau jari menempel.
+  bool getTouch(lgfx::touch_point_t* tp){
+    if(!_touchOk) return false;
+    uint32_t now=millis();
+    if(now-_tLastMs < 4){                      // jangan banjiri bus I2C: pakai hasil terakhir
+      if(_tDown){ *tp=_tLast; return true; }
+      return false;
+    }
+    _tLastMs=now;
+    uint8_t b[7];
+    Wire.beginTransmission(RP_TOUCH_ADDR); Wire.write((uint8_t)0x02);
+    if(Wire.endTransmission(false)!=0){ _tDown=false; return false; }
+    if(Wire.requestFrom((int)RP_TOUCH_ADDR,7)!=7){ _tDown=false; return false; }
+    for(int i=0;i<7;i++) b[i]=Wire.read();
+    uint8_t n=b[0]&0x0F;
+    if(n==0||n>2){ _tDown=false; return false; }
+    int rx=((b[1]&0x0F)<<8)|b[2];              // koordinat NATIVE (portrait, rotasi 0)
+    int ry=((b[3]&0x0F)<<8)|b[4];
+    const int W=RP_DISP_NATIVE_W, H=RP_DISP_NATIVE_H;
+    if(rx>=W) rx=W-1;
+    if(ry>=H) ry=H-1;
+    int x,y;
+    switch(getRotation()&3){
+      case 1:  x=ry;       y=W-1-rx;  break;   // landscape
+      case 2:  x=W-1-rx;   y=H-1-ry;  break;
+      case 3:  x=H-1-ry;   y=rx;      break;
+      default: x=rx;       y=ry;      break;   // portrait
+    }
+    if(RP_TOUCH_SWAP_XY){ int t=x; x=y; y=t; }
+    if(RP_TOUCH_FLIP_X)  x=width()-1-x;
+    if(RP_TOUCH_FLIP_Y)  y=height()-1-y;
+    _tLast.x=x; _tLast.y=y; _tLast.size=64; _tLast.id=0;
+    _tDown=true; *tp=_tLast;
+    return true;
+  }
+private:
+  bool _touchOk=false, _tDown=false;
+  uint32_t _tLastMs=0;
+  lgfx::touch_point_t _tLast;
+public:
+#endif
 
   // v103: SPI Overclock -- dipanggil dari setup() SEBELUM display.init(),
   // BUKAN saat device lagi jalan/tampilan aktif (ganti freq bus SPI di
@@ -2759,6 +2831,11 @@ static bool touchGhostAtBoot(){
 #define TOUCH_CAL_VALUES { 239, 3926, 233, 265, 3856, 3897, 3714, 308 }
 extern int brightness;
 void loadOrRunCalibration(){
+#if RP_TOUCH_CAPACITIVE
+  // FT6236 (kapasitif): koordinat sudah absolut -> tanpa wizard & tanpa NVS touch_cal.
+  display.touchBegin();
+  return;
+#endif
   Preferences p; p.begin("touch_cal",false);
   bool done=p.getBool("done",false);
   if(done){
@@ -13581,7 +13658,7 @@ void mazeTouch(int x,int y,bool held,bool isNew){
 #define INF_MAP_W 18
 #define INF_MAP_H 16
 #define INF_MAX_ENEMIES 6
-#define INF_MAX_COLS 320 // lebar layar max (320 landscape ATAU 240 kalau portrait -- 320 aman utk keduanya)
+#define INF_MAX_COLS RP_INF_MAX_COLS // lebar layar max (320 landscape ATAU 240 kalau portrait -- 320 aman utk keduanya)
 
 // v74: warna dasar tema neraka -- SENGAJA hardcode (bukan lewat T()) krn
 // dunia in-game raycaster ini butuh nuansa gothic/lorong-neraka yg tetap
@@ -19334,6 +19411,9 @@ void hwmonTouch(int x,int y,bool held,bool isNew){
 static bool touchBlocked(const lgfx::touch_point_t &t){
   int x=(int)t.x, y=(int)t.y;
   if(x < -TOUCH_OOR_PX || y < -TOUCH_OOR_PX || x >= SCR_W+TOUCH_OOR_PX || y >= SCR_H+TOUCH_OOR_PX) return true;
+#if RP_TOUCH_CAPACITIVE
+  return false;   // kotak mati/ghost di bawah = tambalan kaca retak ILI9341 lama, bukan utk layar ini
+#endif
   if(TOUCH_DEAD_W>0 && x<TOUCH_DEAD_W && y>=SCR_H-TOUCH_DEAD_H) return true;
   if(TOUCH_EDGE_L>0 && x<TOUCH_EDGE_L) return true;
   if(TOUCH_EDGE_R>0 && x>=SCR_W-TOUCH_EDGE_R) return true;

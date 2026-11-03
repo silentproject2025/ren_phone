@@ -114,7 +114,7 @@ Konsekuensi desain yang penting:
 | Bagian | Spesifikasi |
 |---|---|
 | Otak | ESP32-S3, flash 16 MB, PSRAM OPI 8 MB |
-| Layar | ILI9341 320×240 (SPI2), mode portrait dan landscape |
+| Layar | ILI9341 320×240 (SPI2), mode portrait dan landscape. Varian 3,5 inci: ST7796 480×320 + sentuh FT6236 (lihat bagian "Build layar ST7796") |
 | Sentuh | XPT2046 pada bus SPI3 yang terpisah |
 | Penyimpanan | MicroSD (SDIO 1-bit), dengan FFat internal sebagai cadangan |
 | Sensor | MPU6050 (tilt, shake, rotasi otomatis) dan INA219 (tegangan, arus, daya) |
@@ -995,3 +995,25 @@ Alur: daftar populer atau hasil cari, ketuk buku, layar **Detail**, **Unduh**, b
 - **Salah tulis SD:** bila data di SD tidak cocok dengan jaringan, unduhan diulang sekali dari awal dengan cara tulis lain (buffer atau langsung). Gagal dua kali menampilkan *Tulis SD rusak 2x. Cek SD card.*
 - **Sudah ada?** Sebelum mengunduh, `/books` dicari berdasarkan nomor `[PGnnn]`. Buku yang sudah utuh tidak diunduh ulang; berkas lama yang rusak dipindah ke `.bad`.
 - **Pengujian:** `g++ -std=c++11 -o t tests_gutenberg/test_gutendex.cpp && ./t` dan `g++ -std=c++11 -o t tests_gutenberg/test_gutdl.cpp && ./t` (logika murni), serta `python3 tests_gutenberg/run_sim.py` (alur unduh/verifikasi dari kode `.ino` asli dengan stub Arduino). Alur ini diuji sebagian di perangkat (lihat tabel status).
+
+
+## Build layar ST7796 3,5 inci (sentuh FT6236)
+
+Build ini **terpisah** dari build ILI9341 biasa; kodenya sama, dipilih lewat flag `-DRP_DISPLAY_ST7796`
+(semua pengaturan ada di `display_conf.h`). Workflow `Build Firmware Binaries` kini menjalankan dua job:
+
+| | ILI9341 (lama) | ST7796 (baru) |
+|---|---|---|
+| Rilis per build | `build-N` | `st7796-N` (selalu prerelease) |
+| Berkas | `firmware.bin`, `ren_phone_s3_merged.bin` | `firmware-st7796.bin`, `ren_phone_s3_st7796_merged.bin` |
+| Channel OTA | `channel-<branch>` | `channel-<branch>-st7796` |
+| `info.txt` | `display=ili9341` | `display=st7796` |
+
+HP menolak OTA kalau `display=` di `info.txt` tidak cocok dengan layarnya.
+
+**Wiring bawaan:** pin SPI layar sama dengan ILI9341 (SCLK 12, MOSI 11, MISO 13, DC 2, CS 10, RST 14, BL 21).
+FT6236 berbagi bus I2C dengan MPU6050 (SDA 15, SCL 7, alamat 0x38); RST/INT tidak dipakai. Ganti lewat
+`RP_TOUCH_SDA / RP_TOUCH_SCL / RP_TOUCH_RST` di `display_conf.h`.
+
+**Kalau setelah flash:** warna negatif -> `RP_ST7796_INVERT 1`; merah/biru tertukar -> `RP_ST7796_RGB_ORDER 1`;
+sentuhan terbalik -> `RP_TOUCH_SWAP_XY` / `RP_TOUCH_FLIP_X` / `RP_TOUCH_FLIP_Y`. Sentuh kapasitif tidak memakai wizard kalibrasi.

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "display_conf.h"   // profil layar (ILI9341 default / ST7796) -> ukuran panel & posisi viewport DOOM
+
 // hw_conf.h -- dibaca OTOMATIS oleh DoomGlue.cpp (library ESP-DOOM) lewat
 // __has_include("hw_conf.h"). File ini WAJIB ada di folder sketch yang sama
 // dengan phone.ino (bukan di dalam folder library), sama seperti pola tiap
@@ -28,16 +30,16 @@
 // per sesi app, jadi ukuran panel di bawah ini HARUS konstan compile-time,
 // tidak bisa ikut berubah kalau user gonta-ganti orientasi Setting seperti
 // app lain (lihat catatan panjang soal ini di doom_renphone.ino).
-#define DOOM_PANEL_W       320
-#define DOOM_PANEL_H       240
+#define DOOM_PANEL_W       RP_DOOM_PANEL_W   // ILI9341: 320x240 | ST7796: 480x320 (lihat display_conf.h)
+#define DOOM_PANEL_H       RP_DOOM_PANEL_H
 
 // DOOM asli selalu render di 320x200 (rasio 320:200 = 8:5). Cuma
 // DOOM_VIEWPORT_W yg diisi (mode FILL) -> tinggi konten otomatis mengikuti
 // rasio itu (200px), lalu DOOM_VIEWPORT_Y menaruhnya di TENGAH layar
 // 240px (240-200=40 -> 20px sisa strip hitam di atas & bawah, bukan bug).
 #define DOOM_VIEWPORT_W    320
-#define DOOM_VIEWPORT_X    0
-#define DOOM_VIEWPORT_Y    20
+#define DOOM_VIEWPORT_X    RP_DOOM_VIEW_X    // ST7796: 1:1 di tengah (80,60), tanpa scaling
+#define DOOM_VIEWPORT_Y    RP_DOOM_VIEW_Y
 
 // --- Audio: DIMATIKAN (permintaan user, project non-audio) ------------
 #define DOOM_NO_AUDIO

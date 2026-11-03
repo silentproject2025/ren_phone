@@ -128,7 +128,7 @@ static void aboutRefresh() {
   aboutAdd("SD Card", a);
 
   // ---- layar & baterai ----
-  aboutAdd("Layar", "ILI9341 320x240, sentuh XPT2046");
+  aboutAdd("Layar", RP_DISP_NAME);
   snprintf(a, sizeof(a), "%d%% (%.2f V)", battPercent, battVoltage);
   aboutAdd("Baterai", a);
 

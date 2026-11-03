@@ -318,6 +318,7 @@ void otaCheckAndFill() {
   if (!wifiConnected) { showToast("Sambungkan WiFi dulu di Setting"); return; }
   otaChanLoad();
   String ch = otaSel;
+  if (!ch.endsWith(RP_CH_SUFFIX)) ch += RP_CH_SUFFIX;   // build ST7796 -> channel-<branch>-st7796 (ILI9341: suffix kosong)
 
   updBusy = true;
   updDrawBusy("Memeriksa channel...");
@@ -343,6 +344,17 @@ void otaCheckAndFill() {
   if (build <= 0 || size < 100000 || md5.length() != 32 || bi != ch) {
     showToast("Info channel rusak / tidak valid", 2500);
     return;
+  }
+  // Firmware beda LAYAR (ILI9341 vs ST7796) tidak boleh saling timpa -> layar bisa gelap total.
+  // info.txt lama tanpa "display=" dianggap ili9341.
+  {
+    String disp = otaKv(body, "display");
+    if (disp.length() == 0) disp = "ili9341";
+    if (disp != RP_DISP_ID) {
+      showToast("Firmware untuk layar lain. Dibatalkan", 3500);
+      otaResetCheck();
+      return;
+    }
   }
   if (baseRv != RP_BASE_REV) {
     char b[72];
