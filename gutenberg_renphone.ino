@@ -434,6 +434,30 @@ static bool gutWaitTlsHeap(uint32_t maxMs) {
   return lb >= GUT_TLS_MIN_BLOCK;
 }
 
+// Diagnosis WiFi (Serial): dipanggil saat unduhan putus/macet. "Terlihat terhubung di HP tapi tak bisa diakses" = status di sini
+// masih WL_CONNECTED(3) tapi trafik mati; RSSI & kanal membantu membedakan sinyal lemah / pindah kanal.
+static void gutWifiDiag(const char* tag) {
+  Serial.printf("[GUT] WiFi %s: status=%d rssi=%d ch=%d mode=%d ip=%s gw=%s\n", tag, (int)WiFi.status(), (int)WiFi.RSSI(), (int)WiFi.channel(),
+                (int)WiFi.getMode(), WiFi.localIP().toString().c_str(), WiFi.gatewayIP().toString().c_str());
+}
+
+// Paksa STA lepas & sambung lagi (hanya lapisan radio/IP; status wifiConnected milik phone.ino TIDAK disentuh, web server tetap jalan).
+// Dipakai saat data berhenti/ sambung ulang gagal: asosiasi yg "zombie" (HP bilang terhubung, trafik mati) tak pulih dgn membuka soket baru.
+static bool gutWifiRecover() {
+  gutWifiDiag("macet");
+  gutPhase = GUT_PH_CONNECT; needRedraw = true;
+  WiFi.reconnect();
+  delay(600);                                              // beri event disconnect waktu diproses (supaya status lama tak terbaca "terhubung")
+  uint32_t t0 = millis();
+  while (!gutCancel && (uint32_t)(millis() - t0) < 12000 && (WiFi.status() != WL_CONNECTED || WiFi.localIP() == IPAddress((uint32_t)0))) delay(100);
+  WiFi.setSleep(false);                                    // jaga hemat daya WiFi tetap mati
+  bool ok = (WiFi.status() == WL_CONNECTED);
+  if (ok) for (uint32_t w = 0; w < 800 && !gutCancel; w += 100) delay(100);   // beri ARP/DHCP waktu mapan
+  Serial.printf("[GUT] WiFi pulih=%d setelah %lu ms\n", (int)ok, (unsigned long)(millis() - t0));
+  gutWifiDiag("sesudah");
+  return ok;
+}
+
 static void gutSetErr(int rc) {
   gutPhase = GUT_PH_ERROR;
   switch (rc) {
@@ -538,6 +562,7 @@ static void gutDoDownload() {
       if (useLite) { useLite = false; resume = 0; continue; }     // versi ringan tak ada -> URL asli
       break;
     }
+    if (rc == -1 || rc == -3) { gutWifiDiag("putus"); gutWifiRecover(); }   // data berhenti / gagal konek: segarkan WiFi dulu, bukan cuma soket
     if (sz > resume) { resume = sz; stall = 0; }                  // ada kemajuan: sambung lagi
     else {
       if (++stall >= GUT_MAX_STALL) break;                        // berturut-turut tanpa kemajuan: menyerah
