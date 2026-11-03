@@ -34,9 +34,9 @@
 #define GUT_MAX_STALL  6           // sambung ulang berturut-turut tanpa kemajuan sebelum menyerah (dengan jeda makin panjang)
 #define GUT_MAX_TRY    40          // maks sambungan ulang per unduhan (berhenti lebih awal bila 3x tanpa kemajuan)
 #define GUT_PARALLEL   1           // 1 = unduh dgn 2 koneksi paralel (Range, tiap koneksi separuh berkas); 0 = satu koneksi saja
-#define GUT_TLS_MIN_BLOCK 45000u        // blok RAM internal terbesar yg diminta sebelum (sambung ulang) TLS; ambang awal, sesuaikan dari log
-#define GUT_PAR_MIN_BLOCK 60000u        // paralel (2 TLS sekaligus) hanya dicoba bila blok terbesar >= ini ...
-#define GUT_PAR_MIN_FREE  110000u       // ... dan total RAM internal bebas >= ini
+#define GUT_TLS_MIN_BLOCK 24000u        // blok RAM internal terbesar yg diminta sebelum (sambung ulang); mbedTLS sudah di PSRAM, jadi ambang rendah. TEBAKAN, sesuaikan dari log
+#define GUT_PAR_MIN_BLOCK 30000u        // paralel hanya dicoba bila blok internal terbesar >= ini ... (TEBAKAN)
+#define GUT_PAR_MIN_FREE  60000u        // ... dan total RAM internal bebas >= ini (TEBAKAN)
 #define GUT_PAR_MIN    (192u * 1024u)   // berkas lebih kecil dari ini: satu koneksi saja (handshake TLS kedua tak sepadan)
 
 enum { GUT_JOB_NONE = 0, GUT_JOB_SEARCH, GUT_JOB_DL };
@@ -301,7 +301,8 @@ static int gutFetchRange(const char* url, File* f, uint32_t from, uint32_t to, u
   uint32_t t0 = millis();
   int code = http.GET();
   gutLastReqMs = millis();
-  Serial.printf("[GUT] L%u GET %s [%s] -> %d (%lu ms)\n", (unsigned)lane, url, rg, code, (unsigned long)(millis() - t0));
+  Serial.printf("[GUT] L%u GET %s [%s] -> %d (%lu ms) RAM int: blok %u, bebas %u\n", (unsigned)lane, url, rg, code, (unsigned long)(millis() - t0),
+                (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL), (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
   if (code == 200) { http.end(); return -7; }
   if (code != 206) { http.end(); return code > 0 ? code : (code == -11 ? -3 : -1); }
   uint32_t want = to - from + 1;
