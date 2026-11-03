@@ -29,7 +29,9 @@
 #define GUT_TXT_MAX    (3u * 1024u * 1024u)    // batas TXT pembaca Buku
 #define GUT_EPUB_MAX   (40u * 1024u * 1024u)
 #define GUT_GAP_MS     1500        // jeda minimum antar permintaan ke server
+#define GUT_DL_REDRAW_MS 1000      // selama mengunduh layar digambar ulang tiap ~1 dtk (UI berat bisa menahan pembacaan jaringan)
 #define GUT_IDLE_MS    8000        // diam selama ini = anggap macet, sambung ulang
+#define GUT_MAX_STALL  6           // sambung ulang berturut-turut tanpa kemajuan sebelum menyerah (dengan jeda makin panjang)
 #define GUT_MAX_TRY    40          // maks sambungan ulang per unduhan (berhenti lebih awal bila 3x tanpa kemajuan)
 
 enum { GUT_JOB_NONE = 0, GUT_JOB_SEARCH, GUT_JOB_DL };
@@ -135,7 +137,7 @@ class GutSink : public Stream {                          // HTTPClient::writeToS
       else if (ns - gutSpdT >= 2000) { gutInstBps = (uint32_t)((uint64_t)(got - gutSpdB) * 1000 / (ns - gutSpdT)); gutSpdT = ns; gutSpdB = got; } }
     if (gutPhase == GUT_PH_CONNECT) { gutPhase = GUT_PH_DOWNLOAD; gutT0 = millis(); }
     uint32_t now = millis();
-    if (now - lastDraw > 180) { lastDraw = now; needRedraw = true; }
+    if (now - lastDraw > GUT_DL_REDRAW_MS) { lastDraw = now; needRedraw = true; }   // gambar ulang layar jarang: UI & task unduh berbagi core 1
     return n;
   }
 };
@@ -169,7 +171,10 @@ static int gutFetch(const char* url, uint8_t* mem, uint32_t memCap, File* f, uin
   Serial.printf("[GUT] GET %s%s -> %d (%lu ms)\n", manual ? "(1.0) " : "", url, code, (unsigned long)(millis() - t0));
   if (resumeFrom && code == 200) { http.end(); snprintf(gutDiag, sizeof(gutDiag), "server tak dukung Range"); return -7; }   // kirim ulang penuh: jangan ditempel
   if (code != 200 && !(resumeFrom && code == 206)) {
-    snprintf(gutDiag, sizeof(gutDiag), "GET=%d %s", code, manual ? "http1.0" : "http1.1");
+    snprintf(gutDiag, sizeof(gutDiag), "GET=%d %s int=%uK/%uK", code, manual ? "http1.0" : "http1.1",
+             (unsigned)(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL) / 1024), (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024));
+    Serial.printf("[GUT] GET gagal %d (%s), RAM internal: blok terbesar %u B, bebas %u B\n", code, HTTPClient::errorToString(code).c_str(),
+                  (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL), (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
     http.end(); return code > 0 ? code : (code == -11 ? -3 : -1);
   }
   int len = http.getSize();
@@ -301,12 +306,16 @@ static void gutDoDownload() {
       break;
     }
     if (sz > resume) { resume = sz; stall = 0; }                  // ada kemajuan: sambung lagi
-    else if (++stall >= 3) break;                                 // 3x berturut tanpa kemajuan: menyerah
+    else {
+      if (++stall >= GUT_MAX_STALL) break;                        // berturut-turut tanpa kemajuan: menyerah
+      // gagal sambung (server/WiFi/RAM): beri jeda makin panjang (3, 6, 9 ... dtk) supaya server tak dibanjiri & RAM sempat lega
+      for (uint32_t w = 0; w < 3000u * (uint32_t)stall && !gutCancel; w += 100) delay(100);
+    }
     if (resume == 0) gutPhase = GUT_PH_CONNECT;
   }
   if (rc != 200) {                                                // simpan .part supaya "Coba lagi" melanjutkan
     File g = SD_MMC.open(tmp, FILE_READ); uint32_t sz = g ? (uint32_t)g.size() : 0; if (g) g.close();
-    keepPart = (rc == -3 || (rc > 0 && sz > 0)) && sz > 0;
+    keepPart = sz > 0 && rc != -2 && rc != -4 && rc != -5;        // ada data sebagian & bukan batal/terlalu besar/SD: boleh dilanjut
   }
   if (rc == 200 && got > 0 && isEpub) {                             // EPUB = ZIP: harus diawali "PK"
     File c = SD_MMC.open(tmp, FILE_READ);
@@ -329,7 +338,7 @@ static void gutDoDownload() {
   if (!keepPart) { SD_MMC.remove(tmp); gutPartUrl[0] = 0; }
   gutSetErr(rc == 200 ? -3 : rc);
   if (rc == -4 && !isEpub) strcpy(gutMsg, "TXT > 3 MB: terlalu besar utk Buku.");
-  if (keepPart) strcpy(gutMsg, "Terputus. Ketuk Coba lagi = lanjut.");
+  if (keepPart) strcpy(gutMsg, rc == -1 ? "Gagal sambung ulang. Coba lagi = lanjut." : "Terputus. Ketuk Coba lagi = lanjut.");
 }
 
 static void gutTaskFunc(void*) {
@@ -440,7 +449,7 @@ void gutLoopPoll() {
     gutAutoLoad = false;
     if (WiFi.status() == WL_CONNECTED) gutStartSearch(false);
   }
-  if (gutBusy && millis() - gutAnimMs > 250) { gutAnimMs = millis(); needRedraw = true; }
+  if (gutBusy && millis() - gutAnimMs > (gutPhase == GUT_PH_DOWNLOAD ? GUT_DL_REDRAW_MS : 250u)) { gutAnimMs = millis(); needRedraw = true; }
 }
 
 // ---------------------------------------------------------------------
