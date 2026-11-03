@@ -1389,7 +1389,8 @@ void nyxDrawAppEnergy(LGFX_Sprite&,int,int); void nyxAppEnergyTouch(int,int,int,
 String nyxVoiceInstruction(); String nyxVoiceStatus(); bool nyxVoiceExtract(String&);
 void nyxShotThumbCapture(const char*); void nyxShotThumbHide(); bool nyxShotThumbActive();
 void drawShotThumb(LGFX_Sprite&); bool nyxShotThumbTouch(bool,bool,int,int);
-bool nyxShotThumbAnimating(); void nyxShotThumbFastFrame();   // NYX_TH_STRIP_V3
+bool nyxShotThumbAnimating(); void nyxShotThumbFastFrame(); bool nyxThFreezeFrame();   // NYX_TH_V4
+//   // NYX_TH_STRIP_V3
 void nyxSkeleton(LGFX_Sprite&,int);
 // NYX-AA-V1: bentuk anti-alias (nyxextras_renphone.ino)
 void nyxAaCircle(lgfx::LGFXBase&,int,int,int,uint16_t); void nyxAaCircleRing(lgfx::LGFXBase&,int,int,int,uint16_t);
@@ -11642,8 +11643,9 @@ unsigned long getPushLastUs(){ return nyxPushLastUs; }
 // justru karena push() lama synchronous 100% (jaminan "bus pasti idle
 // begitu push() selesai"). Versi async ngerusak jaminan itu -> dua
 // transfer numpuk di kabel yg sama. Balik ke synchronous biasa.
-void push(){ unsigned long t0=micros(); canvas.pushSprite(0,0); nyxPushLastUs=micros()-t0; rcFrameMark(); }
+void push(){ if(nyxThFreezeFrame()) return; unsigned long t0=micros(); canvas.pushSprite(0,0); nyxPushLastUs=micros()-t0; rcFrameMark(); }
 void renderCurrentFrame(){
+  if(nyxThFreezeFrame()) return;   // NYX_TH_V4
   // v68 FIX: font custom (Mono/Sans/Tebal/Serif) ternyata KETINGGIAN buat
   // kotak2 UI yg didesain pas-pasan buat teks 8px (tombol, status bar, grid
   // home, dst) -- laporan user: "hurufnya keluar-keluar". Lebar teks emang

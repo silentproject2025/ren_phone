@@ -777,7 +777,11 @@ static bool     nyxThBgValid = false;          // latar sah = salinan canvas dar
 static bool     nyxThDispVis = false;          // kartu sedang terlihat di layar
 static bool     nyxThFastWant = false;         // tick minta 1 frame cepat
 static uint32_t nyxThFullN = 0, nyxThSeenFullN = 0;
-static uint32_t nyxThSig = 0;                  // tanda tangan layar saat latar diambil
+static uint32_t nyxThSig = 0;
+static bool     nyxThStarted = false;          // NYX_TH_V4: jam animasi baru jalan di frame pertama
+static int      nyxThShownX = 0;               // posisi x yang benar-benar tampil (dibatasi lajunya)
+static bool     nyxThDeferred = false;         // ada redraw UI yang ditunda selama animasi
+#define NYX_TH_MAX_STEP 14                     // px maksimum per frame                  // tanda tangan layar saat latar diambil
 
 static void* nyxThAlloc(size_t n) {
   void* p = heap_caps_malloc(n, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
@@ -795,6 +799,7 @@ static void nyxThFree() {
   if (nyxThSprOk)  { nyxThBg.deleteSprite(); nyxThStrip.deleteSprite(); nyxThSprOk = false; }
   nyxThShN = 0; nyxThFw = 0; nyxThFh = 0;
   nyxThBgValid = false; nyxThDispVis = false; nyxThFastWant = false;
+  nyxThStarted = false; nyxThDeferred = false;
   nyxThOn = false; nyxThDown = false; nyxThDrag = false; nyxThOutT0 = 0;
 }
 
@@ -814,6 +819,12 @@ static int nyxThCurX() {
   }
   float k = nyxEaseIO((float)(now - nyxThT0) / (float)NYX_TH_IN_MS);
   return (int)lroundf((float)(-(nyxThW + 12)) + (float)(restX + nyxThW + 12) * k);
+}
+// maju satu langkah menuju target berbasis waktu, maksimal NYX_TH_MAX_STEP px per frame
+static void nyxThStepX() {
+  int d = nyxThCurX() - nyxThShownX;
+  if (d > NYX_TH_MAX_STEP) d = NYX_TH_MAX_STEP; else if (d < -NYX_TH_MAX_STEP) d = -NYX_TH_MAX_STEP;
+  nyxThShownX += d;
 }
 static int nyxThCurY() { return SCR_H - BACK_H - nyxThH - 18; }
 
@@ -1069,9 +1080,11 @@ static void nyxThCompose(int fl) {
 void drawShotThumb(LGFX_Sprite& s) {
   if (!nyxShotThumbActive()) return;
   nyxThFullN++;
+  if (!nyxThStarted) { nyxThStarted = true; nyxThT0 = millis(); nyxThShownX = -(nyxThW + 12); }
+  nyxThStepX();
   nyxThCaptureBg(s);
   nyxThBgValid = (&s == &canvas) && !homeBandMode;   // mode pita: canvas di luar pita belum tentu bersih
-  int fl = nyxThCurX() - NYX_TH_BORDER - nyxThBx;
+  int fl = nyxThShownX - NYX_TH_BORDER - nyxThBx;
   if (fl + nyxThFw + NYX_TH_SH_SP <= 0) { nyxThDispVis = false; return; }   // masih di luar layar
   nyxThCompose(fl);
   nyxThStrip.pushSprite(&s, nyxThBx, nyxThBy);       // ke canvas (patuh clip rect)
@@ -1097,7 +1110,8 @@ void nyxShotThumbFastFrame() {
   if (nyxThFullN != nyxThSeenFullN) { nyxThSeenFullN = nyxThFullN; return; }   // frame penuh baru saja menggambarnya
   if (!nyxThFastOk()) { needRedraw = true; return; }                            // fallback: jalur lama
   uiBoostKick();
-  int fl = nyxThCurX() - NYX_TH_BORDER - nyxThBx;
+  nyxThStepX();
+  int fl = nyxThShownX - NYX_TH_BORDER - nyxThBx;
   bool vis = (fl + nyxThFw + NYX_TH_SH_SP > 0);
   if (!vis && !nyxThDispVis) return;                 // belum muncul & layar sudah bersih: tak ada yang dikirim
   nyxThCompose(fl);
@@ -1108,14 +1122,22 @@ void nyxShotThumbFastFrame() {
 // true selama thumbnail sedang bergerak (masuk / keluar)
 bool nyxShotThumbAnimating() {
   if (!nyxShotThumbActive()) return false;
-  if (nyxThOutT0) return true;
-  return (millis() - nyxThT0) < (uint32_t)(NYX_TH_IN_MS + 80);
+  if (!nyxThStarted || nyxThOutT0) return true;
+  return nyxThShownX != nyxThCurX() || (millis() - nyxThT0) < (uint32_t)(NYX_TH_IN_MS + 80);
+}
+
+// true = lewati render+push UI ini (dipanggil dari renderCurrentFrame() & push())
+bool nyxThFreezeFrame() {
+  if (!nyxThCard || !nyxThStarted || wasTouched) return false;
+  if (!nyxShotThumbAnimating() || !nyxThFastOk()) return false;
+  nyxThDeferred = true;
+  return true;
 }
 
 // true = sentuhan ini milik thumbnail (jangan diteruskan ke app)
 bool nyxShotThumbTouch(bool touched, bool newT, int tx, int ty) {
   if (!nyxShotThumbActive() || nyxThOutT0) { nyxThDown = false; return false; }
-  int x = nyxThCurX(), y = nyxThCurY();
+  int x = nyxThShownX, y = nyxThCurY();
   bool inside = tx >= x - 6 && tx <= x + nyxThW + 6 && ty >= y - 6 && ty <= y + nyxThH + 6;
   if (!touched) {
     bool wasDown = nyxThDown, wasDrag = nyxThDrag;
@@ -1151,15 +1173,19 @@ static void nyxThAnimStep() {
 static void nyxThumbTick() {
   if (!nyxThCard) return;
   if (locked) { nyxThFree(); return; }
-  uint32_t now = millis();
   if (SCR_W != nyxThScrW || SCR_H != nyxThScrH) { nyxThFree(); needRedraw = true; return; }   // rotasi berubah
+  if (!nyxThStarted) { needRedraw = true; return; }     // tunggu frame penuh pertama (jam animasi mulai di sana)
+  uint32_t now = millis();
+  bool reached = (nyxThShownX == nyxThCurX());
   if (nyxThOutT0) {
-    if (now - nyxThOutT0 >= NYX_TH_OUT_MS) { nyxThFree(); needRedraw = true; }
+    bool up = (now - nyxThOutT0 >= NYX_TH_OUT_MS);
+    if (up && (reached || now - nyxThOutT0 >= NYX_TH_OUT_MS + 250)) { nyxThFree(); needRedraw = true; }
     else nyxThAnimStep();
     return;
   }
-  if (now - nyxThT0 < NYX_TH_IN_MS + 40) nyxThAnimStep();
-  else if (!nyxThDown && now - nyxThT0 > NYX_TH_IN_MS + NYX_TH_HOLD_MS) { nyxThOutT0 = now; nyxThAnimStep(); }
+  if (!reached || now - nyxThT0 < NYX_TH_IN_MS + 40) { nyxThAnimStep(); return; }
+  if (nyxThDeferred) { nyxThDeferred = false; needRedraw = true; }       // jalankan redraw UI yang tertunda
+  if (!nyxThDown && now - nyxThT0 > NYX_TH_IN_MS + NYX_TH_HOLD_MS) { nyxThOutT0 = now; nyxThAnimStep(); }
 }
 
 // =====================================================================
