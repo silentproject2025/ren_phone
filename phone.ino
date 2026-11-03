@@ -1389,6 +1389,7 @@ void nyxDrawAppEnergy(LGFX_Sprite&,int,int); void nyxAppEnergyTouch(int,int,int,
 String nyxVoiceInstruction(); String nyxVoiceStatus(); bool nyxVoiceExtract(String&);
 void nyxShotThumbCapture(const char*); void nyxShotThumbHide(); bool nyxShotThumbActive();
 void drawShotThumb(LGFX_Sprite&); bool nyxShotThumbTouch(bool,bool,int,int);
+bool nyxShotThumbAnimating(); void nyxShotThumbFastFrame();   // NYX_TH_STRIP_V3
 void nyxSkeleton(LGFX_Sprite&,int);
 // NYX-AA-V1: bentuk anti-alias (nyxextras_renphone.ino)
 void nyxAaCircle(lgfx::LGFXBase&,int,int,int,uint16_t); void nyxAaCircleRing(lgfx::LGFXBase&,int,int,int,uint16_t);
@@ -19993,6 +19994,7 @@ void loop(){
   // NYX-EXTRAS-V1: banner telepon masuk & thumbnail screenshot menelan sentuhan yg mengenai dirinya
   if(callBannerTouch(touched,newT,tx,ty) || nyxShotThumbTouch(touched,newT,tx,ty)){
     if(needRedraw){ renderCurrentFrame(); push(); needRedraw=false; }
+    nyxShotThumbFastFrame();
     wasTouched=touched; delay(1); return;
   }
   if(callOverlayActive()){
@@ -20392,7 +20394,7 @@ void loop(){
       bool plainNow = !locked && !appSwitcherOpen && !controlCenterOpen && !notifShadeOpen && !homeAodActive && !diMenuOpen
                       && !kbVisible && !searching && !toastVisibleNow() && !homeSearchBar.open && !homeSearchBar.animating
                       && ((int)(diCurY+diCurH) < homeGridClipTop());
-      if(bandCand && !redrawBefore && !sbChanged && homeBandReady && plainNow){
+      if(bandCand && !redrawBefore && !sbChanged && homeBandReady && plainNow && !nyxShotThumbAnimating()){
         renderHomeBandFrame();
       } else {
         renderCurrentFrame(); push();
@@ -20575,6 +20577,7 @@ void loop(){
       renderCurrentFrame();push();needRedraw=false;
     }
   }
+  nyxShotThumbFastFrame();   // NYX_TH_STRIP_V3: frame animasi thumbnail = strip kecil, tanpa render UI
   wasTouched=touched;
   // v95: SEMUA delay(8) di file ini (loop() + loop animasi boot + early-
   // return touch di bawah) diperkecil ke delay(1) -- AMAN krn tiap animasi

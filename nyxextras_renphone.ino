@@ -741,74 +741,72 @@ static void nyxVoiceTick() {
 #define NYX_TH_MAX_W    124
 #define NYX_TH_BORDER   3           // 2 px cincin terang + 1 px garis gelap di antara cincin & gambar
 #define NYX_TH_RADIUS   11          // radius luar bingkai
-#define NYX_TH_IN_MS    420          // NYX_TH_SMOOTH_V2 (dulu 260)
+#define NYX_TH_IN_MS    420         // NYX_TH_STRIP_V3
 #define NYX_TH_HOLD_MS  3800
-#define NYX_TH_OUT_MS   320          // (dulu 220)
-#define NYX_TH_SH_SP    9            // bayangan memudar sejauh ini (px)
-#define NYX_TH_SH_OY    4            // bayangan turun sekian px
-static uint16_t* nyxThumb = nullptr;
-static int  nyxThW = 0, nyxThH = 0;
+#define NYX_TH_OUT_MS   320
+#define NYX_TH_SH_SP    9           // bayangan memudar sejauh ini (px)
+#define NYX_TH_SH_OY    4           // bayangan turun sekian px
+#define NYX_TH_REST_X   12          // posisi x gambar saat diam
+
+void uiBoostKick();
+
 static bool nyxThOn = false;
 static uint32_t nyxThT0 = 0, nyxThOutT0 = 0;
 static char nyxThPath[64] = "";
 static bool nyxThDown = false, nyxThDrag = false;
 static int  nyxThX0 = 0;
-static uint8_t* nyxThShMask = nullptr;   // kekuatan bayangan per piksel (0..255), dihitung sekali per screenshot
-static int  nyxThShW = 0, nyxThShH = 0;
-static void nyxThBuildShadow();
+static int  nyxThW = 0, nyxThH = 0;            // ukuran GAMBAR (tanpa bingkai)
+
+// ---- kartu hasil bake: urutan byte = urutan buffer sprite (swap565), premultiplied ----
+static uint16_t* nyxThCard   = nullptr;        // fw*fh
+static uint8_t*  nyxThCardA  = nullptr;        // fw*fh alpha (255 = buram)
+static uint8_t*  nyxThRowLo  = nullptr;        // per baris: piksel [0,lo) di kiri tidak buram penuh
+static uint8_t*  nyxThRowHi  = nullptr;        // per baris: piksel [hi,fw) di kanan tidak buram penuh
+static uint8_t*  nyxThShList = nullptr;        // bayangan: 3 byte per entri (mx, my, kekuatan)
+static int       nyxThShN    = 0;
+static int       nyxThFw = 0, nyxThFh = 0;     // ukuran bingkai
+static int       nyxThFy = 0;                  // y layar tepi atas bingkai (tetap)
+// ---- jalur (band) layar tempat thumbnail bergerak ----
+static LGFX_Sprite nyxThBg(&display);          // latar bersih di jalur (salinan canvas, TANPA thumbnail)
+static LGFX_Sprite nyxThStrip(&display);       // buffer kerja: latar + bayangan + kartu -> ke layar
+static bool nyxThSprOk = false;
+static int  nyxThBx = 0, nyxThBy = 0, nyxThBw = 0, nyxThBh = 0;
+static int  nyxThScrW = 0, nyxThScrH = 0;
+// ---- status jalur cepat ----
+static bool     nyxThBgValid = false;          // latar sah = salinan canvas dari frame penuh terakhir
+static bool     nyxThDispVis = false;          // kartu sedang terlihat di layar
+static bool     nyxThFastWant = false;         // tick minta 1 frame cepat
+static uint32_t nyxThFullN = 0, nyxThSeenFullN = 0;
+static uint32_t nyxThSig = 0;                  // tanda tangan layar saat latar diambil
+
+static void* nyxThAlloc(size_t n) {
+  void* p = heap_caps_malloc(n, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  if (!p) p = malloc(n);
+  return p;
+}
+static inline uint16_t nyxSw16(uint16_t v) { return (uint16_t)((v << 8) | (v >> 8)); }
 
 static void nyxThFree() {
-  if (nyxThumb) { free(nyxThumb); nyxThumb = nullptr; }
-  if (nyxThShMask) { free(nyxThShMask); nyxThShMask = nullptr; }
-  nyxThShW = 0; nyxThShH = 0;
+  if (nyxThCard)   { free(nyxThCard);   nyxThCard = nullptr; }
+  if (nyxThCardA)  { free(nyxThCardA);  nyxThCardA = nullptr; }
+  if (nyxThRowLo)  { free(nyxThRowLo);  nyxThRowLo = nullptr; }
+  if (nyxThRowHi)  { free(nyxThRowHi);  nyxThRowHi = nullptr; }
+  if (nyxThShList) { free(nyxThShList); nyxThShList = nullptr; }
+  if (nyxThSprOk)  { nyxThBg.deleteSprite(); nyxThStrip.deleteSprite(); nyxThSprOk = false; }
+  nyxThShN = 0; nyxThFw = 0; nyxThFh = 0;
+  nyxThBgValid = false; nyxThDispVis = false; nyxThFastWant = false;
   nyxThOn = false; nyxThDown = false; nyxThDrag = false; nyxThOutT0 = 0;
 }
 
-// dipanggil dari screenshotSaveNow() setelah BMP tersimpan
-void nyxShotThumbCapture(const char* path) {
-  nyxThFree();
-  int w = canvas.width(), h = canvas.height();
-  if (w <= 0 || h <= 0) return;
-  int tw = SCR_W * 30 / 100;
-  if (tw < NYX_TH_MIN_W) tw = NYX_TH_MIN_W;
-  if (tw > NYX_TH_MAX_W) tw = NYX_TH_MAX_W;
-  int th = (tw * h) / w;
-  if (th < 40) th = 40;
-  if (th > 110) th = 110;
-  nyxThumb = (uint16_t*)heap_caps_malloc((size_t)tw * th * 2, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-  if (!nyxThumb) nyxThumb = (uint16_t*)malloc((size_t)tw * th * 2);
-  if (!nyxThumb) return;
-  for (int j = 0; j < th; j++) {
-    int y0 = (j * h) / th, y1 = ((j + 1) * h) / th - 1; if (y1 < y0) y1 = y0;
-    for (int i = 0; i < tw; i++) {
-      int x0 = (i * w) / tw, x1 = ((i + 1) * w) / tw - 1; if (x1 < x0) x1 = x0;
-      uint32_t r = 0, g = 0, b = 0; int cnt = 0;
-      for (int sy = 0; sy < 3; sy++) for (int sx = 0; sx < 3; sx++) {            // rata-rata 3x3 titik -> lebih halus
-        uint16_t c = (uint16_t)canvas.readPixel(x0 + ((x1 - x0) * sx) / 2, y0 + ((y1 - y0) * sy) / 2);
-        r += (c >> 11) & 0x1F; g += (c >> 5) & 0x3F; b += c & 0x1F; cnt++;
-      }
-      r /= cnt; g /= cnt; b /= cnt;
-      nyxThumb[j * tw + i] = (uint16_t)((r << 11) | (g << 5) | b);
-    }
-  }
-  nyxThW = tw; nyxThH = th;
-  nyxThBuildShadow();
-  strncpy(nyxThPath, path ? path : "", sizeof(nyxThPath) - 1);
-  nyxThPath[sizeof(nyxThPath) - 1] = 0;
-  nyxThOn = true; nyxThT0 = millis(); nyxThOutT0 = 0;
-  vibSuccess();
-}
+void nyxShotThumbHide() { if (nyxThOn || nyxThCard) { nyxThFree(); needRedraw = true; } }
+bool nyxShotThumbActive() { return nyxThOn && nyxThCard && nyxThSprOk; }
 
-void nyxShotThumbHide() { if (nyxThOn || nyxThumb) { nyxThFree(); needRedraw = true; } }
-bool nyxShotThumbActive() { return nyxThOn && nyxThumb; }
-
-static float nyxEaseOut(float k) { if (k < 0) k = 0; if (k > 1) k = 1; float q = 1.0f - k; return 1.0f - q * q * q; }
-// ease-in-out kosinus: awal & akhir lembut, gerak tengah merata (tidak "melompat" di frame pertama)
+// ease-in-out kosinus: awal & akhir lembut, gerak tengah merata
 static float nyxEaseIO(float k) { if (k < 0) k = 0; if (k > 1) k = 1; return 0.5f - 0.5f * cosf(3.14159265f * k); }
 
-// posisi x thumbnail saat ini (animasi masuk / keluar)
+// posisi x gambar saat ini (animasi masuk / keluar) -- dihitung dari WAKTU NYATA
 static int nyxThCurX() {
-  const int restX = 12;
+  const int restX = NYX_TH_REST_X;
   uint32_t now = millis();
   if (nyxThOutT0) {
     float k = nyxEaseIO((float)(now - nyxThOutT0) / (float)NYX_TH_OUT_MS);
@@ -827,95 +825,291 @@ static float nyxSdfRR(float px, float py, float cx, float cy, float hw, float hh
   return sqrtf(ox * ox + oy * oy) + inside - r;
 }
 
-// hitung sekali: kekuatan bayangan tiap piksel relatif terhadap bingkai (0 = tanpa bayangan / tertutup bingkai)
-static void nyxThBuildShadow() {
-  if (nyxThShMask) { free(nyxThShMask); nyxThShMask = nullptr; }
-  nyxThShW = 0; nyxThShH = 0;
-  if (nyxThW <= 0 || nyxThH <= 0) return;
-  const int bw = NYX_TH_BORDER, ro = NYX_TH_RADIUS, sp = NYX_TH_SH_SP, soy = NYX_TH_SH_OY;
-  int fw = nyxThW + bw * 2, fh = nyxThH + bw * 2;
+// gambar kartu (cincin + garis gelap + gambar dgn sudut anti-alias) ke sprite g di (0,0)
+static void nyxThDrawCardInto(LGFX_Sprite& g, const uint16_t* img, int tw, int th) {
+  const int bw = NYX_TH_BORDER, ro = NYX_TH_RADIUS, ri = ro - bw;
+  int fw = tw + bw * 2, fh = th + bw * 2;
+  const uint16_t hair = 0x1082;
+  iosRR(g, 0, 0, fw, fh, ro, blend565(T().text, T().bg, 22));
+  iosRR(g, 2, 2, fw - 4, fh - 4, ro - 2, hair);
+  for (int j = 0; j < th; j++) {
+    bool cornerRow = (j < ri) || (j >= th - ri);
+    const uint16_t* row = img + (size_t)j * tw;
+    for (int i = 0; i < tw; i++) {
+      uint16_t c = row[i];
+      if (cornerRow && ((i < ri) || (i >= tw - ri))) {
+        float ddx = fmaxf(fmaxf((float)ri - (i + 0.5f), (i + 0.5f) - (float)(tw - ri)), 0.0f);
+        float ddy = fmaxf(fmaxf((float)ri - (j + 0.5f), (j + 0.5f) - (float)(th - ri)), 0.0f);
+        if (ddx > 0.0f && ddy > 0.0f) {
+          float d = sqrtf(ddx * ddx + ddy * ddy) - (float)ri;
+          if (d > 0.5f) continue;
+          if (d > -0.5f) c = blend565(hair, c, (uint8_t)((0.5f - d) * 255.0f));
+        }
+      }
+      g.drawPixel(bw + i, bw + j, c);
+    }
+  }
+}
+
+// BAKE (sekali per screenshot). false = gagal (memori) -> pemanggil memanggil nyxThFree()
+static bool nyxThBake(const uint16_t* img) {
+  const int bd = NYX_TH_BORDER, ro = NYX_TH_RADIUS, sp = NYX_TH_SH_SP, soy = NYX_TH_SH_OY;
+  int fw = nyxThW + bd * 2, fh = nyxThH + bd * 2;
+  size_t n = (size_t)fw * fh;
+  if (fw > 250 || fh > 250) return false;
+
+  // --- 1) kartu premultiplied + alpha: gambar di atas hitam dan putih ---
+  LGFX_Sprite t(&display);
+  t.setColorDepth(16); t.setPsram(true);
+  if (!t.createSprite(fw, fh)) return false;
+  uint16_t* pb = (uint16_t*)nyxThAlloc(n * 2);
+  nyxThCard  = (uint16_t*)nyxThAlloc(n * 2);
+  nyxThCardA = (uint8_t*)nyxThAlloc(n);
+  nyxThRowLo = (uint8_t*)nyxThAlloc((size_t)fh);
+  nyxThRowHi = (uint8_t*)nyxThAlloc((size_t)fh);
+  if (!pb || !nyxThCard || !nyxThCardA || !nyxThRowLo || !nyxThRowHi) {
+    if (pb) free(pb);
+    t.deleteSprite();
+    return false;
+  }
+  t.fillSprite(0x0000);
+  nyxThDrawCardInto(t, img, nyxThW, nyxThH);
+  for (int j = 0; j < fh; j++) for (int i = 0; i < fw; i++) pb[(size_t)j * fw + i] = (uint16_t)t.readPixel(i, j);
+  t.fillSprite(0xFFFF);
+  nyxThDrawCardInto(t, img, nyxThW, nyxThH);
+  for (int j = 0; j < fh; j++) {
+    for (int i = 0; i < fw; i++) {
+      size_t k = (size_t)j * fw + i;
+      uint16_t pw = (uint16_t)t.readPixel(i, j);
+      int dg = (int)((pw >> 5) & 63) - (int)((pb[k] >> 5) & 63);
+      if (dg < 0) dg = 0;
+      uint8_t a;
+      if (dg == 0) a = 255;
+      else { int v = 255 - (dg * 255) / 63; a = (uint8_t)(v < 0 ? 0 : v); }
+      nyxThCard[k]  = nyxSw16(a ? pb[k] : (uint16_t)0);
+      nyxThCardA[k] = a;
+    }
+  }
+  free(pb);
+  t.deleteSprite();
+  for (int j = 0; j < fh; j++) {                       // bagian buram penuh per baris -> memcpy saat compose
+    const uint8_t* ar = nyxThCardA + (size_t)j * fw;
+    int lo = 0; while (lo < fw && ar[lo] != 255) lo++;
+    int hi = fw; while (hi > lo && ar[hi - 1] != 255) hi--;
+    for (int i = lo; i < hi; i++) if (ar[i] != 255) { lo = hi = fw; break; }   // tak terduga: semua lewat jalur blend
+    nyxThRowLo[j] = (uint8_t)lo; nyxThRowHi[j] = (uint8_t)hi;
+  }
+  nyxThFw = fw; nyxThFh = fh;
+
+  // --- 2) bayangan: daftar piksel tak-nol relatif terhadap kartu ---
   int mw = fw + sp * 2, mh = fh + sp * 2;
-  uint8_t* m = (uint8_t*)heap_caps_malloc((size_t)mw * mh, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-  if (!m) m = (uint8_t*)malloc((size_t)mw * mh);
-  if (!m) return;                                   // tanpa mask: bayangan dilewati, thumbnail tetap tampil
+  if (mw > 255 || mh > 255) return false;
+  uint8_t* m = (uint8_t*)nyxThAlloc((size_t)mw * mh);
+  if (!m) return false;
   float cx = fw * 0.5f, cy = fh * 0.5f, hw = cx, hh = cy;
+  int cnt = 0;
   for (int my = 0; my < mh; my++) {
     for (int mx = 0; mx < mw; mx++) {
       float fp = (float)(mx - sp) + 0.5f, fq = (float)(my - sp + soy) + 0.5f;
       uint8_t v = 0;
-      if (nyxSdfRR(fp, fq, cx, cy, hw, hh, (float)ro) > 0.0f) {                 // di luar bingkai
-        float d = nyxSdfRR(fp, fq, cx, cy + (float)soy, hw, hh, (float)ro);     // jarak ke bayangan
+      if (nyxSdfRR(fp, fq, cx, cy, hw, hh, (float)ro) > 0.0f) {
+        float d = nyxSdfRR(fp, fq, cx, cy + (float)soy, hw, hh, (float)ro);
         if (d < (float)sp) {
-          float k = d <= 0 ? 1.0f : 1.0f - d / (float)sp;
-          v = (uint8_t)(k * k * 255.0f + 0.5f);
+          float kk = d <= 0 ? 1.0f : 1.0f - d / (float)sp;
+          v = (uint8_t)(kk * kk * 255.0f + 0.5f);
         }
       }
       m[(size_t)my * mw + mx] = v;
+      if (v) cnt++;
     }
   }
-  nyxThShMask = m; nyxThShW = mw; nyxThShH = mh;
+  nyxThShList = (uint8_t*)nyxThAlloc((size_t)(cnt > 0 ? cnt : 1) * 3);
+  if (!nyxThShList) { free(m); return false; }
+  int w = 0;
+  for (int my = 0; my < mh; my++) for (int mx = 0; mx < mw; mx++) {
+    uint8_t v = m[(size_t)my * mw + mx];
+    if (!v) continue;
+    nyxThShList[w * 3 + 0] = (uint8_t)mx; nyxThShList[w * 3 + 1] = (uint8_t)my; nyxThShList[w * 3 + 2] = v; w++;
+  }
+  nyxThShN = w;
+  free(m);
+
+  // --- 3) jalur layar + sprite latar/kerja ---
+  int fy = nyxThCurY() - bd;
+  int by = fy - sp, bh = fh + sp * 2 + soy;
+  if (by < 0) { bh += by; by = 0; }
+  if (by + bh > SCR_H) bh = SCR_H - by;
+  int bw = (NYX_TH_REST_X - bd) + fw + sp;
+  if (bw > SCR_W) bw = SCR_W;
+  if (bw <= 0 || bh <= 0) return false;
+  nyxThFy = fy; nyxThBx = 0; nyxThBy = by; nyxThBw = bw; nyxThBh = bh;
+  nyxThScrW = SCR_W; nyxThScrH = SCR_H;
+  nyxThBg.setColorDepth(16);    nyxThBg.setPsram(true);
+  nyxThStrip.setColorDepth(16); nyxThStrip.setPsram(true);
+  if (!nyxThBg.createSprite(bw, bh)) return false;
+  if (!nyxThStrip.createSprite(bw, bh)) { nyxThBg.deleteSprite(); return false; }
+  nyxThSprOk = true;
+  return true;
 }
 
+// dipanggil dari screenshotSaveNow() setelah BMP tersimpan
+void nyxShotThumbCapture(const char* path) {
+  nyxThFree();
+  int w = canvas.width(), h = canvas.height();
+  if (w <= 0 || h <= 0) return;
+  int tw = SCR_W * 30 / 100;
+  if (tw < NYX_TH_MIN_W) tw = NYX_TH_MIN_W;
+  if (tw > NYX_TH_MAX_W) tw = NYX_TH_MAX_W;
+  int th = (tw * h) / w;
+  if (th < 40) th = 40;
+  if (th > 110) th = 110;
+  uint16_t* img = (uint16_t*)nyxThAlloc((size_t)tw * th * 2);
+  if (!img) return;
+  for (int j = 0; j < th; j++) {
+    int y0 = (j * h) / th, y1 = ((j + 1) * h) / th - 1; if (y1 < y0) y1 = y0;
+    for (int i = 0; i < tw; i++) {
+      int x0 = (i * w) / tw, x1 = ((i + 1) * w) / tw - 1; if (x1 < x0) x1 = x0;
+      uint32_t r = 0, g = 0, b = 0; int cnt = 0;
+      for (int sy = 0; sy < 3; sy++) for (int sx = 0; sx < 3; sx++) {            // rata-rata 3x3 titik -> lebih halus
+        uint16_t c = (uint16_t)canvas.readPixel(x0 + ((x1 - x0) * sx) / 2, y0 + ((y1 - y0) * sy) / 2);
+        r += (c >> 11) & 0x1F; g += (c >> 5) & 0x3F; b += c & 0x1F; cnt++;
+      }
+      r /= cnt; g /= cnt; b /= cnt;
+      img[j * tw + i] = (uint16_t)((r << 11) | (g << 5) | b);
+    }
+  }
+  nyxThW = tw; nyxThH = th;
+  bool ok = nyxThBake(img);
+  free(img);
+  if (!ok) { nyxThFree(); return; }                 // gagal: pemanggil menampilkan toast biasa
+  strncpy(nyxThPath, path ? path : "", sizeof(nyxThPath) - 1);
+  nyxThPath[sizeof(nyxThPath) - 1] = 0;
+  nyxThOn = true; nyxThT0 = millis(); nyxThOutT0 = 0;
+  vibSuccess();
+}
+
+// tanda tangan layar: kalau berubah sejak latar diambil, latar tidak boleh dipakai lagi
+static uint32_t nyxThScreenSig() {
+  return (uint32_t)curScreen()
+       | ((uint32_t)controlCenterOpen << 8) | ((uint32_t)notifShadeOpen << 9) | ((uint32_t)appSwitcherOpen << 10)
+       | ((uint32_t)homeAodActive << 11) | ((uint32_t)diMenuOpen << 12) | ((uint32_t)kbVisible << 13);
+}
+
+// salin latar bersih (canvas SEBELUM thumbnail digambar) ke sprite latar
+static void nyxThCaptureBg(LGFX_Sprite& s) {
+  s.pushSprite(&nyxThBg, -nyxThBx, -nyxThBy);
+  nyxThSig = nyxThScreenSig();
+}
+
+static inline void nyxThBlendPx(uint16_t* d, uint16_t cardRaw, uint8_t a) {
+  if (!a) return;
+  uint16_t c = nyxSw16(cardRaw), b = nyxSw16(*d);
+  uint32_t ia = 255u - a;
+  uint32_t r  = ((c >> 11) & 31) + ((((b >> 11) & 31) * ia + 127u) / 255u);
+  uint32_t g  = ((c >> 5) & 63)  + ((((b >> 5) & 63)  * ia + 127u) / 255u);
+  uint32_t bl = (c & 31)         + (((b & 31)         * ia + 127u) / 255u);
+  if (r > 31) r = 31; if (g > 63) g = 63; if (bl > 31) bl = 31;
+  *d = nyxSw16((uint16_t)((r << 11) | (g << 5) | bl));
+}
+
+// SATU-SATUNYA jalur gambar: latar -> bayangan -> kartu, hasilnya di nyxThStrip.
+// fl = x tepi kiri bingkai dalam koordinat jalur (boleh negatif / melewati kanan).
+static void nyxThCompose(int fl) {
+  const int bw = nyxThBw, bh = nyxThBh, sp = NYX_TH_SH_SP, soy = NYX_TH_SH_OY;
+  const int ft = nyxThFy - nyxThBy;
+  nyxThBg.pushSprite(&nyxThStrip, 0, 0);
+  uint16_t* buf = (uint16_t*)nyxThStrip.getBuffer();
+  if (!buf) return;
+  const int stride = nyxThStrip.width();
+
+  // 1) bayangan (latar terang: gelap; latar gelap: cahaya halus warna aksen)
+  if (nyxThShList) {
+    const uint16_t acc = (uint16_t)T().accent;
+    const int ox = fl - sp, oy = ft - sp + soy;
+    const uint8_t* e = nyxThShList;
+    for (int i = 0; i < nyxThShN; i++, e += 3) {
+      int px = ox + e[0], py = oy + e[1];
+      if ((unsigned)px >= (unsigned)bw || (unsigned)py >= (unsigned)bh) continue;
+      uint32_t m = e[2];
+      uint16_t* d = buf + (size_t)py * stride + px;
+      uint16_t bgp = nyxSw16(*d);
+      uint32_t lum = ((((bgp >> 11) & 31) << 3) * 77 + (((bgp >> 5) & 63) << 2) * 150 + ((bgp & 31) << 3) * 29) >> 8;
+      uint32_t il = 255u - lum;
+      uint32_t aDark = (150u * m * lum) / 65025u;
+      uint32_t aGlow = (110u * m * il * il) / 16581375u;
+      if (aDark < 3 && aGlow < 3) continue;
+      uint16_t o = bgp;
+      if (aDark >= 3) o = blend565(o, 0x0000, (uint8_t)aDark);
+      if (aGlow >= 3) o = blend565(o, acc, (uint8_t)aGlow);
+      *d = nyxSw16(o);
+    }
+  }
+
+  // 2) kartu: bagian buram = memcpy per baris, hanya tepi sudut yang di-blend
+  const int fw = nyxThFw;
+  for (int j = 0; j < nyxThFh; j++) {
+    int py = ft + j;
+    if ((unsigned)py >= (unsigned)bh) continue;
+    uint16_t* drow = buf + (size_t)py * stride;
+    const uint16_t* crow = nyxThCard + (size_t)j * fw;
+    const uint8_t* arow = nyxThCardA + (size_t)j * fw;
+    int lo = nyxThRowLo[j], hi = nyxThRowHi[j];
+    if (hi > lo) {
+      int x0 = fl + lo, x1 = fl + hi;
+      if (x0 < 0) x0 = 0;
+      if (x1 > bw) x1 = bw;
+      if (x1 > x0) memcpy(drow + x0, crow + (x0 - fl), (size_t)(x1 - x0) * 2);
+    }
+    for (int i = 0; i < lo; i++) { int px = fl + i; if ((unsigned)px < (unsigned)bw) nyxThBlendPx(drow + px, crow[i], arow[i]); }
+    for (int i = hi; i < fw; i++) { int px = fl + i; if ((unsigned)px < (unsigned)bw) nyxThBlendPx(drow + px, crow[i], arow[i]); }
+  }
+}
+
+// ---- jalur FRAME PENUH (dipanggil renderCurrentFrame): hasil piksel identik dgn jalur cepat ----
 void drawShotThumb(LGFX_Sprite& s) {
   if (!nyxShotThumbActive()) return;
-  const int bw = NYX_TH_BORDER, ro = NYX_TH_RADIUS, ri = ro - bw;
-  const int sp = NYX_TH_SH_SP, soy = NYX_TH_SH_OY;
-  int x = nyxThCurX(), y = nyxThCurY();
-  int fx = x - bw, fy = y - bw, fw = nyxThW + bw * 2, fh = nyxThH + bw * 2;
-  if (fx + fw + sp <= 0) return;                    // masih sepenuhnya di luar layar (awal animasi)
+  nyxThFullN++;
+  nyxThCaptureBg(s);
+  nyxThBgValid = (&s == &canvas) && !homeBandMode;   // mode pita: canvas di luar pita belum tentu bersih
+  int fl = nyxThCurX() - NYX_TH_BORDER - nyxThBx;
+  if (fl + nyxThFw + NYX_TH_SH_SP <= 0) { nyxThDispVis = false; return; }   // masih di luar layar
+  nyxThCompose(fl);
+  nyxThStrip.pushSprite(&s, nyxThBx, nyxThBy);       // ke canvas (patuh clip rect)
+  nyxThDispVis = true;
+}
 
-  // 1) bayangan lembut dari mask (tanpa sqrt per frame)
-  if (nyxThShMask) {
-    const uint16_t acc = (uint16_t)T().accent;
-    int ox = fx - sp, oy = fy - sp + soy;
-    for (int my = 0; my < nyxThShH; my++) {
-      int py = oy + my;
-      if (py < 0 || py >= SCR_H) continue;
-      const uint8_t* mrow = nyxThShMask + (size_t)my * nyxThShW;
-      for (int mx = 0; mx < nyxThShW; mx++) {
-        uint32_t m = mrow[mx];
-        if (!m) continue;
-        int px = ox + mx;
-        if (px < 0 || px >= SCR_W) continue;
-        uint16_t bgp = (uint16_t)s.readPixel(px, py);
-        uint32_t lum = ((((bgp >> 11) & 31) << 3) * 77 + (((bgp >> 5) & 63) << 2) * 150 + ((bgp & 31) << 3) * 29) >> 8;   // 0..255
-        uint32_t il = 255u - lum;
-        uint32_t aDark = (150u * m * lum) / 65025u;                // latar terang: bayangan gelap
-        uint32_t aGlow = (110u * m * il * il) / 16581375u;         // latar gelap: cahaya halus warna aksen
-        if (aDark < 3 && aGlow < 3) continue;
-        uint16_t o = bgp;
-        if (aDark >= 3) o = blend565(o, 0x0000, (uint8_t)aDark);
-        if (aGlow >= 3) o = blend565(o, acc, (uint8_t)aGlow);
-        s.drawPixel(px, py, o);
-      }
-    }
-  }
+// boleh pakai jalur cepat (kirim strip langsung ke layar tanpa render UI)?
+static bool nyxThFastOk() {
+  if (!nyxThBgValid || !nyxThSprOk || !nyxThCard) return false;
+  if (SCR_W != nyxThScrW || SCR_H != nyxThScrH) return false;
+  if (locked || powerMenuOpen || callBannerActive() || gameModeActive) return false;
+  Screen sc = curScreen();
+  if (sc == SCR_CAMERA || sc == SCR_MJPEG || sc == SCR_NES || sc == SCR_DOOM || sc == SCR_PPU || sc == SCR_CALL) return false;
+  if (nyxThScreenSig() != nyxThSig) return false;
+  return true;
+}
 
-  // 2) bingkai berlapis: cincin terang 2 px + garis gelap 1 px (memisahkan gambar dari bingkai)
-  const uint16_t hair = 0x1082;
-  iosRR(s, fx, fy, fw, fh, ro, blend565(T().text, T().bg, 22));
-  iosRR(s, fx + 2, fy + 2, fw - 4, fh - 4, ro - 2, hair);
+// dipanggil dari loop() (akhir putaran): gambar 1 frame animasi hanya sebagai strip
+void nyxShotThumbFastFrame() {
+  if (!nyxThFastWant) return;
+  nyxThFastWant = false;
+  if (!nyxShotThumbActive()) return;
+  if (nyxThFullN != nyxThSeenFullN) { nyxThSeenFullN = nyxThFullN; return; }   // frame penuh baru saja menggambarnya
+  if (!nyxThFastOk()) { needRedraw = true; return; }                            // fallback: jalur lama
+  uiBoostKick();
+  int fl = nyxThCurX() - NYX_TH_BORDER - nyxThBx;
+  bool vis = (fl + nyxThFw + NYX_TH_SH_SP > 0);
+  if (!vis && !nyxThDispVis) return;                 // belum muncul & layar sudah bersih: tak ada yang dikirim
+  nyxThCompose(fl);
+  nyxThStrip.pushSprite(nyxThBx, nyxThBy);           // hanya strip ±160x118 lewat SPI
+  nyxThDispVis = vis;
+}
 
-  // 3) gambar; matematika sudut membulat (anti-alias) hanya dipakai di 4 sudut
-  uint16_t frameCol = hair;
-  for (int j = 0; j < nyxThH; j++) {
-    bool cornerRow = (j < ri) || (j >= nyxThH - ri);
-    const uint16_t* row = nyxThumb + (size_t)j * nyxThW;
-    int yy = y + j;
-    for (int i = 0; i < nyxThW; i++) {
-      uint16_t c = row[i];
-      if (cornerRow && ((i < ri) || (i >= nyxThW - ri))) {
-        float ddx = fmaxf(fmaxf((float)ri - (i + 0.5f), (i + 0.5f) - (float)(nyxThW - ri)), 0.0f);
-        float ddy = fmaxf(fmaxf((float)ri - (j + 0.5f), (j + 0.5f) - (float)(nyxThH - ri)), 0.0f);
-        if (ddx > 0.0f && ddy > 0.0f) {
-          float d = sqrtf(ddx * ddx + ddy * ddy) - (float)ri;
-          if (d > 0.5f) continue;
-          if (d > -0.5f) c = blend565(frameCol, c, (uint8_t)((0.5f - d) * 255.0f));
-        }
-      }
-      s.drawPixel(x + i, yy, c);
-    }
-  }
+// true selama thumbnail sedang bergerak (masuk / keluar)
+bool nyxShotThumbAnimating() {
+  if (!nyxShotThumbActive()) return false;
+  if (nyxThOutT0) return true;
+  return (millis() - nyxThT0) < (uint32_t)(NYX_TH_IN_MS + 80);
 }
 
 // true = sentuhan ini milik thumbnail (jangan diteruskan ke app)
@@ -949,17 +1143,23 @@ bool nyxShotThumbTouch(bool touched, bool newT, int tx, int ty) {
   return true;
 }
 
+static void nyxThAnimStep() {
+  if (nyxThFastOk()) nyxThFastWant = true;     // frame animasi = strip kecil saja
+  else needRedraw = true;                      // belum ada latar sah / kondisi khusus -> frame penuh (jalur lama)
+}
+
 static void nyxThumbTick() {
-  if (!nyxThumb) return;
+  if (!nyxThCard) return;
+  if (locked) { nyxThFree(); return; }
   uint32_t now = millis();
+  if (SCR_W != nyxThScrW || SCR_H != nyxThScrH) { nyxThFree(); needRedraw = true; return; }   // rotasi berubah
   if (nyxThOutT0) {
     if (now - nyxThOutT0 >= NYX_TH_OUT_MS) { nyxThFree(); needRedraw = true; }
-    else needRedraw = true;
+    else nyxThAnimStep();
     return;
   }
-  if (now - nyxThT0 < NYX_TH_IN_MS + 40) needRedraw = true;
-  else if (!nyxThDown && now - nyxThT0 > NYX_TH_IN_MS + NYX_TH_HOLD_MS) { nyxThOutT0 = now; needRedraw = true; }
-  if (locked) nyxThFree();
+  if (now - nyxThT0 < NYX_TH_IN_MS + 40) nyxThAnimStep();
+  else if (!nyxThDown && now - nyxThT0 > NYX_TH_IN_MS + NYX_TH_HOLD_MS) { nyxThOutT0 = now; nyxThAnimStep(); }
 }
 
 // =====================================================================
