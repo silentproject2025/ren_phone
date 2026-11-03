@@ -34,6 +34,9 @@
 #define GUT_MAX_STALL  6           // sambung ulang berturut-turut tanpa kemajuan sebelum menyerah (dengan jeda makin panjang)
 #define GUT_MAX_TRY    40          // maks sambungan ulang per unduhan (berhenti lebih awal bila 3x tanpa kemajuan)
 #define GUT_PARALLEL   1           // 1 = unduh dgn 2 koneksi paralel (Range, tiap koneksi separuh berkas); 0 = satu koneksi saja
+#define GUT_TLS_MIN_BLOCK 45000u        // blok RAM internal terbesar yg diminta sebelum (sambung ulang) TLS; ambang awal, sesuaikan dari log
+#define GUT_PAR_MIN_BLOCK 60000u        // paralel (2 TLS sekaligus) hanya dicoba bila blok terbesar >= ini ...
+#define GUT_PAR_MIN_FREE  110000u       // ... dan total RAM internal bebas >= ini
 #define GUT_PAR_MIN    (192u * 1024u)   // berkas lebih kecil dari ini: satu koneksi saja (handshake TLS kedua tak sepadan)
 
 enum { GUT_JOB_NONE = 0, GUT_JOB_SEARCH, GUT_JOB_DL };
@@ -421,6 +424,15 @@ static int gutDownloadParallel(const char* u, const char* tmp, uint32_t total) {
   return 200;
 }
 
+// tunggu RAM internal lega (blok terbesar >= GUT_TLS_MIN_BLOCK) sebelum membuka TLS lagi. true = cukup.
+static bool gutWaitTlsHeap(uint32_t maxMs) {
+  uint32_t t0 = millis();
+  size_t lb = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
+  while (lb < GUT_TLS_MIN_BLOCK && (uint32_t)(millis() - t0) < maxMs && !gutCancel) { delay(100); lb = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL); }
+  Serial.printf("[GUT] tunggu RAM: blok terbesar %u B (butuh %u) setelah %lu ms\n", (unsigned)lb, (unsigned)GUT_TLS_MIN_BLOCK, (unsigned long)(millis() - t0));
+  return lb >= GUT_TLS_MIN_BLOCK;
+}
+
 static void gutSetErr(int rc) {
   gutPhase = GUT_PH_ERROR;
   switch (rc) {
@@ -487,7 +499,10 @@ static void gutDoDownload() {
   bool parDone = false;
 #if GUT_PARALLEL
   // Unduhan baru (bukan lanjutan .part): coba 2 koneksi paralel. Gagal di mana pun -> lanjut ke jalur satu-koneksi di bawah.
-  if (!resume) {
+  size_t parBlk = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL), parFree = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+  if (!resume && (parBlk < GUT_PAR_MIN_BLOCK || parFree < GUT_PAR_MIN_FREE))
+    Serial.printf("[GUT] RAM internal kurang utk 2 koneksi (blok %u, bebas %u): satu koneksi\n", (unsigned)parBlk, (unsigned)parFree);
+  else if (!resume) {
     uint32_t total = 0;
     const char* pu = useLite ? lite : url;
     if (gutProbeSize(pu, &total) && total >= GUT_PAR_MIN && total <= lim) {
@@ -505,7 +520,7 @@ static void gutDoDownload() {
   // Unduhan sering putus di tengah (server/TLS): jangan mulai dari nol, sambung pakai Range dari byte terakhir yang sudah di SD.
   for (int attempt = 0; attempt < GUT_MAX_TRY && !parDone; attempt++) {
     const char* u = useLite ? lite : url;
-    if (attempt) { gutRetries = (uint16_t)attempt; needRedraw = true; }
+    if (attempt) { gutRetries = (uint16_t)attempt; needRedraw = true; gutWaitTlsHeap(10000); }   // sambung ulang butuh RAM TLS: tunggu lega dulu
     if (!resume) { strncpy(gutPartUrl, u, sizeof(gutPartUrl) - 1); gutPartUrl[sizeof(gutPartUrl) - 1] = 0; }
     File f = SD_MMC.open(tmp, resume ? FILE_APPEND : FILE_WRITE);
     if (!f) { rc = -5; break; }
