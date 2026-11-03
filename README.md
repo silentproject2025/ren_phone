@@ -76,6 +76,7 @@ NyxOS tidak berbasis Android maupun Linux. Peluncur aplikasi (launcher), pusat n
 | **Telepon (SIP dan LAN)** | `SEBAGIAN` | Teruji dengan `sip2sip.info` melalui TCP. Penyedia lain, mode LAN, dan TURN belum terkonfirmasi. |
 | Kamera (OV2640 pada ESP32-CAM) | `OK` | Seluruh fitur telah diuji pemilik, termasuk link 3 Mbaud dengan kualitas JPEG 10. Lihat [`KAMERA.md`](./KAMERA.md). |
 | Buku (pembaca `.txt`, `.md` dan `.epub`) | `BETA` | Logika inti (inflate, ZIP, EPUB, HTML ke teks, tata letak) diuji di komputer; antarmuka belum diuji pada perangkat. Lihat bagian *App Buku* di bawah. |
+| Buku: unduh dari Project Gutenberg | `BETA` | Logika inti (URL, CRC32, struktur ZIP, pembaca JSON/OPDS, registry) dan alur unduh/verifikasi diuji di komputer (`tests_gutenberg/`). Pemilik mencoba unduh EPUB dari ±0,1 sampai ±2,9 MB di perangkat dan berhasil; sumber OPDS dan format TXT belum dikonfirmasi pada perangkat. Lihat *Unduh dari Project Gutenberg* di bawah. |
 | SPI Overclock layar | `HW` | Hasil bergantung pada batas fisik kabel. |
 | NyxPPU (mesin piksel) | `EXP` | Fase 1; hanya tersedia pada aplikasi PPU Demo. |
 
@@ -278,7 +279,7 @@ python3 apply_ebook_patch.py     # Buku (pembaca .txt / .epub)
 git add -A && git commit -m "Pasang fitur" && git push
 ```
 
-> Berkas `.ino` baru **harus** didaftarkan pada langkah `cp` di `build-firmware.yml`. Jika terlewat, build gagal pada tahap *link* dengan pesan `undefined reference to ...` untuk fungsi yang didefinisikan di berkas tersebut (pernah terjadi pada `ptr_renphone.ino`). Versi `arduino-cli`, core ESP32, dan library di CI **belum dikunci**, sehingga pembaruan dari upstream dapat menyebabkan build gagal tanpa ada perubahan di repositori.
+> Berkas `.ino` baru **harus** didaftarkan pada langkah `cp` di `build-firmware.yml`; berkas header `.h` yang di-`#include` dari sketch (mis. `gutdl_core.h`) juga. Jika terlewat, build gagal pada tahap *link* dengan pesan `undefined reference to ...` untuk fungsi yang didefinisikan di berkas tersebut (pernah terjadi pada `ptr_renphone.ino`). Versi `arduino-cli`, core ESP32, dan library di CI **belum dikunci**, sehingga pembaruan dari upstream dapat menyebabkan build gagal tanpa ada perubahan di repositori.
 
 ---
 
@@ -803,6 +804,7 @@ Proyek ini ditujukan sebagai perangkat pribadi dan eksperimental. Pertimbangkan 
 |---|---|---|
 | Sertifikat TLS | Tidak diverifikasi (`setInsecure()`) pada fitur jaringan, termasuk Chat. | Jangan mengirim informasi sensitif. |
 | Panggilan SIP | Sinyal SIP berjalan melalui TCP/UDP polos (belum TLS); suara RTP tidak dienkripsi; kata sandi dikirim sebagai *hash digest*. | Gunakan akun khusus untuk perangkat ini; anggap percakapan dapat disadap. |
+| Unduhan Gutenberg | Berkas EPUB/TXT diunduh lewat HTTPS tanpa verifikasi sertifikat (`setInsecure()`) dari `gutenberg.org` dan `gutendex.com`. Integritas diperiksa (CRC32 data SD dibandingkan dengan data yang masuk dari jaringan, plus struktur ZIP), tetapi keaslian server tidak. | Hanya unduh dari sumber bawaan; jangan membuka berkas `.bad`. |
 | Web File Manager | Tidak ditemukan pemeriksaan kredensial pada rute web server (`/`, `/edit`, `/upload`, `/delete`, `/download`, `/apikey`). Perangkat lain pada jaringan yang sama berpotensi dapat mengakses berkas SD. | Aktifkan hanya pada jaringan tepercaya. |
 | Kunci API | `gemini_key.txt` dan `nasa_key.txt` tersimpan sebagai teks biasa pada SD. | Gunakan key dengan kuota terbatas dan jaga kartu SD secara fisik. |
 | Remote Control | AP menggunakan WPA2 dengan sandi yang dibuat saat pertama kali; akses via WiFi rumah ditolak secara default; satu penonton aktif sekaligus. | Ganti sandi bawaan dan biarkan opsi *Izinkan via WiFi rumah* tetap mati bila tidak diperlukan. |
@@ -835,6 +837,7 @@ Proyek ini ditujukan sebagai perangkat pribadi dan eksperimental. Pertimbangkan 
 
 - **Chat:** layar hanya ASCII; tidak ada notifikasi saat aplikasi tertutup.
 - **Baterai:** persentase adalah estimasi. Jika INA219 tidak terdeteksi, persentase dan tegangan berhenti diperbarui (tidak ada *fallback* ADC).
+- **Unduh Gutenberg:** TXT maks 3 MB dan EPUB maks 40 MB; daftar memuat paling banyak 96 buku; satu unduhan sekaligus. Filter bahasa hanya untuk sumber Gutendex. Pilihan sumber (Gutendex/OPDS) tidak tersimpan setelah restart (bawaan: Gutendex). Unduhan dua koneksi paralel tersedia di kode tetapi dimatikan (`GUT_PARALLEL 0`).
 - **PNG:** maksimal 4 MB dan 8 juta piksel; di atas 2 MB tidak memiliki thumbnail.
 - **AVI OpenDML (> 1 GB)** tidak didukung untuk seek dan resume. MP3 VBR dapat bergeser sedikit setelah lompatan jauh.
 - **NyxPPU** belum dipasang pada Inferno maupun Home/Lock Screen.
@@ -919,6 +922,9 @@ cam_bt_coprocessor/             Firmware ESP32-CAM (Bluetooth audio dan kamera)
 chat-mqtt/  call-sip/           Panduan Chat dan Telepon
 KAMERA.md                       Dokumentasi fitur Kamera
 tests_kamera/                   Uji protokol kamera dan penulis AVI di komputer
+gutenberg_renphone.ino          Unduh buku dari Project Gutenberg (dibuka dari app Buku)
+gutendex_core.h  gutdl_core.h   Logika murni Gutenberg: JSON/OPDS, URL langsung, registry, CRC32, cek ZIP
+tests_gutenberg/                Uji logika Gutenberg dan simulasi alur unduh di komputer
 nofrendo_core/ esp_doom_core/   Core pihak ketiga (di-vendor)
 apply_*.py  patch_*.py          Skrip patch bertahap (idempoten)
 ci_hoist_types.py               Langkah CI untuk menghindari bug prototipe arduino-cli
@@ -967,3 +973,25 @@ Salin file `.txt`, `.md` atau `.epub` ke folder `/books` pada SD card (dibuat ot
 - **EPUB 2 dan 3:** bab dibaca satu per satu dari ZIP (hemat RAM); daftar isi dari NCX atau `nav`. ZIP64 dan EPUB ber-DRM tidak didukung.
 - **TXT:** UTF-8, UTF-16 (dengan BOM), Latin-1/Windows-1252. Teks berbaris-keras (gaya Project Gutenberg) disambung ulang menjadi paragraf. Baris seperti `Chapter 1`, `BAB IV`, `Prolog` dikenali sebagai judul dan masuk daftar isi. Batas 3 MB per file.
 - **Pengujian:** `tests_ebook/` — `python3 tests_ebook/test_ebook.py` (inflate, EPUB, TXT, tata letak, fuzz), `python3 tests_ebook/test_ebook_v2.py` (UTF-8 + lipat, gambar EPUB, sampul/metadata, Markdown) dan `python3 tests_ebook/run_ui_test.py` (alur antarmuka dengan *mock* LovyanGFX/SD/JPEGDEC/keyboard), semuanya dengan AddressSanitizer. Dekode JPEG/PNG, pemuatan VLW dan animasi pada layar sungguhan **belum diuji pada perangkat**.
+
+### Unduh dari Project Gutenberg `BETA`
+
+Buka lewat tombol **Gutenberg** di kepala perpustakaan Buku. Butuh WiFi dan SD card.
+
+Alur: daftar populer atau hasil cari, ketuk buku, layar **Detail**, **Unduh**, berkas masuk ke `/books`, lalu **Buka**. Hanya buku domain publik yang ditampilkan.
+
+| Chip | Fungsi |
+|---|---|
+| Bahasa | Berganti: semua, `en`, `id`, `fr`, `de`, `es`, `nl`, `pt`, `it`. Hanya untuk sumber Gutendex. |
+| Gambar | `Tanpa gbr` (bawaan, EPUB jauh lebih kecil) atau `Dgn gbr`. |
+| Urutan | `Populer` atau `Terbaru`. |
+| Sumber | `Gutendex` (bawaan) atau `OPDS`. |
+
+- **Dua sumber pencarian:** Gutendex (`gutendex.com`, API JSON komunitas atas katalog Gutenberg) dan feed OPDS resmi `gutenberg.org` (XML; hanya nomor buku, judul, penulis). Bila sumber yang dipilih gagal, pencarian otomatis dicoba di sumber satunya. Pilihan sumber tidak tersimpan setelah restart.
+- **URL unduh dibangun langsung dari nomor buku** untuk kedua sumber, tanpa pengalihan: `cache/epub/<N>/pg<N>.epub` (tanpa gambar), `pg<N>-images-3.epub` (dengan gambar), atau `pg<N>.txt` bila tidak ada EPUB. URL dari API hanya cadangan terakhir bila URL langsung gagal (404/410).
+- **Sopan ke server:** satu pekerjaan sekaligus, jeda minimal 1,5 detik antar permintaan, dan satu buku tidak bisa dimulai dua kali (registry per nomor buku).
+- **Aman dari berkas setengah jadi:** data ditulis ke `<nama>.part`, baru diganti nama menjadi buku setelah lolos verifikasi. Unduhan yang putus disambung dengan `Range` dari byte terakhir; **Coba lagi** melanjutkan `.part` yang masih cocok.
+- **Verifikasi sebelum jadi buku:** ukuran di SD, kepala `PK`, SD dibaca balik dan CRC32-nya dicocokkan dengan data yang masuk dari jaringan (berkas sampai 16 MB), serta pemeriksaan ujung dan daftar isi ZIP. Berkas yang gagal disimpan sebagai `<nama>.bad` untuk diperiksa di komputer.
+- **Salah tulis SD:** bila data di SD tidak cocok dengan jaringan, unduhan diulang sekali dari awal dengan cara tulis lain (buffer atau langsung). Gagal dua kali menampilkan *Tulis SD rusak 2x. Cek SD card.*
+- **Sudah ada?** Sebelum mengunduh, `/books` dicari berdasarkan nomor `[PGnnn]`. Buku yang sudah utuh tidak diunduh ulang; berkas lama yang rusak dipindah ke `.bad`.
+- **Pengujian:** `g++ -std=c++11 -o t tests_gutenberg/test_gutendex.cpp && ./t` dan `g++ -std=c++11 -o t tests_gutenberg/test_gutdl.cpp && ./t` (logika murni), serta `python3 tests_gutenberg/run_sim.py` (alur unduh/verifikasi dari kode `.ino` asli dengan stub Arduino). Alur ini diuji sebagian di perangkat (lihat tabel status).
