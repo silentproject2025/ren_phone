@@ -434,24 +434,43 @@ static bool gutWaitTlsHeap(uint32_t maxMs) {
   return lb >= GUT_TLS_MIN_BLOCK;
 }
 
-// Diagnosis WiFi (Serial): dipanggil saat unduhan putus/macet. "Terlihat terhubung di HP tapi tak bisa diakses" = status di sini
-// masih WL_CONNECTED(3) tapi trafik mati; RSSI & kanal membantu membedakan sinyal lemah / pindah kanal.
+// Diagnosis WiFi (Serial): dipanggil saat unduhan putus/macet. "reason" = alasan putus terakhir dari stack WiFi
+// (2 AUTH_EXPIRE, 8 ASSOC_LEAVE, 15 4WAY_TIMEOUT, 200 BEACON_TIMEOUT, 201 NO_AP_FOUND, 202 AUTH_FAIL, 203 ASSOC_FAIL, 204 HANDSHAKE_TIMEOUT, 205 CONNECTION_FAIL).
+static volatile uint8_t  gutDiscReason = 0;
+static volatile uint32_t gutDiscMs = 0, gutDiscCount = 0;
+static bool gutEvtReg = false;
+static void gutWifiEvt(WiFiEvent_t ev, WiFiEventInfo_t info) {   // callback dari task WiFi: cukup simpan, jangan cetak
+  if (ev == ARDUINO_EVENT_WIFI_STA_DISCONNECTED) { gutDiscReason = (uint8_t)info.wifi_sta_disconnected.reason; gutDiscMs = millis(); gutDiscCount++; }
+}
 static void gutWifiDiag(const char* tag) {
-  Serial.printf("[GUT] WiFi %s: status=%d rssi=%d ch=%d mode=%d ip=%s gw=%s\n", tag, (int)WiFi.status(), (int)WiFi.RSSI(), (int)WiFi.channel(),
-                (int)WiFi.getMode(), WiFi.localIP().toString().c_str(), WiFi.gatewayIP().toString().c_str());
+  Serial.printf("[GUT] WiFi %s: status=%d rssi=%d ch=%d mode=%d ip=%s gw=%s | putus terakhir: reason=%u %lu ms lalu (total %lu)\n", tag, (int)WiFi.status(), (int)WiFi.RSSI(), (int)WiFi.channel(),
+                (int)WiFi.getMode(), WiFi.localIP().toString().c_str(), WiFi.gatewayIP().toString().c_str(),
+                (unsigned)gutDiscReason, gutDiscMs ? (unsigned long)(millis() - gutDiscMs) : 0ul, (unsigned long)gutDiscCount);
+}
+static bool gutWifiWait(uint32_t ms) {                    // true bila status terhubung DAN sudah punya IP
+  uint32_t t0 = millis();
+  while (!gutCancel && (uint32_t)(millis() - t0) < ms && (WiFi.status() != WL_CONNECTED || WiFi.localIP() == IPAddress((uint32_t)0))) delay(100);
+  return WiFi.status() == WL_CONNECTED && !(WiFi.localIP() == IPAddress((uint32_t)0));
 }
 
-// Paksa STA lepas & sambung lagi (hanya lapisan radio/IP; status wifiConnected milik phone.ino TIDAK disentuh, web server tetap jalan).
-// Dipakai saat data berhenti/ sambung ulang gagal: asosiasi yg "zombie" (HP bilang terhubung, trafik mati) tak pulih dgn membuka soket baru.
+// Pulihkan STA (hanya lapisan radio/IP; status wifiConnected milik phone.ino TIDAK disentuh, web server & AP remote tetap).
+// Langkah 1: reconnect biasa. Langkah 2 (kalau gagal): lepas lalu WiFi.begin dgn kredensial tersimpan -> scan ulang SEMUA kanal
+// (reconnect biasa bisa buntu bila hotspot HP pindah kanal).
 static bool gutWifiRecover() {
   gutWifiDiag("macet");
   gutPhase = GUT_PH_CONNECT; needRedraw = true;
-  WiFi.reconnect();
-  delay(600);                                              // beri event disconnect waktu diproses (supaya status lama tak terbaca "terhubung")
   uint32_t t0 = millis();
-  while (!gutCancel && (uint32_t)(millis() - t0) < 12000 && (WiFi.status() != WL_CONNECTED || WiFi.localIP() == IPAddress((uint32_t)0))) delay(100);
+  WiFi.reconnect();
+  delay(600);                                              // beri event disconnect waktu diproses (status lama tak terbaca "terhubung")
+  bool ok = gutWifiWait(5000);
+  if (!ok && !gutCancel && WIFI_SSID[0]) {
+    Serial.println("[GUT] WiFi reconnect gagal -> begin ulang (scan semua kanal)");
+    WiFi.disconnect(false, false);
+    delay(300);
+    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+    ok = gutWifiWait(12000);
+  }
   WiFi.setSleep(false);                                    // jaga hemat daya WiFi tetap mati
-  bool ok = (WiFi.status() == WL_CONNECTED);
   if (ok) for (uint32_t w = 0; w < 800 && !gutCancel; w += 100) delay(100);   // beri ARP/DHCP waktu mapan
   Serial.printf("[GUT] WiFi pulih=%d setelah %lu ms\n", (int)ok, (unsigned long)(millis() - t0));
   gutWifiDiag("sesudah");
@@ -687,6 +706,7 @@ static void gutBack() {
 // siklus
 // ---------------------------------------------------------------------
 void gutEnter() {
+  if (!gutEvtReg) { WiFi.onEvent(gutWifiEvt); gutEvtReg = true; }     // catat alasan putus WiFi utk diagnosis
   if (!gutItems) gutItems = (GutItem*)ebPsAlloc(sizeof(GutItem) * GUT_CAP);
   if (!gutItems) { showToast("RAM tidak cukup"); return; }
   gutView = GUT_V_LIST; gutScroll = 0; gutDown = false; gutMsg[0] = 0;
