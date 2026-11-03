@@ -1262,7 +1262,7 @@ void showToast(const char* msg, int ms=1400);
 bool callBannerActive(); void drawCallBanner(LGFX_Sprite&); bool callBannerTouch(bool,bool,int,int);
 void nyxExtrasLoopPoll(); void nyxAboutRows(); void nyxAppEnergyAdd(float);
 void nyxDrawAppEnergy(LGFX_Sprite&,int,int); void nyxAppEnergyTouch(int,int,int,int);
-String nyxVoiceInstruction(); bool nyxVoiceExtract(String&);
+String nyxVoiceInstruction(); String nyxVoiceStatus(); bool nyxVoiceExtract(String&);
 void nyxShotThumbCapture(const char*); void nyxShotThumbHide(); bool nyxShotThumbActive();
 void drawShotThumb(LGFX_Sprite&); bool nyxShotThumbTouch(bool,bool,int,int);
 void nyxSkeleton(LGFX_Sprite&,int);
@@ -2534,7 +2534,7 @@ void sendGeminiRequest(String promptText) {
     fullPrompt = promptText;
   }
 
-  fullPrompt = nyxVoiceInstruction() + fullPrompt; // NYX-EXTRAS-V1: Gemini boleh menulis baris @@CMD utk mengendalikan HP
+  fullPrompt = nyxVoiceInstruction() + nyxVoiceStatus() + fullPrompt; // NYX-EXTRAS-V1: Gemini boleh menulis baris @@CMD utk mengendalikan HP
   for (int attempt = 1; attempt <= MAX_ATTEMPTS && !aiSoftStopTriggered; attempt++) {
     if (attempt > 1) {
       Serial.printf("[Gemini] Percobaan %d gagal, retry ke-%d...\n", attempt - 1, attempt);

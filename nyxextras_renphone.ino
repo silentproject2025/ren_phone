@@ -322,33 +322,94 @@ void nyxAppEnergyTouch(int x, int y, int top, int bottom) {
 // =====================================================================
 //  3. PERINTAH SUARA (Gemini -> aksi di HP)
 // =====================================================================
-#define NYX_CMD_Q   3
-#define NYX_CMD_LEN 110
+// NYX-CMD-V2
+#define NYX_CMD_Q   5
+#define NYX_CMD_LEN 120
 static char nyxCmdQ[NYX_CMD_Q][NYX_CMD_LEN];
 static volatile uint8_t nyxCmdN = 0;
 static volatile bool    nyxCmdReady = false;
 
-// teks yang ditaruh di AWAL prompt. Dibuat sekali (daftar nama app diambil dari apps[]).
+// ---------- helper nilai HP (dipakai instruksi, status, dan eksekusi) ----------
+static int nyxBrightPct() {
+  int p = 10 + (int)(((long)brightness - 10) * 90L / 245L);
+  if (p < 10) p = 10;
+  if (p > 100) p = 100;
+  return p;
+}
+
+static void nyxSetBrightPct(long v) {
+  if (v < 10) v = 10;
+  if (v > 100) v = 100;
+  brightness = (int)(10 + (v - 10) * 245L / 90L);
+  display.setBrightness((uint8_t)brightness);
+  char b[32]; snprintf(b, sizeof(b), "Kecerahan %ld%%", v);
+  showToast(b, 1200);
+}
+
+// teks yang ditaruh di AWAL prompt. Dibuat sekali (daftar nama app & tema diambil dari apps[]/themes[]).
 String nyxVoiceInstruction() {
   static String cache;
   if (cache.length()) return cache;
-  cache.reserve(900);
+  cache.reserve(1700);
   cache  = "ATURAN KONTROL HP: kamu terhubung langsung ke HP DIY ini dan boleh menjalankan aksi. ";
-  cache += "Jika user MEMINTA AKSI di HP (buka app, timer, musik, kecerahan, kembali, ke Home), ";
-  cache += "jawab SATU kalimat pendek, lalu tulis baris perintah terpisah (satu per baris, maksimal 3) ";
-  cache += "dengan format persis: @@CMD {\"a\":\"open\",\"app\":\"Musik\"}\n";
-  cache += "Aksi valid: open (app=nama app), timer (sec=detik 1-86400), ";
-  cache += "music (op=play|pause|next|prev|shuffle), brightness (val=10-100), home, back. ";
-  cache += "Contoh: {\"a\":\"timer\",\"sec\":600} atau {\"a\":\"music\",\"op\":\"shuffle\"} atau {\"a\":\"home\"}. ";
+  cache += "Jika user MEMINTA AKSI di HP, jawab SATU kalimat pendek, lalu tulis baris perintah terpisah ";
+  cache += "(satu per baris, maksimal 5) dengan format persis: @@CMD {\"a\":\"open\",\"app\":\"Musik\"}\n";
+  cache += "Aksi valid:\n";
+  cache += "- open (app=nama app)\n";
+  cache += "- timer (sec=detik 1-86400) atau {\"a\":\"timer\",\"op\":\"cancel\"}\n";
+  cache += "- stopwatch (op=start|stop|reset)\n";
+  cache += "- music (op=play|pause|next|prev|shuffle)\n";
+  cache += "- volume (val=0-100 untuk nilai pasti, ATAU delta=-100..100 untuk naik/turun relatif)\n";
+  cache += "- brightness (val=10-100 ATAU delta=-90..90)\n";
+  cache += "- wifi, bluetooth, airplane, dnd, silent (op=on|off; silent on = getar mati)\n";
+  cache += "- theme (name=nama tema ATAU op=next)\n";
+  cache += "- rotate (op=portrait|landscape)\n";
+  cache += "- led (op=on|off|rainbow; color=merah|hijau|biru|kuning|ungu|putih|oranye|pink|cyan ATAU r,g,b 0-255; val=1-100 terang)\n";
+  cache += "- screenshot, lock, home, back\n";
+  cache += "Contoh: {\"a\":\"volume\",\"delta\":-20} {\"a\":\"led\",\"op\":\"on\",\"color\":\"biru\"} {\"a\":\"wifi\",\"op\":\"off\"}\n";
   cache += "Nama app yang ada: ";
   for (int i = 0; i < APP_COUNT; i++) {
     if (strcmp(apps[i].name, "Atur Home") == 0) continue;
     cache += apps[i].name;
     cache += ", ";
   }
-  cache += "\nJangan tulis @@CMD untuk pertanyaan biasa. Jangan pakai markdown atau code block pada baris @@CMD. ";
-  cache += "Kalau permintaan tidak bisa dilakukan dengan aksi di atas, jelaskan singkat tanpa @@CMD.\n\n";
+  cache += "\nNama tema: ";
+  for (int i = 0; i < THEME_COUNT; i++) { cache += themes[i].name; cache += ", "; }
+  cache += "\nKalau user bertanya soal kondisi HP (baterai, jam, volume, dll), jawab dari STATUS HP di bawah tanpa @@CMD. ";
+  cache += "Untuk permintaan relatif (\"agak\", \"sedikit\", \"naikin\") pakai delta dari nilai di STATUS. ";
+  cache += "Jangan tulis @@CMD untuk pertanyaan biasa. Jangan pakai markdown atau code block pada baris @@CMD. ";
+  cache += "Kalau permintaan tidak bisa dilakukan dengan aksi di atas, jelaskan singkat tanpa @@CMD.\n";
   return cache;
+}
+
+// Kondisi HP saat ini (dibaca di task Gemini, hanya baca -- tidak mengubah apa pun).
+// Dikirim bersama prompt supaya Gemini bisa menjawab "baterai berapa?" dan menghitung nilai relatif.
+String nyxVoiceStatus() {
+  String s;
+  s.reserve(340);
+  s  = "STATUS HP SEKARANG: ";
+  struct tm t;
+  if (ntpSynced && getLocalTime(&t, 5)) {
+    char b[28]; snprintf(b, sizeof(b), "jam %02d:%02d, ", t.tm_hour, t.tm_min);
+    s += b;
+  }
+  s += "baterai "; s += String(battPercent); s += "%, ";
+  s += "kecerahan "; s += String(nyxBrightPct()); s += "%, ";
+  s += "volume musik "; s += String((int)musExtGetVol() * 100 / 127); s += "%, ";
+  s += homeMusPlaying() ? "musik diputar, " : (homeMusLoaded() ? "musik dijeda, " : "musik tidak aktif, ");
+  s += wifiConnected ? "WiFi tersambung, " : "WiFi putus, ";
+  s += airplaneMode ? "mode pesawat ON, " : "";
+  s += dndMode ? "DND ON, " : "";
+  s += vibEnabled ? "" : "mode senyap ON, ";
+  s += "tema "; s += themes[themeIdx].name; s += ", ";
+  if (tmRunning) { s += "timer jalan sisa "; s += String((unsigned long)(tmRemain / 1000UL)); s += " detik, "; }
+  if (swRunning) s += "stopwatch jalan, ";
+  const char* scr = "Home";
+  for (int i = 0; i < APP_COUNT; i++) {
+    if (apps[i].screen == curScreen()) { scr = apps[i].name; break; }
+  }
+  s += "layar sekarang: "; s += scr; s += ".\n\n";
+  return s;
 }
 
 // Dipanggil dari sendGeminiRequest() (task Gemini): cabut baris @@CMD dari jawaban,
@@ -402,18 +463,32 @@ static bool nyxJStr(const char* js, const char* key, char* out, int cap) {
   return n > 0;
 }
 
+// angka bertanda (boleh negatif utk delta), nilai boleh dalam tanda kutip
 static bool nyxJInt(const char* js, const char* key, long& v) {
   char pat[20]; snprintf(pat, sizeof(pat), "\"%s\"", key);
   const char* p = strstr(js, pat);
   if (!p) return false;
   p += strlen(pat);
   while (*p == ' ' || *p == ':' || *p == '"') p++;
+  bool neg = false;
+  if (*p == '-') { neg = true; p++; } else if (*p == '+') p++;
   if (*p < '0' || *p > '9') return false;
   v = strtol(p, nullptr, 10);
+  if (neg) v = -v;
   return true;
 }
 
 static void nyxLower(char* s) { for (; *s; s++) *s = (char)tolower((unsigned char)*s); }
+
+// op on/off -> 1 / 0, selain itu -1
+static int nyxOnOff(const char* js) {
+  char op[12];
+  if (!nyxJStr(js, "op", op, sizeof(op))) return -1;
+  nyxLower(op);
+  if (!strcmp(op, "on") || !strcmp(op, "nyala") || !strcmp(op, "hidup") || !strcmp(op, "true")) return 1;
+  if (!strcmp(op, "off") || !strcmp(op, "mati") || !strcmp(op, "false")) return 0;
+  return -1;
+}
 
 static int nyxFindApp(const char* want) {
   char w[28]; strncpy(w, want, sizeof(w) - 1); w[sizeof(w) - 1] = 0; nyxLower(w);
@@ -421,6 +496,17 @@ static int nyxFindApp(const char* want) {
   for (int i = 0; i < APP_COUNT; i++) {
     if (strcmp(apps[i].name, "Atur Home") == 0) continue;
     char nm[28]; strncpy(nm, apps[i].name, sizeof(nm) - 1); nm[sizeof(nm) - 1] = 0; nyxLower(nm);
+    if (strcmp(nm, w) == 0) return i;
+    if (part < 0 && (strstr(nm, w) || strstr(w, nm))) part = i;
+  }
+  return part;
+}
+
+static int nyxFindTheme(const char* want) {
+  char w[20]; strncpy(w, want, sizeof(w) - 1); w[sizeof(w) - 1] = 0; nyxLower(w);
+  int part = -1;
+  for (int i = 0; i < THEME_COUNT; i++) {
+    char nm[20]; strncpy(nm, themes[i].name, sizeof(nm) - 1); nm[sizeof(nm) - 1] = 0; nyxLower(nm);
     if (strcmp(nm, w) == 0) return i;
     if (part < 0 && (strstr(nm, w) || strstr(w, nm))) part = i;
   }
@@ -469,6 +555,58 @@ static void nyxMusicOp(const char* op) {
   }
 }
 
+static void nyxVolumeOp(const char* js) {
+  long v = 0;
+  int cur = (int)musExtGetVol() * 100 / 127;
+  int target;
+  if (nyxJInt(js, "val", v)) target = (int)v;
+  else if (nyxJInt(js, "delta", v)) target = cur + (int)v;
+  else { showToast("Nilai volume kosong", 1400); return; }
+  if (target < 0) target = 0;
+  if (target > 100) target = 100;
+  musBegin();
+  musExtSetVol(target * 127 / 100);
+  char b[28]; snprintf(b, sizeof(b), "Volume %d%%", target);
+  showToast(b, 1200);
+}
+
+static void nyxLedOp(const char* js) {
+  struct NyxCol { const char* n; uint8_t r, g, b; };
+  static const NyxCol cols[] = {
+    {"merah",255,0,0}, {"hijau",0,255,0}, {"biru",0,0,255}, {"kuning",255,200,0}, {"ungu",150,0,255},
+    {"putih",255,255,255}, {"oranye",255,90,0}, {"pink",255,40,140}, {"cyan",0,255,255}
+  };
+  long v = 0;
+  if (nyxJInt(js, "val", v)) {
+    if (v < 1) v = 1;
+    if (v > 100) v = 100;
+    npxSetBrightness((uint8_t)(v * 255L / 100L));
+  }
+  char c[16];
+  bool setCol = false;
+  if (nyxJStr(js, "color", c, sizeof(c))) {
+    nyxLower(c);
+    for (unsigned i = 0; i < sizeof(cols) / sizeof(cols[0]); i++) {
+      if (!strcmp(c, cols[i].n)) { npxSetMode(0); npxSetSolidColor(cols[i].r, cols[i].g, cols[i].b); setCol = true; break; }
+    }
+  } else {
+    long r, g, b;
+    if (nyxJInt(js, "r", r) && nyxJInt(js, "g", g) && nyxJInt(js, "b", b)) {
+      r = r < 0 ? 0 : (r > 255 ? 255 : r);
+      g = g < 0 ? 0 : (g > 255 ? 255 : g);
+      b = b < 0 ? 0 : (b > 255 ? 255 : b);
+      npxSetMode(0); npxSetSolidColor((uint8_t)r, (uint8_t)g, (uint8_t)b); setCol = true;
+    }
+  }
+  char op[12];
+  bool hasOp = nyxJStr(js, "op", op, sizeof(op));
+  if (hasOp) nyxLower(op);
+  if (hasOp && !strcmp(op, "rainbow")) { npxSetMode(1); npxTurnOn(); showToast("LED: Rainbow", 1200); }
+  else if (hasOp && (!strcmp(op, "off") || !strcmp(op, "mati"))) { npxTurnOff(); showToast("LED mati", 1200); }
+  else if (setCol || (hasOp && (!strcmp(op, "on") || !strcmp(op, "nyala")))) { npxTurnOn(); showToast("LED menyala", 1200); }
+  else if (!hasOp && !setCol) showToast("Perintah LED kurang jelas", 1400);
+}
+
 static void nyxVoiceRun(const char* js) {
   char a[16];
   if (!nyxJStr(js, "a", a, sizeof(a))) { showToast("Perintah AI tidak terbaca", 1500); return; }
@@ -480,23 +618,99 @@ static void nyxVoiceRun(const char* js) {
     if (i < 0) { char b[44]; snprintf(b, sizeof(b), "App \"%s\" tidak ada", app); showToast(b, 1800); return; }
     if (curScreen() != apps[i].screen) navPush(apps[i].screen);
   } else if (strcmp(a, "timer") == 0) {
+    char op[12];
+    if (nyxJStr(js, "op", op, sizeof(op))) {
+      nyxLower(op);
+      if (!strcmp(op, "cancel") || !strcmp(op, "stop") || !strcmp(op, "off")) {
+        tmRunning = false; tmRemain = tmTotal; swStopRing();
+        showToast("Timer dibatalkan", 1300);
+        vibSuccess();
+        return;
+      }
+    }
     long sec = 0;
-    if (!nyxJInt(js, "sec", sec)) { showToast("Durasi timer kosong", 1400); return; }
+    if (!nyxJInt(js, "sec", sec) || sec < 1) { showToast("Durasi timer kosong", 1400); return; }
     nyxTimerStart(sec);
+  } else if (strcmp(a, "stopwatch") == 0) {
+    char op[12];
+    if (!nyxJStr(js, "op", op, sizeof(op))) { showToast("Perintah stopwatch kosong", 1400); return; }
+    nyxLower(op);
+    if (!strcmp(op, "start")) {
+      if (!swRunning) { swRunning = true; swLastMs = millis(); }
+      showToast("Stopwatch jalan", 1200);
+    } else if (!strcmp(op, "stop")) {
+      swRunning = false;
+      showToast("Stopwatch berhenti", 1200);
+    } else if (!strcmp(op, "reset")) {
+      swRunning = false; swElapsed = 0; swLapN = 0;
+      showToast("Stopwatch direset", 1200);
+    } else { showToast("Perintah stopwatch tak dikenal", 1400); return; }
   } else if (strcmp(a, "music") == 0) {
     char op[12];
     if (!nyxJStr(js, "op", op, sizeof(op))) { showToast("Perintah musik kosong", 1400); return; }
     nyxLower(op);
     nyxMusicOp(op);
+  } else if (strcmp(a, "volume") == 0) {
+    nyxVolumeOp(js);
   } else if (strcmp(a, "brightness") == 0) {
     long v = 0;
-    if (!nyxJInt(js, "val", v)) { showToast("Nilai kecerahan kosong", 1400); return; }
-    if (v < 10) v = 10;
-    if (v > 100) v = 100;
-    brightness = (int)(10 + (v - 10) * 245L / 90L);
-    display.setBrightness((uint8_t)brightness);
-    char b[32]; snprintf(b, sizeof(b), "Kecerahan %ld%%", v);
-    showToast(b, 1200);
+    if (nyxJInt(js, "val", v)) nyxSetBrightPct(v);
+    else if (nyxJInt(js, "delta", v)) nyxSetBrightPct(nyxBrightPct() + v);
+    else { showToast("Nilai kecerahan kosong", 1400); return; }
+  } else if (strcmp(a, "wifi") == 0) {
+    int on = nyxOnOff(js);
+    if (on < 0) { showToast("Perintah WiFi kosong", 1400); return; }
+    if (on && !wifiConnected && !airplaneMode) { connectWifi(); showToast("WiFi menyambung...", 1400); }
+    else if (!on && (wifiConnected || wifiConnecting)) { disconnectWifi(); showToast("WiFi dimatikan", 1300); }
+    else showToast(on ? "WiFi sudah aktif" : "WiFi sudah mati", 1200);
+  } else if (strcmp(a, "bluetooth") == 0) {
+    int on = nyxOnOff(js);
+    if (on < 0) { showToast("Perintah Bluetooth kosong", 1400); return; }
+    if ((bool)btCcEnabled() != (on == 1)) btCcToggle();
+    showToast(on ? "Bluetooth aktif" : "Bluetooth mati", 1300);
+  } else if (strcmp(a, "airplane") == 0) {
+    int on = nyxOnOff(js);
+    if (on < 0) { showToast("Perintah mode pesawat kosong", 1400); return; }
+    if (airplaneMode != (on == 1)) toggleAirplaneMode();
+    showToast(on ? "Mode pesawat ON" : "Mode pesawat OFF", 1300);
+  } else if (strcmp(a, "dnd") == 0) {
+    int on = nyxOnOff(js);
+    if (on < 0) { showToast("Perintah DND kosong", 1400); return; }
+    dndMode = (on == 1);
+    showToast(on ? "DND aktif" : "DND mati", 1200);
+  } else if (strcmp(a, "silent") == 0) {
+    int on = nyxOnOff(js);
+    if (on < 0) { showToast("Perintah senyap kosong", 1400); return; }
+    vibEnabled = (on == 0);
+    saveVibPref();
+    showToast(on ? "Mode senyap: getar mati" : "Getar aktif", 1300);
+  } else if (strcmp(a, "theme") == 0) {
+    char nm[20];
+    int idx = -1;
+    if (nyxJStr(js, "name", nm, sizeof(nm))) idx = nyxFindTheme(nm);
+    else if (nyxJStr(js, "op", nm, sizeof(nm))) { nyxLower(nm); if (!strcmp(nm, "next")) idx = (themeIdx + 1) % THEME_COUNT; }
+    if (idx < 0) { showToast("Tema tidak ditemukan", 1500); return; }
+    themeIdx = idx;
+    saveTheme();
+    char b[36]; snprintf(b, sizeof(b), "Tema: %s", themes[idx].name);
+    showToast(b, 1300);
+  } else if (strcmp(a, "rotate") == 0) {
+    char op[12];
+    if (!nyxJStr(js, "op", op, sizeof(op))) { showToast("Arah layar kosong", 1400); return; }
+    nyxLower(op);
+    if (!strcmp(op, "portrait")) applyOrientation(ORIENT_PORTRAIT, true);
+    else if (!strcmp(op, "landscape")) applyOrientation(ORIENT_LANDSCAPE, true);
+    else { showToast("Arah layar tak dikenal", 1400); return; }
+    if (autoRotateEnabled) { autoRotateEnabled = false; saveAutoRotatePref(); }
+  } else if (strcmp(a, "led") == 0) {
+    nyxLedOp(js);
+  } else if (strcmp(a, "screenshot") == 0) {
+    ccActScreenshot();
+  } else if (strcmp(a, "lock") == 0) {
+    locked = true;
+    lockScreenReset();
+    closeControlCenter();
+    return;                                // layar terkunci: sisa perintah di antrean dihentikan (lihat nyxVoiceTick)
   } else if (strcmp(a, "home") == 0) {
     navGoHome();
   } else if (strcmp(a, "back") == 0) {
@@ -513,7 +727,10 @@ static void nyxVoiceTick() {
   nyxCmdReady = false;
   if (locked) return;                      // aksi hanya jalan saat HP terbuka
   if (n > NYX_CMD_Q) n = NYX_CMD_Q;
-  for (uint8_t i = 0; i < n; i++) nyxVoiceRun(nyxCmdQ[i]);
+  for (uint8_t i = 0; i < n; i++) {
+    if (locked) break;                     // stop kalau perintah "lock" baru saja dijalankan
+    nyxVoiceRun(nyxCmdQ[i]);
+  }
   needRedraw = true;
 }
 
