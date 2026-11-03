@@ -33,6 +33,8 @@
 #define GUT_IDLE_MS    8000        // diam selama ini = anggap macet, sambung ulang
 #define GUT_MAX_STALL  6           // sambung ulang berturut-turut tanpa kemajuan sebelum menyerah (dengan jeda makin panjang)
 #define GUT_MAX_TRY    40          // maks sambungan ulang per unduhan (berhenti lebih awal bila 3x tanpa kemajuan)
+#define GUT_PARALLEL   1           // 1 = unduh dgn 2 koneksi paralel (Range, tiap koneksi separuh berkas); 0 = satu koneksi saja
+#define GUT_PAR_MIN    (192u * 1024u)   // berkas lebih kecil dari ini: satu koneksi saja (handshake TLS kedua tak sepadan)
 
 enum { GUT_JOB_NONE = 0, GUT_JOB_SEARCH, GUT_JOB_DL };
 enum { GUT_V_LIST = 0, GUT_V_DETAIL, GUT_V_PROG };
@@ -77,6 +79,18 @@ static bool      gutReqAppend = false;
 static int       gutDlIdx = -1;
 static char      gutDoneName[96] = "";
 static StackType_t* gutStack = nullptr; static StaticTask_t gutTCB; static TaskHandle_t gutTaskH = NULL;
+// unduhan paralel: koneksi 0 jalan di task unduh utama, koneksi 1 di task pembantu (stack PSRAM juga)
+static StackType_t* gutStack2 = nullptr; static StaticTask_t gutTCB2; static TaskHandle_t gutTaskH2 = NULL;
+static portMUX_TYPE gutMux = portMUX_INITIALIZER_UNLOCKED;
+static volatile uint32_t gutLaneGot[2] = { 0, 0 };     // byte yg sudah diterima per koneksi
+static volatile uint8_t  gutLaneState[2] = { 0, 0 };   // 0 diam | 1 menyambung | 2 menerima | 3 sukses | 4 gagal
+static volatile int      gutLaneRc[2] = { 0, 0 };
+static volatile bool     gutLaneAbort = false;         // koneksi 0 gagal -> koneksi 1 berhenti
+static volatile bool     gutLane1Alive = false;
+static volatile bool     gutParActive = false;         // utk tampilan "2 koneksi"
+static char      gutL1Url[GUT_URL_LEN + 8] = "";
+static char      gutL1Path[140] = "";
+static uint32_t  gutL1From = 0, gutL1To = 0;
 
 // ---------------------------------------------------------------------
 // jaringan (di dalam task)
@@ -89,6 +103,7 @@ class GutSink : public Stream {                          // HTTPClient::writeToS
   int peek() override { return -1; }
   uint8_t* mem = nullptr; uint32_t cap = 0; File* file = nullptr; uint32_t limit = 0;
   uint32_t got = 0; bool over = false, sdFail = false; uint32_t lastDraw = 0;
+  uint8_t lane = 0xFF;                                     // 0xFF = unduhan tunggal; 0/1 = koneksi paralel (gutLaneGot[lane])
   // Tulis ke SD per blok besar: potongan jaringan cuma ~1,4 KB, dan SD card sangat lambat kalau ditulis sekecil itu.
   uint8_t* wbuf = nullptr; uint32_t wlen = 0, wcap = 0;
   uint32_t flushMs = 0, flushBytes = 0, flushMax = 0;      // statistik tulis SD (utk diagnosis kecepatan)
@@ -117,7 +132,7 @@ class GutSink : public Stream {                          // HTTPClient::writeToS
   }
   size_t write(uint8_t b) override { return write(&b, 1); }
   size_t write(const uint8_t* p, size_t n) override {
-    if (gutCancel || sdFail || over) return 0;                // sudah gagal: hentikan bersih (flag tetap menjelaskan sebabnya)
+    if (gutCancel || sdFail || over || (lane == 1 && gutLaneAbort)) return 0;                // sudah gagal: hentikan bersih (flag tetap menjelaskan sebabnya)
     if (limit && got + n > limit) { over = true; return 0; }
     if (mem) { if (got + n > cap) { over = true; return 0; } memcpy(mem + got, p, n); }
     else if (file) {
@@ -131,10 +146,14 @@ class GutSink : public Stream {                          // HTTPClient::writeToS
         }
       } else { size_t w = file->write(p, n); if (w != n) { sdFail = true; return 0; } }
     }
-    got += (uint32_t)n; gutGot = got;
-    { uint32_t ns = millis(); gutLastDataMs = ns;
-      if (!gutSpdT) { gutSpdT = ns; gutSpdB = got; }
-      else if (ns - gutSpdT >= 2000) { gutInstBps = (uint32_t)((uint64_t)(got - gutSpdB) * 1000 / (ns - gutSpdT)); gutSpdT = ns; gutSpdB = got; } }
+    got += (uint32_t)n;
+    if (lane == 0xFF) gutGot = got; else { gutLaneGot[lane] = got; gutGot = gutLaneGot[0] + gutLaneGot[1]; }
+    { uint32_t ns = millis(); uint32_t tg = gutGot;          // kecepatan dihitung dari TOTAL kedua koneksi
+      if (lane != 0xFF) portENTER_CRITICAL(&gutMux);
+      gutLastDataMs = ns;
+      if (!gutSpdT) { gutSpdT = ns; gutSpdB = tg; }
+      else if (ns - gutSpdT >= 2000) { gutInstBps = (uint32_t)((uint64_t)(tg - gutSpdB) * 1000 / (ns - gutSpdT)); gutSpdT = ns; gutSpdB = tg; }
+      if (lane != 0xFF) portEXIT_CRITICAL(&gutMux); }
     if (gutPhase == GUT_PH_CONNECT) { gutPhase = GUT_PH_DOWNLOAD; gutT0 = millis(); }
     uint32_t now = millis();
     if (now - lastDraw > GUT_DL_REDRAW_MS) { lastDraw = now; needRedraw = true; }   // gambar ulang layar jarang: UI & task unduh berbagi core 1
@@ -222,6 +241,186 @@ static int gutFetch(const char* url, uint8_t* mem, uint32_t memCap, File* f, uin
   return 200;
 }
 
+// ---------------------------------------------------------------------
+// unduhan paralel (2 koneksi): berkas dibelah dua dgn header Range.
+//   koneksi 0 -> byte [0, half)      -> "<nama>.part"   (awalan utuh: kalau gagal, jalur satu-koneksi di bawah melanjutkannya)
+//   koneksi 1 -> byte [half, total)  -> "<nama>.part2"  (digabung ke .part kalau keduanya sukses)
+// Bila server tak dukung Range / RAM tak cukup utk TLS kedua / salah satu putus, otomatis jatuh ke jalur satu-koneksi lama.
+// ---------------------------------------------------------------------
+static void gutOpenSession(HTTPClient& http, WiFiClientSecure& sc, WiFiClient& pc, const char* url, bool* ok) {
+  bool https = !strncmp(url, "https://", 8);
+  if (https) { sc.setInsecure(); sc.setTimeout(GUT_IDLE_MS / 1000 + 1); }
+  *ok = https ? http.begin(sc, url) : http.begin(pc, url);
+  if (!*ok) return;
+  http.setUserAgent("NyxOS-Buku/1.0 (ESP32-S3; pembaca e-book)");
+  http.setTimeout(GUT_IDLE_MS); http.setConnectTimeout(15000);
+  http.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
+  http.useHTTP10(true);
+}
+
+// "Range: bytes=0-0" -> 206 + "Content-Range: bytes 0-0/TOTAL". true bila server dukung Range & ukuran diketahui.
+static bool gutProbeSize(const char* url, uint32_t* total) {
+  *total = 0;
+  while ((uint32_t)(millis() - gutLastReqMs) < GUT_GAP_MS) { if (gutCancel) return false; delay(40); }
+  if (gutCancel) return false;
+  nasaWaitForHeap();
+  WiFiClientSecure sc; WiFiClient pc; HTTPClient http; bool ok = false;
+  gutOpenSession(http, sc, pc, url, &ok);
+  if (!ok) return false;
+  const char* hk[1] = { "Content-Range" };
+  http.collectHeaders(hk, 1);
+  http.addHeader("Range", "bytes=0-0");
+  int code = http.GET();
+  gutLastReqMs = millis();
+  bool good = false;
+  if (code == 206) {
+    String cr = http.header("Content-Range");
+    int sl = cr.lastIndexOf('/');
+    if (sl >= 0) { long v = cr.substring(sl + 1).toInt(); if (v > 0) { *total = (uint32_t)v; good = true; } }
+  }
+  Serial.printf("[GUT] probe %s -> %d total=%u\n", url, code, (unsigned)*total);
+  http.end();
+  return good;
+}
+
+// satu koneksi: ambil byte [from, to] (inklusif) dan tulis ke f dari awal berkas itu.
+// return: 200 ok | >0 HTTP lain | -1 gagal konek/RAM | -2 batal | -3 putus/timeout/kurang | -5 gagal tulis SD | -7 server abaikan Range
+static int gutFetchRange(const char* url, File* f, uint32_t from, uint32_t to, uint8_t lane, uint32_t* outGot) {
+  *outGot = 0; gutLaneGot[lane] = 0;
+  if (lane == 0) while ((uint32_t)(millis() - gutLastReqMs) < GUT_GAP_MS) { if (gutCancel) return -2; delay(40); }   // koneksi 1 sudah dijeda oleh koneksi 0
+  if (gutCancel) return -2;
+  nasaWaitForHeap();
+  WiFiClientSecure sc; WiFiClient pc; HTTPClient http; bool ok = false;
+  gutOpenSession(http, sc, pc, url, &ok);
+  if (!ok) return -1;
+  char rg[40]; snprintf(rg, sizeof(rg), "bytes=%u-%u", (unsigned)from, (unsigned)to);
+  http.addHeader("Range", rg);
+  uint32_t t0 = millis();
+  int code = http.GET();
+  gutLastReqMs = millis();
+  Serial.printf("[GUT] L%u GET %s [%s] -> %d (%lu ms)\n", (unsigned)lane, url, rg, code, (unsigned long)(millis() - t0));
+  if (code == 200) { http.end(); return -7; }
+  if (code != 206) { http.end(); return code > 0 ? code : (code == -11 ? -3 : -1); }
+  uint32_t want = to - from + 1;
+  int len = http.getSize();
+  if (len > 0 && (uint32_t)len != want) { http.end(); return -7; }
+  gutLaneState[lane] = 2;                                 // respons diterima: koneksi 1 boleh mulai
+  GutSink sink; sink.file = f; sink.limit = want; sink.lane = lane; sink.useWriteBuffer();
+  bool idle = false;
+  WiFiClient* st = http.getStreamPtr();
+  uint8_t* chunk = (uint8_t*)heap_caps_malloc(16384, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  if (!chunk || !st) { if (chunk) heap_caps_free(chunk); http.end(); return -1; }
+  uint32_t last = millis();
+  while (!gutCancel && !(lane == 1 && gutLaneAbort)) {
+    if (sink.got >= want) break;
+    int av = st->available();
+    if (av > 0) {
+      uint32_t room = want - sink.got;
+      int n = st->readBytes(chunk, (uint32_t)av > 16384u ? 16384 : av);
+      if (n <= 0) continue;
+      if ((uint32_t)n > room) n = (int)room;
+      if (sink.write(chunk, (size_t)n) != (size_t)n) break;
+      last = millis();
+    } else {
+      if (!st->connected()) break;
+      if (millis() - last > GUT_IDLE_MS) { idle = true; break; }
+      delay(1);
+    }
+  }
+  heap_caps_free(chunk);
+  http.end();
+  gutLastReqMs = millis();
+  if (!gutCancel && !sink.sdFail) sink.flushSd();
+  *outGot = sink.got;
+  Serial.printf("[GUT] L%u selesai got=%u/%u%s%s fl=%u/%ums\n", (unsigned)lane, (unsigned)sink.got, (unsigned)want,
+                idle ? " idle" : "", sink.sdFail ? " sd!" : "", (unsigned)sink.flushMax, (unsigned)sink.flushMs);
+  if (lane == 0) gutSdKBs = sink.flushMs ? (uint32_t)((uint64_t)sink.flushBytes * 1000 / sink.flushMs / 1024) : 0;
+  if (gutCancel) return -2;
+  if (sink.sdFail) return -5;
+  if (sink.got < want) return -3;
+  return 200;
+}
+
+static void gutLane1Func(void*) {                         // task pembantu: koneksi ke-2
+  gutLaneState[1] = 1;
+  uint32_t t0 = millis();
+  while (!gutCancel && gutLaneState[0] < 2 && millis() - t0 < 25000) delay(20);   // tunggu koneksi 0 dapat respons (handshake TLS tidak barengan: hemat RAM internal)
+  int rc = -2;
+  if (!gutCancel && gutLaneState[0] != 4) {
+    delay(250);
+    for (int attempt = 0; attempt < 2 && !gutCancel && !gutLaneAbort; attempt++) {   // 1x ulang dari awal potongan (FILE_WRITE memotong berkas)
+      File f = SD_MMC.open(gutL1Path, FILE_WRITE);
+      if (!f) { rc = -5; break; }
+      uint32_t got = 0;
+      rc = gutFetchRange(gutL1Url, &f, gutL1From, gutL1To, 1, &got);
+      f.close();
+      if (rc == 200 || rc == -2 || rc == -5 || rc == -7) break;
+      for (int w = 0; w < 2000 && !gutCancel && !gutLaneAbort; w += 100) delay(100);
+    }
+  }
+  gutLaneRc[1] = rc;
+  gutLaneState[1] = (rc == 200) ? 3 : 4;
+  gutLane1Alive = false;                                  // paling akhir
+  vTaskDelete(NULL);
+}
+
+// gabung src di ujung dst (src dihapus oleh pemanggil)
+static bool gutAppendFile(const char* dst, const char* src) {
+  File s = SD_MMC.open(src, FILE_READ);
+  if (!s) return false;
+  File d = SD_MMC.open(dst, FILE_APPEND);
+  if (!d) { s.close(); return false; }
+  const size_t CH = 32768;
+  uint8_t* b = (uint8_t*)heap_caps_malloc(CH, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  bool ok = (b != nullptr);
+  while (ok && !gutCancel) {
+    int n = s.read(b, CH);
+    if (n <= 0) break;
+    if (d.write(b, (size_t)n) != (size_t)n) ok = false;
+  }
+  if (b) heap_caps_free(b);
+  s.close(); d.close();
+  return ok && !gutCancel;
+}
+
+// return 200 = berkas utuh sudah ada di tmp | -2 batal | lainnya = gagal (tmp berisi awalan utuh, boleh dilanjut satu-koneksi)
+static int gutDownloadParallel(const char* u, const char* tmp, uint32_t total) {
+  uint32_t half = total / 2;
+  char tmp2[140]; snprintf(tmp2, sizeof(tmp2), "%s2", tmp);
+  SD_MMC.remove(tmp2);
+  strncpy(gutL1Url, u, sizeof(gutL1Url) - 1); gutL1Url[sizeof(gutL1Url) - 1] = 0;
+  strncpy(gutL1Path, tmp2, sizeof(gutL1Path) - 1); gutL1Path[sizeof(gutL1Path) - 1] = 0;
+  gutL1From = half; gutL1To = total - 1;
+  gutLaneGot[0] = gutLaneGot[1] = 0; gutLaneState[0] = 1; gutLaneState[1] = 0; gutLaneRc[0] = gutLaneRc[1] = 0;
+  gutLaneAbort = false; gutGot = 0; gutTot = total; gutPartUrl[0] = 0;
+  strncpy(gutPartUrl, u, sizeof(gutPartUrl) - 1); gutPartUrl[sizeof(gutPartUrl) - 1] = 0;   // .part = awalan dari URL ini (utk lanjut)
+  gutInstBps = 0; gutSpdT = 0; gutSpdB = 0; gutLastDataMs = millis(); gutDiag[0] = 0;
+  gutLane1Alive = true;
+  if (createTaskPsramStack(gutLane1Func, "gutLane1", 12288, nullptr, &gutStack2, &gutTCB2, &gutTaskH2, 0) != pdPASS) { gutLane1Alive = false; return -1; }
+  gutParActive = true;
+  File f = SD_MMC.open(tmp, FILE_WRITE);
+  int rc0 = -5; uint32_t got0 = 0;
+  if (f) { rc0 = gutFetchRange(u, &f, 0, half - 1, 0, &got0); f.close(); }
+  gutLaneRc[0] = rc0; gutLaneState[0] = (rc0 == 200) ? 3 : 4;
+  if (rc0 != 200) gutLaneAbort = true;                    // tanpa koneksi 0, hasil koneksi 1 tak berguna
+  while (gutLane1Alive) delay(30);
+  gutParActive = false;
+  gutEndMs = millis();
+  int rc1 = gutLaneRc[1];
+  Serial.printf("[GUT] paralel: L0 rc=%d got=%u/%u | L1 rc=%d got=%u/%u\n", rc0, (unsigned)got0, (unsigned)half, rc1, (unsigned)gutLaneGot[1], (unsigned)(total - half));
+  snprintf(gutDiag, sizeof(gutDiag), "2 koneksi L0=%d L1=%d", rc0, rc1);
+  if (gutCancel) { SD_MMC.remove(tmp2); return -2; }
+  if (rc0 != 200 || rc1 != 200) { SD_MMC.remove(tmp2); return rc0 != 200 ? rc0 : rc1; }
+  gutLaneGot[0] = half; gutLaneGot[1] = total - half; gutGot = total;
+  bool merged = gutAppendFile(tmp, tmp2);
+  SD_MMC.remove(tmp2);
+  if (gutCancel) return -2;
+  if (!merged) return -5;
+  File g = SD_MMC.open(tmp, FILE_READ); uint32_t sz = g ? (uint32_t)g.size() : 0; if (g) g.close();
+  if (sz != total) { SD_MMC.remove(tmp); gutPartUrl[0] = 0; return -3; }          // ukuran tak cocok: buang, ulang satu-koneksi
+  return 200;
+}
+
 static void gutSetErr(int rc) {
   gutPhase = GUT_PH_ERROR;
   switch (rc) {
@@ -285,8 +484,26 @@ static void gutDoDownload() {
   uint32_t got = 0; int rc = -1; int stall = 0, restarts = 0; bool keepPart = false;
   gutRetries = 0;
   uint32_t lim = isEpub ? GUT_EPUB_MAX : GUT_TXT_MAX;
+  bool parDone = false;
+#if GUT_PARALLEL
+  // Unduhan baru (bukan lanjutan .part): coba 2 koneksi paralel. Gagal di mana pun -> lanjut ke jalur satu-koneksi di bawah.
+  if (!resume) {
+    uint32_t total = 0;
+    const char* pu = useLite ? lite : url;
+    if (gutProbeSize(pu, &total) && total >= GUT_PAR_MIN && total <= lim) {
+      int pr = gutDownloadParallel(pu, tmp, total);
+      if (pr == 200) { rc = 200; got = total; parDone = true; }
+      else if (pr == -2) { rc = -2; parDone = true; }
+      else {
+        File g = SD_MMC.open(tmp, FILE_READ); uint32_t sz = g ? (uint32_t)g.size() : 0; if (g) g.close();
+        if (sz > 0 && sz < total) resume = sz; else { SD_MMC.remove(tmp); gutPartUrl[0] = 0; }   // awalan utuh dari koneksi 0 dilanjutkan satu-koneksi
+        gutPhase = GUT_PH_DOWNLOAD;
+      }
+    } else if (gutCancel) { rc = -2; parDone = true; }
+  }
+#endif
   // Unduhan sering putus di tengah (server/TLS): jangan mulai dari nol, sambung pakai Range dari byte terakhir yang sudah di SD.
-  for (int attempt = 0; attempt < GUT_MAX_TRY; attempt++) {
+  for (int attempt = 0; attempt < GUT_MAX_TRY && !parDone; attempt++) {
     const char* u = useLite ? lite : url;
     if (attempt) { gutRetries = (uint16_t)attempt; needRedraw = true; }
     if (!resume) { strncpy(gutPartUrl, u, sizeof(gutPartUrl) - 1); gutPartUrl[sizeof(gutPartUrl) - 1] = 0; }
@@ -330,7 +547,7 @@ static void gutDoDownload() {
       strncpy(gutDoneName, name, sizeof(gutDoneName) - 1); gutDoneName[sizeof(gutDoneName) - 1] = 0;
       gutPhase = GUT_PH_DONE; strcpy(gutMsg, "Tersimpan di /books.");
       uint32_t el = millis() - gutT0; uint32_t net = el ? (uint32_t)((uint64_t)got * 1000 / el / 1024) : 0;
-      snprintf(gutDiag, sizeof(gutDiag), "rata2 %u KB/s, tulis SD %u KB/s", (unsigned)net, (unsigned)gutSdKBs);
+      snprintf(gutDiag, sizeof(gutDiag), "rata2 %u KB/s%s, tulis SD %u KB/s", (unsigned)net, (parDone && rc == 200) ? " (2 koneksi)" : "", (unsigned)gutSdKBs);
       return;
     }
     strcpy(gutMsg, "Gagal menyimpan berkas."); gutPhase = GUT_PH_ERROR; SD_MMC.remove(tmp); return;
@@ -650,7 +867,8 @@ static void gutDrawProgress(LGFX_Sprite& s) {
       uint32_t bps = (nowD - gutLastDataMs > 3000) ? 0 : gutInstBps;      // kecepatan saat ini; 0 bila macet >3 dtk
       if (!bps && gutInstBps == 0 && nowD - gutLastDataMs <= 3000) bps = (uint32_t)((uint64_t)got * 1000 / el);   // jendela pertama belum terisi
       char sp[64]; char rt[16] = "";
-      if (gutRetries) snprintf(rt, sizeof(rt), "  ulang %ux", (unsigned)gutRetries);
+      if (gutParActive) snprintf(rt, sizeof(rt), "  x2");
+      else if (gutRetries) snprintf(rt, sizeof(rt), "  ulang %ux", (unsigned)gutRetries);
       if (!bps) snprintf(sp, sizeof(sp), "menunggu data...%s", rt);
       else if (tot > got) snprintf(sp, sizeof(sp), "%u KB/s  sisa ~%u dtk%s", (unsigned)(bps / 1024), (unsigned)((tot - got) / bps + 1), rt);
       else snprintf(sp, sizeof(sp), "%u KB/s%s", (unsigned)(bps / 1024), rt);
