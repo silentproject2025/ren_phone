@@ -22,6 +22,11 @@ on:
         description: "Taruh buffer WiFi/lwIP di PSRAM (hemat RAM internal, throughput WiFi bisa sedikit turun)"
         type: boolean
         default: true
+      spiram_always_internal:
+        description: "Alokasi malloc <= batas ini (byte) tetap di RAM internal; lebih besar -> PSRAM. Bawaan IDF 16384. 4096 = lebih banyak ke PSRAM, RAM internal lebih lega (sedikit lebih lambat)"
+        type: choice
+        options: [ "default", "4096", "2048" ]
+        default: "4096"
       tcp_window_kb:
         description: "EKSPERIMEN: window TCP lwIP (KB) utk unduhan lebih cepat di jaringan latensi tinggi. default = bawaan IDF (~5,6 KB). Makin besar makin boros RAM"
         type: choice
@@ -100,10 +105,15 @@ jobs:
           #    dgn stack di PSRAM (dipakai createTaskPsramStack, DOOM, NES, Musik, Telepon).
           #  - SPIRAM_TRY_ALLOCATE_WIFI_LWIP: buffer WiFi/lwIP diutamakan di PSRAM (RAM
           #    internal lebih lega). Bisa dimatikan lewat input wifi_lwip_psram=false.
+          case "${{ inputs.spiram_always_internal }}" in
+            2048|4096) AI="${{ inputs.spiram_always_internal }}" ;;
+            *) AI="" ;;
+          esac
           {
             echo 'CONFIG_MBEDTLS_DYNAMIC_BUFFER=y'
             echo 'CONFIG_MBEDTLS_DYNAMIC_FREE_CONFIG_DATA=y'
             echo 'CONFIG_FREERTOS_TASK_CREATE_ALLOW_EXT_MEM=y'
+            if [ -n "$AI" ]; then echo "CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=$AI"; fi
             if [ "${{ inputs.psram_cache_line_64b }}" = "true" ]; then
               echo 'CONFIG_ESP32S3_DATA_CACHE_LINE_64B=y'
             fi
@@ -162,6 +172,8 @@ jobs:
           for OPT in CONFIG_MBEDTLS_DYNAMIC_BUFFER CONFIG_MBEDTLS_DYNAMIC_FREE_CONFIG_DATA CONFIG_FREERTOS_TASK_CREATE_ALLOW_EXT_MEM CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP; do
             if grep -q "^$OPT=y" "$OUT/sdkconfig"; then echo "OK   $OPT=y"; else echo "::warning::$OPT tidak aktif di sdkconfig hasil build (dependensi Kconfig tidak terpenuhi atau dimatikan lewat input)"; fi
           done
+          echo "=== batas malloc internal (SPIRAM_MALLOC_ALWAYSINTERNAL) ==="
+          grep -E '^CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=' "$OUT/sdkconfig" || echo "::warning::ALWAYSINTERNAL tidak ditemukan di sdkconfig hasil (pakai bawaan 16384)"
           echo "=== window TCP lwIP di sdkconfig hasil ==="
           grep -E '^CONFIG_LWIP_TCP_(WND_DEFAULT|SND_BUF_DEFAULT|RECVMBOX_SIZE)=' "$OUT/sdkconfig" || echo "::warning::opsi window TCP tidak ditemukan di sdkconfig hasil"
           mkdir -p "$HOME/pkg"
