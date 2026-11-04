@@ -41,7 +41,7 @@ Saat kamera dinyalakan, driver mengenali sensor lewat bus SCCB dan CAM melaporka
 Batas yang tidak diubah: CPU CAM sudah 240 MHz; XCLK 20 MHz sudah mendekati batas praktis OV2640; PSRAM CAM berjalan 40 MHz (setelan core, perlu build core khusus untuk mengubahnya).
 
 ## Status pengujian (jujur)
-- **Link maks (v2)**: dedup header, kontrol aliran seq (termasuk wrap-around 256, ACK basi/ngawur, rescue), id header basi, cache hilang + pemulihan, frame rusak -> diuji di komputer (`tests_kamera/test_cam.cpp`, bit-exact). Sintaks `camera_renphone.ino` & `cam_module.h` dicek dgn mock. **Belum dijalankan di perangkat**: stabilitas 4/5 Mbaud tergantung kabel; kalau tidak stabil, link turun sendiri (lihat "Turun otomatis").
+- **Link maks (v2)**: sudah diuji pemilik pada perangkat; hasilnya sangat bagus dan signifikan sesuai harapan. Di komputer, dedup header, kontrol aliran seq (termasuk wrap-around 256, ACK basi/ngawur, rescue), id header basi, cache hilang + pemulihan, dan frame rusak diuji bit-exact (`tests_kamera/test_cam.cpp`). Stabilitas 4/5 Mbaud tetap bergantung kabel; kalau tidak stabil, link turun sendiri (lihat "Turun otomatis").
 - **Flash DUA firmware sekaligus** (S3 + CAM): arti `RP_CAM_ACK` berubah. CAM baru + S3 lama = preview tersendat ~1 fps (ACK lama dianggap basi); CAM lama + S3 baru tetap jalan (tanpa dedup).
 - **Belum dikompilasi dengan toolchain ESP32 dan belum dijalankan di perangkat.** Sintaks `camera_renphone.ino` dan `cam_module.h` dicek dengan mock API; protokol (pemecahan/penyusunan frame, frame rusak, slot, foto vs preview) dan penulis AVI diuji di komputer (`tests_kamera/`); AVI hasilnya didecode oleh ffmpeg (10 frame, 10 fps, idx1 valid).
 - fps nyata tergantung kabel dan beban; HUD menampilkannya.

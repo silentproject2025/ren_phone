@@ -75,7 +75,7 @@ NyxOS tidak berbasis Android maupun Linux. Peluncur aplikasi (launcher), pusat n
 | Gamepad web untuk NES dan DOOM | `OK` | |
 | Baterai (INA219), Galeri, HWmonitor, Profil, dan lainnya | `OK` | |
 | **Telepon (SIP dan LAN)** | `SEBAGIAN` | Teruji dan berjalan normal dengan `sip2sip.info` melalui TCP. Akun `sip.linphone.org` hanya berfungsi satu jalur (sebagai penerima). Mode LAN dan TURN belum terkonfirmasi. |
-| Kamera (OV2640 pada ESP32-CAM) | `OK` | Seluruh fitur telah diuji pemilik, termasuk link 3 Mbaud dengan kualitas JPEG 10. Lihat [`KAMERA.md`](./KAMERA.md). |
+| Kamera (OV2640 pada ESP32-CAM) | `OK` | Seluruh fitur telah diuji pemilik, termasuk optimasi link kamera terbaru (ACK tanpa menunggu UI, dedup header JPEG, link hingga 5 Mbaud) yang hasilnya signifikan. Lihat [`KAMERA.md`](./KAMERA.md). |
 | Buku (pembaca `.txt`, `.md` dan `.epub`) | `OK` | Diuji pemilik di perangkat dan berjalan baik. Logika inti (inflate, ZIP, EPUB, HTML ke teks, tata letak) juga diuji di komputer (`tests_ebook/`). Lihat bagian *App Buku* di bawah. |
 | Buku: unduh dari Project Gutenberg | `OK` | Diuji pemilik di perangkat: unduh ±5 buku EPUB dengan gambar (sampai ±2,9 MB) berhasil. Logika inti dan alur unduh/verifikasi juga diuji di komputer (`tests_gutenberg/`). Sumber OPDS dan format TXT belum dikonfirmasi secara khusus. Lihat *Unduh dari Project Gutenberg* di bawah. |
 | SPI Overclock layar | `HW` | Hasil bergantung pada batas fisik kabel. |
@@ -89,7 +89,7 @@ Perangkat terdiri atas dua mikrokontroler yang saling terhubung melalui UART. ES
 
 ```
 ┌────────────────────────────┐   UART 921.600 baud    ┌──────────────────────────┐
-│ ESP32-S3  (utama)          │  (naik ke 2/3 Mbaud    │ ESP32-CAM  (ko-prosesor) │
+│ ESP32-S3  (utama)          │  (naik ke 2-5 Mbaud    │ ESP32-CAM  (ko-prosesor) │
 │  · UI, aplikasi, game      │   saat Kamera dibuka)  │  · decode MP3 (libhelix) │
 │  · WiFi, HTTP/TLS, SIP     │ ◀────── RPLink ──────▶ │  · A2DP ke TWS           │
 │  · SD card, layar, sentuh  │                        │  · kamera OV2640         │
@@ -142,7 +142,7 @@ Konsekuensi desain yang penting:
 - Berikan daya melalui pin **5V** dengan catu yang cukup kuat. Modul ini mudah mengalami *brownout* ketika kamera dan radio Bluetooth aktif bersamaan.
 - **Cabut kartu SD pada modul ESP32-CAM.** GPIO 13 dan 14 dipakai bersama oleh slot tersebut, dan GPIO 4 digunakan sebagai LED flash.
 - Pemetaan pin kamera mengikuti papan **AI-Thinker**. Papan klon dengan pin berbeda memerlukan perubahan konstanta `CAM_PIN_*` pada `cam_bt_coprocessor/cam_module.h`.
-- Kabel UART yang panjang dapat membuat link 3 Mbaud tidak stabil. Firmware akan kembali otomatis ke 921.600 baud.
+- Kabel UART yang panjang atau berkualitas rendah dapat membuat link 4–5 Mbaud tidak stabil. Firmware akan turun otomatis satu anak tangga kecepatan (5M → 4M → 3M → 2M → 921.600 baud) hingga link bersih. Gunakan kabel sependek mungkin.
 
 ---
 
@@ -551,7 +551,7 @@ Album adalah **folder pada kartu SD** (maksimal 2 tingkat), seperti galeri ponse
 
 Kamera berada pada modul ESP32-CAM, bukan pada S3. Gambar JPEG dikirim melalui link UART yang sama dengan audio Bluetooth. Dokumentasi lengkap tersedia di [`KAMERA.md`](./KAMERA.md).
 
-> **Status.** Seluruh fitur Kamera telah diuji pemilik pada perangkat, termasuk link UART 3 Mbaud dengan kualitas JPEG 10. Sebelum pengujian pada perangkat, sintaks diperiksa dengan *mock API*; protokol (pemecahan dan penyusunan frame, frame rusak, slot, foto versus preview) serta penulis AVI diuji di komputer melalui `tests_kamera/`, dan AVI yang dihasilkan berhasil di-decode oleh ffmpeg.
+> **Status.** Seluruh fitur Kamera telah diuji pemilik pada perangkat, termasuk optimasi link terbaru (ACK tanpa menunggu UI, dedup header JPEG, link UART hingga 5 Mbaud), yang menurut hasil uji pemilik memberi peningkatan signifikan sesuai harapan. Sebelum pengujian pada perangkat, sintaks diperiksa dengan *mock API*; protokol (pemecahan dan penyusunan frame, frame rusak, slot, foto versus preview) serta penulis AVI diuji di komputer melalui `tests_kamera/` (termasuk dedup header, kontrol aliran berbasis nomor urut, serta pemulihan cache header), dan AVI yang dihasilkan berhasil di-decode oleh ffmpeg.
 
 | Fitur | Keterangan |
 |---|---|
@@ -576,17 +576,22 @@ Kamera berada pada modul ESP32-CAM, bukan pada S3. Gambar JPEG dikirim melalui l
 
 | Bagian | Pendekatan |
 |---|---|
-| Link UART | Naik otomatis dari 921,6 kbaud ke **2 atau 3 Mbaud** saat aplikasi dibuka (dapat dipilih pada Atur → Sistem). Throughput sekitar 90 KB/s pada 921k dan sekitar 300 KB/s pada 3M. Turun kembali saat aplikasi ditutup. |
-| Fallback aman | Jika tidak ada frame valid dalam 1,5 detik setelah pindah baud, S3 kembali ke 921k; CAM juga kembali sendiri setelah 3 detik. |
-| Aliran frame | Kontrol kredit (maksimal 2 frame dalam perjalanan) dan `GRAB_LATEST`: selalu frame terbaru, latensi rendah, dan tidak menyumbat musik. |
-| Sisi S3 | CPU 240 MHz selama aplikasi terbuka; pembacaan UART per blok 256 byte; RX buffer 6 KB. |
+| Link UART | Naik otomatis dari 921,6 kbaud ke **2, 3, 4, atau 5 Mbaud** saat aplikasi dibuka (batas atas dipilih pada Atur → Sistem; bawaan 5M). Throughput sekitar 90 KB/s pada 921k, 300 KB/s pada 3M, dan sekitar 500 KB/s pada 5M. Pembagi UART 4M dan 5M pas (80 MHz ÷ 20 dan ÷ 16). Turun kembali saat aplikasi ditutup. |
+| Turun otomatis | Dari batas atas, link turun **satu anak tangga** (5M → 4M → 3M → 2M → 921k) bila kabel tidak bersih: (a) minimal 3 frame rusak dalam 5 detik, CAM diminta pindah langsung; (b) tidak ada frame valid 1,5 detik setelah pindah baud, atau CAM hilang lebih dari 2 detik di baud tinggi, S3 mundur ke 921k, menunggu CAM ikut mundur (maksimal 3 detik), lalu mencoba anak tangga di bawahnya. Tidak naik lagi dalam sesi yang sama. |
+| ACK tanpa menunggu UI | S3 mengirim `RP_CAM_ACK [seq]` begitu potongan akhir frame tiba (di `musTask`), bukan setelah UI selesai decode dan menggambar. Kabel tidak menganggur selama decode, sementara UI tetap mengambil frame terbaru. CAM dibangunkan langsung oleh ACK (*task notify*), bukan polling. |
+| Kontrol aliran berbasis nomor urut | Jendela 3 frame dihitung dari selisih nomor urut kirim dan ACK, bukan hitungan kredit. ACK atau frame yang hilang tidak membocorkan kredit dan tidak membuat aliran macet. |
+| Dedup header JPEG | Header OV2640 (sekitar 600–650 byte) identik di tiap frame preview, sehingga dihilangkan dan diganti id 16-bit; S3 menyalin dari cache. Id harus cocok, bila tidak frame dibuang (tidak pernah menampilkan warna atau gambar yang salah). Bila cache S3 hilang, bit "butuh header" pada ACK membuat frame berikutnya dikirim lengkap; header lengkap tetap dikirim tiap 30 frame. Paling terasa pada preview kecil (sekitar 25% lebih hemat pada 160×120, sekitar 8% pada 320×240). |
+| Aliran frame | `GRAB_LATEST`: selalu frame terbaru, latensi rendah, dan tidak menyumbat musik. |
+| Sisi S3 | CPU 240 MHz selama aplikasi terbuka; pembacaan UART per blok 256 byte; RX buffer 10 KB (diperlukan pada 5 Mbaud). |
 | Sisi CAM | Buffer kamera di PSRAM (2 frame, ukuran UXGA); kamera hanya hidup saat aplikasi terbuka sehingga RAM dikembalikan ke BT/MP3 saat keluar. |
 
 **Risiko yang perlu diuji**
 
 1. **RAM internal CAM:** kamera, A2DP, dan MP3 sekaligus sangat ketat. Jika muncul pesan "RAM CAM kurang", matikan Bluetooth atau musik terlebih dahulu. Ambang pada `CAM_MIN_BLOCK` (`cam_module.h`).
 2. **Daya:** ESP32-CAM mudah *brownout*. Gunakan pin 5V dengan catu yang kuat.
-3. **Kabel UART 3 Mbaud** dapat tidak stabil bila panjang; sistem kembali otomatis ke 921k, atau pilih 2M/921k secara manual. Pada unit pemilik, 3 Mbaud berjalan lancar.
+3. **Kabel UART 4–5 Mbaud** dapat tidak stabil bila panjang; sistem turun otomatis satu anak tangga, atau pilih batas atas yang lebih rendah secara manual pada Atur → Sistem.
+3a. **Dua firmware harus diperbarui bersamaan.** Arti `RP_CAM_ACK` berubah: CAM baru dengan S3 lama membuat preview tersendat sekitar 1 fps, sedangkan CAM lama dengan S3 baru tetap berjalan tetapi tanpa dedup header.
+3b. **RAM internal S3:** RX buffer UART naik dari 6 KB ke 10 KB (`CAM_UART_RXBUF`). Bila RAM internal terlalu ketat, nilai ini dapat diturunkan dengan risiko kurang aman pada 5 Mbaud.
 4. Musik dapat tersendat sebentar saat aplikasi dibuka atau ditutup (momen pergantian baud).
 5. Galeri hanya mengenali foto; video AVI diputar melalui tombol "Putar" atau aplikasi Files.
 6. Orientasi kamera pada papan dapat terputar: gunakan Mirror/Flip pada Atur → Layar.
@@ -822,7 +827,7 @@ SD ─▶ S3 (master) ──UART──▶ ESP32-CAM ──A2DP──▶ TWS
 | S3 → CAM | `P` begin · `D` data · `F` finish · `U` pause · `V` volume · `X` stop · `A` scan · `C` connect · `T` tx-gain · `B` mode BT · `G` ping |
 | CAM → S3 | `S` status · `E` lagu habis · `L` hasil scan · `W` scan selesai · `R` hello · `K` tombol earbuds |
 
-Protokol yang sama juga membawa frame kamera (preview, foto, dan kontrol kredit) dan dinaikkan ke 2 atau 3 Mbaud selama aplikasi Kamera terbuka.
+Protokol yang sama juga membawa frame kamera (preview, foto, dan kontrol aliran berbasis nomor urut) dan dinaikkan hingga 5 Mbaud selama aplikasi Kamera terbuka, dengan penurunan otomatis bila link tidak bersih.
 
 Volume absolut AVRCP sengaja **tidak diiklankan**, karena pada sebagian earbuds hal ini membuat CAM dimatikan oleh watchdog. Saklar `RP_AVRCP_ENABLE` tersedia untuk mengisolasi masalah memori atau link.
 
