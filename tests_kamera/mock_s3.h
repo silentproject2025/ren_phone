@@ -18,7 +18,7 @@ struct String { std::string s; String(){} String(const char* c):s(c){} const cha
 void* heap_caps_malloc(size_t, int); void heap_caps_free(void*);
 struct HW2 : HardwareSerial { int available(); size_t readBytes(uint8_t*, size_t); void updateBaudRate(unsigned long); void flush(); };
 extern HW2 Serial1;
-struct Preferences { bool begin(const char*, bool=false); size_t getBytes(const char*, void*, size_t); size_t putBytes(const char*, const void*, size_t); void end(); };
+struct Preferences { bool begin(const char*, bool=false); size_t getBytes(const char*, void*, size_t); size_t putBytes(const char*, const void*, size_t); unsigned char getUChar(const char*, unsigned char=0); size_t putUChar(const char*, unsigned char); void end(); };
 #define FILE_WRITE "w"
 struct File { operator bool() const; size_t write(const uint8_t*, size_t); bool seek(uint32_t); void close(); };
 struct SDc { bool exists(const char*); bool mkdir(const char*); File open(const char*, const char* m="r"); bool remove(const char*); };

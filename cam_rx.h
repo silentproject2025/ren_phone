@@ -8,6 +8,7 @@
 //
 //  Preview : 3 slot bergilir. Frame baru yang selesai menggantikan frame "siap"
 //            yang belum sempat diambil UI (latensi rendah, frame lama dibuang).
+//  Header  : CAM boleh menghilangkan header JPEG (flag RPF_HDRSKIP) -> disalin dari cache header terakhir (id 16-bit harus cocok).
 //  Foto    : satu buffer besar. Hanya diterima kalau UI sudah "mempersenjatai"
 //            (arm) sebelum mengirim RP_CAM_SHOT, supaya sisa potongan lama diabaikan.
 //
@@ -16,6 +17,7 @@
 // ============================================================
 #include <stdint.h>
 #include <string.h>
+#include "rplink.h"      // rpJpegHdrLen / rpHdrHash / RPF_* (identik dgn sisi CAM)
 
 #ifndef CAMRX_ENTER
   #if defined(ARDUINO) || defined(ESP_PLATFORM)
@@ -52,6 +54,12 @@ struct CamRx {
   bool      sOn = false;
   uint8_t   sSeq = 0;
 
+  uint8_t   hdr[RP_HDR_MAX];      // cache header JPEG utuh terakhir (dari potongan awal frame lengkap)
+  uint16_t  hdrLen = 0, hdrId = 0;
+  volatile uint8_t lastSeq = 0;   // seq frame preview terakhir yang potongan AKHIR-nya tiba (utuh atau rusak) -> isi RP_CAM_ACK
+  uint32_t  bytes = 0;            // total byte data JPEG diterima (utk ukur KB/dtk)
+  volatile bool needHdr = false;  // true = S3 butuh header lengkap -> dititipkan di RP_CAM_ACK (bit0 byte ke-2), CAM kirim lengkap di frame berikutnya
+  uint32_t  hdrMiss = 0;          // frame header-dihilangkan yang dibuang krn cache tak cocok (pulih sendiri <= 1 dtk)
   uint32_t  frames = 0;           // frame preview utuh yang diterima
   uint32_t  dropped = 0;          // frame dibuang (tak ada slot kosong / terlambat diambil)
   uint32_t  bad = 0;              // frame rusak (potongan hilang / checksum JPEG gagal)
@@ -79,7 +87,7 @@ struct CamRx {
   void resetPreview() {
     CAMRX_ENTER();
     for (int i = 0; i < CAMRX_SLOTS; i++) { slotSt[i] = CAMRX_FREE; slotLen[i] = 0; }
-    rxSlot = -1; rxOn = false; ready = -1; cur = -1;
+    rxSlot = -1; rxOn = false; ready = -1; cur = -1; hdrLen = 0;
     CAMRX_EXIT();
   }
 
@@ -94,7 +102,8 @@ struct CamRx {
     uint32_t off = le32(p + 2);
     const uint8_t* d = p + 6;
     uint32_t dn = (uint32_t)n - 6;
-    bool first = fl & 1, last = fl & 2, isStill = fl & 4;
+    bool first = fl & RPF_FIRST, last = fl & RPF_LAST, isStill = fl & RPF_STILL;
+    if (last && !isStill) lastSeq = seq;
 
     if (isStill) {
       if (stillState != CAMRX_STILL_RECV || !still) return false;     // tidak diminta -> abaikan
@@ -102,7 +111,7 @@ struct CamRx {
       else if (!sOn || seq != sSeq || off != stillLen) { sOn = false; stillState = CAMRX_STILL_FAIL; bad++; return false; }
       if (off != stillLen || stillLen + dn > stillCap) { sOn = false; stillState = CAMRX_STILL_FAIL; oversize++; return false; }
       memcpy(still + stillLen, d, dn);
-      stillLen += dn;
+      stillLen += dn; bytes += dn;
       if (last) {
         sOn = false;
         if (jpegOk(still, stillLen)) stillState = CAMRX_STILL_DONE;
@@ -112,26 +121,39 @@ struct CamRx {
     }
 
     // ---- preview ----
+    const uint8_t* src = d; uint32_t sn = dn;      // data JPEG yang benar2 disalin (tanpa id header)
     if (first) {
       rxOn = false; rxSlot = -1;
+      bool skip = (fl & RPF_HDRSKIP) != 0;
+      if (skip) {                                   // header dihilangkan: pakai cache, tapi hanya kalau id-nya cocok
+        if (dn < 2 || hdrLen == 0 || off != hdrLen || (uint16_t)(d[0] | ((uint16_t)d[1] << 8)) != hdrId) { hdrMiss++; needHdr = true; return false; }
+        src = d + 2; sn = dn - 2;
+      } else if (off == 0) {                        // frame lengkap: simpan header-nya jadi cache
+        uint16_t hl = rpJpegHdrLen(d, dn);
+        if (hl) { memcpy(hdr, d, hl); hdrLen = hl; hdrId = rpHdrHash(d, hl); needHdr = false; } else hdrLen = 0;
+      }
       CAMRX_ENTER();
       for (int i = 0; i < CAMRX_SLOTS; i++) if (slotSt[i] == CAMRX_FREE) { slotSt[i] = CAMRX_FILL; rxSlot = i; break; }
       CAMRX_EXIT();
       if (rxSlot < 0) { dropped++; return false; }
       rxOn = true; rxSeq = seq; rxLen = 0;
+      if (skip) {
+        if (hdrLen > slotCap) { CAMRX_ENTER(); slotSt[rxSlot] = CAMRX_FREE; CAMRX_EXIT(); rxOn = false; rxSlot = -1; oversize++; return false; }
+        memcpy(slot[rxSlot], hdr, hdrLen); rxLen = hdrLen;
+      }
     } else if (!rxOn || seq != rxSeq || off != rxLen) {
       if (rxOn && rxSlot >= 0) { CAMRX_ENTER(); slotSt[rxSlot] = CAMRX_FREE; CAMRX_EXIT(); bad++; }
       rxOn = false; rxSlot = -1;
       return false;
     }
     if (!rxOn) return false;
-    if (off != rxLen || rxLen + dn > slotCap) {
+    if (off != rxLen || rxLen + sn > slotCap) {
       CAMRX_ENTER(); slotSt[rxSlot] = CAMRX_FREE; CAMRX_EXIT();
       rxOn = false; rxSlot = -1; oversize++;
       return false;
     }
-    memcpy(slot[rxSlot] + rxLen, d, dn);
-    rxLen += dn;
+    memcpy(slot[rxSlot] + rxLen, src, sn);
+    rxLen += sn; bytes += sn;
     if (!last) return false;
 
     rxOn = false;

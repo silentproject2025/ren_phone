@@ -45,9 +45,9 @@
 #define RP_CAM_CLOSE  'j'   // matikan kamera & lepas RAM
 #define RP_CAM_SET    'k'   // payload: [id RPC_*][nilai int8]
 #define RP_CAM_SHOT   'O'   // payload: [res RPR_*][quality][flash 0..255][flags]. Foto 1x resolusi tinggi
-#define RP_CAM_ACK    'Q'   // payload: [seq]. S3 sudah mengambil 1 frame preview (kredit +1)
+#define RP_CAM_ACK    'Q'   // payload: [seq]. nomor urut frame terakhir yang selesai diterima S3 (lihat "Efisiensi link kamera")
 #define RP_CAM_FLASH  'N'   // payload: [0..255] LED flash GPIO4 (PWM)
-#define RP_CAM_BAUD   'H'   // payload: [u32 LE baud]. CAM menjawab RP_CAM_BAUDOK lalu pindah kecepatan
+#define RP_CAM_BAUD   'H'   // payload: [u32 LE baud, 115200..5000000]. CAM menjawab RP_CAM_BAUDOK lalu pindah kecepatan
 // CAM -> S3
 #define RP_CAM_FRAME  'M'   // payload: [seq][flags b0 awal b1 akhir b2 foto][u32 LE offset][data...]
 #define RP_CAM_STAT   'm'   // 12 byte (lihat camSendStat di cam_module.h)
@@ -83,6 +83,46 @@
 #define RPC_FPSCAP   13   // 0 = secepat mungkin, selain itu batas fps
 #define RPC_COLORBAR 14   // 0/1 pola uji
 #define RPC_COUNT    32
+
+// ---- Efisiensi link kamera (v2) ----
+// RP_CAM_ACK payload [seq] = nomor urut frame terakhir yang SELESAI diterima S3 (bukan "tambah 1 kredit").
+//   CAM menghitung frame di jalan = (uint8_t)(seqKirim - seqAck) & boleh kirim selama < CAM_WINDOW.
+//   ACK yang hilang / frame rusak tidak membocorkan kredit (ACK berikutnya otomatis mencakup yang lama).
+// RP_CAM_FRAME flags: b0 awal, b1 akhir, b2 foto, b3 (RPF_HDRSKIP) = header JPEG DIHILANGKAN (hemat ~600 B/frame preview).
+//   Potongan awal frame begini membawa offset = panjang header, & datanya diawali [hid lo][hid hi]. S3 menyalin header
+//   dari cache (header utuh terakhir yang ia terima) hanya kalau hid cocok; kalau tidak, frame dibuang (aman, tidak salah warna).
+#define RPF_FIRST    1
+#define RPF_LAST     2
+#define RPF_STILL    4
+#define RPF_HDRSKIP  8
+#define RP_HDR_MAX   1000          // header JPEG lebih panjang dari ini tidak dideduplikasi
+
+// Panjang header JPEG (SOI .. akhir segmen SOS = awal data entropi). 0 kalau tidak valid / terlalu panjang.
+// Dipakai identik di CAM (memutuskan skip) & S3 (mengisi cache dari potongan pertama).
+inline uint16_t rpJpegHdrLen(const uint8_t* d, uint32_t n) {
+  if (n < 4 || d[0] != 0xFF || d[1] != 0xD8) return 0;
+  uint32_t p = 2;
+  while (p + 4 <= n) {
+    if (d[p] != 0xFF) return 0;
+    uint8_t m = d[p + 1];
+    if (m == 0xFF) { p++; continue; }                                   // byte pengisi
+    if (m == 0xD8 || m == 0x01 || (m >= 0xD0 && m <= 0xD7)) { p += 2; continue; }   // marker tanpa panjang
+    uint32_t sl = ((uint32_t)d[p + 2] << 8) | d[p + 3];
+    if (sl < 2) return 0;
+    uint32_t e = p + 2 + sl;
+    if (e > n) return 0;
+    if (m == 0xD9) return 0;
+    if (m == 0xDA) return (e > RP_HDR_MAX) ? 0 : (uint16_t)e;
+    p = e;
+  }
+  return 0;
+}
+// ID 16-bit isi header (FNV-1a dilipat). Beda header -> hampir pasti beda id.
+inline uint16_t rpHdrHash(const uint8_t* d, uint32_t n) {
+  uint32_t h = 2166136261u;
+  for (uint32_t i = 0; i < n; i++) { h ^= d[i]; h *= 16777619u; }
+  return (uint16_t)((h >> 16) ^ h);
+}
 
 struct RpParser {
   uint8_t  st = 0;

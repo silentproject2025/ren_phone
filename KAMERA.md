@@ -30,15 +30,19 @@ Saat kamera dinyalakan, driver mengenali sensor lewat bus SCCB dan CAM melaporka
 ## Yang dipacu
 | Bagian | Cara |
 |---|---|
-| Link UART | Naik otomatis 921.6k -> **2 / 3 Mbaud** saat app dibuka (pilih di Atur > Sistem). Di 921k, ~90 KB/s; di 3M, ~300 KB/s. Turun lagi saat keluar. |
-| Fallback aman | Jika tidak ada frame valid 1.5 dtk setelah pindah baud, S3 kembali ke 921k; CAM juga kembali sendiri setelah 3 dtk. |
-| Aliran frame | Kontrol kredit (maks 2 frame di jalan) + `GRAB_LATEST`: selalu frame terbaru, latensi rendah, tidak menyumbat musik. |
-| S3 | CPU 240 MHz selama app terbuka; baca UART per blok 256 byte (bukan per byte); RX buffer 6 KB; task link berputar tiap 1 tick saat kamera aktif. |
+| Link UART | Naik otomatis 921.6k -> **2 / 3 / 4 / 5 Mbaud** saat app dibuka (pilih batas atas di Atur > Sistem; bawaan 5M). 921k ~90 KB/s, 3M ~300 KB/s, **5M ~500 KB/s**. 4M & 5M pembagi UART-nya pas (80 MHz/20 dan /16). Turun lagi saat keluar. |
+| Turun otomatis | Dari batas atas, link turun **satu anak tangga** (5M -> 4M -> 3M -> 2M -> 921k) kalau kabel tidak bersih: (a) >= 3 frame rusak dalam 5 dtk -> CAM diminta pindah langsung; (b) tidak ada frame valid 1.5 dtk setelah pindah, atau CAM hilang > 2 dtk di baud tinggi -> S3 mundur ke 921k, tunggu CAM ikut mundur (maks 3 dtk), lalu coba anak tangga di bawahnya. Tidak naik lagi dalam sesi yang sama. |
+| ACK tanpa menunggu UI | S3 mengirim `RP_CAM_ACK [seq]` begitu potongan akhir frame tiba (di `musTask`), bukan setelah UI selesai decode + gambar. Kabel tidak menganggur selama decode; UI tetap mengambil frame terbaru. Kontrol aliran berbasis NOMOR URUT (jendela 3 frame): ACK/frame yang hilang tidak membocorkan kredit. `camTask` dibangunkan langsung oleh ACK (task notify), bukan polling 2 ms. |
+| Dedup header JPEG | Header OV2640 (~600-650 B: DQT+DHT+SOF) identik di tiap frame preview -> dihilangkan, diganti id 16-bit; S3 menyalin dari cache. Id harus cocok, kalau tidak frame dibuang (tidak pernah salah warna/gambar). Cache S3 hilang -> bit "butuh header" di ACK -> frame berikutnya lengkap lagi. Tiap 30 frame tetap dikirim lengkap. Paling terasa di preview kecil (160x120: ~25% lebih hemat; 320x240: ~8%). |
+| Aliran frame | `GRAB_LATEST`: selalu frame terbaru, latensi rendah, tidak menyumbat musik. |
+| S3 | CPU 240 MHz selama app terbuka; baca UART per blok 256 byte (bukan per byte); RX buffer **10 KB** (naik dari 6 KB; +4 KB RAM internal, perlu di 5 Mbaud); task link berputar tiap 1 tick saat kamera aktif. |
 | CAM | Buffer kamera di PSRAM (2 frame, ukuran UXGA), kamera hanya hidup saat app terbuka (RAM dikembalikan ke BT/MP3 saat keluar), XCLK 10/16/20 MHz. |
 
 Batas yang tidak diubah: CPU CAM sudah 240 MHz; XCLK 20 MHz sudah mendekati batas praktis OV2640; PSRAM CAM berjalan 40 MHz (setelan core, perlu build core khusus untuk mengubahnya).
 
 ## Status pengujian (jujur)
+- **Link maks (v2)**: dedup header, kontrol aliran seq (termasuk wrap-around 256, ACK basi/ngawur, rescue), id header basi, cache hilang + pemulihan, frame rusak -> diuji di komputer (`tests_kamera/test_cam.cpp`, bit-exact). Sintaks `camera_renphone.ino` & `cam_module.h` dicek dgn mock. **Belum dijalankan di perangkat**: stabilitas 4/5 Mbaud tergantung kabel; kalau tidak stabil, link turun sendiri (lihat "Turun otomatis").
+- **Flash DUA firmware sekaligus** (S3 + CAM): arti `RP_CAM_ACK` berubah. CAM baru + S3 lama = preview tersendat ~1 fps (ACK lama dianggap basi); CAM lama + S3 baru tetap jalan (tanpa dedup).
 - **Belum dikompilasi dengan toolchain ESP32 dan belum dijalankan di perangkat.** Sintaks `camera_renphone.ino` dan `cam_module.h` dicek dengan mock API; protokol (pemecahan/penyusunan frame, frame rusak, slot, foto vs preview) dan penulis AVI diuji di komputer (`tests_kamera/`); AVI hasilnya didecode oleh ffmpeg (10 frame, 10 fps, idx1 valid).
 - fps nyata tergantung kabel dan beban; HUD menampilkannya.
 

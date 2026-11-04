@@ -3,8 +3,9 @@
 //  cam_module.h -- kamera OV2640 di ESP32-CAM sebagai bagian ko-prosesor Ren Phone
 //
 //  Alur:  S3 --RP_CAM_OPEN--> CAM menyalakan kamera (JPEG, buffer di PSRAM, GRAB_LATEST)
-//         CAM menyiarkan frame preview (RP_CAM_FRAME) selama masih punya "kredit";
-//         S3 membalas RP_CAM_ACK tiap kali selesai mengambil satu frame (maks 2 frame di jalan).
+//         CAM menyiarkan frame preview (RP_CAM_FRAME) selama frame "di jalan" < CAM_WINDOW;
+//         S3 membalas RP_CAM_ACK [seq] begitu satu frame SELESAI diterima (bukan menunggu UI) -> kabel tidak pernah menganggur.
+//         Kontrol aliran berbasis nomor urut (CamFlow), jadi ACK yang hilang tidak membuat macet. Header JPEG yang sama dihilangkan (cam_tx.h).
 //         RP_CAM_SHOT = foto 1x di resolusi tinggi (ganti resolusi -> buang beberapa frame
 //         agar AE/AGC stabil -> kirim -> kembali ke resolusi preview).
 //
@@ -54,13 +55,18 @@ static inline framesize_t camFs(uint8_t code) { return CAM_FS_MAP[code > 10 ? 1 
 #define CAM_IDLE_CLOSE_MS    8000          // S3 hilang selama ini -> kamera dimatikan sendiri
 #define CAM_BAUD_FALLBACK_MS 3000          // tak ada frame valid dari S3 di baud tinggi -> kembali ke RP_BAUD
 #define CAM_STAT_MS          500
+#define CAM_WINDOW           3             // maks frame preview "di jalan" (terkirim, belum di-ACK S3)
+#define CAM_STALL_MS         1000          // tak ada ACK selama ini padahal jendela penuh -> izinkan 1 frame lagi (jangan macet)
+#define CAM_BAUD_MAX         5000000       // batas atas RP_CAM_BAUD (UART ESP32/S3 resmi sampai 5 Mbaud; 80 MHz / 5M = 16 persis)
 
 struct CamCmd { uint8_t type; uint8_t len; uint8_t d[8]; };
 
 static QueueHandle_t       camQ = nullptr;
 static TaskHandle_t        camTaskH = nullptr;
 static volatile bool       camOpen = false, camStream = false, camShotBusy = false, camCloseReq = false;
-static std::atomic<int>    camCredit{0};
+static CamFlow             camFlow;                      // jendela kirim berbasis seq (lihat cam_tx.h)
+static CamHdrCache         camHdr;                       // header JPEG terakhir yang dikirim lengkap (dedup)
+static volatile uint32_t   camBytesTx = 0;               // total byte JPEG preview terkirim (diagnostik)
 static volatile uint32_t   camLastAckMs = 0;
 static volatile uint32_t   camLastRxMs = 0;
 static uint32_t            camBaudNow = RP_BAUD;
@@ -75,7 +81,8 @@ static uint8_t             camFlashLvl = 0;
 static uint32_t            camFlashOnAt = 0;
 static bool                camFlashInited = false;
 static volatile uint32_t   camFps10 = 0;
-static uint8_t             camSeq = 0;
+static uint8_t             camSeq = 0;                   // seq frame TERAKHIR yang dikirim (ditulis camTask saja)
+static inline uint8_t      camSeqNow() { return *(volatile uint8_t*)&camSeq; }
 static uint32_t            camStatAt = 0;
 static uint32_t            camHeapKb = 0, camBlkKb = 0, camHeapAt = 0;
 
@@ -125,7 +132,7 @@ static void camSendStat() {
 // ---------------- buka / tutup kamera ----------------
 static bool camDoOpen() {
   if (camOpen) return true;
-  camErr = 0; camErrCode = 0;
+  camErr = 0; camErrCode = 0; camHdr.reset();
   if (!psramFound()) { camErr = 1; return false; }
   if (ESP.getMaxAllocHeap() < CAM_MIN_BLOCK) { camErr = 2; return false; }
   camera_config_t c = {};
@@ -168,7 +175,7 @@ static bool camDoOpen() {
 }
 
 static void camDoClose() {
-  camStream = false;
+  camStream = false; camHdr.reset();
   if (camFlashLvl) camFlashSet(0);
   if (camOpen) { esp_camera_deinit(); camOpen = false; }
   camFps10 = 0;
@@ -240,7 +247,7 @@ static void camDoShot(uint8_t res, uint8_t q, uint8_t flash, uint8_t flags) {
   s->set_quality(s, camPrvQ);
   camShotBusy = false;
   if (!ok) camErr = 6;
-  if (wasStream) { camCredit = 2; camLastAckMs = millis(); camStream = true; }
+  if (wasStream) { camFlow.sync(camSeq); camLastAckMs = millis(); camStream = true; }
   camSendStat();
 }
 
@@ -250,7 +257,7 @@ static void camDoShot(uint8_t res, uint8_t q, uint8_t flash, uint8_t flags) {
 static void camDoBaud(const uint8_t* d, uint16_t len) {
   if (len < 4) return;
   uint32_t b = (uint32_t)d[0] | ((uint32_t)d[1] << 8) | ((uint32_t)d[2] << 16) | ((uint32_t)d[3] << 24);
-  if (b < 115200 || b > 4000000) b = RP_BAUD;
+  if (b < 115200 || b > CAM_BAUD_MAX) b = RP_BAUD;
   uint8_t o[4] = { (uint8_t)b, (uint8_t)(b >> 8), (uint8_t)(b >> 16), (uint8_t)(b >> 24) };
   rpSend(Serial2, RP_CAM_BAUDOK, o, 4);        // jawaban masih di baud lama
   Serial2.flush();
@@ -272,7 +279,7 @@ static void camHandleCmd(const CamCmd& c) {
       } else if (camDoOpen()) {
         for (int i = 0; i < RPC_COUNT; i++) if (camCfgSet[i]) camApplySet((uint8_t)i, camCfg[i]);
       }
-      if (camOpen && wantStream) { camCredit = 2; camLastAckMs = millis(); camStream = true; }
+      if (camOpen && wantStream) { camFlow.sync(camSeq); camHdr.reset(); camLastAckMs = millis(); camStream = true; }
       camSendStat();
       break;
     }
@@ -293,21 +300,21 @@ static void camTask(void*) {
     while (xQueueReceive(camQ, &cmd, wait) == pdTRUE) { camHandleCmd(cmd); wait = 0; }
 
     if (camOpen && camStream) {
-      if (camCredit.load() > 0) {
+      if (camFlow.canSend(camSeq, CAM_WINDOW)) {
         int cap = camCfgOr(RPC_FPSCAP, 0);
         uint32_t nowMs = millis();
         if (cap > 0 && (int32_t)(nextFrameAt - nowMs) > 0) { vTaskDelay(pdMS_TO_TICKS(2)); continue; }
         camera_fb_t* fb = esp_camera_fb_get();
         if (!fb) { vTaskDelay(pdMS_TO_TICKS(5)); continue; }
         if (fb->format == PIXFORMAT_JPEG && fb->len > 0 && fb->len <= CAM_MAX_PREVIEW) {
-          camTxFrame(Serial2, ++camSeq, fb->buf, (uint32_t)fb->len, false, camAbortFn);
-          camCredit--; fpsN++;
+          camTxFrame(Serial2, ++camSeq, fb->buf, (uint32_t)fb->len, false, camAbortFn, &camHdr);
+          camBytesTx += (uint32_t)fb->len; fpsN++;
           if (cap > 0) nextFrameAt = millis() + 1000 / cap;
         }
         esp_camera_fb_return(fb);
       } else {
-        if (millis() - camLastAckMs > 1500) { camCredit = 1; camLastAckMs = millis(); }   // ACK hilang -> jangan macet
-        vTaskDelay(pdMS_TO_TICKS(2));
+        if (millis() - camLastAckMs > CAM_STALL_MS) { camFlow.rescue(camSeq, CAM_WINDOW); camLastAckMs = millis(); }   // ACK hilang lama -> jangan macet
+        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(3));   // dibangunkan langsung oleh ACK (camModHandle), bukan polling
       }
     }
     uint32_t now = millis();
@@ -323,10 +330,11 @@ static inline void camModNoteRx() { camLastRxMs = millis(); }
 static bool camModHandle(uint8_t type, const uint8_t* p, uint16_t len) {
   if (type == RP_CAM_BAUD && !camTaskH) { camDoBaud(p, len); return true; }   // kamera tertutup (audio AVI): langsung
   switch (type) {
-    case RP_CAM_ACK: {
-      int c = camCredit.load();
-      if (c < 3) camCredit = c + 1;
+    case RP_CAM_ACK: {                               // payload [seq][flags b0 = S3 butuh header lengkap]
+      if (len >= 1) camFlow.onAck(camSeqNow(), p[0]);
+      if (len >= 2 && (p[1] & 1)) camHdr.run = CAM_HDR_REFRESH;     // frame berikutnya kirim header lengkap
       camLastAckMs = millis();
+      if (camTaskH) xTaskNotifyGive(camTaskH);       // bangunkan camTask yang menunggu jendela kirim
       return true;
     }
     case RP_CAM_OPEN: case RP_CAM_CLOSE: case RP_CAM_SET: case RP_CAM_SHOT: case RP_CAM_FLASH: case RP_CAM_BAUD: {
