@@ -362,8 +362,15 @@ static bool          chsAnimOn = false;
 static unsigned long chsAnimMs = 0;
 static int           chsAnimFrom = 0, chsAnimTo = 0;
 static int8_t        chsAnimCap = 0;            // bidak yg dimakan (bertanda), 0 = tidak ada
+static int           chsAnimRF = -1, chsAnimRT = -1;   // benteng yg ikut meluncur saat rokade (-1 = tidak ada)
 static void chsAnimStart(int from, int to, int8_t cap) {
   chsAnimFrom = from; chsAnimTo = to; chsAnimCap = cap;
+  chsAnimRF = chsAnimRT = -1;
+  int8_t mp = chsBd[to];
+  if ((mp == 6 || mp == -6) && (to - from == 2 || from - to == 2)) {          // rokade: benteng ikut bergerak
+    int rf = to > from ? from + 3 : from - 4, rt = to > from ? from + 1 : from - 1;
+    if (rf >= 0 && rf < 64 && chsBd[rt] == (mp > 0 ? 4 : -4)) { chsAnimRF = rf; chsAnimRT = rt; }
+  }
   chsAnimMs = millis(); chsAnimOn = true;
 }
 
@@ -1080,6 +1087,41 @@ static void chsChip(LGFX_Sprite& s, int cx, int cy, bool white, bool active) {  
   nyxAaCircle(s, cx, cy, 4, white ? CHS_RGB(252, 252, 252) : CHS_RGB(34, 34, 40));
 }
 
+// bidak yg sekarang ada di petak `to` digambar meluncur dari `from` (ae = 0..1 sudah di-ease)
+static void chsDrawSlide(LGFX_Sprite& s, int bx, int by, int sq, int from, int to, float ae) {
+  int8_t mp = chsBd[to];
+  if (!mp) return;
+  int fi, fj, ti, tj;
+  chsSqIJ(from, &fi, &fj); chsSqIJ(to, &ti, &tj);
+  int mx = bx + fj * sq + (int)floorf((float)((tj - fj) * sq) * ae + 0.5f);
+  int my = by + fi * sq + (int)floorf((float)((ti - fi) * sq) * ae + 0.5f);
+  chsBlitPiece(s, mp > 0 ? mp : -mp, mp > 0, mx, my, sq, 255);
+}
+
+// sudut papan membulat anti-alias: piksel di luar lengkung dicampur ke warna bingkai
+static void chsRoundCorners(LGFX_Sprite& s, int bx, int by, int n, int r, uint16_t fc) {
+  for (int k = 0; k < 4; k++) {
+    bool left = (k & 1) == 0, top = (k & 2) == 0;
+    for (int dy = 0; dy < r; dy++) for (int dx = 0; dx < r; dx++) {
+      float ex = (float)r - ((float)dx + 0.5f), ey = (float)r - ((float)dy + 0.5f);
+      float cov = (float)r - sqrtf(ex * ex + ey * ey) + 0.5f;
+      if (cov >= 1.0f) continue;
+      if (cov < 0.0f) cov = 0.0f;
+      int x = left ? bx + dx : bx + n - 1 - dx, y = top ? by + dy : by + n - 1 - dy;
+      uint16_t c = (uint16_t)s.readPixel(x, y);
+      s.drawPixel(x, y, blend565(c, fc, (uint8_t)((1.0f - cov) * 255.0f)));
+    }
+  }
+}
+
+// selisih materi (putih - hitam) dari isi papan: P1 N3 B3 R5 Q9
+static int chsMaterialDiff() {
+  static const int8_t val[7] = {0, 1, 3, 3, 5, 9, 0};
+  int d = 0;
+  for (int i = 0; i < 64; i++) { int8_t p = chsBd[i]; if (p > 0) d += val[p]; else if (p < 0) d -= val[-p]; }
+  return d;
+}
+
 static void chsDrawSetup(LGFX_Sprite& s) {
   bool typing = kbVisible && kbTarget == &chsRoomStr;
   s.setTextColor(T().accent); s.setTextSize(2); s.setCursor(10, 25); s.print("Catur Online");
@@ -1146,7 +1188,7 @@ static void chsDrawGame(LGFX_Sprite& s) {
       if (j == 0) { cl[0] = (char)('1' + rank); s.setCursor(x + 2, y + 2); s.print(cl); }
     }
     int8_t p = chsBd[q];
-    if (p && !(anim && q == chsAnimTo)) {
+    if (p && !(anim && (q == chsAnimTo || q == chsAnimRT))) {
       int oy = (q == chsSel) ? y - 2 : y;                            // bidak terpilih "terangkat" 2 px
       chsBlitPiece(s, p > 0 ? p : -p, p > 0, x, oy, sq, 255);
     }
@@ -1157,19 +1199,16 @@ static void chsDrawGame(LGFX_Sprite& s) {
     }
   }
 
+  chsRoundCorners(s, bx, by, 8 * sq, 5, blend565(T().surface, 0xFFFF, 46));
+
   if (anim) {                                                        // lapisan animasi: yg dimakan memudar, bidak yg jalan meluncur
-    int fi, fj, ti, tj;
-    chsSqIJ(chsAnimFrom, &fi, &fj); chsSqIJ(chsAnimTo, &ti, &tj);
     if (chsAnimCap) {
+      int ti, tj; chsSqIJ(chsAnimTo, &ti, &tj);
       float fa = 1.0f - at / 0.6f;
       if (fa > 0.0f) chsBlitPiece(s, chsAnimCap > 0 ? chsAnimCap : -chsAnimCap, chsAnimCap > 0, bx + tj * sq, by + ti * sq, sq, (uint8_t)(255.0f * fa));
     }
-    int8_t mp = chsBd[chsAnimTo];
-    if (mp) {
-      int mx = bx + fj * sq + (int)floorf((float)((tj - fj) * sq) * ae + 0.5f);
-      int my = by + fi * sq + (int)floorf((float)((ti - fi) * sq) * ae + 0.5f);
-      chsBlitPiece(s, mp > 0 ? mp : -mp, mp > 0, mx, my, sq, 255);
-    }
+    if (chsAnimRT >= 0) chsDrawSlide(s, bx, by, sq, chsAnimRF, chsAnimRT, ae);
+    chsDrawSlide(s, bx, by, sq, chsAnimFrom, chsAnimTo, ae);
   }
 
   if (chsEnd) {                                                      // banner hasil di tengah papan
@@ -1223,9 +1262,15 @@ static void chsDrawGame(LGFX_Sprite& s) {
   bool meW = (chsRole != 2);
   const char* myN = chsRole == 2 ? chsBName : chsWName;
   char nb[40]; snprintf(nb, sizeof(nb), "Kamu : %s", myN[0] ? myN : (chatName.length() ? chatName.c_str() : "HP"));
-  chsClip(nb, clipd, (pw - 40) / 6);
+  chsClip(nb, clipd, (pw - 56) / 6);
   chsChip(s, px + 12, ty + 4, meW, playing && (chsWhite == meW));
   s.setTextColor(T().text); s.setCursor(px + 24, ty); s.print(clipd);
+  int mat = chsMaterialDiff(); if (!meW) mat = -mat;                  // + = aku unggul materi
+  if (mat != 0) {
+    char mb[8]; snprintf(mb, sizeof(mb), "%+d", mat);
+    s.setTextColor(mat > 0 ? (uint16_t)T().good : (uint16_t)T().danger);
+    s.setCursor(px + pw - 12 - (int)strlen(mb) * 6, ty); s.print(mb);
+  }
   ty += gap;
   // lawan
   const char* opN = chsRole == 2 ? chsWName : chsBName;
