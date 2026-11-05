@@ -3322,7 +3322,16 @@ const char* (*kbMaps[5])[10]={kbL,kbU,kbN,kbE1,kbE2};
 // KB-FIX: semua baris 10 tuts, grid rata & di-tengah.
 int kbKeyW(){ return (SCR_W-8-18)/10; }
 int kbKeyH(){ return 22; }
-int kbY(){ return SCR_H - 4*(kbKeyH()+2) - 4; }
+// KAMUS (kamus_renphone.ino): baris saran kata + autokoreksi tepat di atas tuts.
+int  kbBarH();                                   // tinggi baris saran; 0 bila field ini tidak memakainya
+void kbBarDraw(LGFX_Sprite& s,int yTop);
+bool kbBarTouch(int x,int y);                    // true = ketukan sudah ditangani baris saran
+void kbSugOnChar(String& t,char c);              // dipanggil SEBELUM karakter c ditambahkan (autokoreksi di pemisah kata)
+bool kbSugBackspace(String& t);                  // true = hapus tadi membatalkan autokoreksi
+// kbY() = tepi ATAS keyboard (termasuk baris saran) -- layar lain memakainya utk batas area, jadi ikut bergeser otomatis.
+// kbKeysY() = tepi atas deretan tuts.
+int kbY(){ return SCR_H - 4*(kbKeyH()+2) - 4 - kbBarH(); }
+int kbKeysY(){ return kbY() + kbBarH(); }
 int kbLeft(){ return (SCR_W - (10*kbKeyW()+18))/2; }
 int kbOffCol(int row){ (void)row; return kbLeft(); }
 
@@ -3331,11 +3340,13 @@ int kbPressKey=-1;
 unsigned long kbPressUntil=0;
 #define KB_PRESS_MS 130
 void drawKb(LGFX_Sprite& s){
-  int y0=kbY();
+  int yTop=kbY();                                  // tepi atas keyboard (termasuk baris saran)
+  int y0=kbKeysY();                                // tepi atas deretan tuts
   bool pressing = (kbPressKey>=0 && millis()<kbPressUntil);
   if(pressing) needRedraw=true; else kbPressKey=-1;   // frame berikutnya menggambar ulang tuts normal
-  s.fillRect(0,y0-3,SCR_W,SCR_H-y0+3,blend565(T().bg,T().surface,175));
-  s.drawFastHLine(0,y0-3,SCR_W,T().divider);
+  s.fillRect(0,yTop-3,SCR_W,SCR_H-yTop+3,blend565(T().bg,T().surface,175));
+  s.drawFastHLine(0,yTop-3,SCR_W,T().divider);
+  kbBarDraw(s,yTop);                               // baris saran kata (kamus); kosong bila field tidak mendukung
   auto* lay=kbMaps[(int)kbMode];
   bool emo=(kbMode==KB_EMO1||kbMode==KB_EMO2);
   if(emo) s.setFont(emjF(&lgfx::fonts::Font0));          // halaman emoji: Font0 + sprite (lihat emoji_renphone.ino)
@@ -3417,8 +3428,9 @@ void drawKb(LGFX_Sprite& s){
 
 void kbTouch(int x,int y){
   if(!kbVisible||!kbTarget) return;
-  int y0=kbY();
-  if(y<y0-2) return;
+  int yTop=kbY(), y0=kbKeysY();
+  if(y<yTop-2) return;
+  if(y0>yTop && y<y0){ kbBarTouch(x,y); needRedraw=true; return; }   // baris saran kata (ketuk saran / ganti mode)
   int kw=kbKeyW(), kh=kbKeyH(), L=kbLeft(), R=SCR_W-L;
   int cell=kh+2;
   int cy=y0+3*cell;
@@ -3433,9 +3445,10 @@ void kbTouch(int x,int y){
     }
     else if(x<emX-2){       kbMode=((kbMode==KB_NUM||emo)?KB_LOWER:KB_NUM); kbPressKey=101; }
     else if(x<spX-2){       kbMode=(emo?KB_LOWER:KB_EMO1);               kbPressKey=104; }
-    else if(x<dlX-2){       *kbTarget+=" ";                              kbPressKey=102; }
+    else if(x<dlX-2){       kbSugOnChar(*kbTarget,' '); *kbTarget+=" ";  kbPressKey=102; }
     else {
-      emjBackspace(*kbTarget);                                 // hapus 1 karakter UTF-8 utuh (emoji = 3 byte)
+      if(!kbSugBackspace(*kbTarget))                           // tepat setelah autokoreksi: kembalikan ketikan asli
+        emjBackspace(*kbTarget);                               // hapus 1 karakter UTF-8 utuh (emoji = 3 byte)
       kbPressKey=103;
     }
     kbPressUntil=millis()+KB_PRESS_MS;
@@ -3447,8 +3460,8 @@ void kbTouch(int x,int y){
   int c=(x-L)/(kw+2);
   if(x<L||c<0||c>9) return;
   auto* lay=kbMaps[(int)kbMode];
-  if(kbMode==KB_EMO1||kbMode==KB_EMO2){ char elb[4]; if(emjKbLabel(kbEmoPage,r*10+c,elb)) *kbTarget+=elb; }
-  else *kbTarget+=lay[r][c];
+  if(kbMode==KB_EMO1||kbMode==KB_EMO2){ char elb[4]; kbSugOnChar(*kbTarget,0); if(emjKbLabel(kbEmoPage,r*10+c,elb)) *kbTarget+=elb; }
+  else { kbSugOnChar(*kbTarget,lay[r][c][0]); *kbTarget+=lay[r][c]; }
   kbPressKey=r*10+c; kbPressUntil=millis()+KB_PRESS_MS;
   if(kbMode==KB_UPPER)kbMode=KB_LOWER;
   needRedraw=true;

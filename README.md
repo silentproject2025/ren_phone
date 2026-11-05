@@ -65,6 +65,7 @@ NyxOS tidak berbasis Android maupun Linux. Peluncur aplikasi (launcher), pusat n
 | Notifikasi berkelompok, geser-hapus, aksi cepat; preview kartu App Switcher | `BETA` | Kode sudah terpasang di build, belum diuji pada perangkat. Lihat [bagian 5.1](#51-antarmuka-sistem-ok). |
 | Fitur tambahan NyxOS (perintah suara AI, energi per app, log crash, banner telepon, thumbnail screenshot, skeleton loading) | `BETA` | Kode sudah terpasang di build, belum diuji pada perangkat. Lihat bagian 5.5 dan 5.6. |
 | Emoji (set bawaan dan set lengkap dari SD) | `BETA` | Emoji berwarna di seluruh teks NyxOS dan keyboard. Set bawaan 54 sprite; set lengkap dibuat dari Noto Emoji atau Twemoji menjadi `/emoji.bin`. Hanya emoji tunggal; ZWJ, bendera, dan keycap belum didukung. Lihat [bagian 5.1](#51-antarmuka-sistem-ok). |
+| Kamus keyboard (saran kata + autokoreksi) | `BETA` | Baris 3 saran di atas tuts, autokoreksi salah ketik (spasi/`,`/`.`/`?`/`!`), batal dengan Hapus, kamus Indonesia + Inggris bawaan, kamus tambahan dari SD. Aktif di Notepad dan Chat. Logika diuji di komputer (`tests_kamus/`), belum diuji pada perangkat. Lihat [bagian 5.1](#51-antarmuka-sistem-ok). |
 | Chat melalui broker MQTT | `OK` | Diuji dengan broker sungguhan. |
 | Musik Bluetooth dan AVRCP | `OK` | Cover ID3, kontrol dari earbuds, mode acak AI. |
 | Pemutar AVI (seek, resume, zoom) | `OK` | |
@@ -379,6 +380,21 @@ Sumber yang dikenali (folder hasil `git clone`, dicari rekursif, atau berkas zip
 - **Memori.** Seluruh berkas dibaca ke PSRAM saat boot (kartu SD tidak dipakai lagi sesudahnya). Satu emoji memakan ±1,8 KB untuk tiga ukuran, jadi 1000 emoji ≈ 1,8 MB dan 4000 emoji ≈ 7,5 MB, hampir seluruh PSRAM 8 MB. Set yang jauh di bawah batas itu lebih aman.
 - Berkas tidak ada, kartu SD tidak terbaca, header atau ukuran tidak cocok, ukuran berkas kurang, atau PSRAM tidak cukup: set bawaan dipakai tanpa pesan galat.
 - **Chat:** nama pengguna hanya ASCII (emoji pada nama tidak dikirim). Emoji pada pesan dikirim sebagai UTF-8 standar.
+
+**Kamus keyboard (saran kata dan autokoreksi)** `BETA`
+
+Di atas tuts muncul baris tipis berisi **3 saran kata** untuk kata yang sedang diketik, dengan tombol mode `ab` di kiri. Aktif di **Notepad** dan **Chat**. Kolom password, URL, SSID, API key, nama, dan pencarian sengaja tidak memakainya. App AI belum diikutkan karena layarnya menyembunyikan kotak input selagi keyboard terbuka, sehingga koreksi di sana tidak terlihat.
+
+| Aksi | Hasil |
+|---|---|
+| Ketuk saran | Kata yang sedang diketik diganti saran itu, lalu spasi. |
+| Tekan spasi, `,` `.` `?` `!` | Kata salah ketik dikoreksi otomatis. Kata yang akan dikoreksi tampil berwarna aksen di baris saran **sebelum** spasi ditekan. |
+| Tekan **Hapus** tepat setelah koreksi | Kembali ke ketikan asli dan kata itu **dipelajari** (tidak dikoreksi lagi). Disimpan di NVS (maks. 120 kata). Kata asing yang diketik dua kali juga dipelajari otomatis. |
+| Ketuk tombol `ab` | Ganti mode: **saran + koreksi** (tombol berwarna aksen) → **saran saja** (bergaris bawah) → **mati** (dicoret). Pilihan tersimpan. |
+
+*Aturan autokoreksi (konservatif, agar kata sah tidak rusak).* Hanya bila kata **tidak ada** di kamus mana pun, panjang ≥ 4 huruf, huruf pertama sama, dan ada kata kamus yang berjarak **satu salah ketik yang masuk akal**: huruf ganda (`nasii`), tuts bersebelahan di QWERTY (`makab` → `makan`), huruf terlewat, atau dua huruf tertukar (`thier` → `their`). Tidak disentuh: kata berkapital di tengah kalimat (nama), `NASA`/`iPhone`, email/URL/hashtag/kode ber-angka, kata dengan apostrof (`don't`), tawa berulang (`hehe`, `wkwk`), dan huruf yang sengaja dipanjangkan (`yaaa`).
+
+*Kamus.* Bawaan: ±1.290 kata Indonesia (termasuk bahasa gaul: `gak`, `udah`, `banget`, `mager`) dan ±940 kata Inggris, dari `tools/kamus_id.txt` dan `tools/kamus_en.txt` (urutan = perkiraan frekuensi; hasil dibuat `python3 tools/gen_kamus.py` menjadi `kamus_data.h`). Bahasa yang lebih sering Anda ketik didahulukan di saran. **Kamus tambahan opsional:** taruh `/kamus.txt` di root kartu SD (satu kata per baris, yang paling sering di atas; format `kata 1234` juga diterima, maksimum 2 MB). Dimuat sekali ke PSRAM saat keyboard pertama dipakai. Kata yang belum ada di kamus bisa saja dikoreksi keliru; satu kali tekan Hapus langsung membatalkannya dan mencegah terulang. Kamus yang lebih lengkap dari SD mengurangi hal ini.
 
 ### 5.2 Komunikasi
 
@@ -955,8 +971,11 @@ phone_notif_center.ino          Notifikasi dan Dynamic Island
 ppu_engine_renphone.ino         NyxPPU
 emoji_renphone.ino              Dukungan emoji (pembungkus font, keyboard emoji, pemuat /emoji.bin dari SD)
 emoji_data.h                    54 sprite emoji bawaan (cadangan bila /emoji.bin tidak ada)
+kamus_renphone.ino              Kamus keyboard: baris saran, autokoreksi, kata pelajaran (NVS), kamus SD
+kamus_core.h                    Logika murni kamus (saran, jarak edit, autokoreksi); tanpa Arduino, diuji di komputer
+kamus_data.h                    Kata bawaan Indonesia + Inggris (dibuat tools/gen_kamus.py dari tools/kamus_*.txt)
 tools/                          gen_emoji.py (sprite bawaan), make_emoji_bin.py (emoji.bin dari Noto/Twemoji),
-                                make_vlw.py (font Unicode untuk app Buku)
+                                make_vlw.py (font Unicode untuk app Buku), gen_kamus.py (kamus_data.h)
 ptr_renphone.ino                Gestur sistem: pull-to-refresh, swipe-back tepi kiri, panel mengikuti jari
 nyxextras_renphone.ino          Log crash, energi per app, perintah suara Gemini, thumbnail screenshot, skeleton loading
 ryne_engine.h                   RYNE v2
@@ -970,6 +989,7 @@ tests_kamera/                   Uji protokol kamera dan penulis AVI di komputer
 gutenberg_renphone.ino          Unduh buku dari Project Gutenberg (dibuka dari app Buku)
 gutendex_core.h  gutdl_core.h   Logika murni Gutenberg: JSON/OPDS, URL langsung, registry, CRC32, cek ZIP
 tests_gutenberg/                Uji logika Gutenberg dan simulasi alur unduh di komputer
+tests_kamus/                    Uji kamus di komputer: test_kamus.cpp (logika murni), glue_test.cpp (kamus_renphone.ino dengan mock Arduino)
 nofrendo_core/ esp_doom_core/   Core pihak ketiga (di-vendor)
 apply_*.py  patch_*.py          Skrip patch bertahap (idempoten)
 ci_hoist_types.py               Langkah CI untuk menghindari bug prototipe arduino-cli
