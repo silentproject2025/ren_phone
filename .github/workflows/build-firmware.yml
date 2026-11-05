@@ -389,6 +389,8 @@ jobs:
           CH="channel-${RP_BRANCH}"
           NOTES="Channel branch ${RP_BRANCH}: build ${{ github.run_number }}, commit ${{ github.sha }}"
           if gh release view "$CH" >/dev/null 2>&1; then
+          gh release delete-asset "$CH" firmware.bin -y 2>/dev/null || true
+          gh release delete-asset "$CH" info.txt -y 2>/dev/null || true
             gh release upload "$CH" firmware.bin info.txt --clobber
             gh release edit "$CH" --prerelease --notes "$NOTES"
           else
