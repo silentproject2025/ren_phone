@@ -361,6 +361,20 @@ static unsigned long chsConfirmMs = 0;
 static bool          chsAnimOn = false;
 static unsigned long chsAnimMs = 0;
 static int           chsAnimFrom = 0, chsAnimTo = 0;
+// ---- polish tambahan: panel bisa disembunyikan, fade-in titik langkah, denyut skak, popup promosi, efek tekan ----
+static bool          chsPanelHidden = false;    // pilihan pemain (disimpan di NVS "chess"/"hide")
+static unsigned long chsSelMs = 0;              // kapan bidak dipilih (fade-in titik langkah)
+static unsigned long chsPromoMs = 0;            // kapan popup promosi dibuka
+static bool          chsInChk = false;          // sisi yg jalan sedang skak (utk denyut)
+static int8_t        chsPressId = -1;           // tombol yg barusan ditekan: 0 kiri,1 kanan,2 gagang,3 Acak,4 Mulai
+static unsigned long chsPressMs = 0;
+#define CHS_PRESS_MS 160
+static inline bool chsPanelOff() { return chsPanelHidden && chsEnd == 0 && chsScr == 1; }   // panel otomatis muncul lagi saat game selesai
+static void chsPress(int id) { chsPressId = (int8_t)id; chsPressMs = millis(); needRedraw = true; }
+static uint16_t chsPressCol(int id, uint16_t c) {                          // warna tombol menggelap sesaat setelah ditekan
+  if (chsPressId == id && millis() - chsPressMs < CHS_PRESS_MS) return blend565(c, 0x0000, 70);
+  return c;
+}
 static int8_t        chsAnimCap = 0;            // bidak yg dimakan (bertanda), 0 = tidak ada
 static int           chsAnimRF = -1, chsAnimRT = -1;   // benteng yg ikut meluncur saat rokade (-1 = tidak ada)
 static void chsAnimStart(int from, int to, int8_t cap) {
@@ -382,6 +396,7 @@ static void chsTaskFunc(void*);
 static void chsUpdateEnd() {
   chsEnd = chsRes[0] ? 6 : chsStatus();
   if (chsEnd == 0 && chsPly >= CHS_MAX_PLY) chsEnd = 5;
+  chsInChk = (chsEnd == 0) && chsInCheck();
 }
 
 static void chsQueueSend() {
@@ -733,6 +748,8 @@ void chessEnter() {
   chsActive = false; chsConn = 0; chsReady = false;
   chsScr = 0; chsSel = -1; chsPromoOn = false; chsConfirm = false;
   chsReset(); chsEnd = 0;
+  { Preferences p; if (p.begin("chess", true)) { chsPanelHidden = p.getBool("hide", false); p.end(); } }
+  chsPressId = -1; chsInChk = false;
 }
 
 static void chsFreeMasks();
@@ -745,6 +762,7 @@ void chessExit() {
 
 void chessLoopPoll() {
   if (chsDirty) { chsDirty = false; if (curScreen() == SCR_CHESS) needRedraw = true; }
+  if (curScreen() == SCR_CHESS && chsPressId >= 0 && millis() - chsPressMs >= CHS_PRESS_MS) { chsPressId = -1; needRedraw = true; }   // efek tekan selesai
   if (curScreen() != SCR_CHESS || chsScr != 1 || !chsMoves) return;
   chsProcessRx();
   if (chsConfirm && millis() - chsConfirmMs > 3500UL) { chsConfirm = false; needRedraw = true; }
@@ -753,6 +771,9 @@ void chessLoopPoll() {
     needRedraw = true;
     if (millis() - chsAnimMs >= CHS_ANIM_MS) chsAnimOn = false;
   }
+  if (chsSel >= 0 && millis() - chsSelMs < 190UL) { uiBoostKick(); needRedraw = true; }          // fade-in titik langkah
+  if (chsPromoOn && millis() - chsPromoMs < 170UL) { uiBoostKick(); needRedraw = true; }          // popup promosi membesar
+  if (chsInChk) { static unsigned long lp = 0; if (millis() - lp >= 45UL) { lp = millis(); needRedraw = true; } }   // denyut raja skak (~22 fps)
 }
 
 // ---------------------------------------------------------------------
@@ -763,10 +784,10 @@ static void chsGeom(int* bx, int* by, int* sq, int* px, int* py, int* pw, int* p
   if (SCR_W >= SCR_H) {
     int s = (SCR_H - STATUS_H - 3 - BACK_H - 8) / 8;
     if (s < 18) s = 18;
-    *sq = s; *bx = 6; *px = 6 + 8 * s + 8; *py = *by; *pw = SCR_W - *px - 6; *ph = SCR_H - *py - 6;
+    *sq = s; *bx = chsPanelOff() ? (SCR_W - 8 * s) / 2 : 6; *px = 6 + 8 * s + 8; *py = *by; *pw = SCR_W - *px - 6; *ph = SCR_H - *py - 6;
   } else {
     int s = (SCR_W - 8) / 8;
-    int s2 = (SCR_H - STATUS_H - 3 - 6 - 74 - BACK_H - 8) / 8;
+    int s2 = (SCR_H - STATUS_H - 3 - 6 - 96 - BACK_H - 8) / 8;
     if (s2 < s) s = s2;
     if (s < 18) s = 18;
     *sq = s; *bx = (SCR_W - 8 * s) / 2; *px = 6; *py = *by + 8 * s + 6; *pw = SCR_W - 12; *ph = backY() - 4 - *py;
@@ -779,10 +800,23 @@ static void chsBtnRect(int i, int* x, int* y, int* w, int* h) {   // i = 0 kiri,
   int gap = (ph >= 120) ? 15 : 11;
   int bh = 22;
   int yy = py + ph - bh - 4;
-  int minY = py + 4 * gap + 12;
+  int minY = py + 5 * gap + 12;
   if (SCR_W >= SCR_H && yy > minY) yy = minY;
   int bw = (pw - 18) / 2;
   *x = px + 6 + i * (bw + 6); *y = yy; *w = bw; *h = bh;
+}
+
+// gagang (panah kecil) utk menyembunyikan / menampilkan panel; area sentuh diperluas 4 px tiap sisi
+static void chsHandleRect(int* x, int* y, int* w, int* h) {
+  int bx, by, sq, px, py, pw, ph;
+  chsGeom(&bx, &by, &sq, &px, &py, &pw, &ph);
+  *w = 18; *h = 15;
+  if (chsPanelOff()) { *x = bx + 8 * sq - 18; *y = by + 8 * sq + 6; }
+  else               { *x = px + pw - 5 - 18; *y = py + 5; }
+}
+static bool chsInHandle(int x, int y) {
+  int hx, hy, hw, hh; chsHandleRect(&hx, &hy, &hw, &hh);
+  return x >= hx - 4 && x < hx + hw + 4 && y >= hy - 4 && y < hy + hh + 4;
 }
 
 static void chsPrintC(LGFX_Sprite& s, int x, int w, int y, const char* t) {
@@ -911,7 +945,8 @@ static void chsFreeMasks() { if (chsMask) { free(chsMask); chsMask = nullptr; } 
 static float chsSdSeg(float px, float py, float x0, float y0, float x1, float y1) {
   float dx = x1 - x0, dy = y1 - y0, l2 = dx * dx + dy * dy;
   float t = l2 > 0.0f ? ((px - x0) * dx + (py - y0) * dy) / l2 : 0.0f;
-  if (t < 0.0f) t = 0.0f; if (t > 1.0f) t = 1.0f;
+  if (t < 0.0f) t = 0.0f;
+  if (t > 1.0f) t = 1.0f;
   float qx = x0 + t * dx - px, qy = y0 + t * dy - py;
   return sqrtf(qx * qx + qy * qy);
 }
@@ -1143,11 +1178,64 @@ static void chsDrawSetup(LGFX_Sprite& s) {
   s.setCursor(10, 116);
   if (chatConfigured()) { s.setTextColor(T().good); char hb[40]; chsClip(chatCleanHost().c_str(), hb, (SCR_W - 70) / 6); s.print("Broker: "); s.print(hb); }
   else { s.setTextColor(T().danger); s.print("Broker belum diatur - isi di app Chat dulu"); }
-  iosRR(s, 8, 134, 70, 26, 7, T().surface2);
+  iosRR(s, 8, 134, 70, 26, 7, chsPressCol(3, T().surface2));
   s.setTextColor(T().accent); chsPrintC(s, 8, 70, 143, "Acak");
   bool ok = chatConfigured() && chsRoomStr.length() >= 3;
-  iosRR(s, 86, 134, SCR_W - 94, 26, 7, ok ? (uint16_t)T().accent : (uint16_t)T().surface2);
+  iosRR(s, 86, 134, SCR_W - 94, 26, 7, chsPressCol(4, ok ? (uint16_t)T().accent : (uint16_t)T().surface2));
   s.setTextColor(ok ? (uint16_t)T().bg : (uint16_t)T().subtext); chsPrintC(s, 86, SCR_W - 94, 143, "Mulai");
+}
+
+// teks + warna status giliran (dipakai pil di panel dan chip saat panel disembunyikan)
+static void chsStatusText(char* line, size_t n, uint16_t* sc) {
+  const char* t; uint16_t c = T().accent;
+  static char eb[48];
+  if (chsConn == 2)                   { chsClip(chsErr[0] ? chsErr : "Terputus", eb, 46); t = eb; c = T().danger; }
+  else if (chsConn == 0 || !chsReady) { t = "Menyambung..."; c = T().subtext; }
+  else if (chsRole == 0)              { t = "Cari kursi..."; c = T().subtext; }
+  else if (chsRole == 3)              { t = "Room penuh!"; c = T().danger; }
+  else if (!chsOppPid()[0])           { t = "Tunggu lawan..."; c = T().subtext; }
+  else if (chsEnd)                    { t = chsEndShort(); int rr = chsResultForMe(); c = rr == 1 ? T().good : rr == -1 ? T().danger : T().text; }
+  else if (chsCanMove())              { t = chsInCheck() ? "SKAK! Jalanmu" : "Giliranmu"; c = chsInCheck() ? T().danger : T().good; }
+  else                                { t = "Giliran lawan"; c = T().subtext; }
+  strncpy(line, t, n - 1); line[n - 1] = 0;
+  *sc = c;
+}
+
+// bidak yg sudah dimakan: byMe=true -> bidak lawan yg hilang dari papan (huruf: Q R B N P)
+static void chsCapturedStr(bool byMe, char* out, size_t n) {
+  static const uint8_t start[6] = {8, 2, 2, 2, 1, 0};     // P N B R Q (indeks 0..4)
+  static const char    let[5]   = {'P', 'N', 'B', 'R', 'Q'};
+  static const int8_t  idx[5]   = {1, 2, 3, 4, 5};        // kode bidak di papan
+  bool meW = (chsRole != 2);
+  bool capW = byMe ? !meW : meW;                          // warna bidak yg dihitung hilang
+  int cnt[5] = {0, 0, 0, 0, 0};
+  for (int i = 0; i < 64; i++) {
+    int8_t p = chsBd[i];
+    if (!p || ((p > 0) != capW)) continue;
+    int t = p > 0 ? p : -p;
+    if (t >= 1 && t <= 5) cnt[t - 1]++;
+  }
+  size_t k = 0;
+  for (int t = 4; t >= 0 && k + 2 < n; t--) {              // Q dulu, P terakhir
+    int miss = (int)start[t] - cnt[t];
+    for (int m = 0; m < miss && k + 2 < n; m++) out[k++] = let[t];
+  }
+  out[k] = 0;
+  (void)idx;
+}
+
+static void chsDrawHandle(LGFX_Sprite& s) {
+  int hx, hy, hw, hh; chsHandleRect(&hx, &hy, &hw, &hh);
+  bool off = chsPanelOff();
+  nyxAaRR(s, hx, hy, hw, hh, 7, chsPressCol(2, blend565(T().surface2, 0xFFFF, 24)));
+  int cx = hx + hw / 2, cy = hy + hh / 2;
+  uint16_t ac = T().accent;
+  int dir;                                                // 0 kanan, 1 kiri, 2 bawah, 3 atas
+  if (SCR_W >= SCR_H) dir = off ? 1 : 0; else dir = off ? 3 : 2;
+  if (dir == 0)      { s.drawLine(cx - 2, cy - 4, cx + 2, cy, ac); s.drawLine(cx + 2, cy, cx - 2, cy + 4, ac); s.drawLine(cx - 3, cy - 4, cx + 1, cy, ac); s.drawLine(cx + 1, cy, cx - 3, cy + 4, ac); }
+  else if (dir == 1) { s.drawLine(cx + 2, cy - 4, cx - 2, cy, ac); s.drawLine(cx - 2, cy, cx + 2, cy + 4, ac); s.drawLine(cx + 3, cy - 4, cx - 1, cy, ac); s.drawLine(cx - 1, cy, cx + 3, cy + 4, ac); }
+  else if (dir == 2) { s.drawLine(cx - 4, cy - 2, cx, cy + 2, ac); s.drawLine(cx, cy + 2, cx + 4, cy - 2, ac); s.drawLine(cx - 4, cy - 3, cx, cy + 1, ac); s.drawLine(cx, cy + 1, cx + 4, cy - 3, ac); }
+  else               { s.drawLine(cx - 4, cy + 2, cx, cy - 2, ac); s.drawLine(cx, cy - 2, cx + 4, cy + 2, ac); s.drawLine(cx - 4, cy + 3, cx, cy - 1, ac); s.drawLine(cx, cy - 1, cx + 4, cy + 3, ac); }
 }
 
 static void chsDrawGame(LGFX_Sprite& s) {
@@ -1175,14 +1263,15 @@ static void chsDrawGame(LGFX_Sprite& s) {
     if (chsLast >= 0 && (q == (chsLast & 63) || q == ((chsLast >> 6) & 63))) c = blend565(c, hiLast, 105);
     if (q == chsSel) c = blend565(c, T().accent, 150);
     s.fillRect(x, y, sq, sq, c);
-    if (q == kingSq) {                                               // cahaya merah lembut di bawah raja yang skak
-      nyxAaCircle(s, x + sq / 2, y + sq / 2, sq / 2 - 1, blend565(c, T().danger, 110));
-      nyxAaCircle(s, x + sq / 2, y + sq / 2, sq / 3,     blend565(c, T().danger, 190));
+    if (q == kingSq) {                                               // cahaya merah lembut yg berdenyut di bawah raja skak
+      float pu = (chsEnd == 0) ? 0.5f + 0.5f * sinf((float)millis() / 170.0f) : 1.0f;
+      nyxAaCircle(s, x + sq / 2, y + sq / 2, sq / 2 - 1, blend565(c, T().danger, (uint8_t)(70.0f + 70.0f * pu)));
+      nyxAaCircle(s, x + sq / 2, y + sq / 2, sq / 3,     blend565(c, T().danger, (uint8_t)(150.0f + 60.0f * pu)));
     }
     if (q == chsSel) { s.drawRect(x, y, sq, sq, T().accent); s.drawRect(x + 1, y + 1, sq - 2, sq - 2, blend565(c, T().accent, 160)); }
-    if (sq >= 26) {
+    if (sq >= 18) {                                                  // koordinat mini di tepi papan (kontras halus)
       s.setTextSize(1);
-      s.setTextColor((rank + file) & 1 ? CHS_DARK : CHS_LIGHT);
+      s.setTextColor(blend565(c, (rank + file) & 1 ? CHS_DARK : CHS_LIGHT, sq >= 26 ? 255 : 200));
       char cl[2]; cl[1] = 0;
       if (i == 7) { cl[0] = (char)('a' + file); s.setCursor(x + sq - 7, y + sq - 9); s.print(cl); }
       if (j == 0) { cl[0] = (char)('1' + rank); s.setCursor(x + 2, y + 2); s.print(cl); }
@@ -1193,9 +1282,11 @@ static void chsDrawGame(LGFX_Sprite& s) {
       chsBlitPiece(s, p > 0 ? p : -p, p > 0, x, oy, sq, 255);
     }
     if (chsSel >= 0 && chsHL[q]) {
-      uint16_t dc = blend565(c, T().good, 215);
+      float fi2 = (float)(millis() - chsSelMs) / 180.0f; if (fi2 > 1.0f) fi2 = 1.0f;
+      fi2 = 1.0f - (1.0f - fi2) * (1.0f - fi2);                      // ease-out
+      uint16_t dc = blend565(c, T().good, (uint8_t)(215.0f * fi2));
       if (p) { nyxAaCircleRing(s, x + sq / 2, y + sq / 2, sq / 2 - 2, dc); nyxAaCircleRing(s, x + sq / 2, y + sq / 2, sq / 2 - 3, dc); }
-      else nyxAaCircle(s, x + sq / 2, y + sq / 2, sq / 6 + 1, dc);
+      else { int rr2 = (int)((float)(sq / 6 + 1) * fi2 + 0.5f); if (rr2 < 1) rr2 = 1; nyxAaCircle(s, x + sq / 2, y + sq / 2, rr2, dc); }
     }
   }
 
@@ -1223,39 +1314,48 @@ static void chsDrawGame(LGFX_Sprite& s) {
     s.setTextSize(1); s.setTextColor(ec); s.setCursor(xx + 11, yy + 7); s.print(eb);
   }
 
-  if (chsPromoOn) {                                                  // pilih bidak promosi
-    int w = 4 * sq + 10, h = sq + 10, x0 = bx + 4 * sq - w / 2, y0 = by + 4 * sq - h / 2;
+  if (chsPromoOn) {                                                  // pilih bidak promosi (popup membesar dari tengah)
+    float pe = (float)(millis() - chsPromoMs) / 150.0f; if (pe > 1.0f) pe = 1.0f;
+    pe = 1.0f - (1.0f - pe) * (1.0f - pe);
+    int fw = 4 * sq + 10, fh = sq + 10, cx0 = bx + 4 * sq, cy0 = by + 4 * sq;
+    int w = (int)((float)fw * (0.55f + 0.45f * pe)), h = (int)((float)fh * (0.55f + 0.45f * pe));
+    int x0 = cx0 - w / 2, y0 = cy0 - h / 2;
+    nyxAaRR(s, x0, y0 + 2, w, h, 8, blend565(T().bg, 0x0000, 150));
     iosRR(s, x0, y0, w, h, 8, T().surface);
     nyxAaRRRing(s, x0, y0, w, h, 8, T().accent);
-    bool wh = (chsRole == 1);
-    static const int pr[4] = {5, 4, 3, 2};
-    for (int k = 0; k < 4; k++) {
-      s.fillRect(x0 + 5 + k * sq, y0 + 5, sq, sq, ((k & 1) ? CHS_DARK : CHS_LIGHT));
-      chsDrawPiece(s, pr[k], wh, x0 + 5 + k * sq, y0 + 5, sq);
+    if (pe >= 1.0f) {
+      bool wh = (chsRole == 1);
+      static const int pr[4] = {5, 4, 3, 2};
+      for (int k = 0; k < 4; k++) {
+        s.fillRect(x0 + 5 + k * sq, y0 + 5, sq, sq, ((k & 1) ? CHS_DARK : CHS_LIGHT));
+        chsDrawPiece(s, pr[k], wh, x0 + 5 + k * sq, y0 + 5, sq);
+      }
     }
   }
 
-  // ---- panel info ----
-  drawGlassCard(s, px, py, pw, ph, 10, T().surface, 225);
-  int gap = (ph >= 120) ? 15 : 11;
-  int maxCh = (pw - 14) / 6;
+  // ---- panel info (bisa disembunyikan) ----
   char line[48], clipd[48];
   s.setTextSize(1);
   uint16_t sc = T().accent;
-  if (chsConn == 2)               { chsClip(chsErr[0] ? chsErr : "Terputus", line, 46); sc = T().danger; }
-  else if (chsConn == 0 || !chsReady) { strcpy(line, "Menyambung..."); sc = T().subtext; }
-  else if (chsRole == 0)          { strcpy(line, "Mencari kursi..."); sc = T().subtext; }
-  else if (chsRole == 3)          { strcpy(line, "Room penuh!"); sc = T().danger; }
-  else if (!chsOppPid()[0])       { strcpy(line, "Menunggu lawan..."); sc = T().subtext; }
-  else if (chsEnd) {
-    strcpy(line, chsEndShort());
-    int rr = chsResultForMe(); sc = rr == 1 ? T().good : rr == -1 ? T().danger : T().text;
+  chsStatusText(line, sizeof(line), &sc);
+
+  if (chsPanelOff()) {                                                // mode ringkas: chip status di bawah papan + gagang
+    int hx, hy, hw, hh; chsHandleRect(&hx, &hy, &hw, &hh);
+    int cw = hx - 6 - bx;
+    nyxAaRR(s, bx + 4, hy, cw, hh, 7, blend565(T().surface, sc, 60));
+    chsClip(line, clipd, (cw - 14) / 6);
+    s.setTextColor(sc); s.setCursor(bx + 12, hy + 4); s.print(clipd);
+    chsDrawHandle(s);
+    return;
   }
-  else if (chsCanMove())          { strcpy(line, chsInCheck() ? "Giliranmu - SKAK!" : "Giliranmu"); sc = chsInCheck() ? T().danger : T().good; }
-  else                            { strcpy(line, "Giliran lawan"); sc = T().subtext; }
-  chsClip(line, clipd, maxCh);
-  nyxAaRR(s, px + 5, py + 5, pw - 10, 15, 7, blend565(T().surface, sc, 60));     // pil status
+
+  drawGlassCard(s, px, py, pw, ph, 10, T().surface, 225);
+  int gap = (ph >= 120) ? 15 : 11;
+  int maxCh = (pw - 14) / 6;
+  chsClip(line, clipd, (pw - 10 - 22 - 8) / 6);
+  nyxAaRR(s, px + 5, py + 5, pw - 10 - 22, 15, 7, blend565(T().surface, sc, 60));   // pil status
   s.setTextColor(sc); s.setCursor(px + 9, py + 9); s.print(clipd);
+  chsDrawHandle(s);
   int ty = py + 5 + 15 + 6;
   bool playing = chsEnd == 0 && chsOppPid()[0] != 0;
   // kamu
@@ -1286,6 +1386,15 @@ static void chsDrawGame(LGFX_Sprite& s) {
   chsClip(nb, clipd, maxCh);
   s.setTextColor(T().subtext); s.setCursor(px + 9, ty);
   s.print(clipd);
+  ty += gap;
+  // bidak yg dimakan: +huruf = kamu ambil, -huruf = diambil lawan
+  {
+    char c1[20], c2[20]; chsCapturedStr(true, c1, sizeof(c1)); chsCapturedStr(false, c2, sizeof(c2));
+    int cx = px + 9;
+    s.setTextColor(T().good);   s.setCursor(cx, ty); s.print("+"); s.print(c1[0] ? c1 : "-");
+    cx += (int)(1 + (c1[0] ? strlen(c1) : 1)) * 6 + 8;
+    if (cx + 12 < px + pw - 6) { s.setTextColor(T().danger); s.setCursor(cx, ty); s.print("-"); s.print(c2[0] ? c2 : "-"); }
+  }
 
   // tombol
   int x, y, w, h;
@@ -1293,14 +1402,14 @@ static void chsDrawGame(LGFX_Sprite& s) {
   bool over = chsEnd != 0;
   bool canAct = (chsRole == 1 || chsRole == 2) && chsConn == 1;
   if (over) {
-    iosRR(s, x, y, w, h, 6, canAct ? (uint16_t)T().accent : (uint16_t)T().surface2);
+    iosRR(s, x, y, w, h, 6, chsPressCol(0, canAct ? (uint16_t)T().accent : (uint16_t)T().surface2));
     s.setTextColor(canAct ? (uint16_t)T().bg : (uint16_t)T().subtext); chsPrintC(s, x, w, y + 7, "Main lagi");
   } else {
-    iosRR(s, x, y, w, h, 6, chsConfirm ? (uint16_t)T().danger : (uint16_t)T().surface2);
+    iosRR(s, x, y, w, h, 6, chsPressCol(0, chsConfirm ? (uint16_t)T().danger : (uint16_t)T().surface2));
     s.setTextColor(chsConfirm ? (uint16_t)T().bg : (uint16_t)T().danger); chsPrintC(s, x, w, y + 7, chsConfirm ? "Yakin?" : "Menyerah");
   }
   chsBtnRect(1, &x, &y, &w, &h);
-  iosRR(s, x, y, w, h, 6, T().surface2);
+  iosRR(s, x, y, w, h, 6, chsPressCol(1, T().surface2));
   s.setTextColor(T().accent); chsPrintC(s, x, w, y + 7, "Menu");
 
   // daftar langkah (kalau ada ruang)
@@ -1343,8 +1452,8 @@ static void chsTouchSetup(int x, int y, bool isNew) {
   if (isBack(x, y)) { navBack(); return; }
   if (y >= 62 && y <= 96) { kbTarget = &chsRoomStr; kbVisible = true; kbMode = KB_LOWER; needRedraw = true; return; }
   if (y >= 134 && y <= 160) {
-    if (x >= 8 && x <= 78) { chsRandomRoom(); needRedraw = true; }
-    else if (x >= 86) chsStartGame();
+    if (x >= 8 && x <= 78) { chsPress(3); chsRandomRoom(); needRedraw = true; }
+    else if (x >= 86) { chsPress(4); chsStartGame(); }
   }
 }
 
@@ -1359,11 +1468,12 @@ static void chsTapBoard(int q) {
     uint16_t pick = 0; bool found = false;
     for (int i = 0; i < n; i++) if (((mv[i] >> 6) & 63) == q) { promoCnt++; if (!found) { pick = mv[i]; found = true; } }
     if (!found) { chsSel = -1; needRedraw = true; return; }
-    if (promoCnt > 1) { chsPromoOn = true; chsPromoFrom = chsSel; chsPromoTo = q; needRedraw = true; return; }
+    if (promoCnt > 1) { chsPromoOn = true; chsPromoMs = millis(); chsPromoFrom = chsSel; chsPromoTo = q; needRedraw = true; return; }
     chsCommit(pick);
     return;
   }
   if (mine) {
+    if (chsSel != q) chsSelMs = millis();
     chsSel = q;
     memset(chsHL, 0, sizeof(chsHL));
     uint16_t mv[64];
@@ -1394,9 +1504,20 @@ void chessTouch(int x, int y, bool held, bool isNew) {
     return;
   }
 
+  if (chsInHandle(x, y)) {                                           // gagang: sembunyikan / tampilkan panel
+    chsPress(2);
+    chsPanelHidden = !chsPanelHidden;
+    { Preferences pf; if (pf.begin("chess", false)) { pf.putBool("hide", chsPanelHidden); pf.end(); } }
+    chsSel = -1; chsConfirm = false; chsPromoOn = false;
+    needRedraw = true;
+    return;
+  }
+
   int bxr, byr, bw, bh;
+  bool panelOn = !chsPanelOff();
   chsBtnRect(0, &bxr, &byr, &bw, &bh);
-  if (x >= bxr && x < bxr + bw && y >= byr && y < byr + bh) {
+  if (panelOn && x >= bxr && x < bxr + bw && y >= byr && y < byr + bh) {
+    chsPress(0);
     if (chsEnd != 0) { if ((chsRole == 1 || chsRole == 2) && chsConn == 1) chsRematch(); }
     else if (chsRole == 1 || chsRole == 2) {
       if (chsConfirm) chsResign();
@@ -1405,7 +1526,8 @@ void chessTouch(int x, int y, bool held, bool isNew) {
     return;
   }
   chsBtnRect(1, &bxr, &byr, &bw, &bh);
-  if (x >= bxr && x < bxr + bw && y >= byr && y < byr + bh) {
+  if (panelOn && x >= bxr && x < bxr + bw && y >= byr && y < byr + bh) {
+    chsPress(1);
     chsActive = false; chsScr = 0; chsConn = 0; chsReady = false; chsSel = -1; chsConfirm = false;
     needRedraw = true;
     return;
