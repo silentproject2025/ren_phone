@@ -361,6 +361,51 @@ static unsigned long chsConfirmMs = 0;
 static bool          chsAnimOn = false;
 static unsigned long chsAnimMs = 0;
 static int           chsAnimFrom = 0, chsAnimTo = 0;
+// ---- BROKER MQTT KHUSUS CATUR: terpisah total dari app Chat (NVS "chess": bhost/buser/bpass; SD: /chess.cfg) ----
+static String chsBHost = "", chsBUser = "", chsBPass = "";
+static int8_t chsBEdit = -1;                    // field yg sedang diketik di layar Broker (-1 = tidak ada)
+static void chsBrokerLoad() {
+  Preferences p;
+  if (p.begin("chess", true)) {
+    chsBHost = p.getString("bhost", ""); chsBUser = p.getString("buser", ""); chsBPass = p.getString("bpass", "");
+    p.end();
+  }
+}
+static void chsBrokerSave() {
+  chsBHost.trim(); chsBUser.trim(); chsBPass.trim();
+  Preferences p;
+  if (p.begin("chess", false)) {
+    p.putString("bhost", chsBHost); p.putString("buser", chsBUser); p.putString("bpass", chsBPass);
+    p.end();
+  }
+}
+static bool chsBrokerOk() { return chsBHost.length() > 3 && chsBUser.length() > 0 && chsBPass.length() > 0; }
+static bool chsBrokerFromSd() {                 // /chess.cfg: baris host= user= pass=
+  if (!sdReady || !SD_MMC.exists("/chess.cfg")) return false;
+  File f = SD_MMC.open("/chess.cfg", FILE_READ);
+  if (!f) return false;
+  String h = "", u = "", w = "";
+  while (f.available()) {
+    String l = f.readStringUntil('\n'); l.trim();
+    if (l.startsWith("host="))      h = l.substring(5);
+    else if (l.startsWith("user=")) u = l.substring(5);
+    else if (l.startsWith("pass=")) w = l.substring(5);
+  }
+  f.close();
+  h.trim(); u.trim(); w.trim();
+  if (!h.length() || !u.length() || !w.length()) return false;
+  chsBHost = h; chsBUser = u; chsBPass = w;
+  return true;
+}
+// host bersih (tanpa skema & path); ":port" opsional, bawaan 8883 (TLS)
+static void chsBrokerHostPort(String& h, int& port) {
+  h = chsBHost; h.trim(); port = CHS_PORT;
+  int i = h.indexOf("://"); if (i >= 0) h = h.substring(i + 3);
+  int sl = h.indexOf('/'); if (sl >= 0) h = h.substring(0, sl);
+  int co = h.indexOf(':');
+  if (co >= 0) { int pp = h.substring(co + 1).toInt(); if (pp > 0 && pp < 65536) port = pp; h = h.substring(0, co); }
+}
+
 // ---- polish tambahan: panel bisa disembunyikan, fade-in titik langkah, denyut skak, popup promosi, efek tekan ----
 static bool          chsPanelHidden = false;    // pilihan pemain (disimpan di NVS "chess"/"hide")
 static unsigned long chsSelMs = 0;              // kapan bidak dipilih (fade-in titik langkah)
@@ -455,7 +500,12 @@ static void chsTaskFunc(void*) {
       chsConn = 2; chsSetErr("RAM padat, tutup app lain"); chsDirty = true;
       vTaskDelay(pdMS_TO_TICKS(2000)); continue;
     }
-    String host = chatCleanHost(), user = chatUser, pass = chatPass;
+    if (!chsBrokerOk()) {
+      chsConn = 2; chsSetErr("Broker Catur belum diatur"); chsDirty = true;
+      vTaskDelay(pdMS_TO_TICKS(1500)); continue;
+    }
+    String host; int port; chsBrokerHostPort(host, port);
+    String user = chsBUser, pass = chsBPass;
     String base = String("renphone/chess/") + chsRoom + "/";
     strncpy(chsBase, base.c_str(), sizeof(chsBase) - 1); chsBase[sizeof(chsBase) - 1] = 0;
     String willT = base + "on/" + chsPid;
@@ -468,7 +518,7 @@ static void chsTaskFunc(void*) {
       WiFiClientSecure net;                 // dilepas (buffer TLS) begitu blok ini selesai
       net.setInsecure();
       PubSubClient mqtt(net);
-      mqtt.setServer(host.c_str(), CHS_PORT);
+      mqtt.setServer(host.c_str(), port);
       mqtt.setBufferSize(CHS_BUF + 160);
       mqtt.setKeepAlive(30);
       mqtt.setSocketTimeout(8);
@@ -722,7 +772,7 @@ static void chsRandomRoom() {
 
 static void chsStartGame() {
   if (!chsMoves) { showToast("RAM tidak cukup utk Catur", 2200); return; }
-  if (!chatConfigured()) { showToast("Isi broker di app Chat dulu", 2600); return; }
+  if (!chsBrokerOk()) { showToast("Atur broker Catur dulu", 2400); return; }
   chsSanitizeRoom();
   if (chsRoomStr.length() < 3) { showToast("Kode room minimal 3 karakter", 2200); return; }
   strncpy(chsRoom, chsRoomStr.c_str(), 9); chsRoom[9] = 0;
@@ -744,7 +794,9 @@ static void chsStartGame() {
 // ---------------------------------------------------------------------
 void chessEnter() {
   if (!chsEnsureInit()) { showToast("RAM tidak cukup utk Catur", 2500); return; }
-  if (!chatConfigured() && chatCfgFromSd()) { chatCfgSave(); showToast("Konfigurasi dimuat dari SD", 2000); }
+  chsBrokerLoad();
+  if (!chsBrokerOk() && chsBrokerFromSd()) { chsBrokerSave(); showToast("Broker Catur dimuat dari /chess.cfg", 2200); }
+  chsBEdit = -1;
   chsActive = false; chsConn = 0; chsReady = false;
   chsScr = 0; chsSel = -1; chsPromoOn = false; chsConfirm = false;
   chsReset(); chsEnd = 0;
@@ -1176,11 +1228,13 @@ static void chsDrawSetup(LGFX_Sprite& s) {
   String nm = chatName.length() ? chatName : String("HP");
   s.setTextColor(T().subtext); s.setCursor(10, 102); s.print("Pemain: "); s.setTextColor(T().text); s.print(nm.c_str());
   s.setCursor(10, 116);
-  if (chatConfigured()) { s.setTextColor(T().good); char hb[40]; chsClip(chatCleanHost().c_str(), hb, (SCR_W - 70) / 6); s.print("Broker: "); s.print(hb); }
-  else { s.setTextColor(T().danger); s.print("Broker belum diatur - isi di app Chat dulu"); }
+  if (chsBrokerOk()) { s.setTextColor(T().good); String hh; int pt; chsBrokerHostPort(hh, pt); char hb[40]; chsClip(hh.c_str(), hb, (SCR_W - 130) / 6); s.print("Broker: "); s.print(hb); }
+  else { s.setTextColor(T().danger); s.print("Broker belum diatur"); }
+  nyxAaRR(s, SCR_W - 8 - 50, 110, 50, 18, 8, chsPressCol(5, blend565(T().surface2, 0xFFFF, 20)));
+  s.setTextColor(T().accent); chsPrintC(s, SCR_W - 8 - 50, 50, 115, "Atur");
   iosRR(s, 8, 134, 70, 26, 7, chsPressCol(3, T().surface2));
   s.setTextColor(T().accent); chsPrintC(s, 8, 70, 143, "Acak");
-  bool ok = chatConfigured() && chsRoomStr.length() >= 3;
+  bool ok = chsBrokerOk() && chsRoomStr.length() >= 3;
   iosRR(s, 86, 134, SCR_W - 94, 26, 7, chsPressCol(4, ok ? (uint16_t)T().accent : (uint16_t)T().surface2));
   s.setTextColor(ok ? (uint16_t)T().bg : (uint16_t)T().subtext); chsPrintC(s, 86, SCR_W - 94, 143, "Mulai");
 }
@@ -1427,12 +1481,15 @@ static void chsDrawGame(LGFX_Sprite& s) {
   }
 }
 
+static void chsDrawBroker(LGFX_Sprite& s);
+
 void drawChess(LGFX_Sprite& s) {
-  if (chsMoves && chsScr == 0) iosBackdrop(s); else s.fillSprite(T().bg);
+  if (chsMoves && chsScr != 1) iosBackdrop(s); else s.fillSprite(T().bg);
   drawStatusBar(s);
   if (!chsMoves) {
     s.setTextColor(T().danger); s.setTextSize(1); s.setCursor(10, 40); s.print("RAM tidak cukup untuk app Catur");
   } else if (chsScr == 0) chsDrawSetup(s);
+  else if (chsScr == 2) chsDrawBroker(s);
   else chsDrawGame(s);
   if (kbVisible) drawKb(s); else drawBack(s);
   drawToast(s);
@@ -1441,6 +1498,89 @@ void drawChess(LGFX_Sprite& s) {
 // ---------------------------------------------------------------------
 // SENTUHAN
 // ---------------------------------------------------------------------
+static const char* chsBLabel(int i) {
+  static const char* L[3] = { "Host broker (opsional :port, bawaan 8883 TLS)", "Username MQTT", "Password MQTT" };
+  return L[i];
+}
+static String* chsBField(int i) { return i == 0 ? &chsBHost : (i == 1 ? &chsBUser : &chsBPass); }
+
+static void chsDrawBroker(LGFX_Sprite& s) {
+  s.setTextColor(T().accent); s.setTextSize(2); s.setCursor(10, 25); s.print("Broker Catur");
+  s.setTextSize(1);
+  char buf[64];
+  int maxC = (SCR_W - 32) / 6;
+  if (chsBEdit >= 0 && kbVisible) {                                  // mengetik: satu field saja, di atas keyboard
+    chsClip(chsBLabel(chsBEdit), buf, (SCR_W - 20) / 6);
+    s.setTextColor(T().subtext); s.setCursor(10, 48); s.print(buf);
+    iosRR(s, 8, 60, SCR_W - 16, 24, 7, T().surface);
+    nyxAaRRRing(s, 8, 60, SCR_W - 16, 24, 9, T().accent);
+    String v = *chsBField(chsBEdit);
+    if ((int)v.length() > maxC - 1) v = String("..") + v.substring(v.length() - (maxC - 3));
+    v += "_";
+    s.setTextColor(T().text); s.setCursor(16, 68); s.print(v.c_str());
+    s.setTextColor(T().subtext); s.setCursor(10, 92); s.print("Ketuk area di atas keyboard = selesai");
+    return;
+  }
+  s.setTextColor(T().subtext); s.setCursor(10, 46); s.print("Terpisah dari Chat - hanya dipakai Catur");
+  for (int i = 0; i < 3; i++) {
+    int y = 60 + i * 34;
+    iosRR(s, 8, y, SCR_W - 16, 30, 8, T().surface);
+    chsClip(chsBLabel(i), buf, (SCR_W - 32) / 6);
+    s.setTextColor(T().subtext); s.setCursor(16, y + 5); s.print(buf);
+    String v;
+    if (i == 2) { for (size_t k = 0; k < chsBPass.length(); k++) v += '*'; } else v = *chsBField(i);
+    if ((int)v.length() > maxC) v = String("..") + v.substring(v.length() - (maxC - 2));
+    s.setTextColor(v.length() ? T().text : T().subtext);
+    s.setCursor(16, y + 17); s.print(v.length() ? v.c_str() : "ketuk untuk mengisi...");
+  }
+  int bw = (SCR_W - 16 - 12) / 3, by = 166;
+  bool sdOk = sdReady && SD_MMC.exists("/chess.cfg");
+  bool chatOk = chatConfigured();
+  iosRR(s, 8, by, bw, 26, 7, chsPressCol(6, T().surface2));
+  s.setTextColor(sdOk ? (uint16_t)T().accent : (uint16_t)T().subtext); chsPrintC(s, 8, bw, by + 9, "Dari SD");
+  iosRR(s, 8 + bw + 6, by, bw, 26, 7, chsPressCol(7, T().surface2));
+  s.setTextColor(chatOk ? (uint16_t)T().accent : (uint16_t)T().subtext); chsPrintC(s, 8 + bw + 6, bw, by + 9, "Salin Chat");
+  iosRR(s, 8 + 2 * (bw + 6), by, bw, 26, 7, chsPressCol(8, chsBrokerOk() ? (uint16_t)T().accent : (uint16_t)T().surface2));
+  s.setTextColor(chsBrokerOk() ? (uint16_t)T().bg : (uint16_t)T().subtext); chsPrintC(s, 8 + 2 * (bw + 6), bw, by + 9, "Simpan");
+  s.setCursor(10, by + 34);
+  if (chsBrokerOk()) { s.setTextColor(T().good); s.print("Siap dipakai"); }
+  else { s.setTextColor(T().danger); s.print("Lengkapi host, username & password"); }
+}
+
+static void chsTouchBroker(int x, int y, bool isNew) {
+  if (!isNew) return;
+  if (!kbVisible && chsBEdit >= 0) { chsBrokerSave(); chsBEdit = -1; needRedraw = true; }      // keyboard ditutup lewat Enter
+  if (kbVisible) {
+    if (y < kbY() - 2) { kbVisible = false; kbTarget = nullptr; chsBrokerSave(); chsBEdit = -1; }
+    else kbTouch(x, y);
+    needRedraw = true;
+    return;
+  }
+  if (isBack(x, y)) { chsBrokerSave(); chsScr = 0; needRedraw = true; return; }
+  for (int i = 0; i < 3; i++) {
+    int fy = 60 + i * 34;
+    if (y >= fy && y < fy + 30) { chsBEdit = (int8_t)i; kbTarget = chsBField(i); kbVisible = true; kbMode = KB_LOWER; needRedraw = true; return; }
+  }
+  int bw = (SCR_W - 16 - 12) / 3, by = 166;
+  if (y >= by && y <= by + 26) {
+    int k = (x - 8) / (bw + 6);
+    if (k == 0) {
+      chsPress(6);
+      if (chsBrokerFromSd()) { chsBrokerSave(); showToast("Dimuat dari /chess.cfg", 1800); }
+      else showToast("/chess.cfg tidak ada / tidak valid (host= user= pass=)", 2800);
+    } else if (k == 1) {
+      chsPress(7);
+      if (chatConfigured()) { chsBHost = chatHost; chsBUser = chatUser; chsBPass = chatPass; chsBrokerSave(); showToast("Disalin dari Chat (tetap terpisah)", 2200); }
+      else showToast("Broker Chat belum diatur", 2000);
+    } else {
+      chsPress(8);
+      if (!chsBrokerOk()) showToast("Isi host, username & password dulu", 2200);
+      else { chsBrokerSave(); chsScr = 0; showToast("Broker Catur disimpan", 1600); }
+    }
+    needRedraw = true;
+  }
+}
+
 static void chsTouchSetup(int x, int y, bool isNew) {
   if (!isNew) return;
   if (kbVisible) {
@@ -1450,6 +1590,7 @@ static void chsTouchSetup(int x, int y, bool isNew) {
     return;
   }
   if (isBack(x, y)) { navBack(); return; }
+  if (y >= 106 && y <= 130) { chsPress(5); chsScr = 2; chsBEdit = -1; needRedraw = true; return; }      // baris broker -> layar Broker
   if (y >= 62 && y <= 96) { kbTarget = &chsRoomStr; kbVisible = true; kbMode = KB_LOWER; needRedraw = true; return; }
   if (y >= 134 && y <= 160) {
     if (x >= 8 && x <= 78) { chsPress(3); chsRandomRoom(); needRedraw = true; }
@@ -1486,6 +1627,7 @@ static void chsTapBoard(int q) {
 
 void chessTouch(int x, int y, bool held, bool isNew) {
   if (!chsMoves) { if (isNew && isBack(x, y)) navBack(); return; }
+  if (chsScr == 2) { chsTouchBroker(x, y, isNew); return; }
   if (chsScr == 0) { chsTouchSetup(x, y, isNew); return; }
   if (!isNew) return;
   if (isBack(x, y)) { navBack(); return; }
