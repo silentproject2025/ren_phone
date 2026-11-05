@@ -205,6 +205,7 @@ jobs:
           cp about_renphone.ino build_sketch/
           cp remote_renphone.ino build_sketch/
           cp chat_renphone.ino build_sketch/
+          cp chess_renphone.ino build_sketch/
           cp emoji_renphone.ino build_sketch/
           cp emoji_data.h build_sketch/
           cp kamus_renphone.ino build_sketch/

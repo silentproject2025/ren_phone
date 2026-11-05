@@ -644,7 +644,9 @@ enum Screen { SCR_HOME, SCR_CLOCK, SCR_CALC, SCR_SENSOR,
               // Buku: pembaca .txt / .epub -- lihat ebook_renphone.ino + ebook_core.h
               SCR_EBOOK,
               // Backup & Restore pengaturan -- lihat backup_renphone.ino + backup_core.h
-              SCR_BACKUP };
+              SCR_BACKUP,
+              // Catur online (MQTT) -- lihat chess_renphone.ino
+              SCR_CHESS };
 enum Orientation { ORIENT_LANDSCAPE = 0, ORIENT_PORTRAIT = 1 };
 
 // Dipindah ke atas — alasan sama dengan AiLine & Vec3f: arduino-cli men-generate
@@ -5587,6 +5589,13 @@ void drawAppIcon(LGFX_Sprite& s, char sym, int cx, int cy, int r, uint16_t bgCir
       nyxAaRR(s, cx+rr/3,cy-rr/3,rr*2/3,rr*4/3,rr/3,ic);
       break;
     }
+    case 'q': { // Catur: siluet bidak raja (salib + badan + alas)
+      int hh=max(14,r*2), top=cy-hh/2;
+      s.fillRect(cx-1,top,3,6,ic); s.fillRect(cx-3,top+2,7,2,ic);
+      s.fillTriangle(cx,top+6,cx-r*2/3-2,cy+hh/2-3,cx+r*2/3+2,cy+hh/2-3,ic);
+      s.fillRect(cx-r*2/3-3,cy+hh/2-3,r*4/3+7,3,ic);
+      break;
+    }
     case 'c': { // Chat: gelembung pesan + ekor + 3 titik
       int bw=max(16,r*3/2), bh=max(11,r), bx=cx-bw/2, by=cy-bh/2-2;
       nyxAaRRRing(s, bx,by,bw,bh,4,ic); nyxAaRRRing(s, bx+1,by+1,bw-2,bh-2,3,ic);
@@ -5695,6 +5704,8 @@ bool otaRollbackReady(); void otaRollbackRefresh(); bool otaRollbackNow(bool);
 void otaHdrReset(); bool otaHdrFeed(const uint8_t*,size_t,size_t); bool otaPreInstall(const String&,int,String&); void otaApplyExpect(const String&); int otaSlotSizeKB();
 // ---- Chat MQTT: forward declarations (chat_renphone.ino) ----
 void chatEnter(); void chatExit(); void drawChat(LGFX_Sprite&); void chatTouch(int,int,bool,bool); void chatLoopPoll();
+// ---- Catur online MQTT: forward declarations (chess_renphone.ino) ----
+void chessEnter(); void chessExit(); void drawChess(LGFX_Sprite&); void chessTouch(int,int,bool,bool); void chessLoopPoll();
 // ---- Telepon SIP/LAN: forward declarations (call_renphone.ino) ----
 void callEnter(); void callExit(); void drawCall(LGFX_Sprite&); void callTouch(int,int,bool,bool); void callLoopPoll();
 bool callOverlayActive(); void drawCallOverlay(LGFX_Sprite&); void callOverlayTouch(bool,int,int);
@@ -5808,7 +5819,7 @@ void remoteEnter(); void remoteExit(); void drawRemote(LGFX_Sprite&); void remot
 void remotePointerTick(bool,bool,int,int);
 void rcLoopPoll(); void rcRegisterRoutes(); bool rcApIsUp(); bool rcInputPoll(int*,int*); void rcFrameMark();
 
-AppDef apps[44] = {
+AppDef apps[45] = {
   { "Jam",        'J', 0, clockEnter,    clockExit,    drawClock,        clockTouch,    SCR_CLOCK },
   { "Kalkulator", '+', 0, calcEnter,     calcExit,     drawCalc,         calcTouch,     SCR_CALC },
   { "Orientasi3D", '3', 0, sensorEnter,   sensorExit,   drawSensor,       sensorTouch,   SCR_SENSOR },
@@ -5873,8 +5884,10 @@ AppDef apps[44] = {
   { "Buku",    'b', 0, ebookEnter,  ebookExit,  drawEbook,  ebookTouch,  SCR_EBOOK  },
   // ---- Backup & Restore: simpan/pulihkan pengaturan ke SD (disembunyikan dari grid Home; ada di Pengaturan) ----
   { "Backup",  'z', 0x357C, backupEnter, backupExit, drawBackup, backupTouch, SCR_BACKUP },
+  // ---- Catur: catur online antar HP lewat broker MQTT (permintaan user) ----
+  { "Catur",   'q', 0, chessEnter,  chessExit,  drawChess,  chessTouch,  SCR_CHESS  },
 };
-#define APP_COUNT 44
+#define APP_COUNT 45
 
 // =============================================
 // NOTIFIKASI BADGE (BARU) -- angka kecil merah di pojok ikon app, mirip
@@ -6044,6 +6057,7 @@ void initAppColors(){
   apps[40].color=0x2E8B; // Telepon - hijau
   apps[41].color=0xF9A0; // Kamera - oranye
   apps[42].color=0xE68A; // Buku - krem kecokelatan (kertas)
+  apps[44].color=0xFE60; // Catur - emas
   for(int i=0;i<APP_COUNT;i++) apps[i].color=modernTone(apps[i].color); // UI-MODERN: lembutkan warna neon
 }
 
@@ -6585,7 +6599,7 @@ uint8_t homeCatOfScreen(Screen sc){
     case SCR_MJPEG: case SCR_MUSIC: case SCR_GALLERY: case SCR_CAMERA: case SCR_MEMO: case SCR_EBOOK:
       return 1; // Media
     case SCR_SNAKE: case SCR_FLAPPY: case SCR_2048: case SCR_TTT: case SCR_BREAKOUT: case SCR_TRIVIA:
-    case SCR_MAZE: case SCR_INF: case SCR_NES: case SCR_DOOM: case SCR_PPU:
+    case SCR_MAZE: case SCR_INF: case SCR_NES: case SCR_DOOM: case SCR_PPU: case SCR_CHESS:
       return 2; // Game
     case SCR_APOD: case SCR_NEOWS: case SCR_EPIC: case SCR_NASAIMG:
       return 4; // NASA
@@ -19975,6 +19989,7 @@ void loop(){
     webServer.handleClient();
   }
   chatLoopPoll(); // Chat: redraw kalau ada pesan/status baru dari task MQTT
+  chessLoopPoll(); // Catur: sinkron langkah lawan dari task MQTT
   callLoopPoll(); // Telepon: panggilan masuk, dering, notifikasi, siaga (no-op kalau belum dipakai)
   camLoopPoll();  // Kamera: ambil frame dari CAM, foto/rekam/gerak (no-op kalau app tertutup)
   ebookLoopPoll(); // Buku: jalankan pembukaan buku setelah layar "Membuka..." sempat tampil (no-op kalau tidak ada)
