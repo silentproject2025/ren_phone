@@ -642,7 +642,9 @@ enum Screen { SCR_HOME, SCR_CLOCK, SCR_CALC, SCR_SENSOR,
               // Kamera OV2640 (ESP32-CAM) -- lihat camera_renphone.ino
               SCR_CAMERA,
               // Buku: pembaca .txt / .epub -- lihat ebook_renphone.ino + ebook_core.h
-              SCR_EBOOK };
+              SCR_EBOOK,
+              // Backup & Restore pengaturan -- lihat backup_renphone.ino + backup_core.h
+              SCR_BACKUP };
 enum Orientation { ORIENT_LANDSCAPE = 0, ORIENT_PORTRAIT = 1 };
 
 // Dipindah ke atas — alasan sama dengan AiLine & Vec3f: arduino-cli men-generate
@@ -4215,7 +4217,7 @@ bool galInViewer();   // gallery_renphone.ino: di penampil foto geser dari tepi 
 bool screenHasEdgeBack(Screen sc){
   switch(sc){
     case SCR_SETTINGS: case SCR_FILEEXPLORER: case SCR_UPDATE: case SCR_BATTERY: case SCR_APOD: case SCR_NEOWS:
-    case SCR_EPIC: case SCR_NASAIMG: case SCR_ABOUT: case SCR_OWNER: case SCR_HOMEEDIT: case SCR_REMOTE:
+    case SCR_EPIC: case SCR_NASAIMG: case SCR_ABOUT: case SCR_OWNER: case SCR_HOMEEDIT: case SCR_REMOTE: case SCR_BACKUP:
     case SCR_CHAT: case SCR_CLOCK: case SCR_SENSOR: case SCR_HWMON: case SCR_MICLEVEL: case SCR_POMODORO:
     case SCR_WAKE: case SCR_MEMO: case SCR_STOPWATCH: case SCR_MUSIC: case SCR_GALLERY:
       return true;
@@ -5599,6 +5601,13 @@ void drawAppIcon(LGFX_Sprite& s, char sym, int cx, int cy, int r, uint16_t bgCir
       s.fillTriangle(cx-mw/6,cy-mh/3,cx+mw/6,cy+1,cx-mw/16,cy+mh/5,ic);
       break;
     }
+    case 'z': { // Backup: panah turun ke baki
+      int rr=max(8,r-6);
+      s.fillRect(cx-max(1,rr/9),cy-rr*2/3,max(2,rr/4),rr*2/3,ic);
+      s.fillTriangle(cx-rr/2,cy,cx+rr/2,cy,cx,cy+rr/2,ic);
+      s.fillRect(cx-rr*2/3,cy+rr*2/3,rr*4/3,max(2,rr/6),ic);
+      break;
+    }
     case 'i': { // About Phone
       int rr=max(8,r-6);
       nyxAaCircleRing(s, cx,cy,rr,ic); nyxAaCircleRing(s, cx,cy,rr-1,ic);
@@ -5787,6 +5796,8 @@ void ownerSetAvatarUi(const char*);
 
 void aboutEnter(); void aboutExit(); void drawAbout(LGFX_Sprite&); void aboutTouch(int,int,bool,bool);
 void aboutLoopPoll();
+// ---- backup_renphone.ino: Backup & Restore pengaturan ----
+void backupEnter(); void backupExit(); void drawBackup(LGFX_Sprite&); void backupTouch(int,int,bool,bool);
 
 // ---- homeedit_renphone.ino: Atur Home ----
 void homeEditEnter(); void homeEditExit(); void drawHomeEdit(LGFX_Sprite&); void homeEditTouch(int,int,bool,bool);
@@ -5797,7 +5808,7 @@ void remoteEnter(); void remoteExit(); void drawRemote(LGFX_Sprite&); void remot
 void remotePointerTick(bool,bool,int,int);
 void rcLoopPoll(); void rcRegisterRoutes(); bool rcApIsUp(); bool rcInputPoll(int*,int*); void rcFrameMark();
 
-AppDef apps[43] = {
+AppDef apps[44] = {
   { "Jam",        'J', 0, clockEnter,    clockExit,    drawClock,        clockTouch,    SCR_CLOCK },
   { "Kalkulator", '+', 0, calcEnter,     calcExit,     drawCalc,         calcTouch,     SCR_CALC },
   { "Orientasi3D", '3', 0, sensorEnter,   sensorExit,   drawSensor,       sensorTouch,   SCR_SENSOR },
@@ -5860,8 +5871,10 @@ AppDef apps[43] = {
   { "Telepon", 'p', 0, callEnter,   callExit,   drawCall,   callTouch,   SCR_CALL   },
   { "Kamera",  'k', 0, camEnter,    camExit,    drawCamera, camTouch,    SCR_CAMERA },
   { "Buku",    'b', 0, ebookEnter,  ebookExit,  drawEbook,  ebookTouch,  SCR_EBOOK  },
+  // ---- Backup & Restore: simpan/pulihkan pengaturan ke SD (disembunyikan dari grid Home; ada di Pengaturan) ----
+  { "Backup",  'z', 0x357C, backupEnter, backupExit, drawBackup, backupTouch, SCR_BACKUP },
 };
-#define APP_COUNT 43
+#define APP_COUNT 44
 
 // =============================================
 // NOTIFIKASI BADGE (BARU) -- angka kecil merah di pojok ikon app, mirip
@@ -6577,7 +6590,7 @@ uint8_t homeCatOfScreen(Screen sc){
     case SCR_APOD: case SCR_NEOWS: case SCR_EPIC: case SCR_NASAIMG:
       return 4; // NASA
     case SCR_SETTINGS: case SCR_BATTERY: case SCR_UPDATE: case SCR_HWMON: case SCR_SENSOR:
-    case SCR_MICLEVEL: case SCR_ABOUT: case SCR_OWNER: case SCR_HOMEEDIT: case SCR_REMOTE:
+    case SCR_MICLEVEL: case SCR_ABOUT: case SCR_OWNER: case SCR_HOMEEDIT: case SCR_REMOTE: case SCR_BACKUP:
       return 5; // Sistem
     default:
       return 3; // Alat (Jam, Kalkulator, Notepad, Canvas, AI Chat, Files, Neopixel, Pomodoro, Wake Word, Stopwatch, Chat, Telepon)
@@ -6597,7 +6610,7 @@ void homeLayoutRebuildVis(){
 }
 void homeLayoutDefault(){
   homeWMask=0x0F; homeWLayout=1; homeWBig=1;   // v132: ikut kembali ke awal saat Reset
-  for(int i=0;i<APP_COUNT;i++){ homeOrder[i]=i; homeHide[i]=(apps[i].screen==SCR_HOMEEDIT); }
+  for(int i=0;i<APP_COUNT;i++){ homeOrder[i]=i; homeHide[i]=(apps[i].screen==SCR_HOMEEDIT || apps[i].screen==SCR_BACKUP); }
   homeLayoutRebuildVis();
 }
 void homeLayoutLoad(){
@@ -8763,7 +8776,7 @@ int loadSpiOcPref(){
 // PENGATURAN ala iOS -- state layout & sentuhan (daftar scroll, tap-saat-lepas)
 // =====================================================================
 enum { SR_TITLE=0, SR_SECT, SR_BRIGHT, SR_THEME, SR_FONT, SR_ROT, SR_SPI, SR_SPIAPPLY,
-       SR_SCAN, SR_WIFI, SR_NONET, SR_SSID, SR_PASS, SR_CONNECT, SR_MPU, SR_TCAL, SR_OWNER, SR_ABOUT, SR_POWER, SR_HOMEEDIT };
+       SR_SCAN, SR_WIFI, SR_NONET, SR_SSID, SR_PASS, SR_CONNECT, SR_MPU, SR_TCAL, SR_OWNER, SR_ABOUT, SR_POWER, SR_HOMEEDIT, SR_BACKUP };
 #define SETT_MAXROWS 40
 int settRT[SETT_MAXROWS], settRG[SETT_MAXROWS], settRY[SETT_MAXROWS], settRH[SETT_MAXROWS], settRA[SETT_MAXROWS];
 const char* settRL[SETT_MAXROWS];
@@ -8822,7 +8835,8 @@ void settBuildLayout(){
   settAddRow(SR_TCAL,g,34,0,nullptr,y); g++;
 
   settAddRow(SR_SECT,0,26,0,"TENTANG",y);
-  settAddRow(SR_ABOUT,g,34,0,nullptr,y); g++;
+  settAddRow(SR_ABOUT,g,34,0,nullptr,y);
+  settAddRow(SR_BACKUP,g,34,0,nullptr,y); g++;
   settAddRow(SR_POWER,g,34,0,nullptr,y); g++;
 
   y+=14; settTotalH=y;
@@ -8853,7 +8867,7 @@ void settChevron(LGFX_Sprite& s,int cx,int cy,uint16_t col){ // ">" tipis
 bool settHasChip(int t){
   switch(t){
     case SR_BRIGHT: case SR_THEME: case SR_FONT: case SR_ROT: case SR_HOMEEDIT: case SR_SPI:
-    case SR_SCAN: case SR_SSID: case SR_PASS: case SR_MPU: case SR_TCAL: case SR_ABOUT: case SR_POWER:
+    case SR_SCAN: case SR_SSID: case SR_PASS: case SR_MPU: case SR_TCAL: case SR_ABOUT: case SR_POWER: case SR_BACKUP:
       return true;
   }
   return false;
@@ -8873,6 +8887,7 @@ void settChip(LGFX_Sprite& s,int type,int x,int y){ // x,y = pojok kiri-atas chi
     case SR_MPU:      col=CHIP_INDIGO; break;
     case SR_TCAL:     col=CHIP_RED;    break;
     case SR_ABOUT:    col=CHIP_GRAY;   break;
+    case SR_BACKUP:   col=CHIP_TEAL;   break;
     case SR_POWER:    col=CHIP_RED;    break;
     default: return;
   }
@@ -8925,6 +8940,10 @@ void settChip(LGFX_Sprite& s,int type,int x,int y){ // x,y = pojok kiri-atas chi
       break;
     case SR_TCAL:      // riak sentuh
       nyxAaCircle(s, cx,cy,2,W); nyxAaCircleRing(s, cx,cy,5,W); nyxAaCircleRing(s, cx,cy,8,W);
+      break;
+    case SR_BACKUP:    // panah turun ke baki
+      s.fillRect(cx-1,cy-8,3,8,W); s.fillTriangle(cx-5,cy-1,cx+5,cy-1,cx,cy+5,W);
+      s.fillRect(cx-7,cy+7,15,2,W);
       break;
     case SR_ABOUT:     // "i"
       nyxAaCircle(s, cx,cy-5,2,W); s.fillRect(cx-1,cy-1,3,8,W);
@@ -9107,6 +9126,10 @@ void drawSettings(LGFX_Sprite& s){
         s.setTextColor(T().subtext); s.setCursor(tx0,acy+6); s.print("Ketuk untuk atur profil");
         settChevron(s,xr-4,acy,T().subtext);
         } break;
+      case SR_BACKUP:
+        s.setTextColor(T().text); s.setCursor(xl,ty); s.print("Backup & Restore");
+        settChevron(s,xr-4,ty+4,T().subtext);
+        break;
       case SR_ABOUT:
         s.setTextColor(T().text); s.setCursor(xl,ty); s.print("About Phone");
         settChevron(s,xr-4,ty+4,T().subtext);
@@ -9210,6 +9233,8 @@ void settTap(int x,int y){
       navPush(SCR_OWNER); break;
     case SR_ABOUT:
       navPush(SCR_ABOUT); break;
+    case SR_BACKUP:
+      navPush(SCR_BACKUP); break;
     case SR_POWER:
       powerMenuShow(); needRedraw=true; break;
     case SR_MPU:
