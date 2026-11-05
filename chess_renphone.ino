@@ -308,8 +308,8 @@ static int chsCountPlies(const char* mv) {
 #define CHS_BUF       1536
 #define CHS_MAX_PLY   280
 #define CHS_RGB(r,g,b) ((uint16_t)((((r)&0xF8)<<8)|(((g)&0xFC)<<3)|(((b)&0xF8)>>3)))
-#define CHS_LIGHT     CHS_RGB(240,217,181)
-#define CHS_DARK      CHS_RGB(181,136,99)
+#define CHS_LIGHT     CHS_RGB(238,222,192)
+#define CHS_DARK      CHS_RGB(170,125,92)
 
 static SemaphoreHandle_t chsMx = nullptr;
 static TaskHandle_t      chsTask = nullptr;
@@ -355,6 +355,17 @@ static bool   chsPromoOn = false;
 static int    chsPromoFrom = 0, chsPromoTo = 0;
 static bool   chsConfirm = false;
 static unsigned long chsConfirmMs = 0;
+
+// ---- animasi langkah: bidak meluncur dari petak asal ke tujuan (ease-out), bidak yg dimakan memudar ----
+#define CHS_ANIM_MS 210
+static bool          chsAnimOn = false;
+static unsigned long chsAnimMs = 0;
+static int           chsAnimFrom = 0, chsAnimTo = 0;
+static int8_t        chsAnimCap = 0;            // bidak yg dimakan (bertanda), 0 = tidak ada
+static void chsAnimStart(int from, int to, int8_t cap) {
+  chsAnimFrom = from; chsAnimTo = to; chsAnimCap = cap;
+  chsAnimMs = millis(); chsAnimOn = true;
+}
 
 static void chsSetErr(const char* m) { strncpy(chsErr, m, sizeof(chsErr) - 1); chsErr[sizeof(chsErr) - 1] = 0; }
 
@@ -556,6 +567,8 @@ static void chsAdoptRemote(char* g) {
     else if (rl == ll && !strcmp(mv, chsMoves) && res[0] && !chsRes[0]) newer = true;
   }
   if (!newer || strlen(mv) > CHS_BUF - 40) return;
+  int8_t oldBd[64]; memcpy(oldBd, chsBd, 64);
+  int prevPly = (int)chsPly;
   int ply = chsReplay(mv);
   if (ply < 0) { chsReplay(chsMoves); return; }       // pesan rusak: kembalikan posisi lokal
   bool oppMoved = (gen == chsGenNo) && ply > (int)chsPly;
@@ -566,6 +579,8 @@ static void chsAdoptRemote(char* g) {
   chsLastFromTok(chsMoves);
   chsSel = -1; chsPromoOn = false; chsConfirm = false;
   chsUpdateEnd();
+  if (oppMoved && ply == prevPly + 1 && chsLast >= 0) chsAnimStart(chsLast & 63, (chsLast >> 6) & 63, oldBd[(chsLast >> 6) & 63]);
+  else chsAnimOn = false;
   if (oppMoved) vibTap();
   needRedraw = true;
 }
@@ -631,7 +646,9 @@ static void chsCommit(uint16_t m) {
   if (L + 8 > CHS_BUF - 40) return;
   if (L) chsMoves[L++] = ' ';
   strcpy(chsMoves + L, t);
+  int8_t capP = chsBd[(m >> 6) & 63];
   chsDo(m);
+  chsAnimStart(m & 63, (m >> 6) & 63, capP);
   chsPly++;
   chsLast = (m & 63) | (((m >> 6) & 63) << 6);
   chsSel = -1; chsPromoOn = false;
@@ -644,7 +661,7 @@ static void chsCommit(uint16_t m) {
 static void chsNewGameLocal() {
   chsReset();
   chsMoves[0] = 0; chsPly = 0; chsRes[0] = 0; chsLast = -1; chsSel = -1;
-  chsPromoOn = false; chsConfirm = false;
+  chsPromoOn = false; chsConfirm = false; chsAnimOn = false;
   chsUpdateEnd();
 }
 
@@ -711,9 +728,12 @@ void chessEnter() {
   chsReset(); chsEnd = 0;
 }
 
+static void chsFreeMasks();
 void chessExit() {
   chsActive = false;        // task melepas koneksi TLS sendiri
   chsConn = 0;
+  chsAnimOn = false;
+  chsFreeMasks();           // topeng bidak (PSRAM) dibebaskan saat keluar
 }
 
 void chessLoopPoll() {
@@ -721,6 +741,11 @@ void chessLoopPoll() {
   if (curScreen() != SCR_CHESS || chsScr != 1 || !chsMoves) return;
   chsProcessRx();
   if (chsConfirm && millis() - chsConfirmMs > 3500UL) { chsConfirm = false; needRedraw = true; }
+  if (chsAnimOn) {                                    // animasi langkah: redraw tiap loop + CPU dinaikkan sebentar
+    uiBoostKick();
+    needRedraw = true;
+    if (millis() - chsAnimMs >= CHS_ANIM_MS) chsAnimOn = false;
+  }
 }
 
 // ---------------------------------------------------------------------
@@ -778,7 +803,7 @@ static void chsOT(LGFX_Sprite& s, int x0, int y0, int x1, int y1, int x2, int y2
   s.drawLine(x0, y0, x1, y1, o); s.drawLine(x1, y1, x2, y2, o); s.drawLine(x2, y2, x0, y0, o);
 }
 
-static void chsDrawPiece(LGFX_Sprite& s, int t, bool white, int ox, int oy, int sq) {
+static void chsDrawPieceVec(LGFX_Sprite& s, int t, bool white, int ox, int oy, int sq) {
   uint16_t f = white ? CHS_RGB(252, 252, 252) : CHS_RGB(40, 40, 46);
   uint16_t o = white ? CHS_RGB(30, 30, 30)    : CHS_RGB(215, 215, 220);
   switch (t) {
@@ -826,6 +851,174 @@ static void chsDrawPiece(LGFX_Sprite& s, int t, bool white, int ox, int oy, int 
   }
 }
 
+// ---------------------------------------------------------------------
+// BIDAK HALUS: tiap bidak = gabungan primitif (lingkaran / kotak bulat / segitiga) di kotak 10x10.
+// Dirasterisasi SEKALI per ukuran petak dgn supersampling 4x4 -> tiga topeng 0..16 per bidak
+// (isi, garis tepi, detail). Menggambar = memadukan topeng dgn latar (tepi anti-alias, isi
+// bergradasi, bayangan lembut). Tabel berupa float biasa (tanpa struct) -> aman dari bug prototype.
+// Tiap primitif = 7 float: {jenis, v0..v5}. Akhir bidak = {99,...}.
+// ---------------------------------------------------------------------
+#define CHS_PK_CIRCLE 0    // v0=cx v1=cy v2=r
+#define CHS_PK_BOX    1    // v0=x0 v1=y0 v2=x1 v3=y1 v4=radius sudut
+#define CHS_PK_TRI    2    // v0..v5 = tiga titik
+#define CHS_PK_DOT    10   // detail: titik  v0=cx v1=cy v2=r
+#define CHS_PK_LINE   13   // detail: garis  v0=x0 v1=y0 v2=x1 v3=y1 v4=setengah tebal
+#define CHS_PK_END    99
+static const float CHS_PRIM[] = {
+  // 1 pion
+  1, 2.7f, 7.4f, 7.3f, 8.7f, 0.55f, 0,    2, 5.0f, 3.9f, 3.5f, 7.6f, 6.5f, 7.6f,
+  1, 3.7f, 3.9f, 6.3f, 4.6f, 0.30f, 0,    0, 5.0f, 3.0f, 1.55f, 0, 0, 0,
+  99, 0, 0, 0, 0, 0, 0,
+  // 2 kuda
+  1, 2.6f, 7.4f, 7.4f, 8.7f, 0.55f, 0,    2, 3.0f, 7.6f, 7.2f, 7.6f, 6.8f, 3.2f,
+  2, 6.8f, 3.2f, 3.0f, 7.6f, 3.9f, 4.6f,  2, 3.9f, 4.6f, 2.2f, 5.9f, 3.7f, 3.3f,
+  0, 5.2f, 3.1f, 1.7f, 0, 0, 0,           2, 5.0f, 1.2f, 6.6f, 2.5f, 4.7f, 2.7f,
+  10, 4.4f, 3.4f, 0.38f, 0, 0, 0,         13, 6.4f, 3.2f, 6.9f, 6.2f, 0.20f, 0,
+  99, 0, 0, 0, 0, 0, 0,
+  // 3 gajah
+  1, 2.6f, 7.4f, 7.4f, 8.7f, 0.55f, 0,    2, 5.0f, 3.4f, 3.3f, 7.6f, 6.7f, 7.6f,
+  0, 5.0f, 3.2f, 1.6f, 0, 0, 0,           2, 5.0f, 0.9f, 3.7f, 3.0f, 6.3f, 3.0f,
+  0, 5.0f, 1.0f, 0.65f, 0, 0, 0,          13, 4.3f, 3.9f, 5.7f, 2.4f, 0.22f, 0,
+  99, 0, 0, 0, 0, 0, 0,
+  // 4 benteng
+  1, 2.4f, 7.4f, 7.6f, 8.7f, 0.55f, 0,    1, 3.3f, 3.6f, 6.7f, 7.6f, 0.30f, 0,
+  1, 2.7f, 2.4f, 7.3f, 3.8f, 0.30f, 0,    1, 2.7f, 1.1f, 3.9f, 2.6f, 0.20f, 0,
+  1, 4.4f, 1.1f, 5.6f, 2.6f, 0.20f, 0,    1, 6.1f, 1.1f, 7.3f, 2.6f, 0.20f, 0,
+  99, 0, 0, 0, 0, 0, 0,
+  // 5 menteri
+  1, 2.4f, 7.4f, 7.6f, 8.7f, 0.55f, 0,    2, 5.0f, 2.9f, 2.9f, 7.6f, 7.1f, 7.6f,
+  2, 2.8f, 2.4f, 7.2f, 2.4f, 5.0f, 5.4f,  0, 2.8f, 2.2f, 0.80f, 0, 0, 0,
+  0, 5.0f, 1.4f, 0.90f, 0, 0, 0,          0, 7.2f, 2.2f, 0.80f, 0, 0, 0,
+  99, 0, 0, 0, 0, 0, 0,
+  // 6 raja
+  1, 2.4f, 7.4f, 7.6f, 8.7f, 0.55f, 0,    2, 5.0f, 3.7f, 2.9f, 7.6f, 7.1f, 7.6f,
+  0, 5.0f, 4.2f, 1.35f, 0, 0, 0,          1, 4.5f, 0.5f, 5.5f, 3.3f, 0.25f, 0,
+  1, 3.7f, 1.2f, 6.3f, 2.2f, 0.25f, 0,
+  99, 0, 0, 0, 0, 0, 0,
+};
+
+static uint8_t* chsMask = nullptr;     // [6 bidak][3 bidang: isi, tepi, detail][sq*sq], nilai 0..16
+static int      chsMaskSq = 0;
+static void chsFreeMasks() { if (chsMask) { free(chsMask); chsMask = nullptr; } chsMaskSq = 0; }
+
+static float chsSdSeg(float px, float py, float x0, float y0, float x1, float y1) {
+  float dx = x1 - x0, dy = y1 - y0, l2 = dx * dx + dy * dy;
+  float t = l2 > 0.0f ? ((px - x0) * dx + (py - y0) * dy) / l2 : 0.0f;
+  if (t < 0.0f) t = 0.0f; if (t > 1.0f) t = 1.0f;
+  float qx = x0 + t * dx - px, qy = y0 + t * dy - py;
+  return sqrtf(qx * qx + qy * qy);
+}
+
+// jarak bertanda ke satu primitif (negatif = di dalam)
+static float chsSdPrim(const float* q, float px, float py) {
+  switch ((int)q[0]) {
+    case CHS_PK_CIRCLE: case CHS_PK_DOT: {
+      float dx = px - q[1], dy = py - q[2];
+      return sqrtf(dx * dx + dy * dy) - q[3];
+    }
+    case CHS_PK_BOX: {                           // {jenis, x0, y0, x1, y1, radius}
+      float rad = q[5];
+      float cx = (q[1] + q[3]) * 0.5f, cy = (q[2] + q[4]) * 0.5f;
+      float hx = (q[3] - q[1]) * 0.5f - rad, hy = (q[4] - q[2]) * 0.5f - rad;
+      float qx = fabsf(px - cx) - hx, qy = fabsf(py - cy) - hy;
+      float mx = qx > 0.0f ? qx : 0.0f, my = qy > 0.0f ? qy : 0.0f;
+      float m = qx > qy ? qx : qy; if (m > 0.0f) m = 0.0f;
+      return sqrtf(mx * mx + my * my) + m - rad;
+    }
+    case CHS_PK_LINE:
+      return chsSdSeg(px, py, q[1], q[2], q[3], q[4]) - q[5];
+    default: {                                   // segitiga
+      float x0 = q[1], y0 = q[2], x1 = q[3], y1 = q[4], x2 = q[5], y2 = q[6];
+      float d0 = chsSdSeg(px, py, x0, y0, x1, y1), d1 = chsSdSeg(px, py, x1, y1, x2, y2), d2 = chsSdSeg(px, py, x2, y2, x0, y0);
+      float d = d0 < d1 ? d0 : d1; if (d2 < d) d = d2;
+      float c0 = (x1 - x0) * (py - y0) - (y1 - y0) * (px - x0);
+      float c1 = (x2 - x1) * (py - y1) - (y2 - y1) * (px - x1);
+      float c2 = (x0 - x2) * (py - y2) - (y0 - y2) * (px - x2);
+      bool in = (c0 >= 0 && c1 >= 0 && c2 >= 0) || (c0 <= 0 && c1 <= 0 && c2 <= 0);
+      return in ? -d : d;
+    }
+  }
+}
+
+static bool chsBuildMasks(int sq) {
+  if (chsMask && chsMaskSq == sq) return true;
+  chsFreeMasks();
+  size_t per = (size_t)sq * sq;
+  chsMask = (uint8_t*)heap_caps_malloc(per * 18, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  if (!chsMask) return false;
+  const float OW = 0.45f;                         // tebal garis tepi (satuan kotak 10)
+  const float* q = CHS_PRIM;
+  for (int t = 0; t < 6; t++) {
+    const float* e = q;
+    while ((int)e[0] != CHS_PK_END) e += 7;
+    uint8_t* fm = chsMask + (size_t)t * 3 * per;
+    uint8_t* om = fm + per;
+    uint8_t* dm = om + per;
+    for (int y = 0; y < sq; y++) for (int x = 0; x < sq; x++) {
+      int cf = 0, co = 0, cd = 0;
+      for (int sy = 0; sy < 4; sy++) for (int sx = 0; sx < 4; sx++) {
+        float u = ((float)x + ((float)sx + 0.5f) / 4.0f) * 10.0f / (float)sq;
+        float v = ((float)y + ((float)sy + 0.5f) / 4.0f) * 10.0f / (float)sq - 0.5f;   // geser bidak 0.5 turun: puncak tidak terpotong
+        float df = 1e9f, dd = 1e9f;
+        for (const float* r = q; r < e; r += 7) {
+          float d = chsSdPrim(r, u, v);
+          if ((int)r[0] >= CHS_PK_DOT) { if (d < dd) dd = d; } else if (d < df) df = d;
+        }
+        if (df <= 0.0f) cf++;
+        if (df <= OW) co++;
+        if (dd <= 0.0f && df <= 0.0f) cd++;
+      }
+      size_t i = (size_t)y * sq + x;
+      fm[i] = (uint8_t)cf; om[i] = (uint8_t)co; dm[i] = (uint8_t)cd;
+    }
+    q = e + 7;
+    yield();
+  }
+  chsMaskSq = sq;
+  return true;
+}
+
+// Gambar satu bidak (t = 1..6) di (ox,oy) berukuran sq. amul 0..255 = kepekatan (utk memudar).
+static void chsBlitPiece(LGFX_Sprite& s, int t, bool white, int ox, int oy, int sq, uint8_t amul) {
+  if (t < 1 || t > 6) return;
+  if (!chsBuildMasks(sq)) { chsDrawPieceVec(s, t, white, ox, oy, sq); return; }
+  size_t per = (size_t)sq * sq;
+  const uint8_t* fm = chsMask + (size_t)(t - 1) * 3 * per;
+  const uint8_t* om = fm + per;
+  const uint8_t* dm = om + per;
+  const uint16_t fcA = white ? CHS_RGB(255, 255, 255) : CHS_RGB(78, 78, 90);     // sisi terang (kiri-atas)
+  const uint16_t fcB = white ? CHS_RGB(206, 206, 218) : CHS_RGB(20, 20, 26);     // sisi gelap (kanan-bawah)
+  const uint16_t oc  = white ? CHS_RGB(44, 40, 48)    : CHS_RGB(228, 228, 236);
+  const int W = s.width(), H = s.height();
+  const int gd = 2 * sq - 2 > 0 ? 2 * sq - 2 : 1;
+  for (int y = 0; y < sq; y++) {
+    int py = oy + y;
+    if (py < 0 || py >= H) continue;
+    for (int x = 0; x < sq; x++) {
+      int px = ox + x;
+      if (px < 0 || px >= W) continue;
+      size_t i = (size_t)y * sq + x;
+      uint8_t fa = fm[i], ao = om[i], da = dm[i];
+      uint8_t sa = (y > 0) ? om[i - sq] : 0;                          // bayangan = tepi bergeser 1 px ke bawah
+      if (sa < 5) sa = 0;                                             // buang bintik bayangan yg terlalu tipis
+      if (!fa && !ao && !sa) continue;
+      uint16_t col = (uint16_t)s.readPixel(px, py);
+      if (!ao && sa) col = blend565(col, 0x0000, (uint8_t)(((uint32_t)sa * 80u * amul) / (16u * 255u)));
+      if (ao) col = blend565(col, oc, (uint8_t)(((uint32_t)ao * amul) / 16u));
+      if (fa) {
+        uint16_t fc = blend565(fcA, fcB, (uint8_t)(((x + y) * 255) / gd));
+        col = blend565(col, fc, (uint8_t)(((uint32_t)fa * amul) / 16u));
+      }
+      if (da) col = blend565(col, oc, (uint8_t)(((uint32_t)da * amul) / 16u));
+      s.drawPixel(px, py, col);
+    }
+  }
+}
+
+static void chsDrawPiece(LGFX_Sprite& s, int t, bool white, int ox, int oy, int sq) {
+  chsBlitPiece(s, t, white, ox, oy, sq, 255);
+}
+
 static int chsSqAt(int i, int j) {            // baris/kolom layar -> petak papan (membalik utk Hitam)
   bool flip = (chsRole == 2);
   int rank = flip ? i : 7 - i, file = flip ? 7 - j : j;
@@ -866,11 +1059,38 @@ static const char* chsEndText() {
   return "";
 }
 
+static void chsSqIJ(int q, int* i, int* j) {   // petak papan -> baris/kolom layar (kebalikan chsSqAt)
+  bool flip = (chsRole == 2);
+  int rank = q >> 3, file = q & 7;
+  *i = flip ? rank : 7 - rank;
+  *j = flip ? 7 - file : file;
+}
+
+// teks hasil singkat utk pil status di panel
+static const char* chsEndShort() {
+  int r = chsResultForMe();
+  if (r == 1) return "Kamu menang!";
+  if (r == -1) return "Kamu kalah";
+  if (r == 0) return "Seri";
+  return "Selesai";
+}
+
+static void chsChip(LGFX_Sprite& s, int cx, int cy, bool white, bool active) {   // penanda warna pemain
+  nyxAaCircle(s, cx, cy, 6, active ? (uint16_t)T().accent : blend565(T().surface, 0xFFFF, 70));
+  nyxAaCircle(s, cx, cy, 4, white ? CHS_RGB(252, 252, 252) : CHS_RGB(34, 34, 40));
+}
+
 static void chsDrawSetup(LGFX_Sprite& s) {
   bool typing = kbVisible && kbTarget == &chsRoomStr;
   s.setTextColor(T().accent); s.setTextSize(2); s.setCursor(10, 25); s.print("Catur Online");
   s.setTextSize(1); s.setTextColor(T().subtext); s.setCursor(10, 46); s.print("Dua HP isi kode room yang sama, lalu Mulai");
+  if (SCR_W >= SCR_H) {                                             // hiasan: raja + kuda di pojok kanan atas
+    int bx, by, sq, px, py, pw, ph; chsGeom(&bx, &by, &sq, &px, &py, &pw, &ph);
+    chsBlitPiece(s, 6, true,  SCR_W - 2 * sq - 12, 21, sq, 255);
+    chsBlitPiece(s, 2, false, SCR_W - sq - 8,      21, sq, 255);
+  }
   iosRR(s, 8, 62, SCR_W - 16, 34, 8, T().surface);
+  if (typing) nyxAaRRRing(s, 8, 62, SCR_W - 16, 34, 10, T().accent);
   s.setTextColor(T().subtext); s.setCursor(16, 67); s.print("Kode room");
   String shown = chsRoomStr; if (typing) shown += "_";
   s.setTextSize(2); s.setTextColor(chsRoomStr.length() || typing ? T().text : T().subtext);
@@ -891,19 +1111,33 @@ static void chsDrawSetup(LGFX_Sprite& s) {
 static void chsDrawGame(LGFX_Sprite& s) {
   int bx, by, sq, px, py, pw, ph;
   chsGeom(&bx, &by, &sq, &px, &py, &pw, &ph);
-  bool flip = (chsRole == 2);
   int kingSq = -1;
   if (chsEnd == 0 || chsEnd == 1) { if (chsInCheck()) kingSq = chsKingSq(chsWhite); }
-  uint16_t hiLast = 0xFFE0;
+  const uint16_t hiLast = 0xFFE0;
+
+  // ---- animasi langkah ----
+  bool anim = chsAnimOn;
+  float at = 1.0f;
+  if (anim) { at = (float)(millis() - chsAnimMs) / (float)CHS_ANIM_MS; if (at > 1.0f) at = 1.0f; }
+  float ae = 1.0f - (1.0f - at) * (1.0f - at) * (1.0f - at);        // ease-out cubic
+
+  // ---- bingkai papan + bayangan ----
+  nyxAaRR(s, bx - 2, by - 1, 8 * sq + 4, 8 * sq + 6, 7, blend565(T().bg, 0x0000, 130));
+  nyxAaRR(s, bx - 3, by - 3, 8 * sq + 6, 8 * sq + 6, 6, blend565(T().surface, 0xFFFF, 46));
+
   for (int i = 0; i < 8; i++) for (int j = 0; j < 8; j++) {
     int q = chsSqAt(i, j);
     int rank = q >> 3, file = q & 7;
     int x = bx + j * sq, y = by + i * sq;
     uint16_t c = ((rank + file) & 1) ? CHS_LIGHT : CHS_DARK;
-    if (chsLast >= 0 && (q == (chsLast & 63) || q == ((chsLast >> 6) & 63))) c = blend565(c, hiLast, 110);
+    if (chsLast >= 0 && (q == (chsLast & 63) || q == ((chsLast >> 6) & 63))) c = blend565(c, hiLast, 105);
     if (q == chsSel) c = blend565(c, T().accent, 150);
-    if (q == kingSq) c = blend565(c, T().danger, 190);
     s.fillRect(x, y, sq, sq, c);
+    if (q == kingSq) {                                               // cahaya merah lembut di bawah raja yang skak
+      nyxAaCircle(s, x + sq / 2, y + sq / 2, sq / 2 - 1, blend565(c, T().danger, 110));
+      nyxAaCircle(s, x + sq / 2, y + sq / 2, sq / 3,     blend565(c, T().danger, 190));
+    }
+    if (q == chsSel) { s.drawRect(x, y, sq, sq, T().accent); s.drawRect(x + 1, y + 1, sq - 2, sq - 2, blend565(c, T().accent, 160)); }
     if (sq >= 26) {
       s.setTextSize(1);
       s.setTextColor((rank + file) & 1 ? CHS_DARK : CHS_LIGHT);
@@ -912,16 +1146,45 @@ static void chsDrawGame(LGFX_Sprite& s) {
       if (j == 0) { cl[0] = (char)('1' + rank); s.setCursor(x + 2, y + 2); s.print(cl); }
     }
     int8_t p = chsBd[q];
-    if (p) chsDrawPiece(s, p > 0 ? p : -p, p > 0, x, y, sq);
+    if (p && !(anim && q == chsAnimTo)) {
+      int oy = (q == chsSel) ? y - 2 : y;                            // bidak terpilih "terangkat" 2 px
+      chsBlitPiece(s, p > 0 ? p : -p, p > 0, x, oy, sq, 255);
+    }
     if (chsSel >= 0 && chsHL[q]) {
-      uint16_t dc = blend565(c, T().good, 210);
-      if (p) { s.drawCircle(x + sq / 2, y + sq / 2, sq / 2 - 2, dc); s.drawCircle(x + sq / 2, y + sq / 2, sq / 2 - 3, dc); }
-      else s.fillCircle(x + sq / 2, y + sq / 2, sq / 6 + 1, dc);
+      uint16_t dc = blend565(c, T().good, 215);
+      if (p) { nyxAaCircleRing(s, x + sq / 2, y + sq / 2, sq / 2 - 2, dc); nyxAaCircleRing(s, x + sq / 2, y + sq / 2, sq / 2 - 3, dc); }
+      else nyxAaCircle(s, x + sq / 2, y + sq / 2, sq / 6 + 1, dc);
     }
   }
-  (void)flip;
 
-  if (chsPromoOn) {                                   // pilih bidak promosi
+  if (anim) {                                                        // lapisan animasi: yg dimakan memudar, bidak yg jalan meluncur
+    int fi, fj, ti, tj;
+    chsSqIJ(chsAnimFrom, &fi, &fj); chsSqIJ(chsAnimTo, &ti, &tj);
+    if (chsAnimCap) {
+      float fa = 1.0f - at / 0.6f;
+      if (fa > 0.0f) chsBlitPiece(s, chsAnimCap > 0 ? chsAnimCap : -chsAnimCap, chsAnimCap > 0, bx + tj * sq, by + ti * sq, sq, (uint8_t)(255.0f * fa));
+    }
+    int8_t mp = chsBd[chsAnimTo];
+    if (mp) {
+      int mx = bx + fj * sq + (int)floorf((float)((tj - fj) * sq) * ae + 0.5f);
+      int my = by + fi * sq + (int)floorf((float)((ti - fi) * sq) * ae + 0.5f);
+      chsBlitPiece(s, mp > 0 ? mp : -mp, mp > 0, mx, my, sq, 255);
+    }
+  }
+
+  if (chsEnd) {                                                      // banner hasil di tengah papan
+    char eb[40]; chsClip(chsEndText(), eb, (8 * sq - 24) / 6);
+    int tw = (int)strlen(eb) * 6 + 22, bh2 = 22;
+    int xx = bx + (8 * sq - tw) / 2, yy = by + 4 * sq - bh2 / 2;
+    int rr = chsResultForMe();
+    uint16_t ec = rr == 1 ? (uint16_t)T().good : rr == -1 ? (uint16_t)T().danger : (uint16_t)T().text;
+    nyxAaRR(s, xx, yy + 2, tw, bh2, 11, blend565(T().bg, 0x0000, 160));
+    nyxAaRR(s, xx, yy, tw, bh2, 11, blend565(T().surface, 0x0000, 70));
+    nyxAaRRRing(s, xx, yy, tw, bh2, 11, ec);
+    s.setTextSize(1); s.setTextColor(ec); s.setCursor(xx + 11, yy + 7); s.print(eb);
+  }
+
+  if (chsPromoOn) {                                                  // pilih bidak promosi
     int w = 4 * sq + 10, h = sq + 10, x0 = bx + 4 * sq - w / 2, y0 = by + 4 * sq - h / 2;
     iosRR(s, x0, y0, w, h, 8, T().surface);
     nyxAaRRRing(s, x0, y0, w, h, 8, T().accent);
@@ -933,49 +1196,50 @@ static void chsDrawGame(LGFX_Sprite& s) {
     }
   }
 
-  // ---- panel ----
-  iosRR(s, px, py, pw, ph, 8, T().surface);
+  // ---- panel info ----
+  drawGlassCard(s, px, py, pw, ph, 10, T().surface, 225);
   int gap = (ph >= 120) ? 15 : 11;
-  int maxCh = (pw - 12) / 6;
+  int maxCh = (pw - 14) / 6;
   char line[48], clipd[48];
-  int ty = py + 5;
   s.setTextSize(1);
-  // baris status
   uint16_t sc = T().accent;
   if (chsConn == 2)               { chsClip(chsErr[0] ? chsErr : "Terputus", line, 46); sc = T().danger; }
   else if (chsConn == 0 || !chsReady) { strcpy(line, "Menyambung..."); sc = T().subtext; }
   else if (chsRole == 0)          { strcpy(line, "Mencari kursi..."); sc = T().subtext; }
-  else if (chsRole == 3)          { strcpy(line, "Room penuh, pakai kode lain"); sc = T().danger; }
-  else if (!chsOppPid()[0])       { strcpy(line, "Menunggu lawan bergabung..."); sc = T().subtext; }
+  else if (chsRole == 3)          { strcpy(line, "Room penuh!"); sc = T().danger; }
+  else if (!chsOppPid()[0])       { strcpy(line, "Menunggu lawan..."); sc = T().subtext; }
   else if (chsEnd) {
-    strcpy(line, chsEndText());
+    strcpy(line, chsEndShort());
     int rr = chsResultForMe(); sc = rr == 1 ? T().good : rr == -1 ? T().danger : T().text;
   }
   else if (chsCanMove())          { strcpy(line, chsInCheck() ? "Giliranmu - SKAK!" : "Giliranmu"); sc = chsInCheck() ? T().danger : T().good; }
   else                            { strcpy(line, "Giliran lawan"); sc = T().subtext; }
   chsClip(line, clipd, maxCh);
-  s.setTextColor(sc); s.setCursor(px + 6, ty); s.print(clipd); ty += gap;
+  nyxAaRR(s, px + 5, py + 5, pw - 10, 15, 7, blend565(T().surface, sc, 60));     // pil status
+  s.setTextColor(sc); s.setCursor(px + 9, py + 9); s.print(clipd);
+  int ty = py + 5 + 15 + 6;
+  bool playing = chsEnd == 0 && chsOppPid()[0] != 0;
   // kamu
   bool meW = (chsRole != 2);
   const char* myN = chsRole == 2 ? chsBName : chsWName;
   char nb[40]; snprintf(nb, sizeof(nb), "Kamu : %s", myN[0] ? myN : (chatName.length() ? chatName.c_str() : "HP"));
-  chsClip(nb, clipd, maxCh - 3);
-  s.setTextColor(T().text); s.setCursor(px + 6, ty); s.print(clipd);
-  s.fillRect(px + pw - 14, ty, 8, 8, meW ? CHS_RGB(252, 252, 252) : CHS_RGB(40, 40, 46));
-  s.drawRect(px + pw - 14, ty, 8, 8, T().subtext);
+  chsClip(nb, clipd, (pw - 40) / 6);
+  chsChip(s, px + 12, ty + 4, meW, playing && (chsWhite == meW));
+  s.setTextColor(T().text); s.setCursor(px + 24, ty); s.print(clipd);
   ty += gap;
   // lawan
   const char* opN = chsRole == 2 ? chsWName : chsBName;
   snprintf(nb, sizeof(nb), "Lawan: %s", chsOppPid()[0] ? (opN[0] ? opN : "?") : "-");
-  chsClip(nb, clipd, maxCh - 3);
-  s.setTextColor(T().text); s.setCursor(px + 6, ty); s.print(clipd);
-  s.fillCircle(px + pw - 11, ty + 4, 3, chsOppOnline() ? (uint16_t)T().good : (uint16_t)T().subtext);
+  chsClip(nb, clipd, (pw - 40) / 6);
+  chsChip(s, px + 12, ty + 4, !meW, playing && (chsWhite != meW));
+  s.setTextColor(T().text); s.setCursor(px + 24, ty); s.print(clipd);
+  nyxAaCircle(s, px + pw - 10, ty + 4, 3, chsOppOnline() ? (uint16_t)T().good : blend565(T().surface, 0xFFFF, 80));
   ty += gap;
   // room + langkah
   char lt[8]; chsTokAt(chsPly - 1, lt);
   snprintf(nb, sizeof(nb), "Room %s  #%u %s", chsRoom, (unsigned)chsPly, lt);
   chsClip(nb, clipd, maxCh);
-  s.setTextColor(T().subtext); s.setCursor(px + 6, ty);
+  s.setTextColor(T().subtext); s.setCursor(px + 9, ty);
   s.print(clipd);
 
   // tombol
@@ -1000,17 +1264,17 @@ static void chsDrawGame(LGFX_Sprite& s) {
   if (rows >= 2 && pw >= 110) {
     int pairs = (chsPly + 1) / 2;
     int first = pairs - rows; if (first < 0) first = 0;
-    s.setTextColor(T().subtext);
     for (int k = first; k < pairs; k++) {
       char a[8], b[8]; chsTokAt(2 * k, a); chsTokAt(2 * k + 1, b);
       char ln[28]; snprintf(ln, sizeof(ln), "%2d. %-5s %-5s", k + 1, a, b);
+      s.setTextColor(k == pairs - 1 ? (uint16_t)T().text : (uint16_t)T().subtext);   // baris terakhir lebih terang
       s.setCursor(px + 8, ly0 + (k - first) * 10); s.print(ln);
     }
   }
 }
 
 void drawChess(LGFX_Sprite& s) {
-  s.fillSprite(T().bg);
+  if (chsMoves && chsScr == 0) iosBackdrop(s); else s.fillSprite(T().bg);
   drawStatusBar(s);
   if (!chsMoves) {
     s.setTextColor(T().danger); s.setTextSize(1); s.setCursor(10, 40); s.print("RAM tidak cukup untuk app Catur");

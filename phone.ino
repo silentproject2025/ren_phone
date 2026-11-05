@@ -20514,6 +20514,13 @@ void loop(){
         // saat !touched) supaya tombol virtual DOOM (gerak/tembak/dsb) ikut
         // "lepas" pas jari diangkat -- lihat doomTouch() di doom_renphone.ino.
         apps[idx].touch(tx,ty,held,newT);
+      } else if(curScreen()==SCR_BACKUP){
+        // FIX Backup: ketukan baru dieksekusi saat JARI DILEPAS (supaya geser-scroll tdk memicu tombol),
+        // jadi backupTouch() WAJIB dapat event lepas (held=false,isNew=false). Dispatch generik di bawah
+        // tidak pernah mengirimnya -> sebelumnya tombol Backup tidak bereaksi sama sekali.
+        if(newT) apps[idx].touch(tx,ty,false,true);
+        else if(touched && held) apps[idx].touch(tx,ty,true,false);
+        else if(!touched && wasTouched) apps[idx].touch(tx,ty,false,false);
       } else {
         if(newT) apps[idx].touch(tx,ty,false,true);
         else if(touched && held) apps[idx].touch(tx,ty,true,false);

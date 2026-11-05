@@ -336,16 +336,18 @@ static bool bkIn(int r, int x, int y) {
   return x >= bkR[r][0] && x < bkR[r][0] + bkR[r][2] && y >= bkR[r][1] && y < bkR[r][1] + bkR[r][3];
 }
 static void bkLayout() {
-  const int m = 8, bh = 32, tg = 36;
+  const int m = 8, bh = 34, tg = 34;
   const int y0 = 26 + 18;
-  const int bot = backY() - 4;
-  if (SCR_W > SCR_H) {                                  // lanskap: kontrol di kiri, daftar di kanan
-    int lw = (SCR_W - 3 * m) / 2, rx = m + lw + m, rw = SCR_W - rx - m;
-    bkSet(BKR_CREATE,  m, y0,                 lw, bh);
-    bkSet(BKR_TOGGLE,  m, y0 + bh + 8,        lw, tg);
-    bkSet(BKR_RESTORE, m, y0 + bh + 8 + tg + 14, lw, bh);
-    bkSet(BKR_DELETE,  m, y0 + 2 * bh + 8 + tg + 14 + 8, lw, bh);
-    bkSet(BKR_LIST,    rx, y0 + 16, rw, bot - (y0 + 16));
+  // Pil "Kembali" disembunyikan di app ini (swipe tepi kiri) -> ruang dasar layar dipakai penuh.
+  const int bot = backHidden() ? SCR_H - 18 : backY() - 4;
+  if (SCR_W > SCR_H) {                                  // lanskap: sakelar selebar layar, lalu tombol kiri + daftar kanan
+    int lw = 138, rx = m + lw + m, rw = SCR_W - rx - m;
+    int y1 = y0 + tg + 8;
+    bkSet(BKR_TOGGLE,  m, y0, SCR_W - 2 * m, tg);
+    bkSet(BKR_CREATE,  m, y1,                 lw, bh);
+    bkSet(BKR_RESTORE, m, y1 + (bh + 8),      lw, bh);
+    bkSet(BKR_DELETE,  m, y1 + 2 * (bh + 8),  lw, bh);
+    bkSet(BKR_LIST,    rx, y1 + 16, rw, bot - (y1 + 16));
   } else {                                              // potret: tumpuk, tombol aksi di dasar
     int w = SCR_W - 2 * m, bw = (w - 8) / 2, by = bot - bh;
     bkSet(BKR_CREATE,  m, y0,          w, bh);
@@ -363,6 +365,7 @@ static void bkLayout() {
 void backupEnter() {
   { Preferences p; p.begin(BK_NVS_NS, true); bkSecrets = p.getBool("sec", false); p.end(); }
   bkSel = -1; bkScroll = 0; bkArmKind = 0; bkRestartAt = 0; bkDown = false; bkMsg[0] = 0;
+  bkLayout();
   bkScan(false);
 }
 void backupExit() { bkDown = false; bkArmKind = 0; }
@@ -402,9 +405,14 @@ void drawBackup(LGFX_Sprite& s) {
   {
     int x = bkR[BKR_TOGGLE][0], y = bkR[BKR_TOGGLE][1], w = bkR[BKR_TOGGLE][2], h = bkR[BKR_TOGGLE][3];
     drawGlassCard(s, x, y, w, h, 12, T().surface, 215);
-    s.setTextColor(T().text);    s.setCursor(x + 12, y + 7);  s.print("Sertakan sandi & API key");
-    s.setTextColor(T().subtext); s.setCursor(x + 12, y + 20); s.print("File di SD tidak terenkripsi");
     int sw = 36, sh = 20, sx = x + w - 12 - sw, sy = y + (h - sh) / 2;
+    int tw = sx - (x + 12) - 8;                                   // lebar teks yg tersedia (tidak boleh masuk ke sakelar)
+    char t1[32], t2[32];
+    strcpy(t1, "Sertakan sandi & API key"); strcpy(t2, "File di SD tidak terenkripsi");
+    for (int L = (int)strlen(t1); L > 1 && s.textWidth(t1) > tw; ) t1[--L] = 0;
+    for (int L = (int)strlen(t2); L > 1 && s.textWidth(t2) > tw; ) t2[--L] = 0;
+    s.setTextColor(T().text);    s.setCursor(x + 12, y + 7);  s.print(t1);
+    s.setTextColor(T().subtext); s.setCursor(x + 12, y + 20); s.print(t2);
     nyxAaRR(s, sx, sy, sw, sh, 10, bkSecrets ? T().accent : blend565(T().surface2, 0xFFFF, 60));
     nyxAaCircle(s, bkSecrets ? sx + sw - 10 : sx + 10, sy + sh / 2, 8, 0xFFFF);
   }
