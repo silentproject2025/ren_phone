@@ -2337,23 +2337,23 @@ static uint16_t chsVwCol(float v, float m, uint16_t base) {      // biru/aksen =
 }
 
 struct ChsVwG { int ax, ay, aw, ah, bx, by, bw, bh, fy; };
-static ChsVwG chsVwGeom() {
-  ChsVwG g; g.ax = 4; g.ay = STATUS_H + 3; g.aw = SCR_W - 8; g.ah = backY() - 4 - g.ay;
+static ChsVwG chsg;                       // geometri layar Jaringan (global: tipe struct tidak boleh ada di signature fungsi -- prototipe otomatis Arduino ada di atas definisinya)
+static void chsVwGeom() {
+  ChsVwG& g = chsg; g.ax = 4; g.ay = STATUS_H + 3; g.aw = SCR_W - 8; g.ah = backY() - 4 - g.ay;
   g.bx = g.ax; g.by = g.ay + 22; g.bw = g.aw; g.fy = g.ay + g.ah - 20; g.bh = g.fy - 2 - g.by;
-  return g;
 }
 static void chsVwTabRect(int i, int* x, int* y, int* w, int* h) {     // i 0..2 = tab, 3 = chip Selisih
-  ChsVwG g = chsVwGeom(); int chip = 54, gap = 4; int tw = (g.aw - chip - 4 * gap) / 3;
+  chsVwGeom(); const ChsVwG& g = chsg; int chip = 54, gap = 4; int tw = (g.aw - chip - 4 * gap) / 3;
   *y = g.ay; *h = 18;
   if (i < 3) { *x = g.ax + i * (tw + gap); *w = tw; } else { *x = g.ax + g.aw - chip; *w = chip; }
 }
 
 // --- tab 0: diagram ---
-static inline int chsVwYIn(const ChsVwG& g, int k)  { return g.by + 4 + (g.bh - 8) * k / (CHS_NIN - 1); }
-static inline int chsVwYHid(const ChsVwG& g, int j) { return g.by + 4 + (g.bh - 8) * j / (CHS_NH - 1); }
-static inline int chsVwXi(const ChsVwG& g) { return g.bx + 62; }
-static inline int chsVwXo(const ChsVwG& g) { return g.bx + g.bw - 22; }
-static inline int chsVwXh(const ChsVwG& g) { return (chsVwXi(g) + chsVwXo(g)) / 2; }
+static inline int chsVwYIn(int k)  { return chsg.by + 4 + (chsg.bh - 8) * k / (CHS_NIN - 1); }
+static inline int chsVwYHid(int j) { return chsg.by + 4 + (chsg.bh - 8) * j / (CHS_NH - 1); }
+static inline int chsVwXi() { return chsg.bx + 62; }
+static inline int chsVwXo() { return chsg.bx + chsg.bw - 22; }
+static inline int chsVwXh() { return (chsVwXi() + chsVwXo()) / 2; }
 
 static void chsVwNeuronInfo(int j) {
   const int W1n = CHS_NH * CHS_NIN;
@@ -2367,30 +2367,31 @@ static void chsVwNeuronInfo(int j) {
            chsFeatName[b1], v1, chsFeatName[b2], v2);
 }
 
-static void chsVwDrawNet(LGFX_Sprite& s, const ChsVwG& g) {
+static void chsVwDrawNet(LGFX_Sprite& s) {
+  const ChsVwG& g = chsg;
   const int W1n = CHS_NH * CHS_NIN;
   float m = chsVwMax(0, W1n), mv = chsVwMax(W1n + CHS_NH, CHS_NP - 1);
-  int xi = chsVwXi(g), xh = chsVwXh(g), xo = chsVwXo(g), yo = g.by + g.bh / 2;
+  int xi = chsVwXi(), xh = chsVwXh(), xo = chsVwXo(), yo = g.by + g.bh / 2;
   uint16_t bg = T().bg, pc = T().accent, nc = T().danger;
   for (int j = 0; j < CHS_NH; j++) {                                   // garis masukan -> tersembunyi
     if (chsVwSel >= 0 && chsVwSel != j) continue;
-    int yh = chsVwYHid(g, j);
+    int yh = chsVwYHid(j);
     for (int k = 0; k < CHS_NIN; k++) {
       float w = chsVwVal(j * CHS_NIN + k), r = fabsf(w) / m; if (r > 1.0f) r = 1.0f;
       if (chsVwSel < 0 && r < 0.35f) continue;                         // diagram penuh: hanya yang kuat
-      s.drawLine(xi, chsVwYIn(g, k), xh, yh, blend565(bg, w >= 0 ? pc : nc, (uint8_t)(70 + 185 * r)));
+      s.drawLine(xi, chsVwYIn(k), xh, yh, blend565(bg, w >= 0 ? pc : nc, (uint8_t)(70 + 185 * r)));
     }
   }
   for (int j = 0; j < CHS_NH; j++) {                                   // garis tersembunyi -> skor
     float v = chsVwVal(W1n + CHS_NH + j), r = fabsf(v) / mv; if (r > 1.0f) r = 1.0f;
-    bool on = chsVwSel < 0 || chsVwSel == j; int yh = chsVwYHid(g, j);
+    bool on = chsVwSel < 0 || chsVwSel == j; int yh = chsVwYHid(j);
     uint16_t c = blend565(bg, v >= 0 ? pc : nc, on ? (uint8_t)(70 + 185 * r) : (uint8_t)40);
     s.drawLine(xh, yh, xo, yo, c); if (on && r > 0.6f) s.drawLine(xh, yh + 1, xo, yo + 1, c);
   }
   s.setTextSize(1);
   bool lab = (g.bh - 8) / (CHS_NIN - 1) >= 8;                          // label hanya kalau cukup lega
   for (int k = 0; k < CHS_NIN; k++) {
-    int y = chsVwYIn(g, k);
+    int y = chsVwYIn(k);
     s.fillCircle(xi, y, 2, k < CHS_NF ? (uint16_t)T().subtext : (uint16_t)T().accent2);
     if (!lab && (k & 1)) continue;
     char b[12]; chsClip(chsFeatName[k], b, 9);
@@ -2399,7 +2400,7 @@ static void chsVwDrawNet(LGFX_Sprite& s, const ChsVwG& g) {
     s.setCursor(xi - 6 - (int)strlen(b) * 6, y - 3); s.print(b);
   }
   for (int j = 0; j < CHS_NH; j++) {
-    int y = chsVwYHid(g, j);
+    int y = chsVwYHid(j);
     s.fillCircle(xh, y, 6, chsVwCol(chsVwVal(W1n + CHS_NH + j), mv, T().surface2));
     s.drawCircle(xh, y, 6, chsVwSel == j ? (uint16_t)T().text : (uint16_t)T().divider);
   }
@@ -2408,12 +2409,14 @@ static void chsVwDrawNet(LGFX_Sprite& s, const ChsVwG& g) {
 }
 
 // --- tab 1: peta bobot W1 (16 neuron x 26 fitur) ---
-static void chsVwHmGeom(const ChsVwG& g, int* x0, int* y0, int* cs) {
+static void chsVwHmGeom(int* x0, int* y0, int* cs) {
+  const ChsVwG& g = chsg;
   int c1 = (g.bw - 24) / CHS_NIN, c2 = (g.bh - 10) / CHS_NH; int c = c1 < c2 ? c1 : c2; if (c < 4) c = 4;
   *cs = c; *x0 = g.bx + 22; *y0 = g.by + 10;
 }
-static void chsVwDrawHm(LGFX_Sprite& s, const ChsVwG& g) {
-  int x0, y0, cs; chsVwHmGeom(g, &x0, &y0, &cs);
+static void chsVwDrawHm(LGFX_Sprite& s) {
+  const ChsVwG& g = chsg;
+  int x0, y0, cs; chsVwHmGeom(&x0, &y0, &cs);
   float m = chsVwMax(0, CHS_NH * CHS_NIN);
   s.setTextSize(1); s.setTextColor(T().subtext);
   for (int k = 0; k < CHS_NIN; k++) {
@@ -2429,18 +2432,20 @@ static void chsVwDrawHm(LGFX_Sprite& s, const ChsVwG& g) {
 }
 
 // --- tab 2: tabel kebiasaan petak (6 bidak tujuan + petak asal), Putih di bawah ---
-static void chsVwBdGeom(const ChsVwG& g, int i, int* x, int* y, int* cs) {
+static void chsVwBdGeom(int i, int* x, int* y, int* cs) {
+  const ChsVwG& g = chsg;
   int cols = (g.bw >= g.bh) ? 4 : 2, rows = (7 + cols - 1) / cols, gap = 8, lab = 10;
   int c1 = (g.bw - (cols - 1) * gap) / (cols * 8), c2 = (g.bh - rows * (lab + 2)) / (rows * 8);
   int c = c1 < c2 ? c1 : c2; if (c < 3) c = 3;
   int ox = g.bx + (g.bw - (cols * 8 * c + (cols - 1) * gap)) / 2;
   *cs = c; *x = ox + (i % cols) * (8 * c + gap); *y = g.by + (i / cols) * (8 * c + lab + 2) + lab;
 }
-static void chsVwDrawBd(LGFX_Sprite& s, const ChsVwG& g) {
+static void chsVwDrawBd(LGFX_Sprite& s) {
+  const ChsVwG& g = chsg;
   float m = 1e-6f; for (int i = 0; i < CHS_HAB_N; i++) { float v = fabsf(chsHab[i]); if (v > m) m = v; }
   s.setTextSize(1);
   for (int p = 0; p < 7; p++) {
-    int x, y, c; chsVwBdGeom(g, p, &x, &y, &c);
+    int x, y, c; chsVwBdGeom(p, &x, &y, &c);
     s.setTextColor(T().subtext); chsPrintC(s, x, 8 * c, y - 10, chsPcName[p]);
     for (int r = 0; r < 8; r++) for (int f = 0; f < 8; f++) {
       uint16_t base = (((r + f) & 1) == 0) ? (uint16_t)T().surface2 : (uint16_t)T().surface;
@@ -2451,7 +2456,7 @@ static void chsVwDrawBd(LGFX_Sprite& s, const ChsVwG& g) {
 }
 
 static void chsDrawNet(LGFX_Sprite& s) {
-  ChsVwG g = chsVwGeom();
+  chsVwGeom(); const ChsVwG& g = chsg;
   static const char* const tn[3] = { "Jaringan", "Bobot", "Petak" };
   s.setTextSize(1);
   for (int i = 0; i < 3; i++) {
@@ -2462,7 +2467,7 @@ static void chsDrawNet(LGFX_Sprite& s) {
   { int x, y, w, h; chsVwTabRect(3, &x, &y, &w, &h);
     iosRR(s, x, y, w, h, 7, chsVwDelta ? (uint16_t)T().accent : (uint16_t)T().surface2);
     s.setTextColor(chsVwDelta ? (uint16_t)T().bg : (chsVwInit ? (uint16_t)T().text : (uint16_t)T().subtext)); chsPrintC(s, x, w, y + 5, "Selisih"); }
-  if (chsVw == 0) chsVwDrawNet(s, g); else if (chsVw == 1) chsVwDrawHm(s, g); else chsVwDrawBd(s, g);
+  if (chsVw == 0) chsVwDrawNet(s); else if (chsVw == 1) chsVwDrawHm(s); else chsVwDrawBd(s);
   char b[96], ln[96];
   if (chsVwInfo[0]) strncpy(b, chsVwInfo, sizeof(b) - 1), b[sizeof(b) - 1] = 0;
   else strcpy(b, chsVw == 0 ? "Ketuk neuron (lingkaran tengah) utk detail" : chsVw == 1 ? "Ketuk sel utk nilainya" : "Ketuk petak utk nilainya");
@@ -2486,20 +2491,20 @@ static void chsTouchNet(int x, int y, bool isNew) {
       chsVwSel = -1; chsVwCell = -1; chsVwInfo[0] = 0; needRedraw = true; return;
     }
   }
-  ChsVwG g = chsVwGeom();
+  chsVwGeom(); const ChsVwG& g = chsg;
   if (chsVw == 0) {
     int j = ((y - (g.by + 4)) * (CHS_NH - 1) + (g.bh - 8) / 2) / (g.bh - 8);
-    if (y < g.by || j < 0 || j >= CHS_NH || chsAbsI(x - chsVwXh(g)) > 14) return;
+    if (y < g.by || j < 0 || j >= CHS_NH || chsAbsI(x - chsVwXh()) > 14) return;
     if (chsVwSel == j) { chsVwSel = -1; chsVwInfo[0] = 0; } else { chsVwSel = (int8_t)j; chsVwNeuronInfo(j); }
   } else if (chsVw == 1) {
-    int x0, y0, cs; chsVwHmGeom(g, &x0, &y0, &cs);
+    int x0, y0, cs; chsVwHmGeom(&x0, &y0, &cs);
     int k = (x - x0) / cs, j = (y - y0) / cs;
     if (x < x0 || y < y0 || k >= CHS_NIN || j >= CHS_NH) return;
     chsVwCell = (int16_t)(j * CHS_NIN + k);
     snprintf(chsVwInfo, sizeof(chsVwInfo), "H%d x %s: %+.3f", j + 1, chsFeatName[k], chsVwVal(chsVwCell));
   } else {
     for (int p = 0; p < 7; p++) {
-      int bx, by, c; chsVwBdGeom(g, p, &bx, &by, &c);
+      int bx, by, c; chsVwBdGeom(p, &bx, &by, &c);
       if (x < bx || y < by || x >= bx + 8 * c || y >= by + 8 * c) continue;
       int f = (x - bx) / c, r = 7 - (y - by) / c; chsVwCell = (int16_t)(p * 64 + r * 8 + f);
       snprintf(chsVwInfo, sizeof(chsVwInfo), "%s %c%d: %+.2f", p < 6 ? chsPcName[p] : "Asal", 'a' + f, r + 1, chsHab[chsVwCell]);

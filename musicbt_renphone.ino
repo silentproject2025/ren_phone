@@ -1640,13 +1640,13 @@ static const char* const RYV_FEAT[RY_NF] = { "skip 10m", "skip 2m", "tuntas", "l
 static const char* const RYV_AX[3] = { "energi", "cerah", "dinamik" };
 
 struct RyvG { int ax, ay, aw, ah, bx, by, bw, bh, fy; };
-static RyvG ryvGeom() {
-  RyvG g; g.ax = 8; g.aw = SCR_W - 16; g.ay = mHdrY; g.ah = backY() - 4 - g.ay;
+static RyvG ryg;                          // geometri layar RYNE (global: tipe struct/RyneEngine tidak boleh ada di signature fungsi -- prototipe otomatis Arduino ada di atas definisinya)
+static void ryvGeom() {
+  RyvG& g = ryg; g.ax = 8; g.aw = SCR_W - 16; g.ay = mHdrY; g.ah = backY() - 4 - g.ay;
   g.bx = g.ax; g.bw = g.aw; g.by = g.ay + 22; g.fy = g.ay + g.ah - 20; g.bh = g.fy - 2 - g.by;
-  return g;
 }
 static void ryvTabRect(int i, int* x, int* y, int* w, int* h) {
-  RyvG g = ryvGeom(); int gap = 4, tw = (g.aw - 2 * gap) / 3;
+  ryvGeom(); const RyvG& g = ryg; int gap = 4, tw = (g.aw - 2 * gap) / 3;
   *x = g.ax + i * (tw + gap); *y = g.ay; *w = tw; *h = 18;
 }
 static bool ryvChipRect(int* x, int* w) {            // chip "RYNE" di header pemutar (kalau muat)
@@ -1683,7 +1683,8 @@ static void ryvBars(LGFX_Sprite& s, int x, int y, int w, int h, int n, const cha
   }
 }
 
-static void ryvDrawVibe(LGFX_Sprite& s, const RyvG& g, RyneEngine* R) {
+static void ryvDrawVibe(LGFX_Sprite& s) {
+  const RyvG& g = ryg; RyneEngine* R = ryne;
   float pv[RY_NV], ft[RY_NF]; memcpy(pv, R->pv, sizeof(pv)); memcpy(ft, R->feat, sizeof(ft));
   int top = R->vibeTop(); if (top < 0 || top >= RY_NV) top = 0;
   s.setTextSize(1); s.setTextColor(T().accent);
@@ -1702,19 +1703,22 @@ static void ryvDrawVibe(LGFX_Sprite& s, const RyvG& g, RyneEngine* R) {
 }
 
 // --- tab Selera: mu = Ainv * bv, 3 sumbu x (8 vibe + umum) ---
-static void ryvMu(RyneEngine* R, float* mu) {
+static void ryvMu(float* mu) {
+  RyneEngine* R = ryne;
   for (int i = 0; i < RY_D; i++) { float a = 0; for (int j = 0; j < RY_D; j++) a += R->Ainv[i * RY_D + j] * R->bv[j]; mu[i] = (a == a) ? a : 0.f; }
 }
 static inline int ryvIdx(int r, int c) { return c < RY_NV ? 4 + 8 * r + c : 1 + r; }
-static void ryvGridGeom(const RyvG& g, int* x0, int* yA, int* yB, int* cw, int* rh) {
+static void ryvGridGeom(int* x0, int* yA, int* yB, int* cw, int* rh) {
+  const RyvG& g = ryg;
   int c = (g.bw - 52) / 9, h = (g.bh - 34) / 6; if (h > 22) h = 22; if (h < 8) h = 8;
   *cw = c; *rh = h; *x0 = g.bx + 52; *yA = g.by + 20; *yB = *yA + 3 * h + 14;
 }
-static void ryvDrawTaste(LGFX_Sprite& s, const RyvG& g, RyneEngine* R) {
-  float mu[RY_D]; ryvMu(R, mu);
+static void ryvDrawTaste(LGFX_Sprite& s) {
+  const RyvG& g = ryg; RyneEngine* R = ryne;
+  float mu[RY_D]; ryvMu(mu);
   float mA = 1e-3f, sMax = 1e-3f, sd[RY_D];
   for (int i = 0; i < RY_D; i++) { float v = fabsf(mu[i]); if (v > mA && i > 0) mA = v; float d = R->Ainv[i * RY_D + i]; sd[i] = d > 0 ? sqrtf(d) : 0.f; if (i > 0 && sd[i] > sMax) sMax = sd[i]; }
-  int x0, yA, yB, cw, rh; ryvGridGeom(g, &x0, &yA, &yB, &cw, &rh);
+  int x0, yA, yB, cw, rh; ryvGridGeom(&x0, &yA, &yB, &cw, &rh);
   s.setTextSize(1); s.setTextColor(T().accent); s.setCursor(g.bx, g.by); s.print("Selera: biru = suka, merah = tidak");
   s.setTextColor(T().subtext);
   for (int c = 0; c < 9; c++) { char h[4] = "Um"; if (c < RY_NV) { memcpy(h, RY_VIBE_NAME[c], 3); h[3] = 0; } s.setCursor(x0 + c * cw + (cw - (int)strlen(h) * 6) / 2, g.by + 11); s.print(h); }
@@ -1736,12 +1740,14 @@ static void ryvDrawTaste(LGFX_Sprite& s, const RyvG& g, RyneEngine* R) {
 }
 
 // --- tab Lagu: peta energi x kecerahan + daftar paling disukai ---
-static void ryvScatterGeom(const RyvG& g, int* px, int* py, int* ps, int* lx, int* ly, int* lw, int* lh) {
+static void ryvScatterGeom(int* px, int* py, int* ps, int* lx, int* ly, int* lw, int* lh) {
+  const RyvG& g = ryg;
   if (g.bw >= g.bh) { int p = g.bh - 12; if (p > g.bw / 2 - 6) p = g.bw / 2 - 6; *ps = p; *px = g.bx + 2; *py = g.by + 11; *lx = g.bx + p + 14; *ly = g.by; *lw = g.bw - p - 14; *lh = g.bh; }
   else { int p = g.bw - 4, p2 = g.bh * 55 / 100; if (p2 < p) p = p2; *ps = p; *px = g.bx + (g.bw - p) / 2; *py = g.by + 11; *lx = g.bx; *ly = *py + p + 4; *lw = g.bw; *lh = g.by + g.bh - *ly; }
 }
-static void ryvDrawSongs(LGFX_Sprite& s, const RyvG& g, RyneEngine* R) {
-  int px, py, ps, lx, ly, lw, lh; ryvScatterGeom(g, &px, &py, &ps, &lx, &ly, &lw, &lh);
+static void ryvDrawSongs(LGFX_Sprite& s) {
+  const RyvG& g = ryg; RyneEngine* R = ryne;
+  int px, py, ps, lx, ly, lw, lh; ryvScatterGeom(&px, &py, &ps, &lx, &ly, &lw, &lh);
   int n = R->nPl; if (n > RY_MAXPL) n = RY_MAXPL; if (n < 0) n = 0;
   s.setTextSize(1); s.setTextColor(T().accent); s.setCursor(g.bx, g.by); s.print("Lagu: x = energi, y = kecerahan");
   s.drawRect(px, py, ps, ps, T().divider);
@@ -1776,7 +1782,7 @@ static void ryvDrawSongs(LGFX_Sprite& s, const RyvG& g, RyneEngine* R) {
 }
 
 static void ryvDraw(LGFX_Sprite& s) {
-  RyvG g = ryvGeom();
+  ryvGeom(); const RyvG& g = ryg;
   static const char* const tn[3] = { "Vibe", "Selera", "Lagu" };
   s.setTextSize(1);
   for (int i = 0; i < 3; i++) {
@@ -1790,7 +1796,7 @@ static void ryvDraw(LGFX_Sprite& s) {
     s.setCursor(g.bx, g.by + 22); s.print("Buka Daftar & putar lagu dulu.");
     return;
   }
-  if (ryvTab == 0) ryvDrawVibe(s, g, R); else if (ryvTab == 1) ryvDrawTaste(s, g, R); else ryvDrawSongs(s, g, R);
+  if (ryvTab == 0) ryvDrawVibe(s); else if (ryvTab == 1) ryvDrawTaste(s); else ryvDrawSongs(s);
   char b[96], ln[96];
   if (ryvInfo[0]) { strncpy(b, ryvInfo, sizeof(b) - 1); b[sizeof(b) - 1] = 0; }
   else if (ryvTab == 0) { int t = R->vibeTop(); if (t < 0 || t >= RY_NV) t = 0; snprintf(b, sizeof(b), "Vibe: %s, yakin %d%%", RY_VIBE_NAME[t], (int)(R->vibeConf() * 100.f + 0.5f)); }
@@ -1809,19 +1815,19 @@ static void ryvTouch(int x, int y) {
     if (x >= tx && x < tx + tw && y >= ty && y < ty + th + 4) { ryvTab = (uint8_t)i; ryvCell = -1; ryvInfo[0] = 0; vibTap(); needRedraw = true; return; }
   }
   RyneEngine* R = ryne; if (!R) return;
-  RyvG g = ryvGeom();
+  ryvGeom();
   if (ryvTab == 1) {
-    int x0, yA, yB, cw, rh; ryvGridGeom(g, &x0, &yA, &yB, &cw, &rh);
+    int x0, yA, yB, cw, rh; ryvGridGeom(&x0, &yA, &yB, &cw, &rh);
     int c = (x - x0) / cw; if (x < x0 || c < 0 || c >= 9) return;
     int part = -1, r = 0;
     if (y >= yA && y < yA + 3 * rh) { part = 0; r = (y - yA) / rh; } else if (y >= yB && y < yB + 3 * rh) { part = 1; r = (y - yB) / rh; }
     if (part < 0) return;
-    float mu[RY_D]; ryvMu(R, mu); int k = ryvIdx(r, c); float d = R->Ainv[k * RY_D + k]; if (d < 0) d = 0;
+    float mu[RY_D]; ryvMu(mu); int k = ryvIdx(r, c); float d = R->Ainv[k * RY_D + k]; if (d < 0) d = 0;
     ryvCell = (int16_t)(part * 100 + r * 10 + c);
     snprintf(ryvInfo, sizeof(ryvInfo), "%s x %s: %+.2f (+-%.2f)", c < RY_NV ? RY_VIBE_NAME[c] : "Umum", RYV_AX[r], mu[k], sqrtf(d));
     needRedraw = true;
   } else if (ryvTab == 2) {
-    int px, py, ps, lx, ly, lw, lh; ryvScatterGeom(g, &px, &py, &ps, &lx, &ly, &lw, &lh);
+    int px, py, ps, lx, ly, lw, lh; ryvScatterGeom(&px, &py, &ps, &lx, &ly, &lw, &lh);
     int n = R->nPl; if (n > RY_MAXPL) n = RY_MAXPL; int bi = -1, bd = 14 * 14;
     for (int i = 0; i < n; i++) {
       int e = R->idx2ent[i]; if (e < 0 || e >= RY_MAXENT) continue;
