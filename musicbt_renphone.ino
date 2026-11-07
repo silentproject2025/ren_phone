@@ -1391,11 +1391,13 @@ static void musDrawEq(LGFX_Sprite& s, bool playing) {
   }
 }
 
+static bool ryvChipRect(int* x, int* w);      // definisi di blok layar RYNE (bawah)
 static void musDrawChips(LGFX_Sprite& s) {
   musPanel(s, mDafX, mHdrY, mDafW, mChipH, 9, T().surface2, 210);
   for (int i = 0; i < 3; i++) s.fillRect(mDafX + 10, mHdrY + 5 + i * 4, 10, 2, T().text);
   s.setTextSize(1); s.setTextColor(T().text);
   s.setCursor(mDafX + 26, mHdrY + 5); s.print("Daftar");
+  { int cx, cw; if (ryvChipRect(&cx, &cw)) { musPanel(s, cx, mHdrY, cw, mChipH, 9, T().surface2, 210); s.setTextColor(T().accent); s.setCursor(cx + (cw - 24) / 2, mHdrY + 5); s.print("RYNE"); s.setTextColor(T().text); } }
 
   const char* st; uint16_t col;
   if (!musCamAlive)        { st = "Modul BT mati";     col = T().danger; }
@@ -1624,11 +1626,223 @@ static void musDrawScan(LGFX_Sprite& s) {
   musDrawLabel(s, "Pemutar", 12 + bw2 + 6, mBotY, bw2, mBotH, T().bg);
 }
 
+// =====================================================================
+//  LAYAR RYNE (musPage == 3): lihat "otak" RYNE v2 langsung di HP
+//    Tab Vibe  : peluang 8 vibe + 13 sinyal (fitur) yang dipakai filter vibe
+//    Tab Selera: bobot bandit (energi/kecerahan/dinamika x 8 vibe) + ketidakpastiannya
+//    Tab Lagu  : peta lagu (energi x kecerahan), warna = skor suka, + daftar paling disukai
+//  Membaca engine langsung (tanpa kunci) -> hanya untuk tampilan; semua indeks dibatasi.
+// =====================================================================
+static uint8_t ryvTab = 0;
+static int16_t ryvCell = -1;
+static char    ryvInfo[96] = "";
+static const char* const RYV_FEAT[RY_NF] = { "skip 10m", "skip 2m", "tuntas", "lama", "volume", "tren vol", "ulang-1", "energi", "cerah", "dinamik", "malam", "interaksi", "|tren vol|" };
+static const char* const RYV_AX[3] = { "energi", "cerah", "dinamik" };
+
+struct RyvG { int ax, ay, aw, ah, bx, by, bw, bh, fy; };
+static RyvG ryvGeom() {
+  RyvG g; g.ax = 8; g.aw = SCR_W - 16; g.ay = mHdrY; g.ah = backY() - 4 - g.ay;
+  g.bx = g.ax; g.bw = g.aw; g.by = g.ay + 22; g.fy = g.ay + g.ah - 20; g.bh = g.fy - 2 - g.by;
+  return g;
+}
+static void ryvTabRect(int i, int* x, int* y, int* w, int* h) {
+  RyvG g = ryvGeom(); int gap = 4, tw = (g.aw - 2 * gap) / 3;
+  *x = g.ax + i * (tw + gap); *y = g.ay; *w = tw; *h = 18;
+}
+static bool ryvChipRect(int* x, int* w) {            // chip "RYNE" di header pemutar (kalau muat)
+  *x = mDafX + mDafW + 6; *w = 46; return *x + *w + 6 <= mTwsX;
+}
+static uint16_t ryvCol(float v, float m, uint16_t base) {   // positif = aksen, negatif = merah
+  float a = sqrtf(fabsf(v) / (m > 1e-6f ? m : 1e-6f)); if (a > 1.0f) a = 1.0f;
+  return blend565(base, v >= 0 ? (uint16_t)T().accent : (uint16_t)T().danger, (uint8_t)(a * 255.0f));
+}
+
+// deretan batang: unipolar (peluang) atau bipolar (-1..1)
+static void ryvBars(LGFX_Sprite& s, int x, int y, int w, int h, int n, const char* const* names, const float* v, bool bipolar, int hi) {
+  int lw = 66, rowH = h / n; if (rowH < 8) rowH = 8;
+  int bx = x + lw, bw = w - lw - (bipolar ? 0 : 28); if (bw < 10) bw = 10;
+  s.setTextSize(1);
+  for (int i = 0; i < n; i++) {
+    int ry = y + i * rowH; uint16_t tc = (hi == i) ? (uint16_t)T().text : (uint16_t)T().subtext;
+    s.setTextColor(tc); s.setCursor(x, ry + (rowH - 8) / 2); s.print(names[i]);
+    int bh = rowH - 3; if (bh > 8) bh = 8; int by = ry + (rowH - bh) / 2;
+    s.fillRect(bx, by, bw, bh, T().surface);
+    float f = v[i]; if (!(f == f)) f = 0;
+    if (bipolar) {
+      if (f > 1) f = 1; if (f < -1) f = -1;
+      int half = bw / 2, cx = bx + half, len = (int)(fabsf(f) * half); if (len < 1 && f != 0) len = 1;
+      if (len > 0) s.fillRect(f >= 0 ? cx : cx - len, by, len, bh, f >= 0 ? (uint16_t)T().accent : (uint16_t)T().danger);
+      s.drawLine(cx, by - 1, cx, by + bh, T().divider);
+    } else {
+      if (f > 1) f = 1; if (f < 0) f = 0;
+      int len = (int)(f * bw + 0.5f);
+      if (len > 0) s.fillRect(bx, by, len, bh, musHsv(i * 45.f, 0.7f, hi == i ? 0.98f : 0.7f));
+      char b[8]; snprintf(b, sizeof(b), "%d%%", (int)(f * 100.f + 0.5f));
+      s.setTextColor(tc); s.setCursor(bx + bw + 3, ry + (rowH - 8) / 2); s.print(b);
+    }
+  }
+}
+
+static void ryvDrawVibe(LGFX_Sprite& s, const RyvG& g, RyneEngine* R) {
+  float pv[RY_NV], ft[RY_NF]; memcpy(pv, R->pv, sizeof(pv)); memcpy(ft, R->feat, sizeof(ft));
+  int top = R->vibeTop(); if (top < 0 || top >= RY_NV) top = 0;
+  s.setTextSize(1); s.setTextColor(T().accent);
+  if (g.bw >= g.bh) {
+    int hw = (g.bw - 12) / 2, x2 = g.bx + hw + 12;
+    s.setCursor(g.bx, g.by); s.print("Peluang vibe"); s.setCursor(x2, g.by); s.print("Sinyal (fitur)");
+    ryvBars(s, g.bx, g.by + 11, hw, g.bh - 11, RY_NV, RY_VIBE_NAME, pv, false, top);
+    ryvBars(s, x2, g.by + 11, hw, g.bh - 11, RY_NF, RYV_FEAT, ft, true, -1);
+  } else {
+    int h1 = (g.bh - 22) * RY_NV / (RY_NV + RY_NF);
+    s.setCursor(g.bx, g.by); s.print("Peluang vibe");
+    ryvBars(s, g.bx, g.by + 11, g.bw, h1, RY_NV, RY_VIBE_NAME, pv, false, top);
+    s.setTextColor(T().accent); s.setCursor(g.bx, g.by + 13 + h1); s.print("Sinyal (fitur)");
+    ryvBars(s, g.bx, g.by + 24 + h1, g.bw, g.bh - 24 - h1, RY_NF, RYV_FEAT, ft, true, -1);
+  }
+}
+
+// --- tab Selera: mu = Ainv * bv, 3 sumbu x (8 vibe + umum) ---
+static void ryvMu(RyneEngine* R, float* mu) {
+  for (int i = 0; i < RY_D; i++) { float a = 0; for (int j = 0; j < RY_D; j++) a += R->Ainv[i * RY_D + j] * R->bv[j]; mu[i] = (a == a) ? a : 0.f; }
+}
+static inline int ryvIdx(int r, int c) { return c < RY_NV ? 4 + 8 * r + c : 1 + r; }
+static void ryvGridGeom(const RyvG& g, int* x0, int* yA, int* yB, int* cw, int* rh) {
+  int c = (g.bw - 52) / 9, h = (g.bh - 34) / 6; if (h > 22) h = 22; if (h < 8) h = 8;
+  *cw = c; *rh = h; *x0 = g.bx + 52; *yA = g.by + 20; *yB = *yA + 3 * h + 14;
+}
+static void ryvDrawTaste(LGFX_Sprite& s, const RyvG& g, RyneEngine* R) {
+  float mu[RY_D]; ryvMu(R, mu);
+  float mA = 1e-3f, sMax = 1e-3f, sd[RY_D];
+  for (int i = 0; i < RY_D; i++) { float v = fabsf(mu[i]); if (v > mA && i > 0) mA = v; float d = R->Ainv[i * RY_D + i]; sd[i] = d > 0 ? sqrtf(d) : 0.f; if (i > 0 && sd[i] > sMax) sMax = sd[i]; }
+  int x0, yA, yB, cw, rh; ryvGridGeom(g, &x0, &yA, &yB, &cw, &rh);
+  s.setTextSize(1); s.setTextColor(T().accent); s.setCursor(g.bx, g.by); s.print("Selera: biru = suka, merah = tidak");
+  s.setTextColor(T().subtext);
+  for (int c = 0; c < 9; c++) { char h[4] = "Um"; if (c < RY_NV) { memcpy(h, RY_VIBE_NAME[c], 3); h[3] = 0; } s.setCursor(x0 + c * cw + (cw - (int)strlen(h) * 6) / 2, g.by + 11); s.print(h); }
+  for (int r = 0; r < 3; r++) {
+    s.setTextColor(T().subtext); s.setCursor(g.bx, yA + r * rh + (rh - 8) / 2); s.print(RYV_AX[r]);
+    s.setCursor(g.bx, yB + r * rh + (rh - 8) / 2); s.print(RYV_AX[r]);
+    for (int c = 0; c < 9; c++) {
+      int k = ryvIdx(r, c);
+      s.fillRect(x0 + c * cw, yA + r * rh, cw - 1, rh - 1, ryvCol(mu[k], mA, T().surface));
+      float a = sd[k] / sMax; if (a > 1) a = 1;
+      s.fillRect(x0 + c * cw, yB + r * rh, cw - 1, rh - 1, blend565((uint16_t)T().surface, (uint16_t)T().accent2, (uint8_t)(a * 255.f)));
+    }
+  }
+  s.setTextColor(T().accent); s.setCursor(g.bx, yB - 11); s.print("Keraguan: terang = belum yakin");
+  if (ryvCell >= 0) {
+    int part = ryvCell / 100, r = (ryvCell % 100) / 10, c = ryvCell % 10, yy = part ? yB : yA;
+    s.drawRect(x0 + c * cw - 1, yy + r * rh - 1, cw + 1, rh + 1, T().text);
+  }
+}
+
+// --- tab Lagu: peta energi x kecerahan + daftar paling disukai ---
+static void ryvScatterGeom(const RyvG& g, int* px, int* py, int* ps, int* lx, int* ly, int* lw, int* lh) {
+  if (g.bw >= g.bh) { int p = g.bh - 12; if (p > g.bw / 2 - 6) p = g.bw / 2 - 6; *ps = p; *px = g.bx + 2; *py = g.by + 11; *lx = g.bx + p + 14; *ly = g.by; *lw = g.bw - p - 14; *lh = g.bh; }
+  else { int p = g.bw - 4, p2 = g.bh * 55 / 100; if (p2 < p) p = p2; *ps = p; *px = g.bx + (g.bw - p) / 2; *py = g.by + 11; *lx = g.bx; *ly = *py + p + 4; *lw = g.bw; *lh = g.by + g.bh - *ly; }
+}
+static void ryvDrawSongs(LGFX_Sprite& s, const RyvG& g, RyneEngine* R) {
+  int px, py, ps, lx, ly, lw, lh; ryvScatterGeom(g, &px, &py, &ps, &lx, &ly, &lw, &lh);
+  int n = R->nPl; if (n > RY_MAXPL) n = RY_MAXPL; if (n < 0) n = 0;
+  s.setTextSize(1); s.setTextColor(T().accent); s.setCursor(g.bx, g.by); s.print("Lagu: x = energi, y = kecerahan");
+  s.drawRect(px, py, ps, ps, T().divider);
+  s.drawLine(px + ps / 2, py, px + ps / 2, py + ps - 1, T().surface2); s.drawLine(px, py + ps / 2, px + ps - 1, py + ps / 2, T().surface2);
+  for (int i = 0; i < n; i++) {
+    int e = R->idx2ent[i]; if (e < 0 || e >= RY_MAXENT) continue;
+    RyEnt E = R->ent[e]; if (E.fcnt == 0) continue;
+    float m = E.alpha / (E.alpha + E.beta + 1e-6f), v = (m - 0.5f) * 3.f; if (v > 1) v = 1; if (v < -1) v = -1;
+    int x = px + 2 + (int)(fminf(fmaxf(E.e, 0.f), 1.f) * (ps - 5)), y = py + ps - 3 - (int)(fminf(fmaxf(E.b, 0.f), 1.f) * (ps - 5));
+    int rr = 2 + (E.plays >= 3) + (E.plays >= 8);
+    s.fillCircle(x, y, rr, blend565((uint16_t)T().subtext, v >= 0 ? (uint16_t)T().accent : (uint16_t)T().danger, (uint8_t)(fabsf(v) * 255.f)));
+    if (E.flags & 1) s.drawCircle(x, y, rr + 2, T().good);
+    if (ryvCell == i) s.drawCircle(x, y, rr + 4, T().text);
+  }
+  s.setTextColor(T().accent); s.setCursor(lx, ly); s.print("Paling disukai");
+  bool used[RY_MAXPL]; memset(used, 0, sizeof(used));
+  int rows = (lh - 12) / 10; if (rows > 8) rows = 8;
+  for (int r = 0; r < rows; r++) {
+    int bi = -1; float bm = -1.f;
+    for (int i = 0; i < n; i++) {
+      if (used[i]) continue; int e = R->idx2ent[i]; if (e < 0 || e >= RY_MAXENT) continue;
+      RyEnt E = R->ent[e]; if (E.plays == 0) continue;
+      float m = E.alpha / (E.alpha + E.beta + 1e-6f); if (m > bm) { bm = m; bi = i; }
+    }
+    if (bi < 0) break;
+    used[bi] = true;
+    char t[40], pc[8]; musGetTitle(t, sizeof(t), bi); musTrunc(t, (lw - 30) / 6);
+    snprintf(pc, sizeof(pc), "%d%%", (int)(bm * 100.f + 0.5f));
+    s.setTextColor(T().text); s.setCursor(lx, ly + 12 + r * 10); s.print(pc);
+    s.setTextColor(T().subtext); s.setCursor(lx + 28, ly + 12 + r * 10); s.print(t);
+  }
+}
+
+static void ryvDraw(LGFX_Sprite& s) {
+  RyvG g = ryvGeom();
+  static const char* const tn[3] = { "Vibe", "Selera", "Lagu" };
+  s.setTextSize(1);
+  for (int i = 0; i < 3; i++) {
+    int x, y, w, h; ryvTabRect(i, &x, &y, &w, &h); bool on = (ryvTab == i);
+    iosRR(s, x, y, w, h, 7, on ? (uint16_t)T().accent : (uint16_t)T().surface2);
+    s.setTextColor(on ? (uint16_t)T().bg : (uint16_t)T().text); s.setCursor(x + (w - (int)strlen(tn[i]) * 6) / 2, y + 5); s.print(tn[i]);
+  }
+  RyneEngine* R = ryne;
+  if (!R) {
+    s.setTextColor(T().subtext); s.setCursor(g.bx, g.by + 8); s.print("RYNE belum aktif.");
+    s.setCursor(g.bx, g.by + 22); s.print("Buka Daftar & putar lagu dulu.");
+    return;
+  }
+  if (ryvTab == 0) ryvDrawVibe(s, g, R); else if (ryvTab == 1) ryvDrawTaste(s, g, R); else ryvDrawSongs(s, g, R);
+  char b[96], ln[96];
+  if (ryvInfo[0]) { strncpy(b, ryvInfo, sizeof(b) - 1); b[sizeof(b) - 1] = 0; }
+  else if (ryvTab == 0) { int t = R->vibeTop(); if (t < 0 || t >= RY_NV) t = 0; snprintf(b, sizeof(b), "Vibe: %s, yakin %d%%", RY_VIBE_NAME[t], (int)(R->vibeConf() * 100.f + 0.5f)); }
+  else strcpy(b, ryvTab == 1 ? "Ketuk sel utk nilainya" : "Ketuk titik utk detail lagu");
+  int mc = g.aw / 6; if (mc > 90) mc = 90;
+  strncpy(ln, b, mc); ln[mc] = 0;
+  s.setTextColor(T().text); s.setCursor(g.ax, g.fy); s.print(ln);
+  snprintf(b, sizeof(b), "pembaruan %u | lagu %d | eksplorasi %d%%", (unsigned)R->nUpd, R->nPl, (int)((0.04f + 0.12f * expf(-(float)R->nUpd / 150.f)) * 100.f + 0.5f));
+  strncpy(ln, b, mc); ln[mc] = 0;
+  s.setTextColor(T().subtext); s.setCursor(g.ax, g.fy + 10); s.print(ln);
+}
+
+static void ryvTouch(int x, int y) {
+  for (int i = 0; i < 3; i++) {
+    int tx, ty, tw, th; ryvTabRect(i, &tx, &ty, &tw, &th);
+    if (x >= tx && x < tx + tw && y >= ty && y < ty + th + 4) { ryvTab = (uint8_t)i; ryvCell = -1; ryvInfo[0] = 0; vibTap(); needRedraw = true; return; }
+  }
+  RyneEngine* R = ryne; if (!R) return;
+  RyvG g = ryvGeom();
+  if (ryvTab == 1) {
+    int x0, yA, yB, cw, rh; ryvGridGeom(g, &x0, &yA, &yB, &cw, &rh);
+    int c = (x - x0) / cw; if (x < x0 || c < 0 || c >= 9) return;
+    int part = -1, r = 0;
+    if (y >= yA && y < yA + 3 * rh) { part = 0; r = (y - yA) / rh; } else if (y >= yB && y < yB + 3 * rh) { part = 1; r = (y - yB) / rh; }
+    if (part < 0) return;
+    float mu[RY_D]; ryvMu(R, mu); int k = ryvIdx(r, c); float d = R->Ainv[k * RY_D + k]; if (d < 0) d = 0;
+    ryvCell = (int16_t)(part * 100 + r * 10 + c);
+    snprintf(ryvInfo, sizeof(ryvInfo), "%s x %s: %+.2f (+-%.2f)", c < RY_NV ? RY_VIBE_NAME[c] : "Umum", RYV_AX[r], mu[k], sqrtf(d));
+    needRedraw = true;
+  } else if (ryvTab == 2) {
+    int px, py, ps, lx, ly, lw, lh; ryvScatterGeom(g, &px, &py, &ps, &lx, &ly, &lw, &lh);
+    int n = R->nPl; if (n > RY_MAXPL) n = RY_MAXPL; int bi = -1, bd = 14 * 14;
+    for (int i = 0; i < n; i++) {
+      int e = R->idx2ent[i]; if (e < 0 || e >= RY_MAXENT) continue;
+      RyEnt E = R->ent[e]; if (E.fcnt == 0) continue;
+      int sx = px + 2 + (int)(fminf(fmaxf(E.e, 0.f), 1.f) * (ps - 5)), sy = py + ps - 3 - (int)(fminf(fmaxf(E.b, 0.f), 1.f) * (ps - 5));
+      int d2 = (x - sx) * (x - sx) + (y - sy) * (y - sy); if (d2 < bd) { bd = d2; bi = i; }
+    }
+    if (bi < 0) return;
+    RyEnt E = R->ent[R->idx2ent[bi]]; char t[40]; musGetTitle(t, sizeof(t), bi); musTrunc(t, 22);
+    ryvCell = (int16_t)bi;
+    snprintf(ryvInfo, sizeof(ryvInfo), "%s | suka %d%% | %dx | e%.2f c%.2f", t, (int)(E.alpha / (E.alpha + E.beta + 1e-6f) * 100.f + 0.5f), (int)E.plays, E.e, E.b);
+    needRedraw = true;
+  }
+}
+
 void drawMusic(LGFX_Sprite& s) {
   musCalcLayout();
   s.fillSprite(T().bg); drawStatusBar(s);
   if (musPage == 1)      musDrawList(s);
   else if (musPage == 2) musDrawScan(s);
+  else if (musPage == 3) ryvDraw(s);
   else                   musDrawPlayer(s);
   drawBack(s); drawToast(s);
 }
@@ -1649,6 +1863,8 @@ void musicTouch(int x, int y, bool held, bool isNew) {
     else navBack();
     return;
   }
+
+  if (musPage == 3) { ryvTouch(x, y); return; }
 
   if (musPage == 1) {
     int n = musListCount(), rows = musListRows();
@@ -1683,6 +1899,8 @@ void musicTouch(int x, int y, bool held, bool isNew) {
 
   // ---- halaman pemutar ----
   if (musHit(x, y, mDafX, mHdrY - 3, mDafW, mChipH + 6)) { musPage = 1; int r = musListRows(); musListTop = (musCur / r) * r; vibTap(); needRedraw = true; return; }
+  { int cx, cw; bool vr = mVibeY >= 0 && musHit(x, y, mTitX, mVibeY - 3, mTitW, 14);          // chip RYNE / ketuk baris vibe
+    if (vr || (ryvChipRect(&cx, &cw) && musHit(x, y, cx, mHdrY - 3, cw, mChipH + 6))) { musPage = 3; ryvTab = 0; ryvCell = -1; ryvInfo[0] = 0; vibTap(); needRedraw = true; return; } }
   if (musHit(x, y, mTwsX, mHdrY - 3, mTwsW, mChipH + 6)) { musPage = 2; musPost('a', 0, nullptr); vibTap(); needRedraw = true; return; }
 
   if (musHitC(x, y, mPlayX, mCtlCY, mPlayR + 6)) { musPost('u', 0, nullptr); vibTap(); needRedraw = true; return; }
