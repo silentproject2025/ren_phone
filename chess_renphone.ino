@@ -313,8 +313,8 @@ static void chsRbLoadNvs();
 //
 // EMPAT BAGIAN
 //  1. Pencarian negamax alpha-beta + quiescence + evaluasi materi/PST. Lima tingkat lewat chsAiChoose().
-//  2. TinyML: jaringan saraf kecil (MLP 24 -> 16 -> 1, 417 parameter, float32) yg menilai "seberapa mirip
-//     langkah ini dgn pilihan user". Masukan = 18 fitur langkah + 6 konteks posisi (fase, materi, skak, nomor
+//  2. TinyML: jaringan saraf kecil (MLP 26 -> 16 -> 1, 449 parameter, float32) yg menilai "seberapa mirip
+//     langkah ini dgn pilihan user". Masukan = 20 fitur langkah + 6 konteks posisi (fase, materi, skak, nomor
 //     langkah, mobilitas, ada menteri). Dilatih ONLINE di ESP32 sendiri: tiap langkah USER = satu langkah SGD
 //     (backprop, softmax atas semua langkah sah), ditambah replay beberapa contoh lama dari buffer pengalaman.
 //  3. Buku pembuka pribadi: posisi -> langkah yg paling sering user mainkan (chsBk*).
@@ -340,7 +340,7 @@ static void chsRbLoadNvs();
 #define CHS_AI_FREE(p) free(p)
 #endif
 
-#define CHS_NF        18                       // fitur langkah
+#define CHS_NF        20                       // fitur langkah
 #define CHS_NC        6                        // fitur konteks posisi
 #define CHS_NIN       (CHS_NF + CHS_NC)
 #define CHS_NH        16                       // neuron tersembunyi
@@ -618,7 +618,12 @@ static void chsAiFeat(uint16_t m, float* f) {
   f[15] = (t == 1 && (tf <= 1 || tf >= 6)) ? 1.0f : 0.0f;                      // pion sayap
   f[16] = (t == 2) ? 1.0f : 0.0f;                                              // kuda
   f[17] = (t == 3) ? 1.0f : 0.0f;                                              // gajah
-  { CHS_SAVE_ST; chsDo(m); f[10] = chsInCheck() ? 1.0f : 0.0f; CHS_REST_ST; }  // memberi skak
+  bool attFrom = (t != 6) && chsAtt(from, !w), attTo = false, defTo = false;
+  { CHS_SAVE_ST; chsDo(m); f[10] = chsInCheck() ? 1.0f : 0.0f;                  // memberi skak
+    if (t != 6) { attTo = chsAtt(to, !w); defTo = chsAtt(to, w); }              // (papan sesudah langkah)
+    CHS_REST_ST; }
+  f[18] = (attFrom && !attTo) ? 1.0f : 0.0f;                                   // menyelamatkan bidak yg diserang
+  f[19] = defTo ? 1.0f : 0.0f;                                                 // mendarat di petak yg dilindungi
 }
 
 // ---------------------------------------------------------------- TinyML: MLP penilai gaya
@@ -779,16 +784,17 @@ static void chsStyleReset() {
 }
 
 // ---- (de)serialisasi utk NVS ----
+#define CHS_STY_VER 3                          // 3 = 20 fitur langkah (versi 2 = 18 fitur: ditolak, belajar dari awal)
 #define CHS_STY_LEN (8 + 4 * CHS_NP)
 static size_t chsStyleSer(uint8_t* o) {
   chsNetEnsure();
-  o[0] = 2; o[1] = CHS_NIN; o[2] = CHS_NH; o[3] = (chsAccN >= 5) ? (uint8_t)(chsAcc * 254.0f + 1.5f) : 0;   // o[3] = akurasi tebakan (0 = belum diketahui)
+  o[0] = CHS_STY_VER; o[1] = CHS_NIN; o[2] = CHS_NH; o[3] = (chsAccN >= 5) ? (uint8_t)(chsAcc * 254.0f + 1.5f) : 0;   // o[3] = akurasi tebakan (0 = belum diketahui)
   o[4] = (uint8_t)chsTrainN; o[5] = (uint8_t)(chsTrainN >> 8); o[6] = (uint8_t)(chsTrainN >> 16); o[7] = (uint8_t)(chsTrainN >> 24);
   memcpy(o + 8, chsNet, 4 * CHS_NP);
   return CHS_STY_LEN;
 }
 static bool chsStyleDeser(const uint8_t* b, size_t n) {
-  if (n < CHS_STY_LEN || b[0] != 2 || b[1] != CHS_NIN || b[2] != CHS_NH) return false;
+  if (n < CHS_STY_LEN || b[0] != CHS_STY_VER || b[1] != CHS_NIN || b[2] != CHS_NH) return false;
   float w[CHS_NP]; memcpy(w, b + 8, 4 * CHS_NP);
   for (int k = 0; k < CHS_NP; k++) if (!(w[k] > -50.0f && w[k] < 50.0f)) return false;   // juga menolak NaN/inf
   memcpy(chsNet, w, sizeof(w)); chsNetReady = true;
@@ -1104,11 +1110,12 @@ static void chsPrefsLoad() {
   uint8_t* sb = (uint8_t*)malloc(CHS_STY_LEN + CHS_BK_MAXLEN + 16);          // heap, bukan stack (task loop cuma 8 KB)
   if (sb) {
     size_t L = p.getBytesLength("sty");
-    if (L >= CHS_STY_LEN && L <= CHS_STY_LEN + 8) { p.getBytes("sty", sb, L); chsStyleDeser(sb, L); }
+    bool styOk = false;                                                         // sty versi lama / rusak -> jaringan DAN kebiasaan mulai dari awal (hab dilatih bersama jaringannya)
+    if (L >= CHS_STY_LEN && L <= CHS_STY_LEN + 8) { p.getBytes("sty", sb, L); styOk = chsStyleDeser(sb, L); }
     L = p.getBytesLength("bk");
     if (L >= 4 && L <= CHS_BK_MAXLEN) { p.getBytes("bk", sb, L); chsBookDeser(sb, L); }
     L = p.getBytesLength("hab");
-    if (L == CHS_HAB_LEN) { p.getBytes("hab", sb, L); chsHabDeser(sb, L); }       // kebiasaan petak (baru; perangkat lama: kosong)
+    if (styOk && L == CHS_HAB_LEN) { p.getBytes("hab", sb, L); chsHabDeser(sb, L); }       // kebiasaan petak (baru; perangkat lama: kosong)
     free(sb);
   }
   p.end();
@@ -1128,7 +1135,7 @@ static void chsPrefsSaveCfg() {
   Preferences p;
   if (p.begin("chess", false)) { p.putUChar("lvl", chsAiLevel); p.putUChar("afk", chsAfkIdx); p.end(); }
 }
-// Semua blob dilayani buffer yg sama (sty 1676 | bk <= 900 | hab 900 | rb <= 1604 byte).
+// Semua blob dilayani buffer yg sama (sty 1804 | bk <= 900 | hab 900 | rb <= 1604 byte).
 static_assert(CHS_HAB_LEN <= CHS_STY_LEN + CHS_BK_MAXLEN + 16 && CHS_RB_MAXLEN <= CHS_STY_LEN + CHS_BK_MAXLEN + 16, "buffer NVS kurang");
 // withRb=false = simpan ringan berkala (jaringan + kebiasaan + buku); pengalaman (rb) hanya ditulis saat akhir partai / keluar,
 // supaya flash/NVS tidak ditulis 1,6 KB ekstra tiap 8 langkah.

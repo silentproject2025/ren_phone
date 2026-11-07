@@ -97,7 +97,11 @@ int main() {
                           : ((cap ? 800 : 0) + (tp == 6 ? 400 : 0) + (tp == 4 ? 200 : 0));                       //    lanjut: makan / raja / benteng
       else if (kind == 3) k = ((to == 27 || to == 28 || to == 35 || to == 36) ? 500 : 0) + ((tp == 2 && (to == 21 || to == 18)) ? 400 : 0)
                           + (cap ? 100 : 0) + ((tp == 6 && chsAbsI(to - from) == 2) ? 450 : 0);                  // D: kebiasaan petak: pusat, Nf3/Nc3, rokade
-      else k = (((to & 7) <= 1 || (to & 7) >= 6) ? 400 : 0) + (tp == 1 ? 100 : 0) + (tp == 4 ? 200 : 0);       // E: main di sayap
+      else if (kind == 4) k = (((to & 7) <= 1 || (to & 7) >= 6) ? 400 : 0) + (tp == 1 ? 100 : 0) + (tp == 4 ? 200 : 0);   // E: main di sayap
+      else { bool w = chsWhite, attFrom = chsAtt(from, !w), attTo = false, defTo = false;                       // F: hati-hati (selamatkan, lindungi)
+        { CHS_SAVE_ST; chsDo(mv); attTo = chsAtt(to, !w); defTo = chsAtt(to, w); CHS_REST_ST; }
+        k = ((attFrom && !attTo && tp != 6) ? 900 + chsAiVal[tp] : 0) - ((attTo && !defTo) ? 700 + chsAiVal[tp] : 0) + (defTo ? 150 : 0)
+          + (cap && !attTo ? 300 : 0) + (((tp == 2 || tp == 3) && (from >> 3) == (w ? 0 : 7)) ? 120 : 0) + (tp == 1 ? 40 : 0); }
       k = k * 64 + (63 - from);                                                                                  // pemecah seri tetap
       if (k > bk) { bk = k; best = i; }
     }
@@ -123,7 +127,7 @@ int main() {
       }
     }
     if (!train) { *accAll = tot ? (double)hit / tot : 0; *accA = tA ? (double)hA / tA : 0; *accB = tB ? (double)hB / tB : 0; } } };
-  for (int kind = 0; kind < 5; kind++) {
+  for (int kind = 0; kind < 6; kind++) {
     srand(100 + kind); chsStyleReset(); chsAiHistN = 0;
     double a0, a1, a2, b0, b1, b2;
     Eval::run(kind, 6, false, &a0, &a1, &a2);                              // sebelum dilatih
@@ -142,6 +146,7 @@ int main() {
       printf("        akurasi tebakan tercatat: %.0f%% (%d langkah dihitung)\n", chsAcc * 100, chsAccN);
       CHECK(chsAccN == 20 && chsAcc > 0.5f, "gaya E: akurasi tercatat wajar (%.2f)", chsAcc);
     }
+    if (kind == 5) CHECK(b0 > 0.60, "gaya F: fitur selamatkan-bidak / petak-terlindungi harus terpelajari (%.2f; tanpa fitur baru sekitar 0.45)", b0);
     if (kind == 2) CHECK(b1 > 0.30 && b2 > 0.45, "gaya C sadar konteks (awal %.2f, lanjut %.2f)", b1, b2);
     for (int k = 0; k < CHS_NP; k++) CHECK(chsNet[k] == chsNet[k] && chsNet[k] > -50 && chsNet[k] < 50, "parameter stabil");
   }
@@ -157,6 +162,20 @@ int main() {
   buf[20] = 0xFF; buf[21] = 0xFF; buf[22] = 0xFF; buf[23] = 0x7F;   // NaN/inf
   CHECK(!chsStyleDeser(buf, L), "parameter NaN harus ditolak");
   { size_t L2 = chsStyleSer(buf); buf[0] = 1; CHECK(!chsStyleDeser(buf, L2), "versi lain ditolak"); CHECK(!chsStyleDeser(buf, 10), "blob terpotong ditolak"); }
+  { // blob ditolak TIDAK boleh mengubah state apa pun (jaringan, jumlah latihan, akurasi)
+    static float k0[CHS_NP]; memcpy(k0, chsNet, sizeof(k0)); uint32_t t0 = chsTrainN; float a0 = chsAcc; int an0 = chsAccN;
+    static uint8_t bad[CHS_STY_LEN + 8]; size_t L3 = chsStyleSer(bad);
+    #define SAME() (!memcmp(k0, chsNet, sizeof(k0)) && chsTrainN == t0 && chsAcc == a0 && chsAccN == an0)
+    bad[0] = CHS_STY_VER - 1; CHECK(!chsStyleDeser(bad, L3) && SAME(), "versi lama ditolak tanpa mengubah state");
+    chsStyleSer(bad); bad[1] = CHS_NIN - 2; CHECK(!chsStyleDeser(bad, L3) && SAME(), "jumlah masukan lain (18 fitur) ditolak tanpa mengubah state");
+    chsStyleSer(bad); bad[8 + 4 * 100 + 3] = 0x7F; bad[8 + 4 * 100 + 2] = 0x80; CHECK(!chsStyleDeser(bad, L3) && SAME(), "NaN/inf ditolak tanpa mengubah state");
+    chsStyleSer(bad); CHECK(!chsStyleDeser(bad, L3 - 1) && SAME(), "blob terpotong ditolak tanpa mengubah state");
+    // blob versi 2 asli (24 masukan, 1676 B): ditolak oleh panjang & header
+    static uint8_t old2[1676]; memset(old2, 0, sizeof(old2)); old2[0] = 2; old2[1] = 24; old2[2] = CHS_NH;
+    CHECK(!chsStyleDeser(old2, sizeof(old2)) && SAME(), "blob sty versi 2 (1676 B) ditolak tanpa mengubah state");
+    CHECK(CHS_STY_VER == 3 && CHS_NIN == 26, "versi blob / jumlah masukan");
+    #undef SAME
+  }
   printf("ukuran jaringan: %d parameter (%d byte), blob NVS %d byte\n", CHS_NP, CHS_NP * 4, (int)CHS_STY_LEN);
 
   // ---- kebiasaan petak + pengalaman + akurasi: simpan -> hapus -> muat ----
