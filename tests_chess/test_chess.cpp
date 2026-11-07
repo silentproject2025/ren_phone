@@ -93,8 +93,11 @@ int main() {
       int k = 0;
       if (kind == 0) k = (cap ? 1000 + chsAiKey(mv) : 0) + (tp == 1 ? 100 : 0);                                  // A: selalu makan, kalau tidak dorong pion
       else if (kind == 1) k = (cap ? -500 : 0) + (tp == 1 ? 300 : 0) + (tp == 1 ? (to >> 3) : 0);                 // B: tidak pernah makan, suka pion
-      else k = (ply < 14) ? ((tp == 1 ? 500 : 0) + ((to & 7) == 3 || (to & 7) == 4 ? 50 : 0))                   // C: konteks -> awal: pion tengah,
+      else if (kind == 2) k = (ply < 14) ? ((tp == 1 ? 500 : 0) + ((to & 7) == 3 || (to & 7) == 4 ? 50 : 0))    // C: konteks -> awal: pion tengah,
                           : ((cap ? 800 : 0) + (tp == 6 ? 400 : 0) + (tp == 4 ? 200 : 0));                       //    lanjut: makan / raja / benteng
+      else if (kind == 3) k = ((to == 27 || to == 28 || to == 35 || to == 36) ? 500 : 0) + ((tp == 2 && (to == 21 || to == 18)) ? 400 : 0)
+                          + (cap ? 100 : 0) + ((tp == 6 && chsAbsI(to - from) == 2) ? 450 : 0);                  // D: kebiasaan petak: pusat, Nf3/Nc3, rokade
+      else k = (((to & 7) <= 1 || (to & 7) >= 6) ? 400 : 0) + (tp == 1 ? 100 : 0) + (tp == 4 ? 200 : 0);       // E: main di sayap
       k = k * 64 + (63 - from);                                                                                  // pemecah seri tetap
       if (k > bk) { bk = k; best = i; }
     }
@@ -120,7 +123,7 @@ int main() {
       }
     }
     if (!train) { *accAll = tot ? (double)hit / tot : 0; *accA = tA ? (double)hA / tA : 0; *accB = tB ? (double)hB / tB : 0; } } };
-  for (int kind = 0; kind < 3; kind++) {
+  for (int kind = 0; kind < 5; kind++) {
     srand(100 + kind); chsStyleReset(); chsAiHistN = 0;
     double a0, a1, a2, b0, b1, b2;
     Eval::run(kind, 6, false, &a0, &a1, &a2);                              // sebelum dilatih
@@ -128,7 +131,17 @@ int main() {
     Eval::run(kind, 6, false, &b0, &b1, &b2);                              // posisi baru
     printf("gaya %c: akurasi tebak langkah user  sebelum %.0f%%  sesudah %.0f%%  (awal %.0f%% / lanjut %.0f%%)  dilatih %u langkah\n",
            'A' + kind, a0 * 100, b0 * 100, b1 * 100, b2 * 100, (unsigned)chsTrainN);
-    CHECK(b0 > a0 + 0.30 && b0 > 0.45, "gaya %c: jaringan harus jauh lebih baik dari acak (%.2f -> %.2f)", 'A' + kind, a0, b0);
+    CHECK(b0 > a0 + 0.30 && b0 > (kind >= 3 ? 0.60 : 0.45), "gaya %c: jaringan harus jauh lebih baik dari acak (%.2f -> %.2f)", 'A' + kind, a0, b0);
+    if (kind == 3) {                                                       // tabel kebiasaan petak harus benar-benar berperan
+      float keepH[CHS_HAB_N]; memcpy(keepH, chsHab, sizeof(keepH)); double z0, z1, z2; memset(chsHab, 0, sizeof(chsHab));
+      Eval::run(kind, 6, false, &z0, &z1, &z2); memcpy(chsHab, keepH, sizeof(keepH));
+      printf("        tanpa tabel kebiasaan: %.0f%%  (dengan: %.0f%%)\n", z0 * 100, b0 * 100);
+      CHECK(b0 > z0 + 0.05, "gaya D: kebiasaan petak menambah akurasi (%.2f -> %.2f)", z0, b0);
+    }
+    if (kind == 4) {                                                       // akurasi tebakan yg dicatat sendiri harus mencerminkan kenyataan
+      printf("        akurasi tebakan tercatat: %.0f%% (%d langkah dihitung)\n", chsAcc * 100, chsAccN);
+      CHECK(chsAccN == 20 && chsAcc > 0.5f, "gaya E: akurasi tercatat wajar (%.2f)", chsAcc);
+    }
     if (kind == 2) CHECK(b1 > 0.30 && b2 > 0.45, "gaya C sadar konteks (awal %.2f, lanjut %.2f)", b1, b2);
     for (int k = 0; k < CHS_NP; k++) CHECK(chsNet[k] == chsNet[k] && chsNet[k] > -50 && chsNet[k] < 50, "parameter stabil");
   }
@@ -145,6 +158,35 @@ int main() {
   CHECK(!chsStyleDeser(buf, L), "parameter NaN harus ditolak");
   { size_t L2 = chsStyleSer(buf); buf[0] = 1; CHECK(!chsStyleDeser(buf, L2), "versi lain ditolak"); CHECK(!chsStyleDeser(buf, 10), "blob terpotong ditolak"); }
   printf("ukuran jaringan: %d parameter (%d byte), blob NVS %d byte\n", CHS_NP, CHS_NP * 4, (int)CHS_STY_LEN);
+
+  // ---- kebiasaan petak + pengalaman + akurasi: simpan -> hapus -> muat ----
+  { static uint8_t hb[CHS_HAB_LEN + 8], rb[CHS_RB_MAXLEN + 8]; static float keepH[CHS_HAB_N];
+    srand(9); chsStyleReset(); { double x0, x1, x2; for (int g = 0; g < 6; g++) Eval::run(3, 1, true, &x0, &x1, &x2); }
+    memcpy(keepH, chsHab, sizeof(keepH)); float keepAcc = chsAcc; int keepN = chsRbN < CHS_RB_KEEP ? chsRbN : CHS_RB_KEEP;
+    static uint8_t orig[CHS_RB_KEEP][CHS_RB_SZ];                           // pengalaman asli (lama -> baru), utk dibandingkan
+    for (int j = 0; j < keepN; j++) memcpy(orig[j], chsAiRb + (size_t)(((chsRbPos - keepN + j) % CHS_RB_N + CHS_RB_N) % CHS_RB_N) * CHS_RB_SZ, CHS_RB_SZ);
+    size_t HL = chsHabSer(hb), RL = chsRbSer(rb), SL; static uint8_t sb2[CHS_STY_LEN + 8]; SL = chsStyleSer(sb2);
+    CHECK(HL == CHS_HAB_LEN && RL == (size_t)(4 + keepN * CHS_RB_REC), "ukuran blob hab/rb");
+    memset(chsHab, 0, sizeof(chsHab)); chsRbN = 0; chsRbPos = 0; chsAcc = 0; chsAccN = 0; memset(chsAiRb, 0xEE, (size_t)CHS_RB_N * CHS_RB_SZ);
+    CHECK(chsHabDeser(hb, HL), "kebiasaan dimuat");
+    { float maxd = 0; for (int i = 0; i < CHS_HAB_N; i++) { float d = chsHab[i] - keepH[i]; if (d < 0) d = -d; if (d > maxd) maxd = d; }
+      CHECK(maxd < 0.0002f, "kebiasaan round-trip (selisih maks %.5f)", maxd); }
+    CHECK(chsRbDeser(rb, RL) && chsRbN == keepN && chsRbPos == keepN % CHS_RB_N, "pengalaman dimuat (%d posisi)", chsRbN);
+    { int bad = 0; for (int j = 0; j < keepN; j++) if (memcmp(orig[j], chsAiRb + (size_t)j * CHS_RB_SZ, CHS_RB_SZ)) bad++; CHECK(!bad, "pengalaman round-trip: %d dari %d posisi beda", bad, keepN); }
+    CHECK(chsStyleDeser(sb2, SL) && chsAccN == 20 && fabsf(chsAcc - keepAcc) < 0.01f, "akurasi tebakan round-trip (%.3f vs %.3f)", chsAcc, keepAcc);
+    // blob rusak harus ditolak TANPA mengubah apa pun
+    { int n0 = chsRbN; uint8_t bk[CHS_RB_MAXLEN + 8]; memcpy(bk, rb, RL);
+      bk[4] = 0xDD; CHECK(!chsRbDeser(bk, RL) && chsRbN == n0, "pengalaman dgn nilai papan mustahil ditolak");
+      memcpy(bk, rb, RL); bk[0] = 9; CHECK(!chsRbDeser(bk, RL), "versi pengalaman lain ditolak");
+      memcpy(bk, rb, RL); CHECK(!chsRbDeser(bk, RL - 1), "pengalaman terpotong ditolak");
+      memcpy(bk, rb, RL); bk[1] = CHS_RB_KEEP + 1; CHECK(!chsRbDeser(bk, RL), "jumlah posisi berlebih ditolak");
+      uint8_t hk[CHS_HAB_LEN + 8]; memcpy(hk, hb, HL); hk[2] ^= 1; CHECK(!chsHabDeser(hk, HL), "ukuran tabel kebiasaan salah ditolak"); CHECK(!chsHabDeser(hb, 10), "kebiasaan terpotong ditolak"); }
+    // setelah dimuat, belajar+replay jalan normal dan papan tetap utuh
+    { chsReset(); int8_t sbd[64]; memcpy(sbd, chsBd, 64); uint16_t mv[256]; int n = chsGen(mv); uint16_t f = 0; for (int i = 0; i < n; i++) if (chsLegal(mv[i])) { f = mv[i]; break; }
+      for (int i = 0; i < 20; i++) chsStyleLearn(f, 0); CHECK(!memcmp(sbd, chsBd, 64) && chsWhite, "papan utuh setelah belajar dari pengalaman yg dimuat");
+      for (int k = 0; k < CHS_HAB_N; k++) CHECK(chsHab[k] >= -6.001f && chsHab[k] <= 6.001f, "kebiasaan terjepit"); }
+    printf("blob NVS: jaringan %d + kebiasaan %d + pengalaman maks %d byte\n", (int)CHS_STY_LEN, (int)CHS_HAB_LEN, (int)CHS_RB_MAXLEN);
+  }
   { int bn = chsBkN; uint32_t h0 = chsBkH[0]; size_t BL = chsBookSer(buf); chsBkN = 0; CHECK(chsBookDeser(buf, BL) && chsBkN == bn && chsBkH[0] == h0, "buku round-trip"); CHECK(!chsBookDeser(buf, 3), "buku terpotong"); }
 
   // buku: posisi awal harus punya langkah favorit user
