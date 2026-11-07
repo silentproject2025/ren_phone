@@ -45,22 +45,22 @@ int main() {
 
   // mat dalam 1: Qh5xf7#  (skakmat gaya Scholar)
   setFen("r1bqkb1r/pppp1ppp/2n2n2/4p2Q/2B1P3/8/PPPP1PPP/RNB1K1NR w KQkq - 0 1");
-  uint16_t m = chsAiChoose(4, 1000, 0, 0); char s[8]; mstr(m, s);
+  uint16_t m = chsAiChoose(4, 1000, 0, 0, 0); char s[8]; mstr(m, s);
   CHECK(!strcmp(s, "h5f7"), "mat dalam 1, dapat %s", s);
 
   // jangan menggantung menteri: putih menteri di d1, hitam gajah menyerang d4 (d4 diserang pion e5)
   setFen("4k3/8/8/4p3/8/8/3Q4/4K3 w - - 0 1");
-  m = chsAiChoose(4, 1000, 0, 0); mstr(m, s);
+  m = chsAiChoose(4, 1000, 0, 0, 0); mstr(m, s);
   CHECK(!(m & 63) == 0 || strcmp(s, "d2d4") != 0, "menteri digantung di d4");
 
   // makan menteri gratis
   setFen("4k3/8/8/3q4/8/8/3R4/4K3 w - - 0 1");
-  m = chsAiChoose(3, 1000, 0, 0); mstr(m, s);
+  m = chsAiChoose(3, 1000, 0, 0, 0); mstr(m, s);
   CHECK(!strcmp(s, "d2d5"), "makan menteri, dapat %s", s);
 
   // tidak ada langkah (mat) -> 0
   setFen("7k/5Q2/6K1/8/8/8/8/8 b - - 0 1");
-  CHECK(chsAiChoose(3, 500, 0, 0) == 0, "stalemate/mat harus 0");
+  CHECK(chsAiChoose(3, 500, 0, 0, 0) == 0, "stalemate/mat harus 0");
 
   // partai penuh: AI sedang (putih) vs AI mudah (hitam): semua langkah sah, papan utuh, waktu terukur
   for (int lv = 0; lv < 3; lv++) {
@@ -70,7 +70,7 @@ int main() {
       chsAiHistBuild(mv);
       uint32_t t = hostMs();
       bool aiSide = chsWhite;
-      uint16_t mm = aiSide ? chsAiChoose(D[lv], MS[lv], MG[lv], 1) : chsAiChoose(2, 150, 120, 1);
+      uint16_t mm = aiSide ? chsAiChoose(D[lv], MS[lv], MG[lv], 1, ply) : chsAiChoose(2, 150, 120, 1, ply);
       uint32_t dt = hostMs() - t; if (aiSide && dt > worst) worst = dt;
       CHECK(mm != 0, "langkah 0 padahal ada langkah sah");
       uint16_t chk; mstr(mm, s);
@@ -83,42 +83,85 @@ int main() {
     CHECK(worst < (uint32_t)MS[lv] * 2 + 300, "level %d terlalu lambat %u ms", lv, worst);
   }
 
-  // ---- belajar gaya: user selalu memakan bila bisa & mendorong pion; bobot f[0] harus naik
-  memset(chsW, 0, sizeof(chsW)); chsTrainN = 0; chsBkN = 0;
-  for (int g = 0; g < 6; g++) {
-    chsReset();
-    for (int ply = 0; ply < 40 && chsHasMove(); ply++) {
-      uint16_t mv[256]; int n = chsGen(mv), best = -1, bk = -1;
-      for (int i = 0; i < n; i++) if (chsLegal(mv[i])) { int k = chsAiKey(mv[i]) * 4 + (int)(CHS_AI_RAND() % 5); if (k > bk) { bk = k; best = i; } }
-      if (chsWhite) chsStyleLearn(mv[best]);   // hanya Putih = "user"
-      chsDo(mv[best]);
+  // ================= TinyML: jaringan gaya belajar online =================
+  // "user" sintetis dgn kebiasaan jelas; jaringan hanya melihat langkahnya (online, 1 langkah SGD + replay per langkah)
+  // dan harus menebak langkah user di posisi BARU yg belum pernah dilihat.
+  struct Pol { static int pick(int kind, int ply, uint16_t* lm, int n) {     // deterministik
+    int best = -1, bk = -1000000;
+    for (int i = 0; i < n; i++) {
+      uint16_t mv = lm[i]; int from = mv & 63, to = (mv >> 6) & 63; int8_t p = chsBd[from]; int tp = p > 0 ? p : -p; bool cap = chsBd[to] != 0;
+      int k = 0;
+      if (kind == 0) k = (cap ? 1000 + chsAiKey(mv) : 0) + (tp == 1 ? 100 : 0);                                  // A: selalu makan, kalau tidak dorong pion
+      else if (kind == 1) k = (cap ? -500 : 0) + (tp == 1 ? 300 : 0) + (tp == 1 ? (to >> 3) : 0);                 // B: tidak pernah makan, suka pion
+      else k = (ply < 14) ? ((tp == 1 ? 500 : 0) + ((to & 7) == 3 || (to & 7) == 4 ? 50 : 0))                   // C: konteks -> awal: pion tengah,
+                          : ((cap ? 800 : 0) + (tp == 6 ? 400 : 0) + (tp == 4 ? 200 : 0));                       //    lanjut: makan / raja / benteng
+      k = k * 64 + (63 - from);                                                                                  // pemecah seri tetap
+      if (k > bk) { bk = k; best = i; }
     }
+    return best; } };
+  struct Eval { static void run(int kind, int games, bool train, double* accAll, double* accA, double* accB) {
+    int hit = 0, tot = 0, hA = 0, tA = 0, hB = 0, tB = 0;
+    for (int g = 0; g < games; g++) {
+      chsReset(); int ply = 0;
+      while (ply < 70 && chsHasMove()) {
+        uint16_t mv[256]; int n = chsGen(mv), ln = 0; uint16_t lm[256];
+        for (int i = 0; i < n; i++) if (chsLegal(mv[i])) lm[ln++] = mv[i];
+        uint16_t chosen;
+        if (chsWhite) {                                                   // Putih = "user"
+          int bi = Pol::pick(kind, ply, lm, ln); chosen = lm[bi];
+          if (train) chsStyleLearn(chosen, ply);
+          else if (ln > 1) {
+            float ctx[CHS_NC]; chsAiCtx(ctx, ln, ply); int am = 0; float bs = -1e30f;
+            for (int i = 0; i < ln; i++) { float s = chsStyleScore(lm[i], ctx); if (s > bs) { bs = s; am = i; } }
+            bool ok = (am == bi); hit += ok; tot++; if (ply < 14) { hA += ok; tA++; } else { hB += ok; tB++; }
+          }
+        } else chosen = lm[CHS_AI_RAND() % ln];                           // Hitam acak -> posisi beragam
+        chsDo(chosen); ply++;
+      }
+    }
+    if (!train) { *accAll = tot ? (double)hit / tot : 0; *accA = tA ? (double)hA / tA : 0; *accB = tB ? (double)hB / tB : 0; } } };
+  for (int kind = 0; kind < 3; kind++) {
+    srand(100 + kind); chsStyleReset(); chsAiHistN = 0;
+    double a0, a1, a2, b0, b1, b2;
+    Eval::run(kind, 6, false, &a0, &a1, &a2);                              // sebelum dilatih
+    for (int g = 0; g < 14; g++) Eval::run(kind, 1, true, &b0, &b1, &b2);  // ~14 partai = kira-kira 14 x 35 langkah user
+    Eval::run(kind, 6, false, &b0, &b1, &b2);                              // posisi baru
+    printf("gaya %c: akurasi tebak langkah user  sebelum %.0f%%  sesudah %.0f%%  (awal %.0f%% / lanjut %.0f%%)  dilatih %u langkah\n",
+           'A' + kind, a0 * 100, b0 * 100, b1 * 100, b2 * 100, (unsigned)chsTrainN);
+    CHECK(b0 > a0 + 0.30 && b0 > 0.45, "gaya %c: jaringan harus jauh lebih baik dari acak (%.2f -> %.2f)", 'A' + kind, a0, b0);
+    if (kind == 2) CHECK(b1 > 0.30 && b2 > 0.45, "gaya C sadar konteks (awal %.2f, lanjut %.2f)", b1, b2);
+    for (int k = 0; k < CHS_NP; k++) CHECK(chsNet[k] == chsNet[k] && chsNet[k] > -50 && chsNet[k] < 50, "parameter stabil");
   }
-  printf("dilatih %u langkah, w[makan]=%.2f w[pion]=%.2f\n", (unsigned)chsTrainN, chsW[0], chsW[3]);
-  CHECK(chsTrainN > 50, "terlalu sedikit data latih");
-  CHECK(chsW[0] > 0.5f, "bobot memakan tidak naik");
-  for (int k = 0; k < CHS_NF; k++) CHECK(chsW[k] >= -4.0f && chsW[k] <= 4.0f, "bobot di luar batas");
+
+  { chsReset(); uint16_t mv[256]; int n = chsGen(mv); uint16_t first = 0; for (int i = 0; i < n; i++) if (chsLegal(mv[i])) { first = mv[i]; break; }
+    uint32_t t0 = hostMs(); for (int i = 0; i < 300; i++) chsStyleLearn(first, 0); uint32_t dt = hostMs() - t0;
+    printf("1 langkah belajar (1 + 6 replay) di PC: %.2f ms  -> ESP32-S3 kira-kira %.0f-%.0f ms\n", dt / 300.0, dt / 300.0 * 10, dt / 300.0 * 25); }
 
   // serialisasi bolak-balik
-  uint8_t buf[CHS_STY_LEN + CHS_BK_MAXLEN]; float keep[CHS_NF]; memcpy(keep, chsW, sizeof(keep)); uint32_t kn = chsTrainN;
-  size_t L = chsStyleSer(buf); memset(chsW, 0, sizeof(chsW)); chsTrainN = 0;
-  CHECK(chsStyleDeser(buf, L) && !memcmp(keep, chsW, sizeof(keep)) && chsTrainN == kn, "gaya round-trip");
-  buf[10] = 0xFF; buf[11] = 0xFF; buf[12] = 0xFF; buf[13] = 0x7F;   // NaN/inf
-  CHECK(!chsStyleDeser(buf, L), "bobot NaN harus ditolak");
+  static uint8_t buf[CHS_STY_LEN + CHS_BK_MAXLEN]; static float keep[CHS_NP]; memcpy(keep, chsNet, sizeof(keep)); uint32_t kn = chsTrainN;
+  size_t L = chsStyleSer(buf); chsNetInit(); chsTrainN = 0;
+  CHECK(chsStyleDeser(buf, L) && !memcmp(keep, chsNet, sizeof(keep)) && chsTrainN == kn, "jaringan round-trip");
+  buf[20] = 0xFF; buf[21] = 0xFF; buf[22] = 0xFF; buf[23] = 0x7F;   // NaN/inf
+  CHECK(!chsStyleDeser(buf, L), "parameter NaN harus ditolak");
+  { size_t L2 = chsStyleSer(buf); buf[0] = 1; CHECK(!chsStyleDeser(buf, L2), "versi lain ditolak"); CHECK(!chsStyleDeser(buf, 10), "blob terpotong ditolak"); }
+  printf("ukuran jaringan: %d parameter (%d byte), blob NVS %d byte\n", CHS_NP, CHS_NP * 4, (int)CHS_STY_LEN);
   { int bn = chsBkN; uint32_t h0 = chsBkH[0]; size_t BL = chsBookSer(buf); chsBkN = 0; CHECK(chsBookDeser(buf, BL) && chsBkN == bn && chsBkH[0] == h0, "buku round-trip"); CHECK(!chsBookDeser(buf, 3), "buku terpotong"); }
 
   // buku: posisi awal harus punya langkah favorit user
   chsReset(); int bc = 0; uint16_t bm = chsBookGet(chsPosHash(), &bc);
   CHECK(bm != 0 && bc >= 1, "buku pembuka kosong"); printf("buku: %d entri, langkah awal count=%d\n", chsBkN, bc);
 
+  // pelatihan tidak mengubah papan; mode gaya tetap tidak membuang partai: latih "tidak pernah makan" lalu hadapi mat-dalam-1 yg berupa makan
+  srand(5); chsStyleReset(); chsAiHistN = 0;
+  { double x0, x1, x2; for (int g = 0; g < 14; g++) Eval::run(1, 1, true, &x0, &x1, &x2); }
+  chsTrainN = 1000;                                                          // anggap sudah matang -> bobot gaya penuh
   // mode gaya tetap tidak membuang partai: posisi dgn mat dalam 1 -> tetap mat meski gaya melarang
-  memset(chsW, 0, sizeof(chsW)); chsW[0] = -4; chsW[14] = -4;
   setFen("r1bqkb1r/pppp1ppp/2n2n2/4p2Q/2B1P3/8/PPPP1PPP/RNB1K1NR w KQkq - 0 1");
-  m = chsAiChoose(4, 1000, 70, 2); mstr(m, s);
+  m = chsAiChoose(4, 1000, 70, 2, 0); mstr(m, s);
   CHECK(!strcmp(s, "h5f7"), "mode gaya harus tetap memilih mat, dapat %s", s);
 
   // papan utuh setelah pencarian
-  chsReset(); int8_t sb[64]; memcpy(sb, chsBd, 64); chsAiChoose(5, 800, 0, 0);
+  chsReset(); int8_t sb[64]; memcpy(sb, chsBd, 64); chsAiChoose(5, 800, 0, 0, 0);
   CHECK(!memcmp(sb, chsBd, 64) && chsWhite && chsCastle == 15 && chsEp == -1, "papan berubah setelah pencarian");
   chsAiFree();
   printf(fails ? "\n%d GAGAL\n" : "\nSEMUA LULUS\n", fails);
