@@ -301,6 +301,460 @@ static int chsCountPlies(const char* mv) {
 }
 // ==== ENGINE END ====
 
+// ==== AI BEGIN ====
+// Mesin AI + model GAYA PEMAIN yang belajar online. Dipasang di atas mesin aturan (papan global chsBd, dst),
+// tanpa Arduino/LovyanGFX -> diuji di PC (tests_chess/). HANYA dipanggil dari loop UI: pencarian memakai-ulang
+// papan global lalu mengembalikannya persis seperti semula.
+//
+// TIGA BAGIAN
+//  1. Pencarian negamax alpha-beta + quiescence + evaluasi materi/PST. Lima tingkat lewat chsAiChoose().
+//  2. Model gaya (CHS_NF fitur langkah, bobot chsW). Tiap langkah USER dipelajari dgn regresi softmax
+//     online: bobot digeser supaya langkah yg dipilih user lebih mungkin dibanding semua langkah sah lain.
+//  3. Buku pembuka pribadi: posisi -> langkah yg paling sering user mainkan (chsBk*).
+// Mode 2 (gaya) hanya memilih di antara langkah yg nilai pencariannya masih dekat terbaik (margin), jadi AI yg
+// menggantikan user saat AFK meniru gayanya TANPA membuang partai -> tetap adil utk lawan.
+#ifndef CHS_AI_NOW
+#define CHS_AI_NOW() millis()
+#endif
+#ifndef CHS_AI_RAND
+#define CHS_AI_RAND() ((uint32_t)esp_random())
+#endif
+#ifndef CHS_AI_ALLOC
+#define CHS_AI_ALLOC(n) heap_caps_malloc((n), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)
+#endif
+#ifndef CHS_AI_FREE
+#define CHS_AI_FREE(p) free(p)
+#endif
+
+#define CHS_NF        18
+#define CHS_AI_INF    32000
+#define CHS_AI_MATE   30000
+#define CHS_AI_PLY    24
+#define CHS_AI_HIST   320
+#define CHS_BK_N      128
+
+static const int16_t chsAiVal[7] = {0, 100, 320, 330, 500, 900, 0};
+// Tabel petak-bidak (Michniewski), ditulis dari sudut pandang Putih: baris pertama = rank 8.
+static const int8_t chsPst[6][64] = {
+  { 0,  0,  0,  0,  0,  0,  0,  0,   50, 50, 50, 50, 50, 50, 50, 50,   10, 10, 20, 30, 30, 20, 10, 10,    5,  5, 10, 25, 25, 10,  5,  5,
+    0,  0,  0, 20, 20,  0,  0,  0,    5, -5,-10,  0,  0,-10, -5,  5,    5, 10, 10,-20,-20, 10, 10,  5,    0,  0,  0,  0,  0,  0,  0,  0 },
+  {-50,-40,-30,-30,-30,-30,-40,-50,  -40,-20,  0,  0,  0,  0,-20,-40,  -30,  0, 10, 15, 15, 10,  0,-30,  -30,  5, 15, 20, 20, 15,  5,-30,
+   -30,  0, 15, 20, 20, 15,  0,-30,  -30,  5, 10, 15, 15, 10,  5,-30,  -40,-20,  0,  5,  5,  0,-20,-40,  -50,-40,-30,-30,-30,-30,-40,-50 },
+  {-20,-10,-10,-10,-10,-10,-10,-20,  -10,  0,  0,  0,  0,  0,  0,-10,  -10,  0,  5, 10, 10,  5,  0,-10,  -10,  5,  5, 10, 10,  5,  5,-10,
+   -10,  0, 10, 10, 10, 10,  0,-10,  -10, 10, 10, 10, 10, 10, 10,-10,  -10,  5,  0,  0,  0,  0,  5,-10,  -20,-10,-10,-10,-10,-10,-10,-20 },
+  {  0,  0,  0,  0,  0,  0,  0,  0,    5, 10, 10, 10, 10, 10, 10,  5,   -5,  0,  0,  0,  0,  0,  0, -5,   -5,  0,  0,  0,  0,  0,  0, -5,
+   -5,  0,  0,  0,  0,  0,  0, -5,   -5,  0,  0,  0,  0,  0,  0, -5,   -5,  0,  0,  0,  0,  0,  0, -5,    0,  0,  0,  5,  5,  0,  0,  0 },
+  {-20,-10,-10, -5, -5,-10,-10,-20,  -10,  0,  0,  0,  0,  0,  0,-10,  -10,  0,  5,  5,  5,  5,  0,-10,   -5,  0,  5,  5,  5,  5,  0, -5,
+     0,  0,  5,  5,  5,  5,  0, -5,  -10,  5,  5,  5,  5,  5,  0,-10,  -10,  0,  5,  0,  0,  0,  0,-10,  -20,-10,-10, -5, -5,-10,-10,-20 },
+  {-30,-40,-40,-50,-50,-40,-40,-30,  -30,-40,-40,-50,-50,-40,-40,-30,  -30,-40,-40,-50,-50,-40,-40,-30,  -30,-40,-40,-50,-50,-40,-40,-30,
+   -20,-30,-30,-40,-40,-30,-30,-20,  -10,-20,-20,-20,-20,-20,-20,-10,   20, 20,  0,  0,  0,  0, 20, 20,   20, 30, 10,  0,  0, 10, 30, 20 }
+};
+static const int8_t chsPstKe[64] = {
+  -50,-40,-30,-20,-20,-30,-40,-50,  -30,-20,-10,  0,  0,-10,-20,-30,  -30,-10, 20, 30, 30, 20,-10,-30,  -30,-10, 30, 40, 40, 30,-10,-30,
+  -30,-10, 30, 40, 40, 30,-10,-30,  -30,-10, 20, 30, 30, 20,-10,-30,  -30,-30,  0,  0,  0,  0,-30,-30,  -50,-30,-30,-30,-30,-30,-30,-50
+};
+
+// ---- memori kerja (PSRAM, dialokasi saat dipakai, dibebaskan saat keluar app) ----
+static uint16_t* chsAiMv = nullptr;    // [CHS_AI_PLY][256] daftar langkah per kedalaman
+static int16_t*  chsAiKy = nullptr;    // [CHS_AI_PLY][256] kunci urutan
+static uint16_t* chsAiRm = nullptr;    // 256 langkah sah di akar
+static int32_t*  chsAiSc = nullptr;    // skor iterasi berjalan
+static int32_t*  chsAiFs = nullptr;    // skor iterasi terakhir yg SELESAI
+static uint8_t*  chsAiEx = nullptr;    // skor berjalan eksak?
+static uint8_t*  chsAiFx = nullptr;    // skor final eksak?
+static float*    chsAiFB = nullptr;    // [256][CHS_NF] fitur langkah
+static float*    chsAiFS = nullptr;    // 256 skor
+static uint32_t* chsAiHist = nullptr;  // hash posisi sepanjang partai
+static uint8_t*  chsAiMem = nullptr;
+
+static uint32_t chsAiNodes = 0, chsAiDeadline = 0;
+static bool     chsAiAbort = false, chsAiCheckTime = false;
+static int      chsAiHistN = 0;
+
+// ---- model gaya + buku pembuka pribadi (disimpan ke NVS oleh pembungkus di bawah) ----
+static float    chsW[CHS_NF];
+static uint32_t chsTrainN = 0;
+static bool     chsStyleDirty = false;
+static uint32_t chsBkH[CHS_BK_N];
+static uint16_t chsBkM[CHS_BK_N];
+static uint8_t  chsBkC[CHS_BK_N];
+static int      chsBkN = 0;
+static uint16_t chsBkNext = 0;
+
+static bool chsAiEnsure() {
+  if (chsAiMem) return true;
+  size_t szMv = (size_t)CHS_AI_PLY * 256 * 2, szFB = (size_t)256 * CHS_NF * 4;
+  size_t total = szMv * 2 + 512 + 1024 * 2 + 256 * 2 + szFB + 1024 + (size_t)CHS_AI_HIST * 4 + 64;
+  uint8_t* m = (uint8_t*)CHS_AI_ALLOC(total);
+  if (!m) m = (uint8_t*)malloc(total);
+  if (!m) return false;
+  memset(m, 0, total);
+  chsAiMem = m;
+  uint8_t* p = m;
+  chsAiMv = (uint16_t*)p; p += szMv;
+  chsAiKy = (int16_t*)p;  p += szMv;
+  chsAiRm = (uint16_t*)p; p += 512;
+  chsAiSc = (int32_t*)p;  p += 1024;
+  chsAiFs = (int32_t*)p;  p += 1024;
+  chsAiEx = p; p += 256;
+  chsAiFx = p; p += 256;
+  chsAiFB = (float*)p;    p += szFB;
+  chsAiFS = (float*)p;    p += 1024;
+  chsAiHist = (uint32_t*)p;
+  return true;
+}
+static void chsAiFree() {
+  if (chsAiMem) CHS_AI_FREE(chsAiMem);
+  chsAiMem = nullptr; chsAiMv = nullptr; chsAiKy = nullptr; chsAiRm = nullptr; chsAiSc = nullptr; chsAiFs = nullptr;
+  chsAiEx = nullptr; chsAiFx = nullptr; chsAiFB = nullptr; chsAiFS = nullptr; chsAiHist = nullptr; chsAiHistN = 0;
+}
+
+static inline int chsAbsI(int v) { return v < 0 ? -v : v; }
+
+static uint32_t chsPosHash() {
+  uint32_t h = 2166136261u;
+  for (int i = 0; i < 64; i++) { h ^= (uint8_t)chsBd[i]; h *= 16777619u; }
+  h ^= chsWhite ? 1u : 2u;          h *= 16777619u;
+  h ^= chsCastle;                   h *= 16777619u;
+  h ^= (uint8_t)(chsEp + 1);        h *= 16777619u;
+  return h;
+}
+
+#define CHS_SAVE_ST  int8_t _sb[64]; memcpy(_sb, chsBd, 64); bool _sw = chsWhite; uint8_t _sc = chsCastle; int8_t _se = chsEp; uint16_t _sh = chsHalf
+#define CHS_REST_ST  do { memcpy(chsBd, _sb, 64); chsWhite = _sw; chsCastle = _sc; chsEp = _se; chsHalf = _sh; } while (0)
+
+// ---------------------------------------------------------------- evaluasi (dari sudut pandang yg jalan)
+static int chsAiEval() {
+  int sc = 0, npm = 0;
+  for (int sq = 0; sq < 64; sq++) { int8_t p = chsBd[sq]; if (!p) continue; int t = p > 0 ? p : -p; if (t >= 2 && t <= 5) npm += chsAiVal[t]; }
+  bool eg = npm <= 2600;
+  for (int sq = 0; sq < 64; sq++) {
+    int8_t p = chsBd[sq]; if (!p) continue;
+    int t = p > 0 ? p : -p, r = sq >> 3, f = sq & 7;
+    int idx = p > 0 ? (7 - r) * 8 + f : r * 8 + f;
+    int v = chsAiVal[t] + (t == 6 ? (eg ? chsPstKe[idx] : chsPst[5][idx]) : chsPst[t - 1][idx]);
+    sc += p > 0 ? v : -v;
+  }
+  return chsWhite ? sc : -sc;
+}
+
+// kunci urutan langkah: MVV-LVA + promosi
+static int chsAiKey(uint16_t m) {
+  int from = m & 63, to = (m >> 6) & 63, promo = (m >> 12) & 15;
+  int8_t p = chsBd[from], q = chsBd[to];
+  int t = p > 0 ? p : -p, qt = q > 0 ? q : -q, k = 0;
+  if (!q && t == 1 && to == chsEp && (from & 7) != (to & 7)) qt = 1;
+  if (qt) k = chsAiVal[qt] * 10 - chsAiVal[t] / 10;
+  if (promo) k += chsAiVal[promo] * 10;
+  return k;
+}
+static inline void chsAiPick(uint16_t* mv, int16_t* ky, int n, int i) {
+  int b = i;
+  for (int j = i + 1; j < n; j++) if (ky[j] > ky[b]) b = j;
+  if (b != i) { uint16_t tm = mv[i]; mv[i] = mv[b]; mv[b] = tm; int16_t tk = ky[i]; ky[i] = ky[b]; ky[b] = tk; }
+}
+static inline bool chsAiTimeUp() {
+  if (chsAiCheckTime && (chsAiNodes & 255u) == 0 && (int32_t)(CHS_AI_NOW() - chsAiDeadline) >= 0) chsAiAbort = true;
+  return chsAiAbort;
+}
+
+// ---------------------------------------------------------------- pencarian
+static int chsAiQ(int alpha, int beta, int ply) {
+  chsAiNodes++;
+  if (chsAiTimeUp()) return 0;
+  int stand = chsAiEval();
+  if (ply >= CHS_AI_PLY - 1) return stand;
+  if (stand >= beta) return stand;
+  if (stand > alpha) alpha = stand;
+  uint16_t* mv = chsAiMv + ply * 256; int16_t* ky = chsAiKy + ply * 256;
+  int n = chsGen(mv), nc = 0;
+  for (int i = 0; i < n; i++) {
+    uint16_t m = mv[i]; int from = m & 63, to = (m >> 6) & 63;
+    int8_t p = chsBd[from];
+    bool capt = chsBd[to] != 0 || ((p == 1 || p == -1) && to == chsEp && (from & 7) != (to & 7)) || ((m >> 12) & 15);
+    if (capt) { int k = chsAiKey(m); mv[nc] = m; ky[nc] = (int16_t)k; nc++; }
+  }
+  for (int i = 0; i < nc; i++) {
+    chsAiPick(mv, ky, nc, i);
+    CHS_SAVE_ST;
+    bool mover = chsWhite;
+    chsDo(mv[i]);
+    int ks = chsKingSq(mover);
+    if (ks < 0 || chsAtt(ks, !mover)) { CHS_REST_ST; continue; }
+    int sc = -chsAiQ(-beta, -alpha, ply + 1);
+    CHS_REST_ST;
+    if (chsAiAbort) return 0;
+    if (sc >= beta) return sc;
+    if (sc > alpha) alpha = sc;
+  }
+  return alpha;
+}
+
+static int chsAiNeg(int depth, int alpha, int beta, int ply) {
+  chsAiNodes++;
+  if (chsAiTimeUp()) return 0;
+  if (chsHalf >= 100) return 0;
+  bool inchk = chsInCheck();
+  if (inchk && ply < CHS_AI_PLY - 6) depth++;
+  if (depth <= 0) return chsAiQ(alpha, beta, ply);
+  if (ply >= CHS_AI_PLY - 1) return chsAiEval();
+  uint16_t* mv = chsAiMv + ply * 256; int16_t* ky = chsAiKy + ply * 256;
+  int n = chsGen(mv);
+  for (int i = 0; i < n; i++) ky[i] = (int16_t)chsAiKey(mv[i]);
+  int best = -CHS_AI_INF, legal = 0;
+  for (int i = 0; i < n; i++) {
+    chsAiPick(mv, ky, n, i);
+    CHS_SAVE_ST;
+    bool mover = chsWhite;
+    chsDo(mv[i]);
+    int ks = chsKingSq(mover);
+    if (ks < 0 || chsAtt(ks, !mover)) { CHS_REST_ST; continue; }
+    legal++;
+    int sc = -chsAiNeg(depth - 1, -beta, -alpha, ply + 1);
+    CHS_REST_ST;
+    if (chsAiAbort) return 0;
+    if (sc > best) best = sc;
+    if (sc > alpha) alpha = sc;
+    if (alpha >= beta) break;
+  }
+  if (!legal) return inchk ? -CHS_AI_MATE + ply : 0;
+  return best;
+}
+
+// hash tiap posisi dari daftar langkah "e2e4 e7e5 ..." (utk menghindari pengulangan saat AI unggul)
+static void chsAiHistBuild(const char* mv) {
+  chsAiHistN = 0;
+  if (!chsAiEnsure()) return;
+  CHS_SAVE_ST;
+  chsReset();
+  chsAiHist[chsAiHistN++] = chsPosHash();
+  const char* p = mv;
+  while (p && *p && chsAiHistN < CHS_AI_HIST) {
+    while (*p == ' ') p++;
+    if (!*p) break;
+    const char* q = p; while (*q && *q != ' ') q++;
+    uint16_t m;
+    if (!chsParse(p, (int)(q - p), &m)) break;
+    chsDo(m);
+    chsAiHist[chsAiHistN++] = chsPosHash();
+    p = q;
+  }
+  CHS_REST_ST;
+}
+
+// ---------------------------------------------------------------- fitur gaya
+static inline float chsAiCent(int r, int c) { return 7.0f - (float)(chsAbsI(2 * r - 7) + chsAbsI(2 * c - 7)) * 0.5f; }
+static inline float chsAiClamp1(float v) { return v < -1.0f ? -1.0f : (v > 1.0f ? 1.0f : v); }
+
+// f[0..CHS_NF-1] utk langkah m pada posisi SEKARANG (belum dijalankan). Semua nilai relatif thd sisi yg jalan.
+static void chsAiFeat(uint16_t m, float* f) {
+  for (int i = 0; i < CHS_NF; i++) f[i] = 0;
+  int from = m & 63, to = (m >> 6) & 63, promo = (m >> 12) & 15;
+  int8_t p = chsBd[from], q = chsBd[to];
+  int t = p > 0 ? p : -p, qt = q > 0 ? q : -q; bool w = p > 0;
+  bool ep = (t == 1 && !q && to == chsEp && (from & 7) != (to & 7));
+  if (ep) qt = 1;
+  bool cap = q != 0 || ep;
+  int fr = from >> 3, ff = from & 7, tr = to >> 3, tf = to & 7;
+  int fwd = w ? (tr - fr) : (fr - tr);
+  f[0]  = cap ? 1.0f : 0.0f;                                                   // memakan
+  f[1]  = (cap && chsAiVal[qt] >= chsAiVal[t]) ? 1.0f : 0.0f;                  // pertukaran menguntungkan
+  f[2]  = chsAiClamp1((chsAiCent(tr, tf) - chsAiCent(fr, ff)) / 4.0f);         // ke tengah papan
+  f[3]  = (t == 1 && !cap) ? 1.0f : 0.0f;                                      // dorong pion
+  f[4]  = chsAiClamp1(fwd / 2.0f);                                             // maju
+  f[5]  = ((t == 2 || t == 3) && fr == (w ? 0 : 7)) ? 1.0f : 0.0f;            // kembangkan kuda / gajah
+  f[6]  = (t == 6 && chsAbsI(to - from) == 2) ? 1.0f : 0.0f;                   // rokade
+  f[7]  = (t == 5) ? 1.0f : 0.0f;                                              // menteri
+  f[8]  = (t == 4) ? 1.0f : 0.0f;                                              // benteng
+  f[9]  = (t == 6 && chsAbsI(to - from) != 2) ? 1.0f : 0.0f;                   // raja jalan
+  f[11] = chsAtt(to, !w) ? 1.0f : 0.0f;                                        // mendarat di petak yg diserang
+  f[12] = (t != 1 && fwd < 0) ? 1.0f : 0.0f;                                   // mundur
+  int ek = chsKingSq(!w);
+  if (ek >= 0) {
+    int er = ek >> 3, ef = ek & 7;
+    int d0 = chsAbsI(fr - er) > chsAbsI(ff - ef) ? chsAbsI(fr - er) : chsAbsI(ff - ef);
+    int d1 = chsAbsI(tr - er) > chsAbsI(tf - ef) ? chsAbsI(tr - er) : chsAbsI(tf - ef);
+    f[13] = chsAiClamp1((d0 - d1) / 2.0f);                                     // mendekati raja lawan
+  }
+  f[14] = promo ? 1.0f : 0.0f;                                                 // promosi
+  f[15] = (t == 1 && (tf <= 1 || tf >= 6)) ? 1.0f : 0.0f;                      // pion sayap
+  f[16] = (t == 2) ? 1.0f : 0.0f;                                              // kuda
+  f[17] = (t == 3) ? 1.0f : 0.0f;                                              // gajah
+  { CHS_SAVE_ST; chsDo(m); f[10] = chsInCheck() ? 1.0f : 0.0f; CHS_REST_ST; }  // memberi skak
+}
+
+static float chsStyleScore(uint16_t m) {
+  float f[CHS_NF]; chsAiFeat(m, f);
+  float s = 0; for (int k = 0; k < CHS_NF; k++) s += chsW[k] * f[k];
+  return s;
+}
+
+// ---------------------------------------------------------------- buku pembuka pribadi
+static void chsBookAdd(uint32_t h, uint16_t m) {
+  for (int i = 0; i < chsBkN; i++) if (chsBkH[i] == h) {
+    if (chsBkM[i] == m) { if (chsBkC[i] < 255) chsBkC[i]++; }
+    else if (chsBkC[i] > 1) chsBkC[i]--;
+    else { chsBkM[i] = m; chsBkC[i] = 1; }
+    chsStyleDirty = true; return;
+  }
+  int slot;
+  if (chsBkN < CHS_BK_N) slot = chsBkN++;
+  else { slot = chsBkNext; chsBkNext = (uint16_t)((chsBkNext + 1) % CHS_BK_N); }
+  chsBkH[slot] = h; chsBkM[slot] = m; chsBkC[slot] = 1; chsStyleDirty = true;
+}
+static uint16_t chsBookGet(uint32_t h, int* cnt) {
+  for (int i = 0; i < chsBkN; i++) if (chsBkH[i] == h) { if (cnt) *cnt = chsBkC[i]; return chsBkM[i]; }
+  return 0;
+}
+
+// ---------------------------------------------------------------- belajar online dari langkah USER
+// Dipanggil SEBELUM langkah dijalankan (posisi masih sebelum langkah).
+static void chsStyleLearn(uint16_t played) {
+  if (!chsAiEnsure()) return;
+  uint16_t pm[256]; int pn = chsGen(pm), n = 0, j = -1;
+  for (int i = 0; i < pn; i++) if (chsLegal(pm[i])) { chsAiRm[n] = pm[i]; if (pm[i] == played) j = n; n++; }
+  if (n < 2 || j < 0) return;                 // langkah terpaksa tidak mengajarkan apa-apa
+  chsBookAdd(chsPosHash(), played);
+  float* F = chsAiFB; float* S = chsAiFS; float mx = -1e30f;
+  for (int i = 0; i < n; i++) {
+    chsAiFeat(chsAiRm[i], F + i * CHS_NF);
+    float s = 0; for (int k = 0; k < CHS_NF; k++) s += chsW[k] * F[i * CHS_NF + k];
+    S[i] = s; if (s > mx) mx = s;
+  }
+  float sum = 0;
+  for (int i = 0; i < n; i++) { S[i] = expf(S[i] - mx); sum += S[i]; }
+  float E[CHS_NF]; for (int k = 0; k < CHS_NF; k++) E[k] = 0;
+  for (int i = 0; i < n; i++) { float pr = S[i] / sum; for (int k = 0; k < CHS_NF; k++) E[k] += pr * F[i * CHS_NF + k]; }
+  float lr = 0.30f / (1.0f + (float)chsTrainN / 40.0f); if (lr < 0.04f) lr = 0.04f;
+  for (int k = 0; k < CHS_NF; k++) {
+    float nw = chsW[k] + lr * (F[j * CHS_NF + k] - E[k]) - lr * 0.003f * chsW[k];
+    chsW[k] = nw > 4.0f ? 4.0f : (nw < -4.0f ? -4.0f : nw);
+  }
+  chsTrainN++; chsStyleDirty = true;
+}
+
+static void chsStyleReset() {
+  for (int k = 0; k < CHS_NF; k++) chsW[k] = 0;
+  chsTrainN = 0; chsBkN = 0; chsBkNext = 0; chsStyleDirty = true;
+}
+
+// ---- (de)serialisasi utk NVS ----
+#define CHS_STY_LEN (6 + 4 * CHS_NF)
+static size_t chsStyleSer(uint8_t* o) {
+  o[0] = 1; o[1] = CHS_NF;
+  o[2] = (uint8_t)chsTrainN; o[3] = (uint8_t)(chsTrainN >> 8); o[4] = (uint8_t)(chsTrainN >> 16); o[5] = (uint8_t)(chsTrainN >> 24);
+  memcpy(o + 6, chsW, 4 * CHS_NF);
+  return CHS_STY_LEN;
+}
+static bool chsStyleDeser(const uint8_t* b, size_t n) {
+  if (n < CHS_STY_LEN || b[0] != 1 || b[1] != CHS_NF) return false;
+  float w[CHS_NF]; memcpy(w, b + 6, 4 * CHS_NF);
+  for (int k = 0; k < CHS_NF; k++) if (!(w[k] > -10.0f && w[k] < 10.0f)) return false;   // juga menolak NaN
+  memcpy(chsW, w, sizeof(w));
+  chsTrainN = (uint32_t)b[2] | ((uint32_t)b[3] << 8) | ((uint32_t)b[4] << 16) | ((uint32_t)b[5] << 24);
+  return true;
+}
+static size_t chsBookSer(uint8_t* o) {
+  o[0] = (uint8_t)chsBkN; o[1] = (uint8_t)(chsBkN >> 8); o[2] = (uint8_t)chsBkNext; o[3] = (uint8_t)(chsBkNext >> 8);
+  size_t p = 4;
+  for (int i = 0; i < chsBkN; i++) {
+    o[p++] = (uint8_t)chsBkH[i]; o[p++] = (uint8_t)(chsBkH[i] >> 8); o[p++] = (uint8_t)(chsBkH[i] >> 16); o[p++] = (uint8_t)(chsBkH[i] >> 24);
+    o[p++] = (uint8_t)chsBkM[i]; o[p++] = (uint8_t)(chsBkM[i] >> 8); o[p++] = chsBkC[i];
+  }
+  return p;
+}
+#define CHS_BK_MAXLEN (4 + 7 * CHS_BK_N)
+static bool chsBookDeser(const uint8_t* b, size_t len) {
+  if (len < 4) return false;
+  int n = b[0] | (b[1] << 8), nx = b[2] | (b[3] << 8);
+  if (n > CHS_BK_N || nx >= CHS_BK_N || len < (size_t)(4 + 7 * n)) return false;
+  size_t p = 4;
+  for (int i = 0; i < n; i++) {
+    uint16_t m = (uint16_t)(b[p + 4] | (b[p + 5] << 8));
+    if (m == 0) return false;
+    p += 7;
+  }
+  p = 4;
+  for (int i = 0; i < n; i++) {
+    chsBkH[i] = (uint32_t)b[p] | ((uint32_t)b[p + 1] << 8) | ((uint32_t)b[p + 2] << 16) | ((uint32_t)b[p + 3] << 24);
+    chsBkM[i] = (uint16_t)(b[p + 4] | (b[p + 5] << 8)); chsBkC[i] = b[p + 6];
+    p += 7;
+  }
+  chsBkN = n; chsBkNext = (uint16_t)nx;
+  return true;
+}
+
+// ---------------------------------------------------------------- pemilih langkah
+// maxDepth/budgetMs = batas pencarian. margin = selisih skor (centipawn) dari langkah terbaik yg masih dianggap "layak".
+// mode 0 = terbaik | 1 = acak di antara yg layak | 2 = paling cocok dgn GAYA user di antara yg layak.
+// Mengembalikan langkah (dari | ke<<6 | promosi<<12), atau 0 kalau tidak ada langkah sah.
+static uint16_t chsAiChoose(int maxDepth, uint32_t budgetMs, int margin, int mode) {
+  if (!chsAiEnsure()) return 0;
+  uint16_t pm[256]; int pn = chsGen(pm), n = 0;
+  for (int i = 0; i < pn; i++) if (chsLegal(pm[i])) chsAiRm[n++] = pm[i];
+  if (n == 0) return 0;
+  if (n == 1) return chsAiRm[0];
+  for (int i = 0; i < n; i++) chsAiKy[i] = (int16_t)chsAiKey(chsAiRm[i]);
+  for (int i = 0; i < n; i++) chsAiPick(chsAiRm, chsAiKy, n, i);
+  uint32_t t0 = CHS_AI_NOW();
+  chsAiDeadline = t0 + budgetMs; chsAiNodes = 0;
+  for (int d = 1; d <= maxDepth; d++) {
+    chsAiCheckTime = (d > 1); chsAiAbort = false;
+    int curBest = -CHS_AI_INF; bool done = true;
+    for (int i = 0; i < n; i++) {
+      CHS_SAVE_ST;
+      chsDo(chsAiRm[i]);
+      int alpha = (curBest == -CHS_AI_INF) ? -CHS_AI_INF : curBest - margin;
+      int s = -chsAiNeg(d - 1, -CHS_AI_INF, -alpha, 1);
+      CHS_REST_ST;
+      if (chsAiAbort) { done = false; break; }
+      chsAiSc[i] = s; chsAiEx[i] = (s > alpha) ? 1 : 0;
+      if (chsAiEx[i] && s > curBest) curBest = s;
+    }
+    if (!done) break;
+    memcpy(chsAiFs, chsAiSc, (size_t)n * 4); memcpy(chsAiFx, chsAiEx, (size_t)n);
+    int b = 0;
+    for (int i = 1; i < n; i++) if (chsAiFx[i] && (!chsAiFx[b] || chsAiFs[i] > chsAiFs[b])) b = i;
+    if (b != 0) {
+      uint16_t tm = chsAiRm[0]; chsAiRm[0] = chsAiRm[b]; chsAiRm[b] = tm;
+      int32_t ts = chsAiFs[0]; chsAiFs[0] = chsAiFs[b]; chsAiFs[b] = ts;
+      uint8_t te = chsAiFx[0]; chsAiFx[0] = chsAiFx[b]; chsAiFx[b] = te;
+    }
+    if (curBest >= CHS_AI_MATE - 100 && margin == 0) break;                    // mat sudah ketemu
+    if (d < maxDepth && (CHS_AI_NOW() - t0) * 3 > budgetMs) break;             // iterasi berikut hampir pasti tidak selesai
+  }
+  // hindari mengulang posisi saat AI sudah unggul (aturan 3 kali ulang belum ada di mesin ini)
+  if (chsAiHistN > 1) {
+    for (int i = 0; i < n; i++) if (chsAiFx[i] && chsAiFs[i] > 150) {
+      CHS_SAVE_ST; chsDo(chsAiRm[i]); uint32_t h = chsPosHash(); CHS_REST_ST;
+      for (int k = 0; k < chsAiHistN; k++) if (chsAiHist[k] == h) { chsAiFs[i] -= 150; break; }
+    }
+  }
+  int bestSc = -CHS_AI_INF;
+  for (int i = 0; i < n; i++) if (chsAiFx[i] && chsAiFs[i] > bestSc) bestSc = chsAiFs[i];
+  int thr = bestSc - margin;
+  int nc = 0, pick = -1;
+  for (int i = 0; i < n; i++) if (chsAiFx[i] && chsAiFs[i] >= thr) nc++;
+  if (mode == 0 || nc <= 1) {
+    for (int i = 0; i < n; i++) if (chsAiFx[i] && chsAiFs[i] == bestSc) { pick = i; break; }
+  } else if (mode == 1) {
+    int r = (int)(CHS_AI_RAND() % (uint32_t)nc);
+    for (int i = 0; i < n; i++) if (chsAiFx[i] && chsAiFs[i] >= thr) { if (r-- == 0) { pick = i; break; } }
+  } else {
+    int bc = 0; uint16_t bm = chsBookGet(chsPosHash(), &bc);
+    float bestV = -1e30f;
+    for (int i = 0; i < n; i++) if (chsAiFx[i] && chsAiFs[i] >= thr) {
+      float v = chsStyleScore(chsAiRm[i]) + (float)chsAiFs[i] / 60.0f;
+      if (bm && chsAiRm[i] == bm) v += 1.5f + 0.5f * (float)(bc > 4 ? 4 : bc);
+      v += (float)(CHS_AI_RAND() % 100u) * 0.002f;
+      if (v > bestV) { bestV = v; pick = i; }
+    }
+  }
+  if (pick < 0) pick = 0;
+  return chsAiRm[pick];
+}
+// ==== AI END ====
+
 // ---------------------------------------------------------------------
 // STATE PERMAINAN + JARINGAN
 // ---------------------------------------------------------------------
@@ -431,6 +885,51 @@ static void chsAnimStart(int from, int to, int8_t cap) {
     if (rf >= 0 && rf < 64 && chsBd[rt] == (mp > 0 ? 4 : -4)) { chsAnimRF = rf; chsAnimRT = rt; }
   }
   chsAnimMs = millis(); chsAnimOn = true;
+}
+
+// ---------------------------------------------------------------------
+// MODE LAWAN AI + AI PENGGANTI SAAT AFK
+// ---------------------------------------------------------------------
+static bool          chsVsAI = false;          // true = lawan AI (tanpa jaringan)
+static uint8_t       chsAiLevel = 1;           // 0 Mudah, 1 Sedang, 2 Sulit, 3 Cermin (AI meniru gaya user)
+static uint8_t       chsAfkIdx = 2;            // indeks chsAfkSec: 0 = mati
+static bool          chsAfkAI = false;         // AI sedang memainkan giliran user (user AFK)
+static bool          chsAiUserWhite = true;
+static bool          chsAiQueued = false, chsPrevMyTurn = false;
+static unsigned long chsAiDueMs = 0, chsLastTouchMs = 0, chsTurnStartMs = 0;
+static uint8_t       chsUnsaved = 0;
+static const char* const chsLvName[4] = {"Mudah", "Sedang", "Sulit", "Cermin"};
+static const uint16_t chsAfkSec[4] = {0, 30, 60, 120};
+static const uint8_t  chsLvDepth[4]  = {2, 4, 6, 4};
+static const uint16_t chsLvMs[4]     = {250, 700, 1800, 700};
+static const int16_t  chsLvMargin[4] = {120, 10, 0, 70};
+static const uint8_t  chsLvMode[4]   = {1, 1, 0, 2};       // 0 terbaik | 1 acak di antara yg layak | 2 gaya user
+
+static void chsPrefsLoad() {
+  Preferences p;
+  if (!p.begin("chess", true)) return;
+  uint8_t lv = p.getUChar("lvl", 1); if (lv < 4) chsAiLevel = lv;
+  uint8_t af = p.getUChar("afk", 2); if (af < 4) chsAfkIdx = af;
+  uint8_t sb[CHS_STY_LEN + 8];
+  size_t L = p.getBytesLength("sty");
+  if (L >= CHS_STY_LEN && L <= sizeof(sb)) { p.getBytes("sty", sb, L); chsStyleDeser(sb, L); }
+  uint8_t bb[CHS_BK_MAXLEN];
+  L = p.getBytesLength("bk");
+  if (L >= 4 && L <= sizeof(bb)) { p.getBytes("bk", bb, L); chsBookDeser(bb, L); }
+  p.end();
+}
+static void chsPrefsSaveCfg() {
+  Preferences p;
+  if (p.begin("chess", false)) { p.putUChar("lvl", chsAiLevel); p.putUChar("afk", chsAfkIdx); p.end(); }
+}
+static void chsStyleSave() {
+  if (!chsStyleDirty) return;
+  Preferences p;
+  if (!p.begin("chess", false)) return;
+  uint8_t sb[CHS_STY_LEN]; size_t L = chsStyleSer(sb); p.putBytes("sty", sb, L);
+  uint8_t bb[CHS_BK_MAXLEN]; L = chsBookSer(bb); p.putBytes("bk", bb, L);
+  p.end();
+  chsStyleDirty = false; chsUnsaved = 0;
 }
 
 static void chsSetErr(const char* m) { strncpy(chsErr, m, sizeof(chsErr) - 1); chsErr[sizeof(chsErr) - 1] = 0; }
@@ -712,10 +1211,11 @@ static bool chsCanMove() {
 // ---------------------------------------------------------------------
 // AKSI LOKAL
 // ---------------------------------------------------------------------
-static void chsCommit(uint16_t m) {
+static void chsCommitEx(uint16_t m, bool learn) {
   char t[8]; chsMoveStr(m, t);
   size_t L = strlen(chsMoves);
   if (L + 8 > CHS_BUF - 40) return;
+  if (learn) { chsStyleLearn(m); chsUnsaved++; }       // belajar dari langkah USER sebelum langkah dijalankan
   if (L) chsMoves[L++] = ' ';
   strcpy(chsMoves + L, t);
   int8_t capP = chsBd[(m >> 6) & 63];
@@ -726,9 +1226,11 @@ static void chsCommit(uint16_t m) {
   chsSel = -1; chsPromoOn = false;
   chsUpdateEnd();
   vibTap();
-  chsQueueSend();
+  if (!chsVsAI) chsQueueSend();
+  if (chsStyleDirty && (chsUnsaved >= 8 || chsEnd != 0)) chsStyleSave();
   needRedraw = true;
 }
+static void chsCommit(uint16_t m) { chsCommitEx(m, true); }     // langkah user (ikut melatih model gaya)
 
 static void chsNewGameLocal() {
   chsReset();
@@ -737,7 +1239,17 @@ static void chsNewGameLocal() {
   chsUpdateEnd();
 }
 
+static void chsAiSeats() {                      // kursi mode lawan AI: user = chsRole, AI = sisanya
+  chsRole = chsAiUserWhite ? 1 : 2;
+  const char* me = chatName.length() ? chatName.c_str() : "Kamu";
+  char an[24]; snprintf(an, sizeof(an), "AI %s", chsLvName[chsAiLevel]);
+  if (chsRole == 1) { strcpy(chsWPid, chsPid); strcpy(chsBPid, "ai"); strncpy(chsWName, me, 23); chsWName[23] = 0; strcpy(chsBName, an); }
+  else              { strcpy(chsBPid, chsPid); strcpy(chsWPid, "ai"); strncpy(chsBName, me, 23); chsBName[23] = 0; strcpy(chsWName, an); }
+}
 static void chsRematch() {
+  if (chsVsAI) {                                // ganti warna tiap ulang
+    chsAiUserWhite = !chsAiUserWhite; chsAiSeats(); chsNewGameLocal(); chsAiQueued = false; needRedraw = true; return;
+  }
   chsGenNo++;
   chsNewGameLocal();
   chsQueueSend();
@@ -749,7 +1261,8 @@ static void chsResign() {
   strcpy(chsRes, chsRole == 1 ? "RW" : "RB");
   chsConfirm = false;
   chsUpdateEnd();
-  chsQueueSend();
+  if (!chsVsAI) chsQueueSend();
+  chsStyleSave();
   needRedraw = true;
 }
 
@@ -777,6 +1290,7 @@ static void chsStartGame() {
   if (chsRoomStr.length() < 3) { showToast("Kode room minimal 3 karakter", 2200); return; }
   strncpy(chsRoom, chsRoomStr.c_str(), 9); chsRoom[9] = 0;
   { Preferences p; if (p.begin("chess", false)) { p.putString("room", chsRoomStr); p.end(); } }
+  chsVsAI = false; chsAfkAI = false; chsAiQueued = false; chsPrevMyTurn = false; chsLastTouchMs = millis(); chsTurnStartMs = millis();
   chsGenNo = 0; chsNewGameLocal();
   chsRole = 0; chsClaimW = chsClaimB = false; chsClaimMs = 0;
   chsWPid[0] = chsBPid[0] = chsWName[0] = chsBName[0] = 0;
@@ -789,6 +1303,51 @@ static void chsStartGame() {
   needRedraw = true;
 }
 
+// Mulai partai lawan AI (tanpa broker / jaringan)
+static void chsStartAi() {
+  if (!chsMoves) { showToast("RAM tidak cukup utk Catur", 2200); return; }
+  if (!chsAiEnsure()) { showToast("PSRAM tidak cukup utk AI", 2200); return; }
+  chsActive = false;
+  chsVsAI = true; chsAfkAI = false; chsAiQueued = false;
+  chsAiSeats();
+  chsGenNo = 0; chsNewGameLocal();
+  chsClaimW = chsClaimB = false; chsRemoteGen = 0; chsRemotePly = 0; chsRemoteRes[0] = 0;
+  chsSendG = false; chsPubSeat = 0;
+  chsReady = true; chsConn = 1; chsErr[0] = 0;
+  chsLastTouchMs = millis();
+  chsScr = 1;
+  needRedraw = true;
+}
+
+// Giliran AI (mode lawan AI): beri jeda singkat supaya animasi langkah user & teks "AI berpikir" sempat tampil
+static bool chsAiTurn() { return chsVsAI && chsEnd == 0 && (chsRole == 1 || chsRole == 2) && ((chsRole == 1) != chsWhite); }
+static uint16_t chsAiMoveFor(int lv) {
+  chsAiHistBuild(chsMoves);
+  uiBoostKick();                                 // clock penuh selama berpikir
+  return chsAiChoose(chsLvDepth[lv], chsLvMs[lv], chsLvMargin[lv], chsLvMode[lv]);
+}
+static void chsAiPollVs() {
+  if (!chsAiTurn() || chsAnimOn) { chsAiQueued = false; return; }
+  if (!chsAiQueued) { chsAiQueued = true; chsAiDueMs = millis() + 450UL; needRedraw = true; return; }
+  if ((long)(millis() - chsAiDueMs) < 0) return;
+  chsAiQueued = false;
+  uint16_t m = chsAiMoveFor(chsAiLevel);
+  if (m) chsCommitEx(m, false);                  // langkah AI tidak melatih model gaya
+}
+// Online: kalau user diam melewati batas AFK, AI bergaya-user memainkan giliran supaya lawan tidak menunggu
+static void chsAfkPoll() {
+  bool mine = chsCanMove();
+  if (mine && !chsPrevMyTurn) chsTurnStartMs = millis();
+  chsPrevMyTurn = mine;
+  if (!mine || chsAfkSec[chsAfkIdx] == 0 || chsAnimOn || chsPromoOn || chsSendG) return;
+  unsigned long idleSince = chsLastTouchMs > chsTurnStartMs ? chsLastTouchMs : chsTurnStartMs;
+  unsigned long need = chsAfkAI ? 1500UL : (unsigned long)chsAfkSec[chsAfkIdx] * 1000UL;
+  if (millis() - idleSince < need) return;
+  if (!chsAfkAI) { chsAfkAI = true; chsTurnStartMs = millis(); chsSel = -1; needRedraw = true; return; }   // tampilkan dulu "AI bermain utk kamu"
+  uint16_t m = chsAiMoveFor(3);
+  if (m) chsCommitEx(m, false);
+}
+
 // ---------------------------------------------------------------------
 // SIKLUS HIDUP APP
 // ---------------------------------------------------------------------
@@ -797,6 +1356,8 @@ void chessEnter() {
   chsBrokerLoad();
   if (!chsBrokerOk() && chsBrokerFromSd()) { chsBrokerSave(); showToast("Broker Catur dimuat dari /chess.cfg", 2200); }
   chsBEdit = -1;
+  chsPrefsLoad();
+  chsVsAI = false; chsAfkAI = false; chsAiQueued = false; chsPrevMyTurn = false;
   chsActive = false; chsConn = 0; chsReady = false;
   chsScr = 0; chsSel = -1; chsPromoOn = false; chsConfirm = false;
   chsReset(); chsEnd = 0;
@@ -809,6 +1370,9 @@ void chessExit() {
   chsActive = false;        // task melepas koneksi TLS sendiri
   chsConn = 0;
   chsAnimOn = false;
+  chsStyleSave();           // simpan hasil belajar gaya
+  chsVsAI = false; chsAfkAI = false; chsAiQueued = false;
+  chsAiFree();
   chsFreeMasks();           // topeng bidak (PSRAM) dibebaskan saat keluar
 }
 
@@ -816,7 +1380,7 @@ void chessLoopPoll() {
   if (chsDirty) { chsDirty = false; if (curScreen() == SCR_CHESS) needRedraw = true; }
   if (curScreen() == SCR_CHESS && chsPressId >= 0 && millis() - chsPressMs >= CHS_PRESS_MS) { chsPressId = -1; needRedraw = true; }   // efek tekan selesai
   if (curScreen() != SCR_CHESS || chsScr != 1 || !chsMoves) return;
-  chsProcessRx();
+  if (chsVsAI) chsAiPollVs(); else { chsProcessRx(); chsAfkPoll(); }
   if (chsConfirm && millis() - chsConfirmMs > 3500UL) { chsConfirm = false; needRedraw = true; }
   if (chsAnimOn) {                                    // animasi langkah: redraw tiap loop + CPU dinaikkan sebentar
     uiBoostKick();
@@ -1211,8 +1775,8 @@ static int chsMaterialDiff() {
 
 static void chsDrawSetup(LGFX_Sprite& s) {
   bool typing = kbVisible && kbTarget == &chsRoomStr;
-  s.setTextColor(T().accent); s.setTextSize(2); s.setCursor(10, 25); s.print("Catur Online");
-  s.setTextSize(1); s.setTextColor(T().subtext); s.setCursor(10, 46); s.print("Dua HP isi kode room yang sama, lalu Mulai");
+  s.setTextColor(T().accent); s.setTextSize(2); s.setCursor(10, 25); s.print("Catur");
+  s.setTextSize(1); s.setTextColor(T().subtext); s.setCursor(10, 46); s.print("Online: kode room sama. Atau lawan AI");
   if (SCR_W >= SCR_H) {                                             // hiasan: raja + kuda di pojok kanan atas
     int bx, by, sq, px, py, pw, ph; chsGeom(&bx, &by, &sq, &px, &py, &pw, &ph);
     chsBlitPiece(s, 6, true,  SCR_W - 2 * sq - 12, 21, sq, 255);
@@ -1237,18 +1801,39 @@ static void chsDrawSetup(LGFX_Sprite& s) {
   bool ok = chsBrokerOk() && chsRoomStr.length() >= 3;
   iosRR(s, 86, 134, SCR_W - 94, 26, 7, chsPressCol(4, ok ? (uint16_t)T().accent : (uint16_t)T().surface2));
   s.setTextColor(ok ? (uint16_t)T().bg : (uint16_t)T().subtext); chsPrintC(s, 86, SCR_W - 94, 143, "Mulai");
+  {                                                               // baris AI: Lawan AI | level | AFK
+    int gw = (SCR_W - 16 - 12) / 3, x0 = 8, x1 = 8 + gw + 6, x2 = 8 + 2 * (gw + 6), by2 = 166;
+    iosRR(s, x0, by2, gw, 24, 7, chsPressCol(6, (uint16_t)T().accent));
+    s.setTextColor(T().bg); chsPrintC(s, x0, gw, by2 + 8, "Lawan AI");
+    iosRR(s, x1, by2, gw, 24, 7, chsPressCol(7, (uint16_t)T().surface2));
+    s.setTextColor(T().accent); chsPrintC(s, x1, gw, by2 + 8, chsLvName[chsAiLevel]);
+    iosRR(s, x2, by2, gw, 24, 7, chsPressCol(8, (uint16_t)T().surface2));
+    char ab[14]; if (chsAfkSec[chsAfkIdx]) snprintf(ab, sizeof(ab), "AFK %us", (unsigned)chsAfkSec[chsAfkIdx]); else strcpy(ab, "AFK mati");
+    s.setTextColor(chsAfkIdx ? (uint16_t)T().accent : (uint16_t)T().subtext); chsPrintC(s, x2, gw, by2 + 8, ab);
+    char cap[48], cb[48];
+    if (chsTrainN) snprintf(cap, sizeof(cap), "AI belajar gayamu: %u langkah. AFK = AI ganti kamu", (unsigned)chsTrainN);
+    else strcpy(cap, "AI belajar gayamu saat kamu main. AFK = AI ganti kamu");
+    chsClip(cap, cb, (SCR_W - 16) / 6);
+    s.setTextColor(T().subtext); s.setCursor(10, by2 + 30); s.print(cb);
+  }
 }
 
 // teks + warna status giliran (dipakai pil di panel dan chip saat panel disembunyikan)
 static void chsStatusText(char* line, size_t n, uint16_t* sc) {
   const char* t; uint16_t c = T().accent;
   static char eb[48];
-  if (chsConn == 2)                   { chsClip(chsErr[0] ? chsErr : "Terputus", eb, 46); t = eb; c = T().danger; }
+  if (chsVsAI) {
+    if (chsEnd)                       { t = chsEndShort(); int rr = chsResultForMe(); c = rr == 1 ? T().good : rr == -1 ? T().danger : T().text; }
+    else if (chsCanMove())            { t = chsInCheck() ? "SKAK! Jalanmu" : "Giliranmu"; c = chsInCheck() ? T().danger : T().good; }
+    else                              { t = "AI berpikir..."; c = T().subtext; }
+  }
+  else if (chsConn == 2)              { chsClip(chsErr[0] ? chsErr : "Terputus", eb, 46); t = eb; c = T().danger; }
   else if (chsConn == 0 || !chsReady) { t = "Menyambung..."; c = T().subtext; }
   else if (chsRole == 0)              { t = "Cari kursi..."; c = T().subtext; }
   else if (chsRole == 3)              { t = "Room penuh!"; c = T().danger; }
   else if (!chsOppPid()[0])           { t = "Tunggu lawan..."; c = T().subtext; }
   else if (chsEnd)                    { t = chsEndShort(); int rr = chsResultForMe(); c = rr == 1 ? T().good : rr == -1 ? T().danger : T().text; }
+  else if (chsCanMove() && chsAfkAI)  { t = "AI bermain utk kamu"; c = T().accent; }
   else if (chsCanMove())              { t = chsInCheck() ? "SKAK! Jalanmu" : "Giliranmu"; c = chsInCheck() ? T().danger : T().good; }
   else                                { t = "Giliran lawan"; c = T().subtext; }
   strncpy(line, t, n - 1); line[n - 1] = 0;
@@ -1428,15 +2013,18 @@ static void chsDrawGame(LGFX_Sprite& s) {
   ty += gap;
   // lawan
   const char* opN = chsRole == 2 ? chsWName : chsBName;
-  snprintf(nb, sizeof(nb), "Lawan: %s", chsOppPid()[0] ? (opN[0] ? opN : "?") : "-");
+  if (chsVsAI) snprintf(nb, sizeof(nb), "Lawan: %s", opN);
+  else snprintf(nb, sizeof(nb), "Lawan: %s", chsOppPid()[0] ? (opN[0] ? opN : "?") : "-");
   chsClip(nb, clipd, (pw - 40) / 6);
   chsChip(s, px + 12, ty + 4, !meW, playing && (chsWhite != meW));
   s.setTextColor(T().text); s.setCursor(px + 24, ty); s.print(clipd);
-  nyxAaCircle(s, px + pw - 10, ty + 4, 3, chsOppOnline() ? (uint16_t)T().good : blend565(T().surface, 0xFFFF, 80));
+  if (chsVsAI) nyxAaCircle(s, px + pw - 10, ty + 4, 3, chsAiTurn() ? (uint16_t)T().accent : blend565(T().surface, 0xFFFF, 80));
+  else nyxAaCircle(s, px + pw - 10, ty + 4, 3, chsOppOnline() ? (uint16_t)T().good : blend565(T().surface, 0xFFFF, 80));
   ty += gap;
   // room + langkah
   char lt[8]; chsTokAt(chsPly - 1, lt);
-  snprintf(nb, sizeof(nb), "Room %s  #%u %s", chsRoom, (unsigned)chsPly, lt);
+  if (chsVsAI) snprintf(nb, sizeof(nb), "Lawan AI  #%u %s", (unsigned)chsPly, lt);
+  else snprintf(nb, sizeof(nb), "Room %s  #%u %s", chsRoom, (unsigned)chsPly, lt);
   chsClip(nb, clipd, maxCh);
   s.setTextColor(T().subtext); s.setCursor(px + 9, ty);
   s.print(clipd);
@@ -1595,6 +2183,13 @@ static void chsTouchSetup(int x, int y, bool isNew) {
   if (y >= 134 && y <= 160) {
     if (x >= 8 && x <= 78) { chsPress(3); chsRandomRoom(); needRedraw = true; }
     else if (x >= 86) { chsPress(4); chsStartGame(); }
+    return;
+  }
+  if (y >= 166 && y <= 190) {
+    int gw = (SCR_W - 16 - 12) / 3;
+    if (x >= 8 && x < 8 + gw) { chsPress(6); chsStartAi(); }
+    else if (x >= 8 + gw + 6 && x < 8 + 2 * gw + 6) { chsPress(7); chsAiLevel = (uint8_t)((chsAiLevel + 1) & 3); chsPrefsSaveCfg(); needRedraw = true; }
+    else if (x >= 8 + 2 * (gw + 6)) { chsPress(8); chsAfkIdx = (uint8_t)((chsAfkIdx + 1) & 3); chsPrefsSaveCfg(); needRedraw = true; }
   }
 }
 
@@ -1627,6 +2222,8 @@ static void chsTapBoard(int q) {
 
 void chessTouch(int x, int y, bool held, bool isNew) {
   if (!chsMoves) { if (isNew && isBack(x, y)) navBack(); return; }
+  chsLastTouchMs = millis();                         // user kembali -> AI pengganti berhenti
+  if (chsAfkAI) { chsAfkAI = false; needRedraw = true; }
   if (chsScr == 2) { chsTouchBroker(x, y, isNew); return; }
   if (chsScr == 0) { chsTouchSetup(x, y, isNew); return; }
   if (!isNew) return;
@@ -1671,6 +2268,8 @@ void chessTouch(int x, int y, bool held, bool isNew) {
   if (panelOn && x >= bxr && x < bxr + bw && y >= byr && y < byr + bh) {
     chsPress(1);
     chsActive = false; chsScr = 0; chsConn = 0; chsReady = false; chsSel = -1; chsConfirm = false;
+    chsVsAI = false; chsAfkAI = false; chsAiQueued = false;
+    chsStyleSave();
     needRedraw = true;
     return;
   }

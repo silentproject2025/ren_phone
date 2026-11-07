@@ -8,6 +8,7 @@ int SCR_W = 320, SCR_H = 480; bool needRedraw = false, sdReady = true, ntpSynced
 FSMock SD_MMC;
 #define BACK_H 24
 int backY() { return SCR_H - BACK_H - 3; }
+bool backHidden() { return true; }          // app Backup menyembunyikan pil Kembali
 
 #include "../backup_renphone.ino"
 
@@ -134,6 +135,70 @@ int main() {
   bkSel = 0; gSetFailEvery = 3; gSetCount = 0; bkRestartAt = 0; tapR(BKR_RESTORE); tapR(BKR_RESTORE); gSetFailEvery = 0;
   CHECK(gToast.find("gagal") != std::string::npos, "kegagalan sebagian dilaporkan: '%s'", gToast.c_str()); bkRestartAt = 0;
 
+  // ================= ENKRIPSI SANDI =================
+  {
+    seed(); bool secKeep = bkSecrets; if (!bkSecrets) tapR(BKR_TOGGLE);                       // sandi & API key ikut -> paling berisiko bocor
+    nvsStr("chess", "bpass", "rahasia-broker");
+    auto newest = [&]() { char p[40]; bkMakeName(p, sizeof(p), bkNum[0]); return std::string(SDROOT) + p; };
+    auto okBtn = [&]() { frame(); tap(cx(BKR_POK), cy(BKR_POK)); };
+    auto typeIn = [&](const char* pw) { CHECK(kbTarget != nullptr, "keyboard terhubung ke kolom sandi"); if (kbTarget) *kbTarget = pw; };
+    int before = bkListN; int numBefore = bkListN ? bkNum[0] : 0;
+
+    tapR(BKR_ENC);
+    CHECK(bkEnc, "sakelar enkripsi nyala"); { Preferences p; p.begin("nyxbak"); CHECK(p.getBool("enc", false), "sakelar enkripsi tersimpan"); }
+    tapR(BKR_CREATE);
+    CHECK(bkPrompt == 1 && kbVisible && kbTarget == &bkPassA, "Buat Backup membuka kotak sandi + keyboard");
+    CHECK(bkListN == before && (bkListN == 0 || bkNum[0] == numBefore), "belum ada file dibuat sebelum sandi diisi");
+    typeIn("abc"); okBtn();
+    CHECK(bkPrompt == 1 && !strcmp(bkPromptErr, "Minimal 6 karakter"), "sandi < 6 karakter ditolak");
+    typeIn("sandi-rahasia-9"); okBtn();
+    CHECK(bkPrompt == 2 && kbTarget == &bkPassB, "lanjut ke 'ulangi sandi'");
+    typeIn("sandi-lain-12345"); okBtn();
+    CHECK(bkPrompt == 1 && !strcmp(bkPromptErr, "Tidak sama, ulangi") && bkPassA.length() == 0 && bkPassB.length() == 0, "sandi beda -> ulang dari awal, isian dihapus");
+    typeIn("sandi-rahasia-9"); okBtn(); typeIn("sandi-rahasia-9"); okBtn();
+    CHECK(bkPrompt == 0 && !kbVisible && kbTarget == nullptr, "kotak sandi & keyboard menutup");
+    CHECK(bkPassA.length() == 0 && bkPassB.length() == 0, "sandi dihapus dari memori setelah dipakai");
+    CHECK(bkListN >= 1 && bkValid[0] && bkEncF[0], "backup terenkripsi muncul di daftar (terkunci)");
+    std::string P = newest();
+    CHECK(fileHas(P.c_str(), "NYXE1"), "file memakai magic NYXE1");
+    CHECK(!fileHas(P.c_str(), "rahasia-wifi") && !fileHas(P.c_str(), "AIza-rahasia") && !fileHas(P.c_str(), "rahasia-broker") && !fileHas(P.c_str(), "Inter") && !fileHas(P.c_str(), "RumahKu"), "TIDAK ada teks apa pun dari pengaturan di file terenkripsi");
+    CHECK(bkCnt[0] == 11 && (bkFlg[0] & BK_FLAG_SECRETS), "header (jumlah nilai & flag) tetap terbaca tanpa sandi (%d)", bkCnt[0]);
+
+    // batal
+    int nB = bkListN; tapR(BKR_CREATE); CHECK(bkPrompt == 1, "prompt terbuka lagi"); typeIn("setengah-diketik"); frame(); tap(cx(BKR_PCANCEL), cy(BKR_PCANCEL));
+    CHECK(bkPrompt == 0 && !kbVisible && bkPassA.length() == 0 && bkListN == nB, "Batal: tutup, isian dihapus, tidak ada file baru");
+
+    // ubah pengaturan -> pulihkan dgn sandi SALAH, lalu BENAR
+    nvsSet("ui", "theme", NVS_TYPE_U8, { 9 }); nvsStore().erase(nk("wifi", "pass")); ESP.restarts = 0;
+    bkSel = 0; tapR(BKR_RESTORE);
+    CHECK(bkArmKind == 1 && bkPrompt == 0, "ketukan pertama Pulihkan: konfirmasi dulu");
+    tapR(BKR_RESTORE);
+    CHECK(bkPrompt == 3 && kbVisible, "file terkunci -> minta sandi");
+    typeIn("salah-sandi"); okBtn();
+    CHECK(bkPrompt == 3 && !strcmp(bkPromptErr, "Sandi salah") && nvsGetU8("ui", "theme") == 9 && bkRestartAt == 0, "sandi salah: NVS tidak berubah, tidak restart");
+    typeIn("sandi-rahasia-9"); okBtn();
+    CHECK(bkPrompt == 0 && nvsGetU8("ui", "theme") == 3 && nvsGetStr("wifi", "pass") == "rahasia-wifi" && nvsGetStr("chess", "bpass") == "rahasia-broker", "sandi benar: pengaturan lengkap dipulihkan");
+    CHECK(bkRestartAt != 0 && bkPassA.length() == 0, "restart dijadwalkan, sandi dihapus");
+    bkRestartAt = 0;
+
+    // file DIUBAH satu byte -> ditolak walau sandi benar (HMAC)
+    { FILE* f = fopen(P.c_str(), "r+b"); fseek(f, 120, SEEK_SET); int c = fgetc(f); fseek(f, 120, SEEK_SET); fputc(c ^ 1, f); fclose(f); }
+    nvsSet("ui", "theme", NVS_TYPE_U8, { 9 }); bkSel = 0; bkArmKind = 1; bkArmUntil = gMillis + 4000; tapR(BKR_RESTORE);
+    CHECK(bkPrompt == 3, "prompt utk file yg diubah"); typeIn("sandi-rahasia-9"); okBtn();
+    CHECK(bkPrompt == 3 && !strcmp(bkPromptErr, "Sandi salah") && nvsGetU8("ui", "theme") == 9, "file diubah: ditolak, NVS aman");
+    frame(); tap(cx(BKR_PCANCEL), cy(BKR_PCANCEL));
+    CHECK(bkPrompt == 0, "batal dari prompt pulihkan");
+
+    // sakelar mati lagi -> backup biasa tanpa prompt; file biasa tetap bisa dipulihkan tanpa sandi
+    nvsSet("ui", "theme", NVS_TYPE_U8, { 3 });
+    tapR(BKR_ENC); CHECK(!bkEnc, "sakelar enkripsi mati");
+    tapR(BKR_CREATE); CHECK(bkPrompt == 0 && !bkEncF[0] && bkValid[0], "tanpa enkripsi: langsung jadi, file biasa");
+    nvsSet("ui", "theme", NVS_TYPE_U8, { 9 }); bkSel = 0; tapR(BKR_RESTORE); tapR(BKR_RESTORE);
+    CHECK(bkPrompt == 0 && nvsGetU8("ui", "theme") == 3, "file biasa dipulihkan tanpa sandi"); bkRestartAt = 0;
+    if (bkSecrets != secKeep) tapR(BKR_TOGGLE);
+    seed();
+  }
+
   // ---- SD tidak ada
   sdReady = false; bkScan(false); CHECK(bkListN == 0, "tanpa SD daftar kosong");
   tapR(BKR_CREATE); CHECK(gToast.find("SD") != std::string::npos, "pesan SD tidak terdeteksi: '%s'", gToast.c_str());
@@ -150,9 +215,10 @@ int main() {
     bool inside = true; for (int r = 0; r < BKR_N; r++) inside = inside && bkR[r][0] >= 0 && bkR[r][1] >= 0 && bkR[r][0] + bkR[r][2] <= SCR_W && bkR[r][1] + bkR[r][3] <= SCR_H - 8 && bkR[r][3] > 0;
     CHECK(inside, "%dx%d: semua rect di dalam layar", d.w, d.h);
     CHECK(bkR[BKR_LIST][3] >= BK_ROW_H, "%dx%d: daftar muat >= 1 baris (h=%d)", d.w, d.h, bkR[BKR_LIST][3]);
-    bool ov = false; for (int a = 0; a < BKR_N; a++) for (int b = a + 1; b < BKR_N; b++) {
+    bool ov = false; for (int a = 0; a < BKR_PBOX; a++) for (int b = a + 1; b < BKR_PBOX; b++) {
       bool sx = bkR[a][0] < bkR[b][0] + bkR[b][2] && bkR[b][0] < bkR[a][0] + bkR[a][2], sy = bkR[a][1] < bkR[b][1] + bkR[b][3] && bkR[b][1] < bkR[a][1] + bkR[a][3]; if (sx && sy) ov = true; }
     CHECK(!ov, "%dx%d: tidak ada rect tumpang tindih", d.w, d.h);
+    CHECK(bkR[BKR_POK][1] + bkR[BKR_POK][3] <= kbY() && bkR[BKR_PBOX][1] + bkR[BKR_PBOX][3] <= kbY(), "%dx%d: kotak sandi tidak tertutup keyboard (kbY=%d)", d.w, d.h, kbY());
     // scroll: geser jari -> posisi berubah, dalam batas, dan TIDAK memicu ketukan
     int maxS = bkListN * BK_ROW_H - bkR[BKR_LIST][3];
     bkScroll = 0; bkSel = -1;

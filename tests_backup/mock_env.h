@@ -17,6 +17,19 @@
 #define MALLOC_CAP_8BIT 2
 static inline void* heap_caps_malloc(size_t n, int) { return malloc(n); }
 static unsigned long gMillis = 1000;
+static inline void yield() {}
+static inline uint32_t esp_random() { return (uint32_t)rand(); }
+struct String {                                  // String Arduino minimum
+  std::string s; String(const char* c = "") : s(c) {}
+  String& operator=(const char* c) { s = c; return *this; }
+  unsigned length() const { return (unsigned)s.size(); } const char* c_str() const { return s.c_str(); }
+  bool operator==(const String& o) const { return s == o.s; }
+};
+enum KbMode { KB_LOWER, KB_UPPER, KB_NUM };
+static bool kbVisible = false; static String* kbTarget = nullptr; static KbMode kbMode = KB_LOWER;
+extern int SCR_H;
+static inline int kbY() { return SCR_H - 100; }        // sama dgn phone.ino: SCR_H - 4*(22+2) - 4 (tanpa baris saran)
+
 static inline unsigned long millis() { return gMillis; }
 #define FILE_READ "r"
 #define FILE_WRITE "w"
@@ -129,8 +142,12 @@ static inline void drawGlassCard(LGFX_Sprite&, int,int,int,int,int,uint16_t,uint
 static inline void iosBackdrop(LGFX_Sprite&) {} static inline void drawStatusBar(LGFX_Sprite&) {}
 static inline void iosTitle(LGFX_Sprite& s, int,int,const char* t) { s.print(t); }
 static inline void drawBack(LGFX_Sprite&) {} static inline void drawToast(LGFX_Sprite&) {}
+struct LGFX_Sprite;
+static int gKbTouches = 0;
 static bool gWentBack = false;
 static inline bool isBack(int, int y) { return y > 9000; }
 static inline void navBack() { gWentBack = true; }
 struct EspMock { int restarts = 0; void restart() { restarts++; } };
 static EspMock ESP;
+static inline void drawKb(LGFX_Sprite&) {}
+static inline void kbTouch(int, int) { gKbTouches++; }

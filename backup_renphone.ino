@@ -36,7 +36,9 @@
 #include <nvs.h>
 #include <nvs_flash.h>
 #include "esp_idf_version.h"
+#define BK_YIELD() yield()              // PBKDF2 ~0,5 dtk di ESP32: beri napas ke watchdog
 #include "backup_core.h"
+#include "backup_crypto.h"
 
 #define BK_DIR        "/backup"
 #define BK_KEEP       6                 // jumlah file backup yang disimpan di SD
@@ -45,9 +47,15 @@
 #define BK_ROW_H      36
 #define BK_NVS_NS     "nyxbak"
 
-enum { BKR_CREATE = 0, BKR_TOGGLE, BKR_LIST, BKR_RESTORE, BKR_DELETE, BKR_N };
+enum { BKR_CREATE = 0, BKR_TOGGLE, BKR_ENC, BKR_LIST, BKR_RESTORE, BKR_DELETE, BKR_PBOX, BKR_POK, BKR_PCANCEL, BKR_N };
 
 static bool          bkSecrets   = false;
+static bool          bkEnc       = false;          // backup baru dienkripsi dgn sandi (sandi ditanya tiap kali, TIDAK disimpan)
+static bool          bkEncF[BK_KEEP];              // file di daftar ini terenkripsi?
+static int           bkPrompt    = 0;              // 0 tidak ada | 1 sandi baru | 2 ulangi sandi | 3 sandi utk pulihkan
+static int           bkPromptIdx = -1;             // backup yg mau dipulihkan (prompt 3)
+static char          bkPromptErr[32] = "";
+static String        bkPassA, bkPassB;             // dihapus (ditimpa nol) segera setelah dipakai
 static int           bkListN     = 0;
 static int           bkNum[BK_KEEP];
 static uint32_t      bkEpoch[BK_KEEP];
@@ -239,14 +247,14 @@ static void bkScan(bool prune) {
   }
   for (int i = 0; i < n && i < BK_KEEP; i++) {
     char p[40]; bkMakeName(p, sizeof(p), nums[i]);
-    bkNum[i] = nums[i]; bkValid[i] = false; bkSize[i] = 0; bkEpoch[i] = 0; bkCnt[i] = 0; bkFlg[i] = 0;
+    bkNum[i] = nums[i]; bkValid[i] = false; bkSize[i] = 0; bkEpoch[i] = 0; bkCnt[i] = 0; bkFlg[i] = 0; bkEncF[i] = false;
     File f = SD_MMC.open(p, FILE_READ);
     if (f) {
       bkSize[i] = (uint32_t)f.size();
       uint8_t hb[BK_HDR];
       if (f.read(hb, BK_HDR) == BK_HDR) {
         BkHdr h;
-        if (bkParseHdr(hb, BK_HDR, h)) { bkValid[i] = true; bkEpoch[i] = h.epoch; bkCnt[i] = h.count; bkFlg[i] = h.flags; }
+        if (bkParseHdr(hb, BK_HDR, h)) { bkValid[i] = true; bkEpoch[i] = h.epoch; bkCnt[i] = h.count; bkFlg[i] = h.flags; bkEncF[i] = h.enc; }
       }
       f.close();
     }
@@ -265,7 +273,15 @@ static void bkClampScroll() {
 // ---------------------------------------------------------------------
 // aksi
 // ---------------------------------------------------------------------
-static void bkDoCreate() {
+static void bkWipe(String& s) {                                    // timpa isi String dgn nol sebelum dilepas
+  char* p = (char*)s.c_str(); size_t n = s.length();
+  for (size_t i = 0; i < n; i++) ((volatile char*)p)[i] = 0;
+  s = "";
+}
+static void bkZero(void* p, size_t n) { for (size_t i = 0; i < n; i++) ((volatile uint8_t*)p)[i] = 0; }
+
+// pass == NULL -> file biasa; selain itu file dienkripsi AES-256 + HMAC dgn kunci dari sandi (lihat backup_crypto.h)
+static void bkDoCreate(const char* pass) {
   if (!sdReady) { bkSay("SD Card tidak terdeteksi", 2200); return; }
   uint8_t* buf = bkAlloc(BK_BUF_MAX);
   if (!buf) { bkSay("PSRAM tidak cukup", 2200); return; }
@@ -273,49 +289,121 @@ static void bkDoCreate() {
   int rc = bkCollect(buf, BK_BUF_MAX, bkSecrets, &len, &cnt);
   if (rc == 1) { free(buf); bkSay("Pengaturan terlalu besar", 2400); return; }
   if (rc != 0) { free(buf); bkSay("Gagal membaca pengaturan", 2400); return; }
+  uint8_t* wbuf = buf; size_t wlen = len; uint8_t* eb = NULL;
+  if (pass) {                                                     // enkripsi di memori; isi biasa (bisa memuat sandi) langsung ditimpa nol
+    size_t cap = len + BK_ENC_OVERHEAD + 16;
+    eb = bkAlloc(cap);
+    if (!eb) { bkZero(buf, len); free(buf); bkSay("PSRAM tidak cukup", 2200); return; }
+    uint8_t rnd[32]; for (int i = 0; i < 32; i += 4) { uint32_t r = esp_random(); memcpy(rnd + i, &r, 4); }
+    wlen = bkEncrypt(buf, len, (const uint8_t*)pass, strlen(pass), rnd, rnd + 16, BK_ENC_ITER_DEF, eb, cap);
+    bkZero(buf, len); bkZero(rnd, sizeof(rnd));
+    if (!wlen) { free(eb); free(buf); bkSay("Gagal mengenkripsi", 2400); return; }
+    wbuf = eb;
+  }
   if (!SD_MMC.exists(BK_DIR)) SD_MMC.mkdir(BK_DIR);
   bkScan(false);
   int next = bkListN ? bkNum[0] + 1 : 1;
   char path[40]; bkMakeName(path, sizeof(path), next);
   File f = SD_MMC.open(path, FILE_WRITE);
   bool ok = false;
-  if (f) { ok = (f.write(buf, len) == len); f.close(); }
+  if (f) { ok = (f.write(wbuf, wlen) == wlen); f.close(); }
   if (ok) {                                                       // baca ulang & cek CRC supaya yakin utuh
     File g = SD_MMC.open(path, FILE_READ);
     ok = false;
-    if (g && (size_t)g.size() == len) {
-      uint8_t* chk = bkAlloc(len);
-      if (chk) { ok = (g.read(chk, len) == len); BkHdr h; ok = ok && bkVerify(chk, len, h); free(chk); }
+    if (g && (size_t)g.size() == wlen) {
+      uint8_t* chk = bkAlloc(wlen);
+      if (chk) {
+        ok = (g.read(chk, wlen) == wlen);
+        if (pass) ok = ok && memcmp(chk, wbuf, wlen) == 0;        // terenkripsi: harus sama persis dgn yg ditulis
+        else { BkHdr h; ok = ok && bkVerify(chk, wlen, h); }
+        free(chk);
+      }
     }
     if (g) g.close();
   }
-  free(buf);
+  bkZero(buf, len); free(buf); if (eb) free(eb);
   if (!ok) { SD_MMC.remove(path); bkSay("Gagal menulis ke SD", 2400); return; }
   bkScan(true);
   bkSel = 0; bkScroll = 0; bkArmKind = 0;
-  char m[44]; snprintf(m, sizeof(m), "Backup #%03d dibuat (%d nilai)", next, cnt);
+  char m[44]; snprintf(m, sizeof(m), pass ? "Backup #%03d dibuat (%d nilai) +kunci" : "Backup #%03d dibuat (%d nilai)", next, cnt);
   bkSay(m, 2400);
 }
 
-static void bkDoRestore(int idx) {
+// Mengembalikan 0 = selesai (berhasil/gagal sudah diberitahukan lewat toast), BK_DEC_PASS = sandi salah, -2 = butuh sandi.
+static int bkDoRestore(int idx, const char* pass) {
   char path[40]; bkMakeName(path, sizeof(path), bkNum[idx]);
   File f = SD_MMC.open(path, FILE_READ);
-  if (!f) { bkSay("File tidak bisa dibuka", 2200); return; }
+  if (!f) { bkSay("File tidak bisa dibuka", 2200); return 0; }
   size_t n = (size_t)f.size();
-  if (n < BK_HDR + 5 || n > BK_BUF_MAX) { f.close(); bkSay("Ukuran file tidak wajar", 2200); return; }
+  if (n < BK_HDR + 5 || n > BK_BUF_MAX + BK_ENC_OVERHEAD + 16) { f.close(); bkSay("Ukuran file tidak wajar", 2200); return 0; }
   uint8_t* buf = bkAlloc(n);
-  if (!buf) { f.close(); bkSay("PSRAM tidak cukup", 2200); return; }
+  if (!buf) { f.close(); bkSay("PSRAM tidak cukup", 2200); return 0; }
   size_t got = f.read(buf, n); f.close();
-  if (got != n) { free(buf); bkSay("File terbaca tidak utuh", 2200); return; }
+  if (got != n) { free(buf); bkSay("File terbaca tidak utuh", 2200); return 0; }
+  BkHdr hh; bool isEnc = bkParseHdr(buf, n, hh) && hh.enc;
+  uint8_t* pb = NULL; const uint8_t* src = buf; size_t sn = n;
+  if (isEnc) {
+    if (!pass) { free(buf); return -2; }
+    pb = bkAlloc(n);
+    if (!pb) { free(buf); bkSay("PSRAM tidak cukup", 2200); return 0; }
+    size_t pl = 0;
+    int dr = bkDecrypt(buf, n, (const uint8_t*)pass, strlen(pass), pb, n, &pl);
+    free(buf); buf = NULL;
+    if (dr == BK_DEC_PASS) { bkZero(pb, n); free(pb); return BK_DEC_PASS; }          // sandi salah ATAU file diubah
+    if (dr != BK_DEC_OK) { bkZero(pb, n); free(pb); bkSay("Backup rusak, ditolak", 2600); return 0; }
+    src = pb; sn = pl;
+  }
   int fail = 0;
-  int ok = bkApply(buf, n, &fail);
-  free(buf);
-  if (ok < 0) { bkSay("Backup rusak, ditolak", 2600); return; }
+  int ok = bkApply(src, sn, &fail);
+  if (pb) { bkZero(pb, n); free(pb); }
+  if (buf) free(buf);
+  if (ok < 0) { bkSay("Backup rusak, ditolak", 2600); return 0; }
   char m[44];
   if (fail) snprintf(m, sizeof(m), "Dipulihkan %d, gagal %d. Restart...", ok, fail);
   else      snprintf(m, sizeof(m), "Dipulihkan %d nilai. Restart...", ok);
   bkSay(m, 2600);
   bkRestartAt = millis() + 2200;                                   // drawBackup() melakukan restart
+  return 0;
+}
+
+// ---------------------------------------------------------------------
+// kotak sandi (overlay di atas keyboard sistem)
+// ---------------------------------------------------------------------
+static void bkPromptClose() {
+  bkWipe(bkPassA); bkWipe(bkPassB);
+  bkPrompt = 0; bkPromptIdx = -1; bkPromptErr[0] = 0;
+  if (kbTarget == &bkPassA || kbTarget == &bkPassB) { kbVisible = false; kbTarget = nullptr; }
+  needRedraw = true;
+}
+static void bkPromptOpen(int kind, int idx) {
+  bkWipe(bkPassA); bkWipe(bkPassB);
+  bkPrompt = kind; bkPromptIdx = idx; bkPromptErr[0] = 0;
+  kbTarget = &bkPassA; kbVisible = true; kbMode = KB_LOWER;
+  needRedraw = true;
+}
+static void bkPromptOk() {
+  if (bkPassA.length() > 64) { strcpy(bkPromptErr, "Maksimal 64 karakter"); needRedraw = true; return; }
+  if (bkPrompt == 1) {
+    if (bkPassA.length() < BK_PASS_MIN) { strcpy(bkPromptErr, "Minimal 6 karakter"); needRedraw = true; return; }
+    bkPrompt = 2; bkPromptErr[0] = 0; bkWipe(bkPassB); kbTarget = &bkPassB; kbVisible = true; needRedraw = true;
+    return;
+  }
+  if (bkPrompt == 2) {
+    if (!(bkPassA == bkPassB)) {                                    // salah ketik = backup tak bisa dibuka lagi -> wajib dua kali sama
+      bkWipe(bkPassA); bkWipe(bkPassB); bkPrompt = 1; kbTarget = &bkPassA; kbVisible = true;
+      strcpy(bkPromptErr, "Tidak sama, ulangi"); needRedraw = true; return;
+    }
+    String pw = bkPassA; bkPromptClose();
+    bkDoCreate(pw.c_str()); bkWipe(pw);
+    return;
+  }
+  if (bkPrompt == 3) {
+    int idx = bkPromptIdx; String pw = bkPassA;
+    if (idx < 0 || idx >= bkListN) { bkWipe(pw); bkPromptClose(); return; }
+    int rc = bkDoRestore(idx, pw.c_str()); bkWipe(pw);
+    if (rc == BK_DEC_PASS) { bkWipe(bkPassA); strcpy(bkPromptErr, "Sandi salah"); kbTarget = &bkPassA; kbVisible = true; needRedraw = true; return; }
+    bkPromptClose();
+  }
 }
 
 static void bkDoDelete(int idx) {
@@ -338,23 +426,34 @@ static bool bkIn(int r, int x, int y) {
 static void bkLayout() {
   const int m = 8, bh = 34, tg = 34;
   const int y0 = 26 + 18;
+  {                                                     // kotak sandi: di atas keyboard sistem
+    const int top = 26, ch = 78, cw = SCR_W - 2 * m;
+    bkSet(BKR_PBOX,    m + 8, top + 20, cw - 16, 24);
+    int hw = (cw - 16 - 8) / 2;
+    bkSet(BKR_PCANCEL, m + 8, top + 50, hw, 24);
+    bkSet(BKR_POK,     m + 8 + hw + 8, top + 50, cw - 16 - hw - 8, 24);
+    (void)ch;
+  }
   // Pil "Kembali" disembunyikan di app ini (swipe tepi kiri) -> ruang dasar layar dipakai penuh.
   const int bot = backHidden() ? SCR_H - 18 : backY() - 4;
   if (SCR_W > SCR_H) {                                  // lanskap: sakelar selebar layar, lalu tombol kiri + daftar kanan
+    const int tl = 30, bl = 30, gp = 6;                 // lanskap: dua sakelar -> baris & tombol dirampingkan
     int lw = 138, rx = m + lw + m, rw = SCR_W - rx - m;
-    int y1 = y0 + tg + 8;
-    bkSet(BKR_TOGGLE,  m, y0, SCR_W - 2 * m, tg);
-    bkSet(BKR_CREATE,  m, y1,                 lw, bh);
-    bkSet(BKR_RESTORE, m, y1 + (bh + 8),      lw, bh);
-    bkSet(BKR_DELETE,  m, y1 + 2 * (bh + 8),  lw, bh);
+    int y1 = y0 + 2 * tl + 4 + 8;
+    bkSet(BKR_TOGGLE,  m, y0, SCR_W - 2 * m, tl);
+    bkSet(BKR_ENC,     m, y0 + tl + 4, SCR_W - 2 * m, tl);
+    bkSet(BKR_CREATE,  m, y1,                 lw, bl);
+    bkSet(BKR_RESTORE, m, y1 + (bl + gp),     lw, bl);
+    bkSet(BKR_DELETE,  m, y1 + 2 * (bl + gp), lw, bl);
     bkSet(BKR_LIST,    rx, y1 + 16, rw, bot - (y1 + 16));
   } else {                                              // potret: tumpuk, tombol aksi di dasar
     int w = SCR_W - 2 * m, bw = (w - 8) / 2, by = bot - bh;
     bkSet(BKR_CREATE,  m, y0,          w, bh);
     bkSet(BKR_TOGGLE,  m, y0 + bh + 8, w, tg);
+    bkSet(BKR_ENC,     m, y0 + bh + 8 + tg + 4, w, tg);
     bkSet(BKR_RESTORE, m, by,          bw, bh);
     bkSet(BKR_DELETE,  m + bw + 8, by, w - bw - 8, bh);
-    int ly = y0 + bh + 8 + tg + 8 + 16;                 // 16 = baris judul "RIWAYAT"
+    int ly = y0 + bh + 8 + 2 * tg + 4 + 8 + 16;         // 16 = baris judul "RIWAYAT"
     bkSet(BKR_LIST,    m, ly, w, by - 6 - ly);
   }
 }
@@ -363,12 +462,13 @@ static void bkLayout() {
 // siklus app
 // ---------------------------------------------------------------------
 void backupEnter() {
-  { Preferences p; p.begin(BK_NVS_NS, true); bkSecrets = p.getBool("sec", false); p.end(); }
+  { Preferences p; p.begin(BK_NVS_NS, true); bkSecrets = p.getBool("sec", false); bkEnc = p.getBool("enc", false); p.end(); }
+  bkPromptClose();
   bkSel = -1; bkScroll = 0; bkArmKind = 0; bkRestartAt = 0; bkDown = false; bkMsg[0] = 0;
   bkLayout();
   bkScan(false);
 }
-void backupExit() { bkDown = false; bkArmKind = 0; }
+void backupExit() { bkDown = false; bkArmKind = 0; bkPromptClose(); }
 
 // ---------------------------------------------------------------------
 // gambar
@@ -386,6 +486,42 @@ static void bkButton(LGFX_Sprite& s, int r, const char* label, uint16_t tint, ui
   s.print(label);
 }
 
+static void bkToggleRow(LGFX_Sprite& s, int r, const char* l1, const char* l2, bool on) {
+  int x = bkR[r][0], y = bkR[r][1], w = bkR[r][2], h = bkR[r][3];
+  drawGlassCard(s, x, y, w, h, 12, T().surface, 215);
+  int sw = 36, sh = 20, sx = x + w - 12 - sw, sy = y + (h - sh) / 2;
+  int tw = sx - (x + 12) - 8;                                     // lebar teks yg tersedia (tidak boleh masuk ke sakelar)
+  char t1[48], t2[48];
+  strncpy(t1, l1, sizeof(t1) - 1); t1[sizeof(t1) - 1] = 0; strncpy(t2, l2, sizeof(t2) - 1); t2[sizeof(t2) - 1] = 0;
+  for (int L = (int)strlen(t1); L > 1 && s.textWidth(t1) > tw; ) t1[--L] = 0;
+  for (int L = (int)strlen(t2); L > 1 && s.textWidth(t2) > tw; ) t2[--L] = 0;
+  int ty = (h >= 34) ? 7 : 4, ty2 = (h >= 34) ? 20 : 16;
+  s.setTextColor(T().text);    s.setCursor(x + 12, y + ty);  s.print(t1);
+  s.setTextColor(T().subtext); s.setCursor(x + 12, y + ty2); s.print(t2);
+  nyxAaRR(s, sx, sy, sw, sh, 10, on ? T().accent : blend565(T().surface2, 0xFFFF, 60));
+  nyxAaCircle(s, on ? sx + sw - 10 : sx + 10, sy + sh / 2, 8, 0xFFFF);
+}
+
+static void bkDrawPrompt(LGFX_Sprite& s) {
+  const int m = 8, top = 26, ch = 78, cw = SCR_W - 2 * m;
+  drawGlassCard(s, m, top, cw, ch, 12, T().surface, 250);
+  char title[40];
+  if (bkPromptErr[0]) { strncpy(title, bkPromptErr, sizeof(title) - 1); title[sizeof(title) - 1] = 0; }
+  else if (bkPrompt == 1) strcpy(title, "Sandi backup (min 6 karakter)");
+  else if (bkPrompt == 2) strcpy(title, "Ketik ulang sandi yang sama");
+  else snprintf(title, sizeof(title), "Sandi untuk backup #%03d", (bkPromptIdx >= 0 && bkPromptIdx < bkListN) ? bkNum[bkPromptIdx] : 0);
+  for (int L = (int)strlen(title); L > 1 && s.textWidth(title) > cw - 20; ) title[--L] = 0;
+  s.setTextColor(bkPromptErr[0] ? T().danger : T().text); s.setCursor(m + 10, top + 7); s.print(title);
+  drawGlassPanel(s, bkR[BKR_PBOX][0], bkR[BKR_PBOX][1], bkR[BKR_PBOX][2], bkR[BKR_PBOX][3], 8, T().surface2, 200);
+  const String& cur = (bkPrompt == 2) ? bkPassB : bkPassA;
+  char mask[40]; int n = (int)cur.length(); if (n > 30) n = 30;
+  for (int i = 0; i < n; i++) mask[i] = '*';
+  mask[n] = 0;
+  s.setTextColor(T().text); s.setCursor(bkR[BKR_PBOX][0] + 8, bkR[BKR_PBOX][1] + 8); s.print(mask);
+  bkButton(s, BKR_PCANCEL, "Batal", T().surface2, T().subtext, 190);
+  bkButton(s, BKR_POK, bkPrompt == 1 ? "Lanjut" : (bkPrompt == 2 ? "Buat Backup" : "Pulihkan"), T().accent, 0xFFFF, 235);
+}
+
 void drawBackup(LGFX_Sprite& s) {
   bkLayout();
   if (bkRestartAt) { needRedraw = true; if ((long)(millis() - bkRestartAt) >= 0) ESP.restart(); }
@@ -401,21 +537,9 @@ void drawBackup(LGFX_Sprite& s) {
   // ---- Buat Backup
   bkButton(s, BKR_CREATE, "Buat Backup Sekarang", T().accent, 0xFFFF, 235);
 
-  // ---- sakelar sandi
-  {
-    int x = bkR[BKR_TOGGLE][0], y = bkR[BKR_TOGGLE][1], w = bkR[BKR_TOGGLE][2], h = bkR[BKR_TOGGLE][3];
-    drawGlassCard(s, x, y, w, h, 12, T().surface, 215);
-    int sw = 36, sh = 20, sx = x + w - 12 - sw, sy = y + (h - sh) / 2;
-    int tw = sx - (x + 12) - 8;                                   // lebar teks yg tersedia (tidak boleh masuk ke sakelar)
-    char t1[32], t2[32];
-    strcpy(t1, "Sertakan sandi & API key"); strcpy(t2, "File di SD tidak terenkripsi");
-    for (int L = (int)strlen(t1); L > 1 && s.textWidth(t1) > tw; ) t1[--L] = 0;
-    for (int L = (int)strlen(t2); L > 1 && s.textWidth(t2) > tw; ) t2[--L] = 0;
-    s.setTextColor(T().text);    s.setCursor(x + 12, y + 7);  s.print(t1);
-    s.setTextColor(T().subtext); s.setCursor(x + 12, y + 20); s.print(t2);
-    nyxAaRR(s, sx, sy, sw, sh, 10, bkSecrets ? T().accent : blend565(T().surface2, 0xFFFF, 60));
-    nyxAaCircle(s, bkSecrets ? sx + sw - 10 : sx + 10, sy + sh / 2, 8, 0xFFFF);
-  }
+  // ---- sakelar: sandi & API key | enkripsi sandi
+  bkToggleRow(s, BKR_TOGGLE, "Sertakan sandi & API key", bkEnc ? "File dienkripsi AES-256 dgn sandimu" : "File di SD tidak terenkripsi", bkSecrets);
+  bkToggleRow(s, BKR_ENC, "Enkripsi dengan sandi", bkEnc ? "Sandi ditanya tiap backup, tidak disimpan" : "Backup bisa dibaca siapa saja yg pegang SD", bkEnc);
 
   // ---- judul daftar + pesan status
   {
@@ -450,7 +574,7 @@ void drawBackup(LGFX_Sprite& s) {
       if (bkValid[i]) {
         bkStamp(t, sizeof(t), bkEpoch[i]);
         snprintf(a, sizeof(a), "#%03d  %s", bkNum[i], t);
-        snprintf(b, sizeof(b), "%u nilai - %.1f KB%s", (unsigned)bkCnt[i], bkSize[i] / 1024.0, (bkFlg[i] & BK_FLAG_SECRETS) ? " - +sandi" : "");
+        snprintf(b, sizeof(b), "%u nilai - %.1f KB%s%s", (unsigned)bkCnt[i], bkSize[i] / 1024.0, bkEncF[i] ? " - terkunci" : "", (bkFlg[i] & BK_FLAG_SECRETS) ? " - +sandi" : "");
       } else {
         snprintf(a, sizeof(a), "#%03d  File rusak", bkNum[i]);
         snprintf(b, sizeof(b), "bukan backup NyxOS (%.1f KB)", bkSize[i] / 1024.0);
@@ -479,7 +603,8 @@ void drawBackup(LGFX_Sprite& s) {
              armD ? T().danger : T().surface2, armD ? 0xFFFF : (has ? T().danger : dim), armD ? 235 : 190);
   }
 
-  drawBack(s);
+  if (bkPrompt) { bkDrawPrompt(s); if (kbVisible) drawKb(s); }
+  else drawBack(s);
   drawToast(s);
 }
 
@@ -487,7 +612,18 @@ void drawBackup(LGFX_Sprite& s) {
 // sentuh: ketuk dieksekusi saat JARI DILEPAS (supaya geser-scroll tidak memicu tombol)
 // ---------------------------------------------------------------------
 static void bkTap(int x, int y) {
-  if (bkIn(BKR_CREATE, x, y)) { bkArmKind = 0; bkDoCreate(); return; }
+  if (bkIn(BKR_CREATE, x, y)) {
+    bkArmKind = 0;
+    if (bkEnc) { if (!sdReady) { bkSay("SD Card tidak terdeteksi", 2200); return; } bkPromptOpen(1, -1); }
+    else bkDoCreate(NULL);
+    return;
+  }
+  if (bkIn(BKR_ENC, x, y)) {
+    bkEnc = !bkEnc;
+    { Preferences p; p.begin(BK_NVS_NS, false); p.putBool("enc", bkEnc); p.end(); }
+    bkSay(bkEnc ? "Backup berikutnya dienkripsi sandi" : "Backup berikutnya tanpa enkripsi", 1900);
+    return;
+  }
   if (bkIn(BKR_TOGGLE, x, y)) {
     bkSecrets = !bkSecrets;
     { Preferences p; p.begin(BK_NVS_NS, false); p.putBool("sec", bkSecrets); p.end(); }
@@ -504,7 +640,9 @@ static void bkTap(int x, int y) {
     if (bkSel < 0 || bkSel >= bkListN) { bkSay("Pilih satu backup dulu", 1600); return; }
     if (!bkValid[bkSel]) { bkSay("File ini rusak, tidak bisa dipulihkan", 2200); return; }
     if (bkArmKind != 1) { bkArmKind = 1; bkArmUntil = millis() + 4000; bkSay("Ketuk lagi: pengaturan ditimpa & HP restart", 3600); return; }
-    bkArmKind = 0; bkDoRestore(bkSel);
+    bkArmKind = 0;
+    if (bkEncF[bkSel]) bkPromptOpen(3, bkSel);                       // file terkunci: minta sandi dulu
+    else bkDoRestore(bkSel, NULL);
     return;
   }
   if (bkIn(BKR_DELETE, x, y)) {
@@ -515,8 +653,17 @@ static void bkTap(int x, int y) {
   }
 }
 
+static void bkPromptTouch(int x, int y, bool isNew) {
+  if (!isNew) return;
+  if (kbVisible && y >= kbY() - 2) { kbTouch(x, y); needRedraw = true; return; }
+  if (bkIn(BKR_PCANCEL, x, y)) { bkPromptClose(); return; }
+  if (bkIn(BKR_POK, x, y)) { bkPromptOk(); return; }
+  if (bkIn(BKR_PBOX, x, y)) { kbVisible = true; needRedraw = true; }      // keyboard tertutup lewat Enter -> buka lagi
+}
+
 void backupTouch(int x, int y, bool held, bool isNew) {
   if (bkRestartAt) return;                                           // sedang menunggu restart
+  if (bkPrompt) { bkPromptTouch(x, y, isNew); return; }
   if (isNew) {
     if (isBack(x, y)) { navBack(); return; }
     bkDown = true; bkMoved = false; bkPx = x; bkPy = y; bkLy = y;

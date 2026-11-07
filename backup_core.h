@@ -56,6 +56,7 @@ static inline bool bkNsSkip(const char* ns) {
 static inline bool bkIsSecret(const char* ns, const char* key) {
   if (!strcmp(ns, "wifi") || !strcmp(ns, "sip") || !strcmp(ns, "chat") || !strcmp(ns, "gemini")) return true;
   if (!strcmp(ns, "rcfg") && !strncmp(key, "pass", 4)) return true;   // sandi AP Remote Control
+  if (!strcmp(ns, "chess") && (!strcmp(key, "bhost") || !strcmp(key, "buser") || !strcmp(key, "bpass"))) return true;   // kredensial broker MQTT Catur
   return false;
 }
 
@@ -108,11 +109,14 @@ static inline size_t bkFinish(BkWriter& w, uint8_t flags, uint32_t epoch) {
 }
 
 // ---------------------------------------------------------------- pembaca
-struct BkHdr { uint8_t flags; uint8_t ver; uint32_t epoch; uint16_t count; };
+struct BkHdr { uint8_t flags; uint8_t ver; uint32_t epoch; uint16_t count; bool enc; };   // enc = file terenkripsi sandi (magic NYXE1)
 
 // Baca 14 byte header saja (dipakai untuk daftar riwayat). false = bukan file backup NyxOS.
 static inline bool bkParseHdr(const uint8_t* b, size_t n, BkHdr& h) {
-  if (n < BK_HDR || memcmp(b, "NYXB1\0", 6) != 0) return false;
+  if (n < BK_HDR) return false;
+  if (memcmp(b, "NYXB1\0", 6) == 0) h.enc = false;
+  else if (memcmp(b, "NYXE1\0", 6) == 0) h.enc = true;
+  else return false;
   h.flags = b[6]; h.ver = b[7];
   h.epoch = (uint32_t)b[8] | ((uint32_t)b[9] << 8) | ((uint32_t)b[10] << 16) | ((uint32_t)b[11] << 24);
   h.count = (uint16_t)(b[12] | (b[13] << 8));
@@ -121,6 +125,7 @@ static inline bool bkParseHdr(const uint8_t* b, size_t n, BkHdr& h) {
 // Periksa file utuh: header + CRC. true = aman dibaca rekamannya.
 static inline bool bkVerify(const uint8_t* b, size_t n, BkHdr& h) {
   if (n < BK_HDR + 1 + 4 || !bkParseHdr(b, n, h)) return false;
+  if (h.enc) return false;            // terenkripsi: harus dibuka dulu dgn sandi (bkDecrypt di backup_crypto.h)
   uint32_t want = (uint32_t)b[n - 4] | ((uint32_t)b[n - 3] << 8) | ((uint32_t)b[n - 2] << 16) | ((uint32_t)b[n - 1] << 24);
   return bkCrc32(0, b + BK_HDR, n - BK_HDR - 4) == want;
 }

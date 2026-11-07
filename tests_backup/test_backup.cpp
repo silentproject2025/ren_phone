@@ -5,6 +5,7 @@
 #include <vector>
 #include <map>
 #include "backup_core.h"
+#include "backup_crypto.h"
 
 static int fails = 0, checks = 0;
 #define CHECK(cond, ...) do { checks++; if(!(cond)){ fails++; printf("GAGAL  %s:%d  ", __FILE__, __LINE__); printf(__VA_ARGS__); printf("\n"); } } while(0)
@@ -170,6 +171,38 @@ int main() {
   CHECK(bkCrc32(0, (const uint8_t*)"123456789", 9) == 0xCBF43926u, "CRC32 standar");
   uint32_t part = bkCrc32(bkCrc32(0, (const uint8_t*)"12345", 5), (const uint8_t*)"6789", 4);
   CHECK(part == 0xCBF43926u, "CRC32 bertahap sama");
+
+  // ---- kredensial broker Catur dianggap rahasia; data gaya AI & pengaturan biasa tidak
+  CHECK(bkIsSecret("chess", "bpass") && bkIsSecret("chess", "buser") && bkIsSecret("chess", "bhost"), "kredensial broker Catur = rahasia");
+  CHECK(!bkIsSecret("chess", "sty") && !bkIsSecret("chess", "bk") && !bkIsSecret("chess", "lvl") && !bkIsSecret("chess", "afk"), "data gaya AI & pengaturan Catur bukan rahasia");
+  // ---- kontainer terenkripsi
+  {
+    Store a; putStr(a, "ui", "font", "Inter"); putU8(a, "ui", "theme", 3); putStr(a, "wifi", "pass", "rahasia-wifi");
+    std::vector<uint8_t> plain; dump(a, true, plain);
+    uint8_t salt[16], iv[16]; for (int i = 0; i < 16; i++) { salt[i] = (uint8_t)(i * 7 + 1); iv[i] = (uint8_t)(255 - i); }
+    std::vector<uint8_t> enc(plain.size() + BK_ENC_OVERHEAD + 16);
+    size_t el = bkEncrypt(plain.data(), plain.size(), (const uint8_t*)"kata-sandi", 10, salt, iv, 1000, enc.data(), enc.size());
+    CHECK(el == plain.size() + BK_ENC_OVERHEAD, "panjang terenkripsi = biasa + %d (%zu)", BK_ENC_OVERHEAD, el);
+    BkHdr h; CHECK(bkParseHdr(enc.data(), el, h) && h.enc && h.count == 3 && (h.flags & BK_FLAG_SECRETS), "header terenkripsi terbaca");
+    CHECK(!bkVerify(enc.data(), el, h), "bkVerify menolak file terenkripsi (harus dibuka dulu)");
+    CHECK(bkParseHdr(plain.data(), plain.size(), h) && !h.enc, "file biasa: enc=false");
+    std::vector<uint8_t> out(el); size_t ol = 0;
+    CHECK(bkDecrypt(enc.data(), el, (const uint8_t*)"kata-sandi", 10, out.data(), out.size(), &ol) == BK_DEC_OK && ol == plain.size() && !memcmp(out.data(), plain.data(), ol), "dekripsi bolak-balik identik dgn file biasa");
+    CHECK(bkVerify(out.data(), ol, h), "hasil dekripsi lolos bkVerify (CRC dalam)");
+    CHECK(bkDecrypt(enc.data(), el, (const uint8_t*)"kata-sandI", 10, out.data(), out.size(), &ol) == BK_DEC_PASS, "sandi beda 1 huruf ditolak");
+    CHECK(bkDecrypt(enc.data(), el, (const uint8_t*)"", 0, out.data(), out.size(), &ol) == BK_DEC_PASS, "sandi kosong ditolak");
+    bool allRej = true; for (size_t i = 0; i < el; i += 13) { std::vector<uint8_t> x = enc; x[i] ^= 0x40; int r = bkDecrypt(x.data(), x.size(), (const uint8_t*)"kata-sandi", 10, out.data(), out.size(), &ol); if (r == BK_DEC_OK) allRej = false; }
+    CHECK(allRej, "mengubah byte MANA PUN (header, salt, iv, isi, mac) ditolak");
+    CHECK(bkDecrypt(enc.data(), el - 1, (const uint8_t*)"kata-sandi", 10, out.data(), out.size(), &ol) != BK_DEC_OK, "file terpotong ditolak");
+    CHECK(bkDecrypt(plain.data(), plain.size(), (const uint8_t*)"x", 1, out.data(), out.size(), &ol) == BK_DEC_FORMAT, "file biasa bukan format terenkripsi");
+    CHECK(bkDecrypt(enc.data(), el, (const uint8_t*)"kata-sandi", 10, out.data(), 10, &ol) == BK_DEC_SPACE, "buffer keluaran kekecilan");
+    { std::vector<uint8_t> x = enc; x[BK_ENC_OFF_ITER + 3] = 0x7f; CHECK(bkDecrypt(x.data(), x.size(), (const uint8_t*)"kata-sandi", 10, out.data(), out.size(), &ol) == BK_DEC_FORMAT, "iterasi tak wajar ditolak (tidak mengunci HP)"); }
+    bool noLeak = true; std::string es((const char*)enc.data(), el); for (const char* w : {"rahasia-wifi", "Inter", "wifi", "theme"}) if (es.find(w) != std::string::npos) noLeak = false;
+    CHECK(noLeak, "tidak ada teks asli di file terenkripsi");
+    std::vector<uint8_t> enc2(enc.size()); salt[0] ^= 1;
+    bkEncrypt(plain.data(), plain.size(), (const uint8_t*)"kata-sandi", 10, salt, iv, 1000, enc2.data(), enc2.size());
+    CHECK(memcmp(enc.data() + BK_ENC_OFF_DATA, enc2.data() + BK_ENC_OFF_DATA, plain.size() - 14) != 0, "salt berbeda -> ciphertext berbeda");
+  }
 
   printf("%d pemeriksaan, %d gagal\n", checks, fails);
   return fails ? 1 : 0;
