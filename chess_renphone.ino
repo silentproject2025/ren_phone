@@ -628,16 +628,16 @@ static void chsAiFeat(uint16_t m, float* f) {
 
 // ---------------------------------------------------------------- TinyML: MLP penilai gaya
 // Tata letak chsNet: W1[NH][NIN] | b1[NH] | v[NH] | b2
-static void chsNetInit() {                           // inisialisasi deterministik (xorshift) ala Xavier
+static void chsNetFill(float* o) {                   // bobot awal deterministik (xorshift) ala Xavier; dipakai juga layar Jaringan utk 'selisih'
   uint32_t s = 0x9E3779B9u;
   float lim1 = 0.39f, lim2 = 0.45f;
   for (int i = 0; i < CHS_NP; i++) {
     s ^= s << 13; s ^= s >> 17; s ^= s << 5;
     float r = ((float)(s & 0xFFFFu) / 32767.5f) - 1.0f;                // -1..1
-    chsNet[i] = (i < CHS_NH * CHS_NIN) ? r * lim1 : ((i < CHS_NH * CHS_NIN + CHS_NH) ? 0.0f : ((i < CHS_NP - 1) ? r * lim2 : 0.0f));
+    o[i] = (i < CHS_NH * CHS_NIN) ? r * lim1 : ((i < CHS_NH * CHS_NIN + CHS_NH) ? 0.0f : ((i < CHS_NP - 1) ? r * lim2 : 0.0f));
   }
-  chsNetReady = true;
 }
+static void chsNetInit() { chsNetFill(chsNet); chsNetReady = true; }
 static inline void chsNetEnsure() { if (!chsNetReady) chsNetInit(); }
 // maju: kembalikan skor; zout (opsional, CHS_NH) = pra-aktivasi utk backprop
 static inline float chsNetFwd(const float* x, float* zout) {
@@ -1594,6 +1594,7 @@ void chessEnter() {
 }
 
 static void chsFreeMasks();
+static void chsVwClose();
 void chessExit() {
   chsActive = false;        // task melepas koneksi TLS sendiri
   chsConn = 0;
@@ -1601,6 +1602,7 @@ void chessExit() {
   chsStyleSave();           // simpan hasil belajar gaya
   chsVsAI = false; chsAfkAI = false; chsAiQueued = false;
   chsAiFree();
+  chsVwClose();             // bobot awal layar Jaringan (PSRAM)
   chsFreeMasks();           // topeng bidak (PSRAM) dibebaskan saat keluar
 }
 
@@ -2039,11 +2041,13 @@ static void chsDrawSetup(LGFX_Sprite& s) {
     char ab[14]; if (chsAfkSec[chsAfkIdx]) snprintf(ab, sizeof(ab), "AFK %us", (unsigned)chsAfkSec[chsAfkIdx]); else strcpy(ab, "AFK mati");
     s.setTextColor(chsAfkIdx ? (uint16_t)T().accent : (uint16_t)T().subtext); chsPrintC(s, x2, gw, by2 + 8, ab);
     char cap[48], cb[48];
-    if (chsTrainN && chsAccN >= 5) snprintf(cap, sizeof(cap), "AI belajar gayamu: %u langkah, tebak %d%%", (unsigned)chsTrainN, (int)(chsAcc * 100.0f + 0.5f));
+    if (chsTrainN && chsAccN >= 5) snprintf(cap, sizeof(cap), "AI belajar: %u langkah, tebak %d%%", (unsigned)chsTrainN, (int)(chsAcc * 100.0f + 0.5f));
     else if (chsTrainN) snprintf(cap, sizeof(cap), "AI belajar gayamu: %u langkah. AFK = AI ganti kamu", (unsigned)chsTrainN);
     else strcpy(cap, "AI belajar gayamu saat kamu main. AFK = AI ganti kamu");
-    chsClip(cap, cb, (SCR_W - 16) / 6);
+    chsClip(cap, cb, (SCR_W - 16 - 66) / 6);
     s.setTextColor(T().subtext); s.setCursor(10, by2 + 30); s.print(cb);
+    nyxAaRR(s, SCR_W - 8 - 58, by2 + 27, 58, 16, 7, chsPressCol(9, blend565(T().surface2, 0xFFFF, 20)));   // buka layar Jaringan
+    s.setTextColor(T().accent); chsPrintC(s, SCR_W - 8 - 58, 58, by2 + 31, "Jaringan");
   }
 }
 
@@ -2298,6 +2302,214 @@ static void chsDrawGame(LGFX_Sprite& s) {
   }
 }
 
+// =====================================================================
+// LAYAR "JARINGAN" (chsScr == 3): lihat MLP gaya (26-16-1) + tabel kebiasaan petak langsung di HP.
+//   Tab: Jaringan (diagram) | Bobot (peta W1 16x26) | Petak (7 papan 8x8). Chip "Selisih" = beda dari bobot awal.
+//   Bobot awal (utk selisih) dihitung ulang di PSRAM hanya selama layar ini dibuka.
+// =====================================================================
+static uint8_t chsVw = 0;                 // 0 diagram, 1 peta bobot, 2 petak
+static bool    chsVwDelta = false;        // true = tampilkan selisih dari bobot awal
+static int8_t  chsVwSel = -1;             // neuron tersembunyi terpilih (tab 0)
+static int16_t chsVwCell = -1;            // sel / petak terpilih (tab 1, 2)
+static float*  chsVwInit = nullptr;
+static char    chsVwInfo[80] = "";
+
+static const char* const chsFeatName[CHS_NIN] = {
+  "makan", "tukar untung", "ke tengah", "dorong pion", "maju", "kembang", "rokade", "menteri", "benteng", "raja jalan",
+  "skak", "mendarat diserang", "mundur", "dekati raja", "promosi", "pion sayap", "kuda", "gajah", "selamatkan", "dilindungi",
+  "fase", "materi", "diskak", "no.langkah", "mobilitas", "ada menteri" };
+static const char* const chsPcName[7] = { "Pion", "Kuda", "Gajah", "Benteng", "Menteri", "Raja", "Asal" };
+
+static void chsVwClose() { if (chsVwInit) { CHS_AI_FREE(chsVwInit); chsVwInit = nullptr; } }
+static void chsVwOpen() {
+  chsNetEnsure();
+  if (!chsVwInit) chsVwInit = (float*)CHS_AI_ALLOC(CHS_NP * sizeof(float));
+  if (chsVwInit) chsNetFill(chsVwInit);
+  chsVw = 0; chsVwDelta = false; chsVwSel = -1; chsVwCell = -1; chsVwInfo[0] = 0;
+  chsScr = 3; needRedraw = true;
+}
+
+static inline float chsVwVal(int i) { return (chsVwDelta && chsVwInit) ? chsNet[i] - chsVwInit[i] : chsNet[i]; }
+static float chsVwMax(int a, int b) { float m = 1e-6f; for (int i = a; i < b; i++) { float v = fabsf(chsVwVal(i)); if (v > m) m = v; } return m; }
+static uint16_t chsVwCol(float v, float m, uint16_t base) {      // biru/aksen = positif, merah = negatif
+  float a = sqrtf(fabsf(v) / m); if (a > 1.0f) a = 1.0f;
+  return blend565(base, v >= 0 ? (uint16_t)T().accent : (uint16_t)T().danger, (uint8_t)(a * 255.0f));
+}
+
+struct ChsVwG { int ax, ay, aw, ah, bx, by, bw, bh, fy; };
+static ChsVwG chsVwGeom() {
+  ChsVwG g; g.ax = 4; g.ay = STATUS_H + 3; g.aw = SCR_W - 8; g.ah = backY() - 4 - g.ay;
+  g.bx = g.ax; g.by = g.ay + 22; g.bw = g.aw; g.fy = g.ay + g.ah - 20; g.bh = g.fy - 2 - g.by;
+  return g;
+}
+static void chsVwTabRect(int i, int* x, int* y, int* w, int* h) {     // i 0..2 = tab, 3 = chip Selisih
+  ChsVwG g = chsVwGeom(); int chip = 54, gap = 4; int tw = (g.aw - chip - 4 * gap) / 3;
+  *y = g.ay; *h = 18;
+  if (i < 3) { *x = g.ax + i * (tw + gap); *w = tw; } else { *x = g.ax + g.aw - chip; *w = chip; }
+}
+
+// --- tab 0: diagram ---
+static inline int chsVwYIn(const ChsVwG& g, int k)  { return g.by + 4 + (g.bh - 8) * k / (CHS_NIN - 1); }
+static inline int chsVwYHid(const ChsVwG& g, int j) { return g.by + 4 + (g.bh - 8) * j / (CHS_NH - 1); }
+static inline int chsVwXi(const ChsVwG& g) { return g.bx + 62; }
+static inline int chsVwXo(const ChsVwG& g) { return g.bx + g.bw - 22; }
+static inline int chsVwXh(const ChsVwG& g) { return (chsVwXi(g) + chsVwXo(g)) / 2; }
+
+static void chsVwNeuronInfo(int j) {
+  const int W1n = CHS_NH * CHS_NIN;
+  int b1 = -1, b2 = -1; float v1 = 0, v2 = 0;
+  for (int k = 0; k < CHS_NIN; k++) {
+    float w = chsVwVal(j * CHS_NIN + k);
+    if (b1 < 0 || fabsf(w) > fabsf(v1)) { b2 = b1; v2 = v1; b1 = k; v1 = w; }
+    else if (b2 < 0 || fabsf(w) > fabsf(v2)) { b2 = k; v2 = w; }
+  }
+  snprintf(chsVwInfo, sizeof(chsVwInfo), "H%d skor %+.2f | %s %+.2f, %s %+.2f", j + 1, chsVwVal(W1n + CHS_NH + j),
+           chsFeatName[b1], v1, chsFeatName[b2], v2);
+}
+
+static void chsVwDrawNet(LGFX_Sprite& s, const ChsVwG& g) {
+  const int W1n = CHS_NH * CHS_NIN;
+  float m = chsVwMax(0, W1n), mv = chsVwMax(W1n + CHS_NH, CHS_NP - 1);
+  int xi = chsVwXi(g), xh = chsVwXh(g), xo = chsVwXo(g), yo = g.by + g.bh / 2;
+  uint16_t bg = T().bg, pc = T().accent, nc = T().danger;
+  for (int j = 0; j < CHS_NH; j++) {                                   // garis masukan -> tersembunyi
+    if (chsVwSel >= 0 && chsVwSel != j) continue;
+    int yh = chsVwYHid(g, j);
+    for (int k = 0; k < CHS_NIN; k++) {
+      float w = chsVwVal(j * CHS_NIN + k), r = fabsf(w) / m; if (r > 1.0f) r = 1.0f;
+      if (chsVwSel < 0 && r < 0.35f) continue;                         // diagram penuh: hanya yang kuat
+      s.drawLine(xi, chsVwYIn(g, k), xh, yh, blend565(bg, w >= 0 ? pc : nc, (uint8_t)(70 + 185 * r)));
+    }
+  }
+  for (int j = 0; j < CHS_NH; j++) {                                   // garis tersembunyi -> skor
+    float v = chsVwVal(W1n + CHS_NH + j), r = fabsf(v) / mv; if (r > 1.0f) r = 1.0f;
+    bool on = chsVwSel < 0 || chsVwSel == j; int yh = chsVwYHid(g, j);
+    uint16_t c = blend565(bg, v >= 0 ? pc : nc, on ? (uint8_t)(70 + 185 * r) : (uint8_t)40);
+    s.drawLine(xh, yh, xo, yo, c); if (on && r > 0.6f) s.drawLine(xh, yh + 1, xo, yo + 1, c);
+  }
+  s.setTextSize(1);
+  bool lab = (g.bh - 8) / (CHS_NIN - 1) >= 8;                          // label hanya kalau cukup lega
+  for (int k = 0; k < CHS_NIN; k++) {
+    int y = chsVwYIn(g, k);
+    s.fillCircle(xi, y, 2, k < CHS_NF ? (uint16_t)T().subtext : (uint16_t)T().accent2);
+    if (!lab && (k & 1)) continue;
+    char b[12]; chsClip(chsFeatName[k], b, 9);
+    bool hot = chsVwSel >= 0 && fabsf(chsVwVal(chsVwSel * CHS_NIN + k)) / m > 0.5f;
+    s.setTextColor(hot ? (uint16_t)T().text : (uint16_t)T().subtext);
+    s.setCursor(xi - 6 - (int)strlen(b) * 6, y - 3); s.print(b);
+  }
+  for (int j = 0; j < CHS_NH; j++) {
+    int y = chsVwYHid(g, j);
+    s.fillCircle(xh, y, 6, chsVwCol(chsVwVal(W1n + CHS_NH + j), mv, T().surface2));
+    s.drawCircle(xh, y, 6, chsVwSel == j ? (uint16_t)T().text : (uint16_t)T().divider);
+  }
+  s.fillCircle(xo, yo, 8, T().accent);
+  s.setTextColor(T().subtext); chsPrintC(s, xo - 12, 24, yo + 11, "skor");
+}
+
+// --- tab 1: peta bobot W1 (16 neuron x 26 fitur) ---
+static void chsVwHmGeom(const ChsVwG& g, int* x0, int* y0, int* cs) {
+  int c1 = (g.bw - 24) / CHS_NIN, c2 = (g.bh - 10) / CHS_NH; int c = c1 < c2 ? c1 : c2; if (c < 4) c = 4;
+  *cs = c; *x0 = g.bx + 22; *y0 = g.by + 10;
+}
+static void chsVwDrawHm(LGFX_Sprite& s, const ChsVwG& g) {
+  int x0, y0, cs; chsVwHmGeom(g, &x0, &y0, &cs);
+  float m = chsVwMax(0, CHS_NH * CHS_NIN);
+  s.setTextSize(1); s.setTextColor(T().subtext);
+  for (int k = 0; k < CHS_NIN; k++) {
+    if (cs < 13 && k != 0 && (k + 1) % 5 != 0) continue;
+    char b[4]; snprintf(b, sizeof(b), "%d", k + 1); chsPrintC(s, x0 + k * cs - 2, cs + 4, g.by + 1, b);
+  }
+  for (int j = 0; j < CHS_NH; j++) {
+    char b[5]; snprintf(b, sizeof(b), "H%d", j + 1);
+    s.setTextColor(T().subtext); s.setCursor(g.bx + 2, y0 + j * cs + (cs - 8) / 2); s.print(b);
+    for (int k = 0; k < CHS_NIN; k++) s.fillRect(x0 + k * cs, y0 + j * cs, cs - 1, cs - 1, chsVwCol(chsVwVal(j * CHS_NIN + k), m, T().surface));
+  }
+  if (chsVwCell >= 0) { int j = chsVwCell / CHS_NIN, k = chsVwCell % CHS_NIN; s.drawRect(x0 + k * cs - 1, y0 + j * cs - 1, cs + 1, cs + 1, T().text); }
+}
+
+// --- tab 2: tabel kebiasaan petak (6 bidak tujuan + petak asal), Putih di bawah ---
+static void chsVwBdGeom(const ChsVwG& g, int i, int* x, int* y, int* cs) {
+  int cols = (g.bw >= g.bh) ? 4 : 2, rows = (7 + cols - 1) / cols, gap = 8, lab = 10;
+  int c1 = (g.bw - (cols - 1) * gap) / (cols * 8), c2 = (g.bh - rows * (lab + 2)) / (rows * 8);
+  int c = c1 < c2 ? c1 : c2; if (c < 3) c = 3;
+  int ox = g.bx + (g.bw - (cols * 8 * c + (cols - 1) * gap)) / 2;
+  *cs = c; *x = ox + (i % cols) * (8 * c + gap); *y = g.by + (i / cols) * (8 * c + lab + 2) + lab;
+}
+static void chsVwDrawBd(LGFX_Sprite& s, const ChsVwG& g) {
+  float m = 1e-6f; for (int i = 0; i < CHS_HAB_N; i++) { float v = fabsf(chsHab[i]); if (v > m) m = v; }
+  s.setTextSize(1);
+  for (int p = 0; p < 7; p++) {
+    int x, y, c; chsVwBdGeom(g, p, &x, &y, &c);
+    s.setTextColor(T().subtext); chsPrintC(s, x, 8 * c, y - 10, chsPcName[p]);
+    for (int r = 0; r < 8; r++) for (int f = 0; f < 8; f++) {
+      uint16_t base = (((r + f) & 1) == 0) ? (uint16_t)T().surface2 : (uint16_t)T().surface;
+      s.fillRect(x + f * c, y + (7 - r) * c, c, c, chsVwCol(chsHab[p * 64 + r * 8 + f], m, base));
+    }
+    if (chsVwCell >= 0 && chsVwCell / 64 == p) { int q = chsVwCell % 64, r = q / 8, f = q % 8; s.drawRect(x + f * c, y + (7 - r) * c, c, c, T().text); }
+  }
+}
+
+static void chsDrawNet(LGFX_Sprite& s) {
+  ChsVwG g = chsVwGeom();
+  static const char* const tn[3] = { "Jaringan", "Bobot", "Petak" };
+  s.setTextSize(1);
+  for (int i = 0; i < 3; i++) {
+    int x, y, w, h; chsVwTabRect(i, &x, &y, &w, &h); bool on = (chsVw == i);
+    iosRR(s, x, y, w, h, 7, on ? (uint16_t)T().accent : (uint16_t)T().surface2);
+    s.setTextColor(on ? (uint16_t)T().bg : (uint16_t)T().text); chsPrintC(s, x, w, y + 5, tn[i]);
+  }
+  { int x, y, w, h; chsVwTabRect(3, &x, &y, &w, &h);
+    iosRR(s, x, y, w, h, 7, chsVwDelta ? (uint16_t)T().accent : (uint16_t)T().surface2);
+    s.setTextColor(chsVwDelta ? (uint16_t)T().bg : (chsVwInit ? (uint16_t)T().text : (uint16_t)T().subtext)); chsPrintC(s, x, w, y + 5, "Selisih"); }
+  if (chsVw == 0) chsVwDrawNet(s, g); else if (chsVw == 1) chsVwDrawHm(s, g); else chsVwDrawBd(s, g);
+  char b[96], ln[96];
+  if (chsVwInfo[0]) strncpy(b, chsVwInfo, sizeof(b) - 1), b[sizeof(b) - 1] = 0;
+  else strcpy(b, chsVw == 0 ? "Ketuk neuron (lingkaran tengah) utk detail" : chsVw == 1 ? "Ketuk sel utk nilainya" : "Ketuk petak utk nilainya");
+  chsClip(b, ln, g.aw / 6);
+  s.setTextColor(T().text); s.setCursor(g.ax + 2, g.fy); s.print(ln);
+  if (chsTrainN && chsAccN >= 5) snprintf(b, sizeof(b), "%u langkah | tebak %d%% | %s", (unsigned)chsTrainN, (int)(chsAcc * 100.0f + 0.5f), chsVwDelta ? "selisih dari awal" : "bobot");
+  else snprintf(b, sizeof(b), "%u langkah | %s", (unsigned)chsTrainN, chsVwDelta ? "selisih dari awal" : "bobot");
+  chsClip(b, ln, g.aw / 6);
+  s.setTextColor(T().subtext); s.setCursor(g.ax + 2, g.fy + 10); s.print(ln);
+}
+
+static void chsTouchNet(int x, int y, bool isNew) {
+  if (!isNew) return;
+  if (isBack(x, y)) { chsVwClose(); chsScr = 0; needRedraw = true; return; }
+  for (int i = 0; i < 4; i++) {
+    int tx, ty, tw, th; chsVwTabRect(i, &tx, &ty, &tw, &th);
+    if (x >= tx && x < tx + tw && y >= ty && y < ty + th + 4) {
+      if (i < 3) chsVw = (uint8_t)i;
+      else if (chsVwInit) chsVwDelta = !chsVwDelta;
+      else showToast("RAM tidak cukup utk selisih", 1800);
+      chsVwSel = -1; chsVwCell = -1; chsVwInfo[0] = 0; needRedraw = true; return;
+    }
+  }
+  ChsVwG g = chsVwGeom();
+  if (chsVw == 0) {
+    int j = ((y - (g.by + 4)) * (CHS_NH - 1) + (g.bh - 8) / 2) / (g.bh - 8);
+    if (y < g.by || j < 0 || j >= CHS_NH || chsAbsI(x - chsVwXh(g)) > 14) return;
+    if (chsVwSel == j) { chsVwSel = -1; chsVwInfo[0] = 0; } else { chsVwSel = (int8_t)j; chsVwNeuronInfo(j); }
+  } else if (chsVw == 1) {
+    int x0, y0, cs; chsVwHmGeom(g, &x0, &y0, &cs);
+    int k = (x - x0) / cs, j = (y - y0) / cs;
+    if (x < x0 || y < y0 || k >= CHS_NIN || j >= CHS_NH) return;
+    chsVwCell = (int16_t)(j * CHS_NIN + k);
+    snprintf(chsVwInfo, sizeof(chsVwInfo), "H%d x %s: %+.3f", j + 1, chsFeatName[k], chsVwVal(chsVwCell));
+  } else {
+    for (int p = 0; p < 7; p++) {
+      int bx, by, c; chsVwBdGeom(g, p, &bx, &by, &c);
+      if (x < bx || y < by || x >= bx + 8 * c || y >= by + 8 * c) continue;
+      int f = (x - bx) / c, r = 7 - (y - by) / c; chsVwCell = (int16_t)(p * 64 + r * 8 + f);
+      snprintf(chsVwInfo, sizeof(chsVwInfo), "%s %c%d: %+.2f", p < 6 ? chsPcName[p] : "Asal", 'a' + f, r + 1, chsHab[chsVwCell]);
+      needRedraw = true; return;
+    }
+    return;
+  }
+  needRedraw = true;
+}
+
 static void chsDrawBroker(LGFX_Sprite& s);
 
 void drawChess(LGFX_Sprite& s) {
@@ -2307,6 +2519,7 @@ void drawChess(LGFX_Sprite& s) {
     s.setTextColor(T().danger); s.setTextSize(1); s.setCursor(10, 40); s.print("RAM tidak cukup untuk app Catur");
   } else if (chsScr == 0) chsDrawSetup(s);
   else if (chsScr == 2) chsDrawBroker(s);
+  else if (chsScr == 3) chsDrawNet(s);
   else chsDrawGame(s);
   if (kbVisible) drawKb(s); else drawBack(s);
   drawToast(s);
@@ -2414,6 +2627,7 @@ static void chsTouchSetup(int x, int y, bool isNew) {
     else if (x >= 86) { chsPress(4); chsStartGame(); }
     return;
   }
+  if (y >= 192 && y <= 210 && x >= SCR_W - 8 - 62) { chsPress(9); chsVwOpen(); return; }          // chip Jaringan
   if (y >= 166 && y <= 190) {
     int gw = (SCR_W - 16 - 12) / 3;
     if (x >= 8 && x < 8 + gw) { chsPress(6); chsStartAi(); }
@@ -2454,6 +2668,7 @@ void chessTouch(int x, int y, bool held, bool isNew) {
   chsLastTouchMs = millis();                         // user kembali -> AI pengganti berhenti
   if (chsAfkAI) { chsAfkAI = false; needRedraw = true; }
   if (chsScr == 2) { chsTouchBroker(x, y, isNew); return; }
+  if (chsScr == 3) { chsTouchNet(x, y, isNew); return; }
   if (chsScr == 0) { chsTouchSetup(x, y, isNew); return; }
   if (!isNew) return;
   if (isBack(x, y)) { navBack(); return; }
