@@ -238,6 +238,7 @@ jobs:
           cp gutenberg_renphone.ino build_sketch/
           cp backup_renphone.ino build_sketch/
           cp backup_core.h build_sketch/
+          cp backup_crypto.h build_sketch/
           cp gutendex_core.h build_sketch/
           cp gutdl_core.h build_sketch/
           cp hw_conf.h         build_sketch/
