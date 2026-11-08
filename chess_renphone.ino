@@ -879,9 +879,47 @@ static bool chsBookDeser(const uint8_t* b, size_t len) {
   return true;
 }
 
+// ---------------------------------------------------------------- level NYX: jebakan kebiasaan
+// Pencarian minimax (di chsAiChoose) sudah menyaring kandidat yang AMAN (dalam margin). Di antara mereka, NYX memilih
+// yang paling "menghukum kebiasaan user":
+//   1. aiMove dijalankan; model gaya memprediksi peluang p_r tiap balasan sah user (softmax skor gaya)
+//   2. tiap balasan dinilai V_r = quiescence dari sisi AI (2-ply + tangkapan)
+//   3. E = sum p_r*V_r (hasil bila user bermain seperti biasanya), M = min V_r (hasil bila user membalas terbaik)
+//   4. keyakinan c = 1 - H(p)/ln(n): model yang ragu (peluang merata) tidak dipercaya
+//   bonus = c * (E - M)  (>= 0, centipawn)
+// Skor akhir kandidat: v = fs + w*GAMMA*min(bonus, CAP), w = min(1, chsTrainN/60) seperti level Cermin.
+#define CHS_NYX_GAMMA  0.9f
+#define CHS_NYX_CAP    150.0f
+#define CHS_NYX_TOPK   8
+static float chsAiTrapBonus(uint16_t aiMove, int ply) {
+  CHS_SAVE_ST;
+  chsDo(aiMove);
+  uint16_t rep[256]; int rn = chsGen(rep), n = 0;
+  for (int i = 0; i < rn; i++) if (chsLegal(rep[i])) rep[n++] = rep[i];
+  if (n < 2) { CHS_REST_ST; return 0.0f; }                      // tidak ada pilihan balasan -> tidak ada kebiasaan yang bisa dihukum
+  float ctx[CHS_NC]; chsAiCtx(ctx, n, ply + 1);
+  float* S = chsAiFS; float mx = -1e30f;
+  for (int r = 0; r < n; r++) { S[r] = chsStyleScore(rep[r], ctx); if (S[r] > mx) mx = S[r]; }
+  float sum = 0;
+  for (int r = 0; r < n; r++) { S[r] = expf(S[r] - mx); sum += S[r]; }
+  chsAiAbort = false; chsAiCheckTime = false;
+  float E = 0, H = 0; int M = CHS_AI_INF;
+  for (int r = 0; r < n; r++) {
+    float pr = S[r] / sum; int v;
+    { CHS_SAVE_ST; chsDo(rep[r]); v = chsAiQ(-CHS_AI_INF, CHS_AI_INF, 2); CHS_REST_ST; }
+    E += pr * (float)v; if (v < M) M = v;
+    if (pr > 1e-6f) H -= pr * logf(pr);
+  }
+  CHS_REST_ST;
+  float conf = 1.0f - H / logf((float)n); if (conf < 0) conf = 0; else if (conf > 1) conf = 1;
+  float b = conf * (E - (float)M);
+  return b < 0 ? 0.0f : b;
+}
+
 // ---------------------------------------------------------------- pemilih langkah
 // maxDepth/budgetMs = batas pencarian. margin = selisih skor (centipawn) dari langkah terbaik yg masih dianggap "layak".
-// mode 0 = terbaik | 1 = acak di antara yg layak | 2 = paling cocok dgn GAYA user di antara yg layak.
+// mode 0 = terbaik | 1 = acak di antara yg layak | 2 = paling cocok dgn GAYA user di antara yg layak |
+// 3 = NYX: di antara yg layak, pilih yg paling menghukum KEBIASAAN user (prediksi balasan lewat model gaya).
 // ply = jumlah langkah yg sudah dimainkan (konteks utk jaringan gaya).
 // Mengembalikan langkah (dari | ke<<6 | promosi<<12), atau 0 kalau tidak ada langkah sah.
 static uint16_t chsAiChoose(int maxDepth, uint32_t budgetMs, int margin, int mode, int ply) {
@@ -933,6 +971,24 @@ static uint16_t chsAiChoose(int maxDepth, uint32_t budgetMs, int margin, int mod
   for (int i = 0; i < n; i++) if (chsAiFx[i] && chsAiFs[i] >= thr) nc++;
   if (mode == 0 || nc <= 1) {
     for (int i = 0; i < n; i++) if (chsAiFx[i] && chsAiFs[i] == bestSc) { pick = i; break; }
+  } else if (mode == 3) {
+    // NYX: kandidat aman (dalam margin) + bonus jebakan kebiasaan (lihat chsAiTrapBonus)
+    float sw = (float)chsTrainN / 60.0f; if (sw > 1.0f) sw = 1.0f;
+    int idx[CHS_NYX_TOPK], ni = 0;
+    for (int i = 0; i < n; i++) if (chsAiFx[i] && chsAiFs[i] >= thr) {   // TOPK kandidat dengan skor tertinggi
+      int ps = ni;
+      if (ni < CHS_NYX_TOPK) ni++; else if (chsAiFs[i] <= chsAiFs[idx[CHS_NYX_TOPK - 1]]) continue; else ps = CHS_NYX_TOPK - 1;
+      while (ps > 0 && chsAiFs[idx[ps - 1]] < chsAiFs[i]) { idx[ps] = idx[ps - 1]; ps--; }
+      idx[ps] = i;
+    }
+    float bestV = -1e30f; pick = idx[0];
+    uint32_t tEnd = CHS_AI_NOW() + budgetMs / 2;                          // waktu tambahan utk analisis kebiasaan
+    for (int k = 0; k < ni; k++) {
+      int i = idx[k]; float bonus = 0;
+      if (sw > 0 && (int32_t)(CHS_AI_NOW() - tEnd) < 0) { bonus = chsAiTrapBonus(chsAiRm[i], ply); if (bonus > CHS_NYX_CAP) bonus = CHS_NYX_CAP; }
+      float v = (float)chsAiFs[i] + sw * CHS_NYX_GAMMA * bonus + (float)(CHS_AI_RAND() % 100u) * 0.04f;
+      if (v > bestV) { bestV = v; pick = i; }
+    }
   } else if (mode == 1) {
     int r = (int)(CHS_AI_RAND() % (uint32_t)nc);
     for (int i = 0; i < n; i++) if (chsAiFx[i] && chsAiFs[i] >= thr) { if (r-- == 0) { pick = i; break; } }
@@ -1088,24 +1144,24 @@ static void chsAnimStart(int from, int to, int8_t cap) {
 // MODE LAWAN AI + AI PENGGANTI SAAT AFK
 // ---------------------------------------------------------------------
 static bool          chsVsAI = false;          // true = lawan AI (tanpa jaringan)
-static uint8_t       chsAiLevel = 1;           // 0 Mudah, 1 Sedang, 2 Sulit, 3 Cermin (AI meniru gaya user)
+static uint8_t       chsAiLevel = 1;           // 0 Mudah, 1 Sedang, 2 Sulit, 3 Cermin (AI meniru gaya user), 4 Nyx (AI menghukum kebiasaan user)
 static uint8_t       chsAfkIdx = 2;            // indeks chsAfkSec: 0 = mati
 static bool          chsAfkAI = false;         // AI sedang memainkan giliran user (user AFK)
 static bool          chsAiUserWhite = true;
 static bool          chsAiQueued = false, chsPrevMyTurn = false;
 static unsigned long chsAiDueMs = 0, chsLastTouchMs = 0, chsTurnStartMs = 0;
 static uint8_t       chsUnsaved = 0;
-static const char* const chsLvName[4] = {"Mudah", "Sedang", "Sulit", "Cermin"};
+static const char* const chsLvName[5] = {"Mudah", "Sedang", "Sulit", "Cermin", "Nyx"};
 static const uint16_t chsAfkSec[4] = {0, 30, 60, 120};
-static const uint8_t  chsLvDepth[4]  = {2, 4, 6, 4};
-static const uint16_t chsLvMs[4]     = {250, 700, 1800, 700};
-static const int16_t  chsLvMargin[4] = {120, 10, 0, 70};
-static const uint8_t  chsLvMode[4]   = {1, 1, 0, 2};       // 0 terbaik | 1 acak di antara yg layak | 2 gaya user
+static const uint8_t  chsLvDepth[5]  = {2, 4, 6, 4, 4};
+static const uint16_t chsLvMs[5]     = {250, 700, 1800, 700, 900};
+static const int16_t  chsLvMargin[5] = {120, 10, 0, 70, 80};
+static const uint8_t  chsLvMode[5]   = {1, 1, 0, 2, 3};    // 0 terbaik | 1 acak di antara yg layak | 2 gaya user | 3 Nyx (jebakan kebiasaan)
 
 static void chsPrefsLoad() {
   Preferences p;
   if (!p.begin("chess", true)) return;
-  uint8_t lv = p.getUChar("lvl", 1); if (lv < 4) chsAiLevel = lv;
+  uint8_t lv = p.getUChar("lvl", 1); if (lv < 5) chsAiLevel = lv;
   uint8_t af = p.getUChar("afk", 2); if (af < 4) chsAfkIdx = af;
   uint8_t* sb = (uint8_t*)malloc(CHS_STY_LEN + CHS_BK_MAXLEN + 16);          // heap, bukan stack (task loop cuma 8 KB)
   if (sb) {
@@ -2636,7 +2692,7 @@ static void chsTouchSetup(int x, int y, bool isNew) {
   if (y >= 166 && y <= 190) {
     int gw = (SCR_W - 16 - 12) / 3;
     if (x >= 8 && x < 8 + gw) { chsPress(6); chsStartAi(); }
-    else if (x >= 8 + gw + 6 && x < 8 + 2 * gw + 6) { chsPress(7); chsAiLevel = (uint8_t)((chsAiLevel + 1) & 3); chsPrefsSaveCfg(); needRedraw = true; }
+    else if (x >= 8 + gw + 6 && x < 8 + 2 * gw + 6) { chsPress(7); chsAiLevel = (uint8_t)((chsAiLevel + 1) % 5); chsPrefsSaveCfg(); needRedraw = true; }
     else if (x >= 8 + 2 * (gw + 6)) { chsPress(8); chsAfkIdx = (uint8_t)((chsAfkIdx + 1) & 3); chsPrefsSaveCfg(); needRedraw = true; }
   }
 }

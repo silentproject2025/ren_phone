@@ -7,8 +7,8 @@ NyxOS tidak berbasis Android maupun Linux. Peluncur aplikasi (launcher), pusat n
 | | |
 |---|---|
 | **Mikrokontroler** | ESP32-S3, flash 16 MB, PSRAM OPI 8 MB |
-| **Aplikasi bawaan** | 43 aplikasi |
-| **Ukuran kode** | ±40.200 baris firmware utama + ±1.400 baris firmware ko-prosesor (tidak termasuk kode pihak ketiga) |
+| **Aplikasi bawaan** | 45 aplikasi |
+| **Ukuran kode** | ±53.000 baris firmware utama + ±1.500 baris firmware ko-prosesor (tidak termasuk kode pihak ketiga) |
 | **Versi** | 1.0.0 (lihat berkas `VERSION`) |
 | **Lisensi** | AGPL-3.0 |
 
@@ -17,6 +17,7 @@ NyxOS tidak berbasis Android maupun Linux. Peluncur aplikasi (launcher), pusat n
 > - **Telepon** baru teruji sebagian: berhasil dengan akun `sip2sip.info` (SIP melalui TCP), sedangkan penyedia SIP lain, mode LAN, dan TURN belum terkonfirmasi.
 > - **NyxPPU** masih berupa eksperimen (fase 1), dan **SPI Overclock** bergantung pada kualitas kabel.
 > - **Gestur sistem baru** (tarik-untuk-muat-ulang, geser-kembali dari tepi kiri, panel yang mengikuti jari) baru ditambahkan dan berstatus `BETA`.
+> - **Backup & Restore** pengaturan dan **Catur** (online dan lawan AI) berstatus `BETA`: logikanya diuji di komputer, tetapi belum diuji pada perangkat.
 >
 > Penjelasan lengkap tiap fitur tersedia pada [bagian 5](#5-fitur-secara-rinci) dan [bagian 6](#6-fitur-eksperimental-dan-catatan-perangkat-keras).
 
@@ -66,6 +67,8 @@ NyxOS tidak berbasis Android maupun Linux. Peluncur aplikasi (launcher), pusat n
 | Fitur tambahan NyxOS (perintah suara AI, energi per app, log crash, banner telepon, thumbnail screenshot, skeleton loading) | `BETA` | Kode sudah terpasang di build, belum diuji pada perangkat. Lihat bagian 5.5 dan 5.6. |
 | Emoji (set bawaan dan set lengkap dari SD) | `BETA` | Emoji berwarna di seluruh teks NyxOS dan keyboard. Set bawaan 54 sprite; set lengkap dibuat dari Noto Emoji atau Twemoji menjadi `/emoji.bin`. Hanya emoji tunggal; ZWJ, bendera, dan keycap belum didukung. Lihat [bagian 5.1](#51-antarmuka-sistem-ok). |
 | Kamus keyboard (saran kata + autokoreksi) | `BETA` | Baris 3 saran di atas tuts, autokoreksi salah ketik (spasi/`,`/`.`/`?`/`!`), batal dengan Hapus, kamus Indonesia + Inggris bawaan, kamus tambahan dari SD. Aktif di Notepad dan Chat. Logika diuji di komputer (`tests_kamus/`), belum diuji pada perangkat. Lihat [bagian 5.1](#51-antarmuka-sistem-ok). |
+| Backup & Restore pengaturan | `BETA` | Seluruh pengaturan (NVS) disimpan ke `/backup/nyx_NNN.nbk` di SD dan dapat dipulihkan; sandi/API key tidak ikut kecuali diminta; opsi enkripsi AES-256 dengan sandi. Format, CRC, dan kripto diuji di komputer (`tests_backup/`), belum diuji pada perangkat. Lihat [bagian 5.6](#56-sistem-dan-perangkat). |
+| Catur (online lewat MQTT dan lawan AI) | `BETA` | Aturan lengkap, 5 level AI termasuk level "Cermin" (belajar gaya pemilik di perangkat) dan "Nyx" (eksperimental, memanfaatkan kebiasaan pemilik), dan AI pengganti saat pemain AFK. Dilengkapi layar **Jaringan** untuk melihat bobot hasil belajar AI. Mesin aturan dan AI diuji di komputer (`tests_chess/`, termasuk *perft*), belum diuji pada perangkat atau antar dua HP. Lihat [bagian 5.2.3](#523-catur-online-dan-lawan-ai-beta). |
 | Chat melalui broker MQTT | `OK` | Diuji dengan broker sungguhan. |
 | Musik Bluetooth dan AVRCP | `OK` | Cover ID3, kontrol dari earbuds, mode acak AI. |
 | Pemutar AVI (seek, resume, zoom) | `OK` | |
@@ -351,6 +354,7 @@ Catatan: panel Notification Shade kini menyesuaikan tingginya saat isi berubah, 
 - **Atur Home.** Mengubah urutan ikon dan menyembunyikan aplikasi dari grid. Tersedia tombol *Reset* dengan konfirmasi.
 - **Profil.** Kartu avatar dan nama pemilik di bagian atas Pengaturan; foto dipilih dari kartu SD.
 - **About Phone.** Informasi perangkat dan sistem.
+- **Backup & Restore.** Simpan dan pulihkan seluruh pengaturan ke kartu SD, dibuka dari Pengaturan → Tentang. Lihat [bagian 5.6](#56-sistem-dan-perangkat).
 
 **Emoji** `BETA`
 
@@ -488,6 +492,53 @@ Tanpa TURN, panggilan melalui internet pada jaringan CGNAT dapat bisu atau satu 
 
 Panduan ringkas tersedia juga pada [`call-sip/README.md`](./call-sip/README.md).
 
+#### 5.2.3 Catur (online dan lawan AI) `BETA`
+
+Catur lengkap (skak, skakmat, pat, rokade, *en passant*, promosi bidak, aturan 50 langkah) dengan dua cara bermain. Papan diputar otomatis untuk pemain Hitam, dan panel di bawah papan dapat disembunyikan.
+
+| Mode | Cara kerja |
+|---|---|
+| **Online** | Dua HP membuka app **Catur**, mengisi **kode room** yang sama (minimal 3 karakter), lalu menekan **Mulai**. HP yang masuk lebih dulu menjadi Putih, yang kedua menjadi Hitam. Tersedia **Main lagi** dan **Menyerah** (dengan konfirmasi). Perlu WiFi dan sebuah broker MQTT. |
+| **Lawan AI** | Tanpa jaringan sama sekali. Tombol tingkat AI berganti antara Mudah, Sedang, Sulit, Cermin, dan Nyx. |
+
+**Broker.** Catur memakai pengaturan broker **sendiri**, terpisah dari Chat (TLS, port 8883 bawaan; `host` boleh diberi `:port`). Diisi lewat app (host, username, password, lalu **Simpan**), lewat berkas `/chess.cfg` di SD (`host=`, `user=`, `pass=`; lihat [bagian 7](#7-konfigurasi-melalui-kartu-sd)), atau dengan tombol salin dari pengaturan Chat (setelah disalin, keduanya tetap terpisah). Bila akun broker dibatasi oleh ACL ke `renphone/chat/#`, tambahkan izin *publish* dan *subscribe* ke `renphone/chess/#`.
+
+**Cara kerja online.**
+
+- Setiap permainan disimpan sebagai pesan *retained* berisi **seluruh daftar langkah** (notasi koordinat, misalnya `e2e4 e7e5 g1f3`) beserta nomor generasi dan hasil. Karena yang dikirim selalu daftar lengkap, pesan ganda, terlambat, atau terputus tidak merusak permainan, dan lawan yang baru tersambung langsung memperoleh posisi terakhir.
+- Kursi Putih dan Hitam juga berupa pesan *retained*; kehadiran pemain memakai *Last Will* sehingga HP yang putus ditandai offline.
+- Seperti Chat, koneksi hanya ada selama app Catur terbuka. Bila RAM internal terlalu padat, app menampilkan pesan agar app lain ditutup.
+
+**Tingkat AI.**
+
+| Tingkat | Perilaku |
+|---|---|
+| **Mudah** | Pencarian dangkal (kedalaman 2); memilih acak di antara langkah yang masih tergolong layak, dengan toleransi lebar. |
+| **Sedang** | Kedalaman 4; memilih acak di antara langkah layak dengan toleransi sempit. |
+| **Sulit** | Kedalaman 6; selalu memainkan langkah terbaik menurut pencariannya. |
+| **Cermin** | Kedalaman 4; di antara langkah yang nilainya masih dekat dengan yang terbaik, AI memilih langkah yang paling **mirip gaya pemilik**. |
+| **Nyx** `eksperimental` | Kedalaman 4, toleransi 80 centipawan. Memakai model gaya Cermin untuk **memprediksi balasanmu**, lalu memilih langkah yang paling menghukum kebiasaanmu. Lihat penjelasan di bawah. |
+
+**Nyx (level eksperimental).** Level kelima ini menambahkan logika buatan sendiri di atas mesin yang ada, tanpa mengubah format model yang tersimpan. Pencarian minimax tetap menyaring kandidat yang aman (selisih nilai dalam 80 centipawan dari yang terbaik, paling banyak 8 kandidat). Untuk tiap kandidat, AI lalu menjalankan langkahnya, meminta model gaya memperkirakan **peluang tiap balasan sahmu**, dan menilai setiap balasan dengan pencarian tangkapan (*quiescence*) dari sisi AI. Dari situ dihitung `E` (nilai bila kamu membalas seperti kebiasaanmu) dan `M` (nilai bila kamu membalas terbaik); selisih `E − M` adalah seberapa besar kebiasaanmu merugikanmu. Selisih itu dikalikan **keyakinan** model (`1 − H/ln n`, dengan `H` entropi peluang balasan) agar model yang ragu tidak dipercaya, dibatasi maksimal 150, dan ditambahkan ke skor kandidat dengan bobot `0,9 · min(1, N/60)`, yaitu gating yang sama dengan Cermin. Sebelum model terlatih (N kecil), Nyx bermain seperti pencarian biasa. Analisis kebiasaan memakai tambahan waktu sampai setengah anggaran pencarian.
+
+Status: logika dan keamanannya (langkah selalu sah, papan tidak berubah, mat-dalam-1 tetap dimainkan, bonus bernilai nol pada model yang ragu dan membesar pada model yang yakin) diuji di komputer (`tests_chess/`). **Keunggulannya belum terbukti.** Percobaan kasar (`tests_chess/bench_nyx.cpp`) melawan bot yang 95% selalu makan bidak terbesar menunjukkan Nyx justru mengumpulkan sedikit lebih sedikit materi daripada minimax murni, karena model gaya hanya menebak ±19% langkah bot itu sehingga bonus jebakan jarang tepat, sementara toleransi 80 centipawan membuat Nyx kadang memilih langkah yang bukan terbaik. Karena itu level ini ditandai eksperimental.
+
+**Cermin dan AFK.** Mesin AI memakai pencarian *negamax* alpha-beta dengan *quiescence* dan evaluasi materi serta tabel posisi. Level Cermin menambahkan tiga komponen kecil yang **belajar langsung di ESP32** setiap kali pemilik melangkah: jaringan saraf mini (26 masukan, 16 neuron tersembunyi, 1 keluaran; 449 parameter) yang menilai seberapa mirip suatu langkah dengan pilihan pemilik, **buku pembuka pribadi** (posisi dan langkah yang paling sering dimainkan), dan **tabel kebiasaan petak** (misalnya selalu membuka dengan `e4` atau gemar memajukan kuda ke `f3`). Model disimpan di NVS sehingga tidak hilang saat app ditutup. Pada permainan online, bila pemain diam melewati batas **AFK** (30, 60, atau 120 detik; dapat dimatikan), AI bergaya-pemilik memainkan gilirannya agar lawan tidak menunggu. Karena AI hanya memilih di antara langkah yang masih dekat terbaik, partai tidak dibuang begitu saja.
+
+**Layar Jaringan (melihat isi otak AI).** Pada layar setup Catur, di bawah baris *Lawan AI | tingkat | AFK*, ada chip kecil **Jaringan** di kanan. Layar ini menampilkan **bobot hasil latihan** jaringan gaya langsung di HP; yang ditampilkan adalah hasil belajarnya, bukan grafik *loss* atau log tiap langkah latihan. Tombol Kembali menutupnya. Pada semua tampilan, warna aksen tema berarti bobot positif dan merah berarti bobot negatif; makin pekat berarti makin besar dibandingkan nilai terbesar yang sedang tampil.
+
+| Tab | Isi dan cara memakai |
+|---|---|
+| **Jaringan** | Diagram 26-16-1: 26 titik masukan di kiri (abu-abu untuk 20 fitur langkah, warna lain untuk 6 konteks posisi), 16 neuron tersembunyi di tengah, dan 1 titik skor di kanan. Hanya garis masukan→neuron yang kuat (di atas 35% dari bobot terbesar) yang digambar agar layar tidak penuh. Warna isi tiap neuron menunjukkan bobotnya ke skor (aksen = mendorong skor naik, merah = menurunkan). **Ketuk satu neuron** (lingkaran tengah): garis neuron lain diredupkan, seluruh garis neuron itu tampil, dan baris info menampilkan skor neuron serta dua fitur yang paling memengaruhinya, misalnya `H7 skor +0.31 \| makan +0.42, skak -0.28`. Ketuk lagi untuk membatalkan. |
+| **Bobot** | Peta panas matriks bobot lapisan pertama: 16 baris (H1 sampai H16) kali 26 kolom (fitur 1 sampai 26), jadi seluruh 416 bobot terlihat sekaligus. **Ketuk sebuah kotak** untuk nilainya, misalnya `H3 x makan: +0.215`. |
+| **Petak** | Tabel kebiasaan petak sebagai 7 papan 8×8: satu papan untuk tiap jenis bidak tujuan (Pion, Kuda, Gajah, Benteng, Menteri, Raja) dan satu papan **Asal** untuk petak yang ditinggalkan; Putih berada di bawah. Petak yang pekat adalah petak yang sering kamu tuju atau tinggalkan. **Ketuk sebuah petak** untuk nilainya, misalnya `Kuda f3: +1.80`. |
+| **Selisih** (chip) | Mengganti tampilan dari bobot sekarang menjadi **selisih dari bobot awal**, sehingga hanya bobot yang berubah karena belajar dari langkahmu yang berwarna. Bobot awal dihitung ulang dari generator acak yang sama dengan inisialisasi dan disimpan di PSRAM hanya selama layar ini dibuka. Bila RAM tidak cukup, muncul pesan *RAM tidak cukup utk selisih*. |
+
+Dua baris teks di bawah tampilan memuat info sentuhan terakhir (neuron, kotak, atau petak) dan status latihan, misalnya `54 langkah | tebak 62% | bobot`. **Langkah** adalah jumlah langkahmu yang sudah dipelajari. **Tebak** adalah rata-rata bergerak 20 langkah terakhir: seberapa sering pilihan teratas jaringan, sebelum belajar dari langkah itu, sama dengan langkah yang kamu mainkan. Angka ini baru muncul setelah minimal 5 langkah; tebakan yang terus rendah berarti jaringan belum menangkap pola atau gayamu memang bervariasi.
+
+Cara memakainya: mainkan beberapa partai melawan AI, buka **Bobot** dengan **Selisih** menyala untuk melihat fitur apa yang dipelajari AI dari gayamu, lalu buka **Petak** untuk melihat kebiasaan petak bukaanmu (misalnya `e4` dan `f3` yang menyala).
+
+**Batasan.** Tidak ada jam catur, dan belum ada aturan ulangan tiga posisi. Fitur ini baru diuji di komputer (aturan dan *perft*, kekuatan tiap level, pelatihan serta serialisasi model gaya); perilaku nyata di dua perangkat dan pada broker sungguhan belum terkonfirmasi.
 ### 5.3 Kendali jarak jauh
 
 #### 5.3.1 Remote Control `OK`
@@ -665,6 +716,27 @@ Memperbarui firmware dari GitHub tanpa kabel, dengan beberapa lapis pengaman.
 - Branch yang belum pernah di-build menampilkan pesan *Channel belum dipublikasikan*. Jalankan workflow build untuk branch tersebut satu kali agar Release `channel-<branch>` terbentuk.
 - Firmware lama yang belum memuat kode channel tidak memiliki pemilih branch; pasang satu kali melalui flasher atau SD.
 
+#### Backup dan Restore pengaturan `BETA`
+
+Menyimpan seluruh pengaturan NyxOS ke kartu SD dan memulihkannya, misalnya sebelum flash ulang dengan *erase flash* atau saat pindah ke unit lain. Dibuka dari **Pengaturan → Tentang → Backup & Restore** (tidak tampil pada grid Home).
+
+| Aksi | Hasil |
+|---|---|
+| **Buat Backup Sekarang** | Seluruh pengaturan di NVS (tema, kecerahan, susunan Home, kalibrasi, kata pelajaran kamus, Remote Control, dan lainnya) ditulis ke `/backup/nyx_NNN.nbk`. Yang disisir adalah isi NVS, bukan daftar tetap, jadi pengaturan dari fitur baru ikut otomatis. Namespace sistem (`nvs*`, `phy*`, `bt*`, `otaguard`) dikecualikan. |
+| **Riwayat** | Daftar backup beserta nomor, waktu, jumlah nilai, dan ukuran. Maksimal **6** berkas; yang paling lama dibuang otomatis saat membuat backup baru. |
+| **Pulihkan** | Pilih satu backup lalu ketuk dua kali (*Yakin? Ketuk lagi*). Nilainya ditulis kembali ke NVS, lalu HP **restart sendiri** karena pengaturan dibaca ke RAM saat boot. Pemulihan menimpa nilai yang ada di berkas; pengaturan yang dibuat setelah backup tidak dihapus. |
+| **Hapus** | Membuang satu berkas backup (juga dengan konfirmasi ketuk dua kali). |
+| **Sertakan sandi & API key** | Sakelar, **mati** secara bawaan. Sandi WiFi, akun SIP, akun Chat, API key Gemini, dan sandi AP Remote Control hanya ikut bila sakelar ini dinyalakan. |
+| **Enkripsi dengan sandi** | Sakelar. Backup berikutnya dienkripsi dengan sandi 6 sampai 64 karakter yang ditanyakan setiap kali (dua kali saat membuat) dan **tidak disimpan**. |
+
+**Keamanan berkas.**
+
+- Berkas `.nbk` tanpa enkripsi **tidak terenkripsi**: siapa pun yang memegang kartu SD dapat membacanya. Itu sebabnya sandi dan API key tidak disertakan secara bawaan.
+- Berkas terenkripsi memakai PBKDF2-HMAC-SHA256 untuk menurunkan kunci, AES-256 mode CTR, dan HMAC-SHA256 (*encrypt-then-MAC*). Sandi salah atau berkas yang diubah ditolak sebelum ada nilai yang diterapkan. Penurunan kunci memakan ±0,5 detik.
+- Saat memulihkan, berkas dari SD dianggap tidak tepercaya: CRC32 diperiksa penuh, semua panjang dicek terhadap batas buffer, dan namespace sistem tidak pernah ditulis. Backup rusak ditolak.
+- Satu berkas maksimal 96 KB; nilai NVS di atas 32 KB dilewati. Buffer dialokasikan di PSRAM hanya selama operasi.
+
+Format berkas dan kripto ditulis sebagai kode murni C++ (`backup_core.h`, `backup_crypto.h`) dan diuji di komputer, termasuk dibandingkan dengan `hashlib` dan `cryptography` milik Python (`tests_backup/`). Belum diuji pada perangkat.
 #### Log crash `BETA`
 
 Saat boot, NyxOS membaca alasan reset terakhir. Untuk reset tidak normal (panic, watchdog, brownout) satu baris ditulis ke `/crashlog.txt` di SD: waktu, alasan, layar yang sedang terbuka, sisa RAM internal (bebas, minimum, blok terbesar), lama menyala, dan, bila core dump flash aktif di build, task + alamat crash + backtrace (decode dengan `addr2line` terhadap berkas ELF dari CI). Detail terbaru tampil di **About Phone**. Berkas dirotasi di 32 KB (`/crashlog.old`).
@@ -685,6 +757,7 @@ Screenshot (BMP ke `/screenshot`), Stopwatch dan Timer (tetap berjalan di latar)
 | **NES** | Emulator (core Nofrendo) pada task terpisah; ROM `.nes` diletakkan di root SD. |
 | **DOOM** | Berbasis doomgeneric, tanpa suara. Berkas `doom1.wad` disediakan sendiri oleh pengguna. |
 | **Labirin** | Kejar-kejaran di labirin dengan kontrol sentuh dan miring. |
+| **Catur** | Catur online antar HP lewat MQTT atau lawan AI (5 tingkat, termasuk AI yang meniru gaya pemilik dan level eksperimental Nyx) `BETA`. Lihat [bagian 5.2.3](#523-catur-online-dan-lawan-ai-beta). |
 | **Klasik** | Snake, Flappy, 2048, TicTacToe, Breakout. |
 | **PPU Demo** | Peragaan mesin NyxPPU `EXP`. |
 
@@ -722,9 +795,10 @@ Screenshot (BMP ke `/screenshot`), Stopwatch dan Timer (tetap berjalan di latar)
 ```
 /
 ├── gemini_key.txt   nasa_key.txt   wallpaper.jpg   emoji.bin
-├── chat.cfg         sip.cfg        turn.cfg
-├── ai_memory.txt    ryne2.bin      notepad.txt
+├── chat.cfg         sip.cfg        turn.cfg        chess.cfg
+├── ai_memory.txt    ryne2.bin      notepad.txt     kamus.txt
 ├── music/   memo/   screenshot/   update/   Kamera/   .thumbs/
+├── backup/   books/
 ├── *.avi   *.mjpeg   *.nes        doom1.wad   (disediakan sendiri)
 └── (folder album Galeri)
 ```
@@ -740,6 +814,9 @@ Screenshot (BMP ke `/screenshot`), Stopwatch dan Timer (tetap berjalan di latar)
 | `/turn.cfg` | Telepon (relay TURN) | `host=`, `port=` (default 3478), `user=`, `pass=` |
 | `wallpaper.jpg` | Home dan Lock Screen | Nama berkas harus persis `wallpaper.jpg`. |
 | `/emoji.bin` | Emoji (semua teks dan keyboard) | Opsional. Dibuat `tools/make_emoji_bin.py` dari Noto Emoji atau Twemoji. Tanpa berkas ini dipakai set bawaan 54 sprite. Lihat [bagian 5.1](#51-antarmuka-sistem-ok). |
+| `/chess.cfg` | Catur (online) | `host=`, `user=`, `pass=`. Opsional; broker juga dapat diisi lewat app. Terpisah dari `chat.cfg`. |
+| `/kamus.txt` | Kamus keyboard | Opsional. Satu kata per baris, yang paling sering di atas (format `kata 1234` juga diterima), maksimum 2 MB. Lihat [bagian 5.1](#51-antarmuka-sistem-ok). |
+| `/backup/nyx_NNN.nbk` | Backup & Restore | Dibuat otomatis (maksimal 6 berkas). Tidak terenkripsi kecuali enkripsi sandi dinyalakan. Lihat [bagian 5.6](#56-sistem-dan-perangkat). |
 
 **Contoh `chat.cfg`**
 
@@ -862,6 +939,8 @@ Proyek ini ditujukan sebagai perangkat pribadi dan eksperimental. Pertimbangkan 
 | Kunci API | `gemini_key.txt` dan `nasa_key.txt` tersimpan sebagai teks biasa pada SD. | Gunakan key dengan kuota terbatas dan jaga kartu SD secara fisik. |
 | Remote Control | AP menggunakan WPA2 dengan sandi yang dibuat saat pertama kali; akses via WiFi rumah ditolak secara default; satu penonton aktif sekaligus. | Ganti sandi bawaan dan biarkan opsi *Izinkan via WiFi rumah* tetap mati bila tidak diperlukan. |
 | Kredensial TURN | Disimpan pada perangkat atau `/turn.cfg`. | Gunakan kredensial berumur pendek (misalnya Cloudflare dengan TTL). |
+| Backup pengaturan | Berkas `.nbk` di SD tidak terenkripsi kecuali opsi enkripsi dinyalakan; sandi WiFi, akun SIP, akun Chat, API key, dan sandi AP Remote hanya ikut bila sakelar *Sertakan sandi & API key* dinyalakan. | Biarkan sakelar itu mati, atau aktifkan enkripsi sandi bila perlu menyertakan rahasia; jaga kartu SD secara fisik. |
+| Catur online | Broker memakai TLS tanpa verifikasi sertifikat seperti Chat; akun broker tersimpan di NVS dan `/chess.cfg` sebagai teks biasa. | Gunakan akun broker khusus dan jangan memakai ulang kata sandi lain. |
 
 ---
 
@@ -889,6 +968,8 @@ Proyek ini ditujukan sebagai perangkat pribadi dan eksperimental. Pertimbangkan 
 **Fitur lain**
 
 - **Chat:** layar menampilkan ASCII dan emoji (huruf lain tampil `?`); tidak ada notifikasi saat aplikasi tertutup.
+- **Catur:** tidak ada jam catur dan belum ada aturan ulangan tiga posisi. Belum diuji pada perangkat; mode online membutuhkan broker MQTT dengan akun sendiri (terpisah dari Chat).
+- **Backup & Restore:** maksimal 6 berkas, satu berkas maksimal 96 KB, nilai NVS di atas 32 KB dilewati. Pemulihan menimpa nilai yang ada di berkas dan tidak menghapus pengaturan yang dibuat sesudahnya. Backup tanpa enkripsi dapat dibaca siapa pun yang memegang SD. Belum diuji pada perangkat.
 - **Emoji:** hanya emoji tunggal (satu kodepoint). Bendera, urutan ZWJ, keycap, dan varian warna kulit tidak punya sprite sendiri; maksimal 4000 sprite, dan set besar memakan PSRAM (±1,8 KB per emoji). Rinciannya ada di [bagian 5.1](#51-antarmuka-sistem-ok).
 - **Baterai:** persentase adalah estimasi. Jika INA219 tidak terdeteksi, persentase dan tegangan berhenti diperbarui (tidak ada *fallback* ADC).
 - **Unduh Gutenberg:** TXT maks 3 MB dan EPUB maks 40 MB; daftar memuat paling banyak 96 buku; satu unduhan sekaligus. Filter bahasa hanya untuk sumber Gutendex. Pilihan sumber (Gutendex/OPDS) tidak tersimpan setelah restart (bawaan: Gutendex). Unduhan dua koneksi paralel tersedia di kode tetapi dimatikan (`GUT_PARALLEL 0`).
@@ -917,6 +998,12 @@ Proyek ini ditujukan sebagai perangkat pribadi dan eksperimental. Pertimbangkan 
 | Telepon dengan akun `sip.linphone.org` hanya bisa menerima | Akun tersebut hanya berfungsi satu jalur pada firmware ini | Gunakan akun `sip2sip.info`. |
 | Emoji tampil sebagai kotak `?` | Emoji tidak ada di set aktif (bendera, urutan ZWJ, atau emoji di luar `emoji.bin`) | Gunakan emoji tunggal, atau buat ulang `emoji.bin` dari sumber yang lebih lengkap. |
 | Emoji yang tampil hanya 54 sprite bawaan | `/emoji.bin` tidak dipakai: tidak ada di root SD, SD tidak terbaca, header atau ukuran tidak cocok, atau PSRAM tidak cukup | Salin ulang `emoji.bin` ke root SD, buat ulang dengan `tools/make_emoji_bin.py`, kurangi jumlah emoji, lalu restart. |
+| Catur menampilkan "Atur broker Catur dulu" atau "Broker Catur belum diatur" | Host, username, atau password broker Catur belum diisi | Isi di app Catur lalu **Simpan**, taruh `/chess.cfg` di SD, atau salin dari pengaturan Chat. |
+| Catur menampilkan "Username/password salah" atau "Tidak bisa menghubungi broker" | Kredensial salah, WiFi belum tersambung, atau broker tidak tersedia | Periksa akun dan host broker; pastikan WiFi aktif; bila ada ACL, izinkan `renphone/chess/#`. |
+| Layar Jaringan Catur menampilkan "RAM tidak cukup utk selisih" | Bobot awal untuk chip **Selisih** tidak muat di PSRAM | Tutup app lain lalu buka ulang layar Jaringan; tab Jaringan, Bobot, dan Petak tetap dapat dipakai tanpa Selisih. |
+| Catur menampilkan "RAM padat, tutup app lain" | RAM internal tidak cukup untuk koneksi TLS | Tutup app lain (App Switcher → Tutup semua), lalu coba lagi. |
+| Backup menampilkan "SD Card tidak terdeteksi" | Kartu SD tidak terbaca | Periksa kartu SD; backup disimpan di `/backup/` pada SD. |
+| Pulihkan menampilkan "Backup rusak, ditolak" atau "Sandi salah" | Berkas rusak atau diubah, atau sandi enkripsi salah | Pilih backup lain; untuk berkas terenkripsi masukkan sandi yang sama dengan saat backup dibuat. |
 | Aplikasi Kamera menampilkan "CAM belum mendukung kamera" | Firmware CAM belum diperbarui | Flash ulang firmware `cam_bt_coprocessor`. |
 | Pesan "RAM CAM kurang" | Kamera, A2DP, dan MP3 berjalan bersamaan | Matikan Bluetooth atau musik sebelum membuka Kamera. |
 | ESP32-CAM sering restart | *Brownout* akibat catu daya lemah | Gunakan pin 5V dengan catu yang kuat. |
@@ -941,6 +1028,8 @@ Kontribusi berupa hasil uji pada perangkat nyata sangat membantu, terutama untuk
 2. **Telepon, mode SIP** ke penyedia selain `sip2sip.info` (`sip.linphone.org` sudah dicoba dan hanya satu jalur).
 3. **Telepon dengan TURN** pada jaringan CGNAT atau NAT ketat.
 4. **Kamera** pada unit lain, terutama dengan sensor selain OV2640 dan kabel UART yang lebih panjang.
+5. **Catur online** antara dua perangkat NyxOS (aturan, sinkronisasi langkah, putus-sambung, AI pengganti saat AFK) dan **lawan AI** pada tiap tingkat.
+6. **Backup & Restore**: buat dan pulihkan, dengan dan tanpa enkripsi, lalu pastikan pengaturan kembali setelah restart.
 
 Untuk pengujian Telepon, catat apakah dering muncul, apakah suara dua arah, seberapa jernih, dan apakah ada restart.
 
@@ -990,12 +1079,20 @@ gutenberg_renphone.ino          Unduh buku dari Project Gutenberg (dibuka dari a
 gutendex_core.h  gutdl_core.h   Logika murni Gutenberg: JSON/OPDS, URL langsung, registry, CRC32, cek ZIP
 tests_gutenberg/                Uji logika Gutenberg dan simulasi alur unduh di komputer
 tests_kamus/                    Uji kamus di komputer: test_kamus.cpp (logika murni), glue_test.cpp (kamus_renphone.ino dengan mock Arduino)
+backup_renphone.ino             Backup & Restore pengaturan (NVS ke SD, opsional terenkripsi)
+backup_core.h  backup_crypto.h  Format berkas .nbk dan CRC32; SHA-256, PBKDF2, AES-256-CTR (murni C++, diuji di komputer)
+tests_backup/                   Uji backup dan kripto di komputer (kripto dibandingkan dengan Python hashlib/cryptography)
+chess_renphone.ino              Catur: mesin aturan, AI (negamax + model gaya pemain), online lewat MQTT
+tests_chess/                    Uji mesin catur (perft), AI, dan serialisasi model gaya di komputer; bench_nyx.cpp = percobaan kasar level Nyx
+ebook_renphone.ino ebook_core.h App Buku dan mesinnya (inflate, ZIP, EPUB, HTML ke teks, tata letak)
+tests_ebook/                    Uji mesin Buku di komputer
 nofrendo_core/ esp_doom_core/   Core pihak ketiga (di-vendor)
 apply_*.py  patch_*.py          Skrip patch bertahap (idempoten)
 ci_hoist_types.py               Langkah CI untuk menghindari bug prototipe arduino-cli
 .github/workflows/              Build S3, build library kustom, build CAM, web flasher
 VERSION                         Nomor versi proyek
 Bruce-accretion-phone.bin       Firmware alternatif (fork Bruce), terpisah dari NyxOS
+phone.ino.broken  *.bak-v1      Cadangan lama (tidak ikut build)
 ```
 
 > Folder dan repositori bernama `ren_phone` karena itulah nama awal proyek. Sebagian komentar dan variabel lama masih memakai nama tersebut.
