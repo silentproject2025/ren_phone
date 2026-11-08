@@ -1,0 +1,81 @@
+name: Build CAM BT Co-Processor
+
+on:
+  push:
+    branches: [ "main", "master", "remote-control" ]
+    paths: [ "cam_bt_coprocessor/**", ".github/workflows/build-cam-coprocessor.yml" ]
+  pull_request:
+    branches: [ "main", "master" ]
+    paths: [ "cam_bt_coprocessor/**" ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Arduino CLI
+        uses: arduino/setup-arduino-cli@v2
+
+      - name: Install ESP32 core & libraries
+        run: |
+          arduino-cli config init --overwrite
+          arduino-cli config set board_manager.additional_urls https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
+          arduino-cli config set library.enable_unsafe_install true
+          arduino-cli core update-index
+          arduino-cli core install esp32:esp32
+
+          arduino-cli lib install "audio-tools" || \
+            arduino-cli lib install --git-url https://github.com/pschatzmann/arduino-audio-tools.git
+          arduino-cli lib install "arduino-libhelix" || \
+            arduino-cli lib install --git-url https://github.com/pschatzmann/arduino-libhelix.git
+          arduino-cli lib install "ESP32-A2DP" || \
+            arduino-cli lib install --git-url https://github.com/pschatzmann/ESP32-A2DP.git
+
+      - name: Compile CAM sketch
+        run: |
+          arduino-cli compile --fqbn esp32:esp32:esp32cam \
+            --board-options "PartitionScheme=huge_app" \
+            cam_bt_coprocessor --output-dir build_cam
+
+      - name: Upload Binary Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: cam-bt-coprocessor-binaries
+          path: build_cam/*.bin
+
+      - name: Siapkan cam_merged.bin untuk web flasher
+        if: github.event_name != 'pull_request'
+        run: |
+          test -f build_cam/cam_bt_coprocessor.ino.merged.bin || (echo "::error::cam_bt_coprocessor.ino.merged.bin tidak ada" && ls build_cam && exit 1)
+          cp build_cam/cam_bt_coprocessor.ino.merged.bin cam_merged.bin
+
+      - name: Publish Release CAM (prerelease)
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="cam-${{ github.run_number }}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" cam_merged.bin --clobber
+          else
+            gh release create "$TAG" cam_merged.bin \
+              --prerelease \
+              --target "${{ github.sha }}" \
+              --title "CAM co-processor build ${{ github.run_number }}" \
+              --notes "Commit ${{ github.sha }} (${{ github.ref_name }})"
+          fi
+
+  flasher:
+    needs: build
+    if: github.event_name != 'pull_request'
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    uses: ./.github/workflows/flasher-pages.yml

@@ -354,12 +354,12 @@ static void chsRbLoadNvs();
 #define CHS_RB_MAXLEN (4 + CHS_RB_REC * CHS_RB_KEEP)
 #define CHS_AI_INF    32000
 #define CHS_AI_MATE   30000
-#define CHS_AI_PLY    26                       // batas keras kedalaman rekursi: total stack <= PLY x ~230 B (< 8 KB task loop)
+#define CHS_AI_PLY    32                       // batas keras kedalaman rekursi: total stack <= PLY x ~230 B (< 8 KB task loop)
 #define CHS_AI_HIST   320
-#define CHS_AI_MAXD   10                       // kedalaman iterasi maksimum (dibatasi supaya rekursi + perpanjangan skak muat di PLY)
+#define CHS_AI_MAXD   14                       // kedalaman iterasi maksimum (dibatasi supaya rekursi + perpanjangan skak muat di PLY)
 #define CHS_BK_N      128
 #ifndef CHS_TT_BITS
-#define CHS_TT_BITS   15                       // 2^15 entri x 12 byte = 384 KB (PSRAM); 0 = tanpa tabel transposisi
+#define CHS_TT_BITS   16                       // 2^16 entri x 12 byte = 768 KB (PSRAM); 0 = tanpa tabel transposisi
 #endif
 
 static const int16_t chsAiVal[7] = {0, 100, 320, 330, 500, 900, 0};
@@ -713,7 +713,7 @@ static int chsAiNeg(int depth, int alpha, int beta, int ply, bool nullOk) {
   if (ply >= CHS_AI_PLY - 1 || chsAiStackLow()) return chsAiEval();
   int alpha0 = alpha; uint16_t ttm = 0;
   ChsTT* te = chsAiTT ? &chsAiTT[(uint32_t)hk & chsAiTTMask] : nullptr;
-  if (te && te->k == hk32) {
+  if (te && te->k == hk32 && te->a == chsAiAge) {                  // hanya entri dari pencarian ini: skor lama bergantung riwayat (remis ulang, 50 langkah) dan membuat AI "mengira" menang = remis
     ttm = te->m;
     if (te->d >= depth) {
       int s = chsAiFromTT(te->s, ply);
@@ -1492,9 +1492,9 @@ static unsigned long chsAiDueMs = 0, chsLastTouchMs = 0, chsTurnStartMs = 0;
 static uint8_t       chsUnsaved = 0;
 static const char* const chsLvName[5] = {"Mudah", "Sedang", "Sulit", "Cermin", "Nyx"};
 static const uint16_t chsAfkSec[4] = {0, 30, 60, 120};
-static const uint8_t  chsLvDepth[5]  = {2, 4, 6, 4, 10};
-static const uint16_t chsLvMs[5]     = {250, 700, 1800, 700, 1600};
-static const int16_t  chsLvMargin[5] = {120, 10, 0, 70, 30};
+static const uint8_t  chsLvDepth[5]  = {2, 4, 6, 4, 14};
+static const uint16_t chsLvMs[5]     = {250, 700, 1800, 700, 2400};
+static const int16_t  chsLvMargin[5] = {120, 10, 0, 70, 15};
 static const uint8_t  chsLvMode[5]   = {1, 1, 0, 2, 3};    // 0 terbaik | 1 acak di antara yg layak | 2 gaya user | 3 Nyx (jebakan kebiasaan)
 
 static void chsPrefsLoad() {

@@ -97,10 +97,13 @@ int main() {
   uint16_t m1 = chsAiChoose(6, 4000, 0, 0, 0), m2 = chsAiChoose(6, 4000, 0, 0, 0);
   { uint16_t chk; mstr(m1, s); CHECK(chsParse(s, (int)strlen(s), &chk) && chk == m1, "TT: langkah 1 tak sah"); mstr(m2, s); CHECK(chsParse(s, (int)strlen(s), &chk) && chk == m2, "TT: langkah 2 tak sah"); }
   // 4) Konversi endgame (mop-up): K+R vs K dan K+Q vs K harus berakhir skakmat dalam 80 ply
-  static const char* const ENDG[2] = {"8/8/8/4k3/8/8/8/R3K3 w - - 0 1", "8/8/8/4k3/8/8/8/Q3K3 w - - 0 1"};
-  for (int e = 0; e < 2; e++) {
+  static const char* const ENDG[9] = {"8/8/8/4k3/8/8/8/R3K3 w - - 0 1", "8/8/4k3/8/8/8/8/R3K3 w - - 0 1", "8/2k5/8/8/8/8/8/4K2R w - - 0 1",
+    "8/8/8/8/3k4/8/8/R3K3 w - - 0 1", "4k3/8/8/8/8/8/8/R3K3 w - - 0 1", "8/8/8/3k4/8/8/4K3/7R w - - 0 1",
+    "6k1/8/8/8/8/8/3K4/R7 w - - 0 1", "8/8/2k5/8/8/5K2/8/7R w - - 0 1", "8/8/8/4k3/8/8/8/Q3K3 w - - 0 1"};   // 8 posisi K+R + 1 K+Q
+  int endgOk = 0;
+  for (int e = 0; e < 9; e++) {
     setFen(ENDG[e]); int pl = 0; bool mated = false; uint32_t worstE = 0;
-    while (pl < 80) {
+    while (pl < 90) {
       if (!chsHasMove()) { mated = chsInCheck(); break; }
       uint32_t t = hostMs();
       uint16_t mm = chsWhite ? chsAiChoose(8, 300, 0, 0, pl) : chsAiChoose(4, 100, 0, 0, pl);
@@ -108,9 +111,10 @@ int main() {
       CHECK(mm != 0, "endgame: langkah 0");
       chsDo(mm); pl++;
     }
-    printf("endgame %s: %s dalam %d ply (terlama %u ms)\n", e ? "K+Q vs K" : "K+R vs K", mated ? "SKAKMAT" : "belum mat", pl, worstE);
-    CHECK(mated, "endgame %d tidak berakhir skakmat dalam 80 ply", e);
+    if (mated) endgOk++;
+    CHECK(mated, "endgame %d tidak berakhir skakmat dalam 90 ply (regresi TT/pengulangan?)", e);
   }
+  printf("endgame K+R / K+Q vs K: %d/9 skakmat\n", endgOk);
   // 5) Batas stack: pencarian tidak boleh melewati CHS_AI_STACK_MAX (+ margin eval) walau kedalaman diminta besar
   { setFen("r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1");
     uint32_t t = hostMs(); uint16_t mm = chsAiChoose(64, 400, 0, 0, 0); uint32_t dt = hostMs() - t;
