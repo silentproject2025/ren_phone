@@ -299,6 +299,79 @@ static int chsCountPlies(const char* mv) {
   }
   return n;
 }
+// ---- Adu mesin vs Gemini: bahan prompt (FEN, daftar langkah sah) + pembaca balasan. Murni (tanpa Arduino), diuji di PC. ----
+// FEN posisi sekarang. ply = jumlah setengah-langkah yg sudah dimainkan (utk nomor langkah penuh). Butuh cap >= 100.
+static int chsFen(char* o, int cap, int ply) {
+  static const char L[] = " pnbrqk";
+  int k = 0;
+  if (cap < 100) { if (cap > 0) o[0] = 0; return 0; }
+  for (int r = 7; r >= 0; r--) {
+    int e = 0;
+    for (int f = 0; f < 8; f++) {
+      int8_t p = chsBd[r * 8 + f];
+      if (!p) { e++; continue; }
+      if (e) { o[k++] = (char)('0' + e); e = 0; }
+      int t = p > 0 ? p : -p;
+      char c = L[t > 6 ? 0 : t];
+      o[k++] = (p > 0) ? (char)(c - 32) : c;
+    }
+    if (e) o[k++] = (char)('0' + e);
+    if (r) o[k++] = '/';
+  }
+  o[k++] = ' '; o[k++] = chsWhite ? 'w' : 'b'; o[k++] = ' ';
+  if (!chsCastle) o[k++] = '-';
+  else {
+    if (chsCastle & CHS_WK) o[k++] = 'K';
+    if (chsCastle & CHS_WQ) o[k++] = 'Q';
+    if (chsCastle & CHS_BK) o[k++] = 'k';
+    if (chsCastle & CHS_BQ) o[k++] = 'q';
+  }
+  o[k++] = ' ';
+  if (chsEp < 0) o[k++] = '-'; else { o[k++] = (char)('a' + (chsEp & 7)); o[k++] = (char)('1' + (chsEp >> 3)); }
+  k += snprintf(o + k, (size_t)(cap - k), " %u %d", (unsigned)chsHalf, ply / 2 + 1);
+  return k;
+}
+
+// semua langkah sah posisi sekarang: "e2e4 d2d4 ..." (UCI). Return jumlah langkah yg muat.
+static int chsLegalList(char* o, int cap) {
+  uint16_t mv[256]; int n = chsGen(mv), k = 0, c = 0;
+  if (cap < 8) { if (cap > 0) o[0] = 0; return 0; }
+  for (int i = 0; i < n; i++) {
+    if (!chsLegal(mv[i])) continue;
+    char t[8]; chsMoveStr(mv[i], t);
+    int L = (int)strlen(t);
+    if (k + L + 2 >= cap) break;
+    if (k) o[k++] = ' ';
+    memcpy(o + k, t, (size_t)L); k += L; c++;
+  }
+  o[k] = 0;
+  return c;
+}
+
+// cari langkah sah pertama di teks balasan Gemini. Menerima "e2e4", "**e2e4**", "e7e8q", "e7e8=Q", dan "e7e8" (promosi tanpa huruf -> vezir).
+// SAN ("Nf3") sengaja tidak ditebak: prompt sudah meminta UCI & memberi daftar langkah sah.
+static bool chsPickFromReply(const char* s, uint16_t* out) {
+  int n = (int)strlen(s);
+  for (int i = 0; i + 4 <= n; i++) {
+    if (i > 0) { char b = s[i - 1]; if ((b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9')) continue; }   // bukan di tengah kata
+    char a[7];
+    for (int j = 0; j < 4; j++) { char c = s[i + j]; a[j] = (c >= 'A' && c <= 'H') ? (char)(c + 32) : c; }
+    if (a[0] < 'a' || a[0] > 'h' || a[1] < '1' || a[1] > '8' || a[2] < 'a' || a[2] > 'h' || a[3] < '1' || a[3] > '8') continue;
+    char pc = 0;
+    if (i + 4 < n) {
+      char c = s[i + 4];
+      if (c == '=' && i + 5 < n) c = s[i + 5];
+      if (c >= 'A' && c <= 'Z') c = (char)(c + 32);
+      if (c == 'q' || c == 'r' || c == 'b' || c == 'n') pc = c;
+    }
+    if (pc) { a[4] = pc; a[5] = 0; if (chsParse(a, 5, out)) return true; }
+    a[4] = 0;
+    if (chsParse(a, 4, out)) return true;
+    a[4] = 'q'; a[5] = 0;
+    if (chsParse(a, 5, out)) return true;
+  }
+  return false;
+}
 // ==== ENGINE END ====
 
 // hook: begitu memori kerja AI siap, pengalaman (replay) terakhir dimuat dari NVS. Definisinya ada di bagian prefs di bawah
@@ -1643,6 +1716,8 @@ static void chsAnimStart(int from, int to, int8_t cap) {
 // MODE LAWAN AI + AI PENGGANTI SAAT AFK
 // ---------------------------------------------------------------------
 static bool          chsVsAI = false;          // true = lawan AI (tanpa jaringan)
+static bool          chsGem = false;           // true = adu MESIN vs GEMINI (kamu penonton; chsVsAI ikut true, kursi chsRole = kursi mesin)
+static bool          chsGemForfeit = false;    // Gemini kalah karena 3x langkah tak sah
 static uint8_t       chsAiLevel = 1;           // 0 Mudah, 1 Sedang, 2 Sulit, 3 Cermin (AI meniru gaya user), 4 Nyx (AI menghukum kebiasaan user)
 static uint8_t       chsAfkIdx = 2;            // indeks chsAfkSec: 0 = mati
 static bool          chsAfkAI = false;         // AI sedang memainkan giliran user (user AFK)
@@ -1990,7 +2065,7 @@ static bool chsOppOnline() {
 }
 
 static bool chsCanMove() {
-  return chsScr == 1 && chsConn == 1 && chsReady && (chsRole == 1 || chsRole == 2) &&
+  return chsScr == 1 && chsConn == 1 && chsReady && (chsRole == 1 || chsRole == 2) && !chsGem &&
          chsOppPid()[0] && chsEnd == 0 && ((chsRole == 1) == chsWhite);
 }
 
@@ -2076,7 +2151,7 @@ static void chsStartGame() {
   if (chsRoomStr.length() < 3) { showToast("Kode room minimal 3 karakter", 2200); return; }
   strncpy(chsRoom, chsRoomStr.c_str(), 9); chsRoom[9] = 0;
   { Preferences p; if (p.begin("chess", false)) { p.putString("room", chsRoomStr); p.end(); } }
-  chsVsAI = false; chsAfkAI = false; chsAiQueued = false; chsPrevMyTurn = false; chsLastTouchMs = millis(); chsTurnStartMs = millis();
+  chsVsAI = false; chsGem = false; chsAfkAI = false; chsAiQueued = false; chsPrevMyTurn = false; chsLastTouchMs = millis(); chsTurnStartMs = millis();
   chsGenNo = 0; chsNewGameLocal();
   chsRole = 0; chsClaimW = chsClaimB = false; chsClaimMs = 0;
   chsWPid[0] = chsBPid[0] = chsWName[0] = chsBName[0] = 0;
@@ -2094,7 +2169,7 @@ static void chsStartAi() {
   if (!chsMoves) { showToast("RAM tidak cukup utk Catur", 2200); return; }
   if (!chsAiEnsure()) { showToast("PSRAM tidak cukup utk AI", 2200); return; }
   chsActive = false;
-  chsVsAI = true; chsAfkAI = false; chsAiQueued = false;
+  chsVsAI = true; chsGem = false; chsAfkAI = false; chsAiQueued = false;
   chsAiSeats();
   chsGenNo = 0; chsNewGameLocal();
   chsClaimW = chsClaimB = false; chsRemoteGen = 0; chsRemotePly = 0; chsRemoteRes[0] = 0;
@@ -2135,6 +2210,217 @@ static void chsAfkPoll() {
 }
 
 // ---------------------------------------------------------------------
+// ADU MESIN vs GEMINI (kamu penonton)
+//   Mesin lokal (level yg dipilih di menu) lawan Gemini lewat API yg sama dgn AI Chat (kunci: /gemini_key.txt).
+//   Gemini diberi FEN + riwayat + DAFTAR LANGKAH SAH, diminta membalas satu langkah UCI. Balasan tak sah diulang
+//   (maks 3x per langkah); 3x berturut-turut tak sah = Gemini kalah. Galat jaringan = jeda, ketuk "Lanjut".
+//   Skor per level disimpan di NVS: M = mesin menang, G = Gemini menang, S = seri.
+// ---------------------------------------------------------------------
+static int  chsResultForMe();
+static void chsGemStatSave();
+static bool chsGemLaunch();
+// ==== GEM BEGIN ====
+static bool          chsGemEngWhite = true;      // mesin memegang putih?
+static bool          chsGemPaused = false;
+static volatile uint8_t chsGemSt = 0;            // 0 diam | 1 permintaan ke Gemini berjalan | 2 balasan siap diproses
+static volatile bool chsGemOk = false;
+static uint32_t      chsGemGen = 0;              // naik tiap partai baru / berhenti: balasan lama diabaikan
+static uint32_t      chsGemReqGen = 0;
+static String        chsGemPrompt, chsGemReply;
+static uint8_t       chsGemBad = 0;              // balasan tak sah beruntun utk langkah ini
+static char          chsGemBadMv[14] = "";
+static unsigned long chsGemReqMs = 0, chsGemDueMs = 0, chsGemSecMs = 0;
+static bool          chsGemQueued = false, chsGemRec = false;
+static char          chsGemMsg[48] = "";
+static uint16_t      chsGemStat[5][4];           // per level: mesin menang | Gemini menang | seri | Gemini kalah krn tak sah
+
+static void chsGemSetMsg(const char* a, const char* b) {
+  size_t k = 0;
+  for (; a && a[k] && k < sizeof(chsGemMsg) - 1; k++) chsGemMsg[k] = a[k];
+  for (size_t j = 0; b && b[j] && k < sizeof(chsGemMsg) - 1; j++) { char c = b[j]; chsGemMsg[k++] = (c == '\n' || c == '\r') ? ' ' : c; }
+  chsGemMsg[k] = 0;
+}
+
+static void chsGemBuildPrompt() {
+  char fen[104], legal[1200];
+  chsFen(fen, sizeof(fen), (int)chsPly);
+  chsLegalList(legal, sizeof(legal));
+  const char* hist = chsMoves ? chsMoves : "";
+  size_t hl = strlen(hist);
+  if (hl > 400) { hist += hl - 400; while (*hist && *hist != ' ') hist++; if (*hist == ' ') hist++; }   // 400 huruf terakhir, mulai di batas langkah
+  String p;
+  p.reserve(1700);
+  p = "You are playing a chess game as ";
+  p += chsWhite ? "White" : "Black";
+  p += " against a chess engine. Choose the strongest move.\n";
+  p += "Position (FEN): "; p += fen; p += "\n";
+  p += "Recent moves (UCI): "; p += (*hist ? hist : "(game start)"); p += "\n";
+  p += "Legal moves (UCI): "; p += legal; p += "\n";
+  if (chsGemBad) { p += "Your previous answer \""; p += chsGemBadMv; p += "\" was NOT in the legal moves list. "; }
+  p += "Reply with exactly ONE move copied from the legal moves list, in UCI notation (for example e2e4 or e7e8q), and nothing else.";
+  chsGemPrompt = p;
+}
+
+static void chsGemFinish() {                      // catat skor sekali per partai
+  if (chsGemRec) return;
+  chsGemRec = true;
+  int r = chsResultForMe();                       // sudut pandang MESIN (chsRole = kursi mesin)
+  int lv = chsAiLevel > 4 ? 4 : chsAiLevel;
+  if (r == 1)       { if (chsGemStat[lv][0] < 65535) chsGemStat[lv][0]++; if (chsGemForfeit && chsGemStat[lv][3] < 65535) chsGemStat[lv][3]++; }
+  else if (r == -1) { if (chsGemStat[lv][1] < 65535) chsGemStat[lv][1]++; }
+  else if (r == 0)  { if (chsGemStat[lv][2] < 65535) chsGemStat[lv][2]++; }
+  chsGemStatSave();
+  needRedraw = true;
+}
+
+static void chsGemPoll() {
+  if (!chsGem) return;
+  if (chsEnd != 0) { chsGemFinish(); return; }
+  if (chsGemSt == 2) {                            // balasan (atau galat) dari task Gemini
+    chsGemSt = 0;
+    if (chsGemReqGen != chsGemGen) return;        // dari partai/sesi lama
+    if (!chsGemOk) {
+      chsGemPaused = true;
+      chsGemSetMsg("Gemini gagal: ", chsGemReply.c_str());
+      needRedraw = true;
+      return;
+    }
+    uint16_t m;
+    if (chsPickFromReply(chsGemReply.c_str(), &m)) {
+      chsGemBad = 0; chsGemMsg[0] = 0;
+      chsCommitEx(m, false);
+      chsGemDueMs = millis() + 450UL;
+      return;
+    }
+    chsGemBad++;
+    {                                             // simpan sebagian balasan utk ditegur di prompt berikutnya
+      size_t k = 0; const char* r = chsGemReply.c_str();
+      for (; r[k] && k < sizeof(chsGemBadMv) - 1; k++) { char c = r[k]; chsGemBadMv[k] = (c == '"' || c == '\n' || c == '\r') ? ' ' : c; }
+      chsGemBadMv[k] = 0;
+    }
+    if (chsGemBad >= 3) {                         // 3x berturut-turut: Gemini kalah
+      strcpy(chsRes, chsWhite ? "RW" : "RB");
+      chsGemForfeit = true;
+      chsUpdateEnd();
+    } else chsGemDueMs = millis() + 400UL;
+    needRedraw = true;
+    return;
+  }
+  if (chsGemSt == 1) {                            // menunggu: segarkan hitungan detik tiap 1 dtk
+    if (millis() - chsGemSecMs >= 1000UL) { chsGemSecMs = millis(); needRedraw = true; }
+    return;
+  }
+  if (chsGemPaused || chsAnimOn || chsPromoOn) return;
+  if ((long)(millis() - chsGemDueMs) < 0) return;
+  if (chsWhite == chsGemEngWhite) {               // giliran mesin
+    if (!chsGemQueued) { chsGemQueued = true; chsGemDueMs = millis() + 450UL; needRedraw = true; return; }
+    chsGemQueued = false;
+    uint16_t m = chsAiMoveFor(chsAiLevel);
+    if (m) chsCommitEx(m, false);
+    chsGemDueMs = millis();
+    return;
+  }
+  chsGemBuildPrompt();                            // giliran Gemini
+  if (!chsGemLaunch()) {
+    chsGemPaused = true;
+    chsGemSetMsg(WiFi.status() == WL_CONNECTED ? "Gagal membuat task Gemini" : "WiFi belum terhubung", "");
+    needRedraw = true;
+  }
+}
+// ==== GEM END ====
+
+static TaskHandle_t chsGemTask = nullptr;
+static StackType_t* chsGemStack = nullptr;
+static StaticTask_t chsGemTCB;
+static const char*  CHS_GEM_MODEL = "";           // "" = model bawaan AI Chat; isi nama model Gemini lain kalau mau lawan yg lebih kuat
+
+static void chsGemTaskFunc(void*) {
+  String resp; bool ok = false;
+  for (int a = 1; a <= 3; a++) {
+    if (a > 1) { delay(400 * a); if (WiFi.status() != WL_CONNECTED) break; }
+    gemModelOverride = CHS_GEM_MODEL;
+    ok = doGeminiHttpRequest(chsGemPrompt, resp);
+    gemModelOverride = nullptr;
+    if (ok || chsGemReqGen != chsGemGen) break;
+  }
+  chsGemReply = resp; chsGemOk = ok;
+  delay(700);                                     // beri lwIP/mbedTLS waktu melepas buffer TLS sebelum permintaan berikutnya
+  chsGemTask = nullptr;
+  chsGemSt = 2;
+  vTaskDelete(NULL);
+}
+
+static bool chsGemLaunch() {
+  if (chsGemTask || WiFi.status() != WL_CONNECTED) return false;
+  chsGemReqGen = chsGemGen; chsGemOk = false; chsGemReqMs = millis(); chsGemSecMs = chsGemReqMs;
+  chsGemSt = 1;
+  BaseType_t r = createTaskPsramStack(chsGemTaskFunc, "chsGem", 12288, NULL, &chsGemStack, &chsGemTCB, &chsGemTask, 1);
+  if (r != pdPASS) { chsGemTask = nullptr; chsGemSt = 0; return false; }
+  return true;
+}
+
+static void chsGemStatLoad() {
+  Preferences p;
+  if (!p.begin("chess", true)) return;
+  if (p.getBytesLength("gst") == sizeof(chsGemStat)) p.getBytes("gst", chsGemStat, sizeof(chsGemStat));
+  p.end();
+}
+static void chsGemStatSave() {
+  Preferences p;
+  if (p.begin("chess", false)) { p.putBytes("gst", chsGemStat, sizeof(chsGemStat)); p.end(); }
+}
+
+static void chsGemSeats() {                       // kursi: chsRole = kursi MESIN (papan dilihat dari sisi mesin)
+  chsRole = chsGemEngWhite ? 1 : 2;
+  char an[24]; snprintf(an, sizeof(an), "AI %s", chsLvName[chsAiLevel]);
+  if (chsRole == 1) { strcpy(chsWPid, chsPid); strcpy(chsBPid, "gem"); strncpy(chsWName, an, 23); chsWName[23] = 0; strcpy(chsBName, "Gemini"); }
+  else              { strcpy(chsBPid, chsPid); strcpy(chsWPid, "gem"); strncpy(chsBName, an, 23); chsBName[23] = 0; strcpy(chsWName, "Gemini"); }
+}
+
+static void chsGemNewGame() {
+  chsGemGen++;
+  chsGemSeats();
+  chsGenNo = 0; chsNewGameLocal();
+  chsGemPaused = false; chsGemBad = 0; chsGemMsg[0] = 0; chsGemRec = false; chsGemForfeit = false; chsGemQueued = false;
+  chsGemDueMs = millis() + 600UL;
+  needRedraw = true;
+}
+
+static void chsStartGem() {
+  if (!chsMoves) { showToast("RAM tidak cukup utk Catur", 2200); return; }
+  geminiApiKey.trim();
+  if (geminiApiKey.length() == 0 || geminiApiKey == "YOUR_GEMINI_API_KEY_HERE") { showToast("Isi API key Gemini dulu (AI Chat / SD)", 2600); return; }
+  if (WiFi.status() != WL_CONNECTED) { showToast("WiFi belum terhubung", 2200); return; }
+  if (chsGemTask) { showToast("Tunggu permintaan Gemini sebelumnya selesai", 2400); return; }
+  if (!chsAiEnsure()) { showToast("PSRAM tidak cukup utk AI", 2200); return; }
+  chsActive = false;
+  chsVsAI = true; chsGem = true; chsAfkAI = false; chsAiQueued = false;
+  chsGemSt = 0;
+  chsGemEngWhite = true;
+  chsClaimW = chsClaimB = false; chsRemoteGen = 0; chsRemotePly = 0; chsRemoteRes[0] = 0;
+  chsSendG = false; chsPubSeat = 0;
+  chsReady = true; chsConn = 1; chsErr[0] = 0;
+  chsLastTouchMs = millis();
+  chsGemNewGame();
+  chsScr = 1;
+  needRedraw = true;
+}
+
+static void chsGemStop() {                        // keluar dari mode Gemini (Menu / keluar app): permintaan yg berjalan dibatalkan
+  if (!chsGem) return;
+  chsGem = false; chsGemPaused = false; chsGemQueued = false;
+  chsGemGen++;                                    // balasan yg masih di jalan akan diabaikan
+  if (chsGemTask && aiClientPtr) aiClientPtr->stop();
+}
+
+static void chsGemBtn0() {                        // tombol kiri panel: Jeda/Lanjut, atau Main lagi (warna ditukar) setelah partai selesai
+  if (chsEnd != 0) { chsGemEngWhite = !chsGemEngWhite; chsGemNewGame(); return; }
+  chsGemPaused = !chsGemPaused;
+  if (!chsGemPaused) { chsGemMsg[0] = 0; chsGemDueMs = millis(); }
+  needRedraw = true;
+}
+
+// ---------------------------------------------------------------------
 // SIKLUS HIDUP APP
 // ---------------------------------------------------------------------
 void chessEnter() {
@@ -2143,7 +2429,8 @@ void chessEnter() {
   if (!chsBrokerOk() && chsBrokerFromSd()) { chsBrokerSave(); showToast("Broker Catur dimuat dari /chess.cfg", 2200); }
   chsBEdit = -1;
   chsPrefsLoad();
-  chsVsAI = false; chsAfkAI = false; chsAiQueued = false; chsPrevMyTurn = false;
+  chsVsAI = false; chsGem = false; chsAfkAI = false; chsAiQueued = false; chsPrevMyTurn = false;
+  chsGemStatLoad();
   chsActive = false; chsConn = 0; chsReady = false;
   chsScr = 0; chsSel = -1; chsPromoOn = false; chsConfirm = false;
   chsReset(); chsEnd = 0;
@@ -2158,6 +2445,7 @@ void chessExit() {
   chsConn = 0;
   chsAnimOn = false;
   chsStyleSave();           // simpan hasil belajar gaya
+  chsGemStop();
   chsVsAI = false; chsAfkAI = false; chsAiQueued = false;
   chsAiFree();
   chsVwClose();             // bobot awal layar Jaringan (PSRAM)
@@ -2168,7 +2456,7 @@ void chessLoopPoll() {
   if (chsDirty) { chsDirty = false; if (curScreen() == SCR_CHESS) needRedraw = true; }
   if (curScreen() == SCR_CHESS && chsPressId >= 0 && millis() - chsPressMs >= CHS_PRESS_MS) { chsPressId = -1; needRedraw = true; }   // efek tekan selesai
   if (curScreen() != SCR_CHESS || chsScr != 1 || !chsMoves) return;
-  if (chsVsAI) chsAiPollVs(); else { chsProcessRx(); chsAfkPoll(); }
+  if (chsGem) chsGemPoll(); else if (chsVsAI) chsAiPollVs(); else { chsProcessRx(); chsAfkPoll(); }
   if (chsConfirm && millis() - chsConfirmMs > 3500UL) { chsConfirm = false; needRedraw = true; }
   if (chsAnimOn) {                                    // animasi langkah: redraw tiap loop + CPU dinaikkan sebentar
     uiBoostKick();
@@ -2500,7 +2788,8 @@ static const char* chsEndText() {
     case 3: return "Seri: aturan 50 langkah";
     case 4: return "Seri: bidak tidak cukup";
     case 5: return "Seri: batas 280 langkah";
-    case 6: return chsRes[1] == 'W' ? "Putih menyerah. Hitam menang" : "Hitam menyerah. Putih menang";
+    case 6: if (chsGem && chsGemForfeit) return chsRes[1] == 'W' ? "Gemini (putih) 3x tak sah. Kalah" : "Gemini (hitam) 3x tak sah. Kalah";
+            return chsRes[1] == 'W' ? "Putih menyerah. Hitam menang" : "Hitam menyerah. Putih menang";
   }
   return "";
 }
@@ -2515,6 +2804,7 @@ static void chsSqIJ(int q, int* i, int* j) {   // petak papan -> baris/kolom lay
 // teks hasil singkat utk pil status di panel
 static const char* chsEndShort() {
   int r = chsResultForMe();
+  if (chsGem) return r == 1 ? "Mesin menang!" : r == -1 ? "Gemini menang" : r == 0 ? "Seri" : "Selesai";
   if (r == 1) return "Kamu menang!";
   if (r == -1) return "Kamu kalah";
   if (r == 0) return "Seri";
@@ -2599,13 +2889,15 @@ static void chsDrawSetup(LGFX_Sprite& s) {
     char ab[14]; if (chsAfkSec[chsAfkIdx]) snprintf(ab, sizeof(ab), "AFK %us", (unsigned)chsAfkSec[chsAfkIdx]); else strcpy(ab, "AFK mati");
     s.setTextColor(chsAfkIdx ? (uint16_t)T().accent : (uint16_t)T().subtext); chsPrintC(s, x2, gw, by2 + 8, ab);
     char cap[48], cb[48];
-    if (chsTrainN && chsAccN >= 5) snprintf(cap, sizeof(cap), "AI belajar: %u langkah, tebak %d%%", (unsigned)chsTrainN, (int)(chsAcc * 100.0f + 0.5f));
-    else if (chsTrainN) snprintf(cap, sizeof(cap), "AI belajar gayamu: %u langkah. AFK = AI ganti kamu", (unsigned)chsTrainN);
-    else strcpy(cap, "AI belajar gayamu saat kamu main. AFK = AI ganti kamu");
-    chsClip(cap, cb, (SCR_W - 16 - 66) / 6);
+    if (chsTrainN && chsAccN >= 5) snprintf(cap, sizeof(cap), "Belajar: %u langkah, tebak %d%%", (unsigned)chsTrainN, (int)(chsAcc * 100.0f + 0.5f));
+    else if (chsTrainN) snprintf(cap, sizeof(cap), "AI belajar gayamu: %u langkah", (unsigned)chsTrainN);
+    else strcpy(cap, "AI belajar gayamu saat main");
+    chsClip(cap, cb, (SCR_W - 16 - 66 - 64) / 6);
     s.setTextColor(T().subtext); s.setCursor(10, by2 + 30); s.print(cb);
     nyxAaRR(s, SCR_W - 8 - 58, by2 + 27, 58, 16, 7, chsPressCol(9, blend565(T().surface2, 0xFFFF, 20)));   // buka layar Jaringan
     s.setTextColor(T().accent); chsPrintC(s, SCR_W - 8 - 58, 58, by2 + 31, "Jaringan");
+    nyxAaRR(s, SCR_W - 8 - 58 - 6 - 58, by2 + 27, 58, 16, 7, chsPressCol(10, blend565(T().surface2, 0xFFFF, 20)));   // adu mesin vs Gemini
+    s.setTextColor(T().accent); chsPrintC(s, SCR_W - 8 - 58 - 6 - 58, 58, by2 + 31, "Gemini");
   }
 }
 
@@ -2613,7 +2905,14 @@ static void chsDrawSetup(LGFX_Sprite& s) {
 static void chsStatusText(char* line, size_t n, uint16_t* sc) {
   const char* t; uint16_t c = T().accent;
   static char eb[48];
-  if (chsVsAI) {
+  if (chsGem) {
+    if (chsEnd)                                  { t = chsEndShort(); int rr = chsResultForMe(); c = rr == 1 ? T().good : rr == -1 ? T().danger : T().text; }
+    else if (chsGemPaused && chsGemMsg[0])       { chsClip(chsGemMsg, eb, 46); t = eb; c = T().danger; }
+    else if (chsGemPaused)                       { t = "Jeda"; c = T().subtext; }
+    else if (chsWhite == chsGemEngWhite)         { t = "Mesin berpikir..."; c = T().accent; }
+    else { snprintf(eb, sizeof(eb), "Gemini berpikir %us", (unsigned)((millis() - chsGemReqMs) / 1000UL)); t = eb; c = T().accent; }
+  }
+  else if (chsVsAI) {
     if (chsEnd)                       { t = chsEndShort(); int rr = chsResultForMe(); c = rr == 1 ? T().good : rr == -1 ? T().danger : T().text; }
     else if (chsCanMove())            { t = chsInCheck() ? "SKAK! Jalanmu" : "Giliranmu"; c = chsInCheck() ? T().danger : T().good; }
     else                              { t = "AI berpikir..."; c = T().subtext; }
@@ -2791,7 +3090,9 @@ static void chsDrawGame(LGFX_Sprite& s) {
   // kamu
   bool meW = (chsRole != 2);
   const char* myN = chsRole == 2 ? chsBName : chsWName;
-  char nb[40]; snprintf(nb, sizeof(nb), "Kamu : %s", myN[0] ? myN : (chatName.length() ? chatName.c_str() : "HP"));
+  char nb[40];
+  if (chsGem) snprintf(nb, sizeof(nb), "Mesin: %s", myN);
+  else snprintf(nb, sizeof(nb), "Kamu : %s", myN[0] ? myN : (chatName.length() ? chatName.c_str() : "HP"));
   chsClip(nb, clipd, (pw - 56) / 6);
   chsChip(s, px + 12, ty + 4, meW, playing && (chsWhite == meW));
   s.setTextColor(T().text); s.setCursor(px + 24, ty); s.print(clipd);
@@ -2814,7 +3115,8 @@ static void chsDrawGame(LGFX_Sprite& s) {
   ty += gap;
   // room + langkah
   char lt[8]; chsTokAt(chsPly - 1, lt);
-  if (chsVsAI) snprintf(nb, sizeof(nb), "Lawan AI  #%u %s", (unsigned)chsPly, lt);
+  if (chsGem) { int gl = chsAiLevel > 4 ? 4 : chsAiLevel; snprintf(nb, sizeof(nb), "M%u G%u S%u #%u", (unsigned)chsGemStat[gl][0], (unsigned)chsGemStat[gl][1], (unsigned)chsGemStat[gl][2], (unsigned)chsPly); }
+  else if (chsVsAI) snprintf(nb, sizeof(nb), "Lawan AI  #%u %s", (unsigned)chsPly, lt);
   else snprintf(nb, sizeof(nb), "Room %s  #%u %s", chsRoom, (unsigned)chsPly, lt);
   chsClip(nb, clipd, maxCh);
   s.setTextColor(T().subtext); s.setCursor(px + 9, ty);
@@ -2834,7 +3136,10 @@ static void chsDrawGame(LGFX_Sprite& s) {
   chsBtnRect(0, &x, &y, &w, &h);
   bool over = chsEnd != 0;
   bool canAct = (chsRole == 1 || chsRole == 2) && chsConn == 1;
-  if (over) {
+  if (chsGem) {
+    iosRR(s, x, y, w, h, 6, chsPressCol(0, over ? (uint16_t)T().accent : (uint16_t)T().surface2));
+    s.setTextColor(over ? (uint16_t)T().bg : (uint16_t)T().accent); chsPrintC(s, x, w, y + 7, over ? "Main lagi" : (chsGemPaused ? "Lanjut" : "Jeda"));
+  } else if (over) {
     iosRR(s, x, y, w, h, 6, chsPressCol(0, canAct ? (uint16_t)T().accent : (uint16_t)T().surface2));
     s.setTextColor(canAct ? (uint16_t)T().bg : (uint16_t)T().subtext); chsPrintC(s, x, w, y + 7, "Main lagi");
   } else {
@@ -3191,6 +3496,7 @@ static void chsTouchSetup(int x, int y, bool isNew) {
     return;
   }
   if (y >= 192 && y <= 210 && x >= SCR_W - 8 - 62) { chsPress(9); chsVwOpen(); return; }          // chip Jaringan
+  if (y >= 192 && y <= 210 && x >= SCR_W - 8 - 58 - 6 - 62 && x < SCR_W - 8 - 62) { chsPress(10); chsStartGem(); return; }   // chip Gemini
   if (y >= 166 && y <= 190) {
     int gw = (SCR_W - 16 - 12) / 3;
     if (x >= 8 && x < 8 + gw) { chsPress(6); chsStartAi(); }
@@ -3264,6 +3570,7 @@ void chessTouch(int x, int y, bool held, bool isNew) {
   chsBtnRect(0, &bxr, &byr, &bw, &bh);
   if (panelOn && x >= bxr && x < bxr + bw && y >= byr && y < byr + bh) {
     chsPress(0);
+    if (chsGem) { chsGemBtn0(); return; }
     if (chsEnd != 0) { if ((chsRole == 1 || chsRole == 2) && chsConn == 1) chsRematch(); }
     else if (chsRole == 1 || chsRole == 2) {
       if (chsConfirm) chsResign();
@@ -3275,6 +3582,7 @@ void chessTouch(int x, int y, bool held, bool isNew) {
   if (panelOn && x >= bxr && x < bxr + bw && y >= byr && y < byr + bh) {
     chsPress(1);
     chsActive = false; chsScr = 0; chsConn = 0; chsReady = false; chsSel = -1; chsConfirm = false;
+    chsGemStop();
     chsVsAI = false; chsAfkAI = false; chsAiQueued = false;
     chsStyleSave();
     needRedraw = true;

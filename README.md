@@ -544,6 +544,8 @@ Dua baris teks di bawah tampilan memuat info sentuhan terakhir (neuron, kotak, a
 
 Cara memakainya: mainkan beberapa partai melawan AI, buka **Bobot** dengan **Selisih** menyala untuk melihat fitur apa yang dipelajari AI dari gayamu, lalu buka **Petak** untuk melihat kebiasaan petak bukaanmu (misalnya `e4` dan `f3` yang menyala).
 
+**Adu mesin vs Gemini (menguji kekuatan AI).** Pada layar setup Catur, di sebelah chip **Jaringan** ada chip **Gemini**. Mesin lokal (tingkat yang dipilih di baris *Lawan AI | tingkat | AFK*) bertanding melawan Gemini lewat kunci API yang sama dengan AI Chat (`/gemini_key.txt`), dan kamu menonton. Gemini diberi FEN, riwayat langkah, dan **daftar langkah sah**, lalu diminta membalas satu langkah UCI. Balasan yang tak sah diulang (maksimal 3 kali per langkah); tiga kali berturut-turut tak sah berarti Gemini kalah. Bila jaringan atau API gagal, partai dijeda dengan pesan galat dan bisa dilanjutkan dengan **Lanjut**. Tombol kiri panel: **Jeda/Lanjut**, lalu **Main lagi** (warna ditukar) setelah partai selesai. Skor per tingkat (`M` mesin menang, `G` Gemini menang, `S` seri) tersimpan di NVS dan tampil di panel. Perlu WiFi. Model bawaan sama dengan AI Chat; untuk lawan yang berbeda, isi `CHS_GEM_MODEL` di `chess_renphone.ino`. Logika giliran, pembacaan balasan, dan hitungan skor diuji di komputer dengan Gemini tiruan (`tests_chess/run_gem.sh`); panggilan API sungguhan dan tampilan layar belum diuji pada perangkat.
+
 **Batasan.** Tidak ada jam catur, dan belum ada aturan ulangan tiga posisi. Fitur ini baru diuji di komputer (aturan dan *perft*, kekuatan tiap level, pelatihan serta serialisasi model gaya); perilaku nyata di dua perangkat dan pada broker sungguhan belum terkonfirmasi.
 ### 5.3 Kendali jarak jauh
 

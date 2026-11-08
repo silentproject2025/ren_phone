@@ -2453,6 +2453,9 @@ static BaseType_t createTaskPsramStack(TaskFunction_t taskFunc, const char* name
 const unsigned long AI_HARD_TIMEOUT_MS = 30000; // 30s -> paksa hapus task
 volatile bool aiSoftStopTriggered = false;
 
+// Nama model sementara utk satu pemanggilan (diisi app lain, mis. adu Catur vs Gemini, lalu dikosongkan lagi). nullptr/"" = bawaan.
+const char* gemModelOverride = nullptr;
+
 bool doGeminiHttpRequest(const String& promptText, String& outResponse) {
   bool ok = false;
   WiFiClientSecure client;
@@ -2476,7 +2479,9 @@ bool doGeminiHttpRequest(const String& promptText, String& outResponse) {
   http.setConnectTimeout(15000);
 
   // FIX v7: model diganti dari gemini-2.5-flash-lite -> gemini-3.5-flash-lite
-  String url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent?key=" + geminiApiKey;
+  String url = String("https://generativelanguage.googleapis.com/v1beta/models/") +
+               ((gemModelOverride && gemModelOverride[0]) ? gemModelOverride : "gemini-3.5-flash-lite") +
+               ":generateContent?key=" + geminiApiKey;
 
   Serial.printf("[Gemini] Free DRAM internal: %u bytes (blok terbesar: %u)\n",
                 heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
