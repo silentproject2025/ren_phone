@@ -312,7 +312,9 @@ static void chsRbLoadNvs();
 // papan global lalu mengembalikannya persis seperti semula.
 //
 // EMPAT BAGIAN
-//  1. Pencarian negamax alpha-beta + quiescence + evaluasi materi/PST. Lima tingkat lewat chsAiChoose().
+//  1. Pencarian negamax PVS + quiescence (delta pruning) + tabel transposisi 64 bit + null-move + LMR + futility +
+//     killer/history + deteksi pengulangan di jalur; evaluasi materi/PST + struktur pion + mobilitas + perisai raja +
+//     mop-up endgame. Lima tingkat lewat chsAiChoose(). Penjaga stack (CHS_AI_STACK_MAX) menjaga rekursi < 8 KB task loop.
 //  2. TinyML: jaringan saraf kecil (MLP 26 -> 16 -> 1, 449 parameter, float32) yg menilai "seberapa mirip
 //     langkah ini dgn pilihan user". Masukan = 20 fitur langkah + 6 konteks posisi (fase, materi, skak, nomor
 //     langkah, mobilitas, ada menteri). Dilatih ONLINE di ESP32 sendiri: tiap langkah USER = satu langkah SGD
@@ -352,9 +354,13 @@ static void chsRbLoadNvs();
 #define CHS_RB_MAXLEN (4 + CHS_RB_REC * CHS_RB_KEEP)
 #define CHS_AI_INF    32000
 #define CHS_AI_MATE   30000
-#define CHS_AI_PLY    24
+#define CHS_AI_PLY    26                       // batas keras kedalaman rekursi: total stack <= PLY x ~230 B (< 8 KB task loop)
 #define CHS_AI_HIST   320
+#define CHS_AI_MAXD   10                       // kedalaman iterasi maksimum (dibatasi supaya rekursi + perpanjangan skak muat di PLY)
 #define CHS_BK_N      128
+#ifndef CHS_TT_BITS
+#define CHS_TT_BITS   15                       // 2^15 entri x 12 byte = 384 KB (PSRAM); 0 = tanpa tabel transposisi
+#endif
 
 static const int16_t chsAiVal[7] = {0, 100, 320, 330, 500, 900, 0};
 // Tabel petak-bidak (Michniewski), ditulis dari sudut pandang Putih: baris pertama = rank 8.
@@ -391,6 +397,13 @@ static float*    chsAiG = nullptr;     // gradien CHS_NP
 static uint8_t*  chsAiRb = nullptr;    // buffer pengalaman
 static uint32_t* chsAiHist = nullptr;  // hash posisi sepanjang partai
 static uint8_t*  chsAiMem = nullptr;
+struct ChsTT { uint32_t k; int16_t s; uint16_t m; int8_t d; uint8_t f; uint8_t a; uint8_t pad; };   // kunci, skor, langkah, kedalaman, jenis (0 eksak 1 batas bawah 2 batas atas), umur
+static ChsTT*    chsAiTT = nullptr;
+static uint32_t  chsAiTTMask = 0;
+static uint8_t   chsAiAge = 0;
+static uint32_t* chsAiPath = nullptr;  // [CHS_AI_PLY + 2] hash jalur pencarian (deteksi pengulangan)
+static uint16_t  chsAiKil[CHS_AI_PLY + 2][2];
+static int16_t*  chsAiHis = nullptr;   // [2][64][64] history heuristic
 
 static uint32_t chsAiNodes = 0, chsAiDeadline = 0;
 static bool     chsAiAbort = false, chsAiCheckTime = false;
@@ -439,7 +452,8 @@ static float*   chsAiGv = nullptr;             // 256 keserakahan langkah (scrat
 static bool chsAiEnsure() {
   if (chsAiMem) return true;
   size_t szMv = (size_t)CHS_AI_PLY * 256 * 2, szFB = (size_t)256 * CHS_NIN * 4;
-  size_t total = szMv * 2 + 512 + 1024 * 2 + 256 * 2 + szFB + 1024 + (size_t)CHS_AI_HIST * 4 + (size_t)CHS_NP * 4 + 2048 + (size_t)CHS_RB_N * CHS_RB_SZ + 64;
+  size_t szPath = (size_t)(CHS_AI_PLY + 2) * 4, szHis = (size_t)2 * 4096 * 2;
+  size_t total = szMv * 2 + 512 + 1024 * 2 + 256 * 2 + szFB + 1024 + (size_t)CHS_AI_HIST * 4 + (size_t)CHS_NP * 4 + 2048 + (size_t)CHS_RB_N * CHS_RB_SZ + 64 + szPath + szHis;
   uint8_t* m = (uint8_t*)CHS_AI_ALLOC(total);
   if (!m) m = (uint8_t*)malloc(total);
   if (!m) return false;
@@ -459,13 +473,24 @@ static bool chsAiEnsure() {
   chsAiG = (float*)p;     p += (size_t)CHS_NP * 4;
   chsAiQv = (float*)p;    p += 1024;
   chsAiGv = (float*)p;    p += 1024;
+  chsAiPath = (uint32_t*)p; p += szPath;
+  chsAiHis = (int16_t*)p;   p += szHis;
   chsAiRb = p;
   chsRbN = 0; chsRbPos = 0;
+#if CHS_TT_BITS > 0
+  if (!chsAiTT) {                                                  // tabel transposisi: gagal alokasi -> pencarian tetap jalan tanpa TT
+    size_t cnt = (size_t)1 << CHS_TT_BITS;
+    chsAiTT = (ChsTT*)CHS_AI_ALLOC(cnt * sizeof(ChsTT));
+    if (chsAiTT) { memset(chsAiTT, 0, cnt * sizeof(ChsTT)); chsAiTTMask = (uint32_t)(cnt - 1); }
+  }
+#endif
   CHS_AI_AFTER_ALLOC();
   return true;
 }
 static void chsAiFree() {
   if (chsAiMem) CHS_AI_FREE(chsAiMem);
+  if (chsAiTT) CHS_AI_FREE(chsAiTT);
+  chsAiTT = nullptr; chsAiTTMask = 0; chsAiPath = nullptr; chsAiHis = nullptr;
   chsAiMem = nullptr; chsAiMv = nullptr; chsAiKy = nullptr; chsAiRm = nullptr; chsAiSc = nullptr; chsAiFs = nullptr;
   chsAiEx = nullptr; chsAiFx = nullptr; chsAiFB = nullptr; chsAiFS = nullptr; chsAiHist = nullptr; chsAiG = nullptr; chsAiQv = nullptr; chsAiGv = nullptr; chsAiRb = nullptr; chsRbN = 0; chsRbPos = 0; chsAiHistN = 0;
 }
@@ -483,19 +508,109 @@ static uint32_t chsPosHash() {
 
 #define CHS_SAVE_ST  int8_t _sb[64]; memcpy(_sb, chsBd, 64); bool _sw = chsWhite; uint8_t _sc = chsCastle; int8_t _se = chsEp; uint16_t _sh = chsHalf
 #define CHS_REST_ST  do { memcpy(chsBd, _sb, 64); chsWhite = _sw; chsCastle = _sc; chsEp = _se; chsHalf = _sh; } while (0)
+// Versi per-ply utk rekursi pencarian: salinan papan ada di array global (RAM internal), bukan di stack -> frame lebih kecil.
+struct ChsSv { bool w; uint8_t c; int8_t e; uint16_t h; };
+static int8_t chsAiSvB[CHS_AI_PLY + 2][64];
+static ChsSv  chsAiSvS[CHS_AI_PLY + 2];
+#define CHS_SAVE_AT(pl) do { memcpy(chsAiSvB[pl], chsBd, 64); chsAiSvS[pl].w = chsWhite; chsAiSvS[pl].c = chsCastle; chsAiSvS[pl].e = chsEp; chsAiSvS[pl].h = chsHalf; } while (0)
+#define CHS_REST_AT(pl) do { memcpy(chsBd, chsAiSvB[pl], 64); chsWhite = chsAiSvS[pl].w; chsCastle = chsAiSvS[pl].c; chsEp = chsAiSvS[pl].e; chsHalf = chsAiSvS[pl].h; } while (0)
 
 // ---------------------------------------------------------------- evaluasi (dari sudut pandang yg jalan)
+// Materi + tabel petak + struktur pion (ganda, terisolasi, bebas), pasangan gajah, benteng di file terbuka / baris 7,
+// mobilitas kuda/gajah/benteng, perlindungan raja (perisai pion), dan "mop-up" endgame (dorong raja lawan ke tepi
+// saat unggul) supaya kemenangan teknis (mis. K+B vs K) benar-benar dituntaskan, bukan cuma berputar-putar.
+static const int16_t chsEvPass[8] = {0, 8, 14, 24, 42, 72, 120, 0};
+static const int8_t  chsEvKn[8][2] = {{1,2},{2,1},{-1,2},{-2,1},{1,-2},{2,-1},{-1,-2},{-2,-1}};
+static const int8_t  chsEvDr[8][2] = {{1,1},{1,-1},{-1,1},{-1,-1},{1,0},{-1,0},{0,1},{0,-1}};
+static int chsEvMob(int sq, int8_t p, int t) {
+  int sg = p > 0 ? 1 : -1, r = sq >> 3, f = sq & 7, cnt = 0;
+  if (t == 2) {
+    for (int k = 0; k < 8; k++) {
+      int rr = r + chsEvKn[k][0], ff = f + chsEvKn[k][1];
+      if (rr < 0 || rr > 7 || ff < 0 || ff > 7) continue;
+      if (chsBd[rr * 8 + ff] * sg <= 0) cnt++;
+    }
+    return cnt;
+  }
+  int k0 = (t == 3) ? 0 : 4;
+  for (int k = k0; k < k0 + 4; k++) {
+    int rr = r + chsEvDr[k][0], ff = f + chsEvDr[k][1];
+    while (rr >= 0 && rr <= 7 && ff >= 0 && ff <= 7) {
+      int q = chsBd[rr * 8 + ff] * sg;
+      if (q == 0) cnt++; else { if (q < 0) cnt++; break; }
+      rr += chsEvDr[k][0]; ff += chsEvDr[k][1];
+    }
+  }
+  return cnt;
+}
+static inline int chsEvMop(int lk, int wk) {            // lk = raja pihak yg kalah, wk = raja pihak yg menang
+  int lr = lk >> 3, lf = lk & 7, wr = wk >> 3, wf = wk & 7;
+  int cd = chsAbsI(2 * lr - 7) + chsAbsI(2 * lf - 7);
+  int md = chsAbsI(lr - wr) + chsAbsI(lf - wf);
+  return cd * 6 + (14 - md) * 3;
+}
 static int chsAiEval() {
-  int sc = 0, npm = 0;
-  for (int sq = 0; sq < 64; sq++) { int8_t p = chsBd[sq]; if (!p) continue; int t = p > 0 ? p : -p; if (t >= 2 && t <= 5) npm += chsAiVal[t]; }
-  bool eg = npm <= 2600;
+  int sc = 0, npm = 0, mat[2] = {0, 0};
+  int8_t pcnt[2][8], bmax[8], wmin[8];
+  for (int f = 0; f < 8; f++) { pcnt[0][f] = pcnt[1][f] = 0; bmax[f] = -1; wmin[f] = 8; }
+  int ksq[2] = {-1, -1}, nb[2] = {0, 0}, np[2] = {0, 0}, nr[2] = {0, 0};
+  int8_t pawnSq[2][8], rks[2][4];
   for (int sq = 0; sq < 64; sq++) {
     int8_t p = chsBd[sq]; if (!p) continue;
-    int t = p > 0 ? p : -p, r = sq >> 3, f = sq & 7;
-    int idx = p > 0 ? (7 - r) * 8 + f : r * 8 + f;
-    int v = chsAiVal[t] + (t == 6 ? (eg ? chsPstKe[idx] : chsPst[5][idx]) : chsPst[t - 1][idx]);
-    sc += p > 0 ? v : -v;
+    int t = p > 0 ? p : -p, w = p > 0 ? 0 : 1, r = sq >> 3, f = sq & 7;
+    if (t == 6) { ksq[w] = sq; continue; }
+    mat[w] += chsAiVal[t];
+    if (t >= 2 && t <= 5) npm += chsAiVal[t];
+    int idx = w == 0 ? (7 - r) * 8 + f : r * 8 + f;
+    int v = chsAiVal[t] + chsPst[t - 1][idx];
+    if (t == 1) {
+      pcnt[w][f]++; if (np[w] < 8) pawnSq[w][np[w]++] = (int8_t)sq;
+      if (w == 0) { if (r < wmin[f]) wmin[f] = (int8_t)r; } else { if (r > bmax[f]) bmax[f] = (int8_t)r; }
+    } else if (t == 2) { v += (chsEvMob(sq, p, t) - 4) * 4;
+    } else if (t == 3) { v += (chsEvMob(sq, p, t) - 6) * 3; nb[w]++;
+    } else if (t == 4) { v += (chsEvMob(sq, p, t) - 7) * 2; if (nr[w] < 4) rks[w][nr[w]++] = (int8_t)sq; }
+    sc += w == 0 ? v : -v;
   }
+  bool eg = npm <= 2600;
+  for (int w = 0; w < 2; w++) {
+    int s = 0;
+    if (ksq[w] >= 0) { int r = ksq[w] >> 3, f = ksq[w] & 7; s += eg ? chsPstKe[w == 0 ? (7 - r) * 8 + f : r * 8 + f] : chsPst[5][w == 0 ? (7 - r) * 8 + f : r * 8 + f]; }
+    if (nb[w] >= 2) s += 30;
+    for (int i = 0; i < np[w]; i++) {                               // pion
+      int sq = pawnSq[w][i], r = sq >> 3, f = sq & 7, rel = w == 0 ? r : 7 - r;
+      if (pcnt[w][f] > 1) s -= 6;
+      if ((f == 0 || pcnt[w][f - 1] == 0) && (f == 7 || pcnt[w][f + 1] == 0)) s -= 12;
+      bool pass = true;
+      for (int ff = (f > 0 ? f - 1 : 0); ff <= (f < 7 ? f + 1 : 7); ff++) {
+        if (w == 0 ? (bmax[ff] > r) : (wmin[ff] < r)) { pass = false; break; }
+      }
+      if (pass) { int b = chsEvPass[rel]; s += eg ? b + b / 2 : b; }
+    }
+    for (int i = 0; i < nr[w]; i++) {                               // benteng
+      int sq = rks[w][i], f = sq & 7, rel = w == 0 ? (sq >> 3) : 7 - (sq >> 3);
+      if (pcnt[w][f] == 0) s += pcnt[1 - w][f] == 0 ? 18 : 10;
+      if (rel == 6) s += 10;
+    }
+    if (!eg && ksq[w] >= 0) {                                       // perisai raja
+      int kr = ksq[w] >> 3, kf = ksq[w] & 7, rel = w == 0 ? kr : 7 - kr;
+      if (rel <= 1) {
+        int dir = w == 0 ? 1 : -1; int8_t pw = (int8_t)dir; int ks = 0;
+        for (int ff = (kf > 0 ? kf - 1 : 0); ff <= (kf < 7 ? kf + 1 : 7); ff++) {
+          if (chsBd[(kr + dir) * 8 + ff] == pw) ks += 10;
+          else if (chsBd[(kr + 2 * dir) * 8 + ff] == pw) ks += 5;
+        }
+        if (pcnt[w][kf] == 0) ks -= pcnt[1 - w][kf] == 0 ? 25 : 14;
+        if (npm < 1800) ks /= 2;
+        s += ks;
+      }
+    }
+    sc += w == 0 ? s : -s;
+  }
+  if (eg && ksq[0] >= 0 && ksq[1] >= 0) {                           // mop-up endgame
+    int dm = mat[0] - mat[1];
+    if (dm > 200) sc += chsEvMop(ksq[1], ksq[0]); else if (dm < -200) sc -= chsEvMop(ksq[0], ksq[1]);
+  }
+  sc += chsWhite ? 8 : -8;                                          // tempo
   return chsWhite ? sc : -sc;
 }
 
@@ -514,9 +629,33 @@ static inline void chsAiPick(uint16_t* mv, int16_t* ky, int n, int i) {
   for (int j = i + 1; j < n; j++) if (ky[j] > ky[b]) b = j;
   if (b != i) { uint16_t tm = mv[i]; mv[i] = mv[b]; mv[b] = tm; int16_t tk = ky[i]; ky[i] = ky[b]; ky[b] = tk; }
 }
+#ifndef CHS_AI_STACK_MAX
+#define CHS_AI_STACK_MAX 4800                  // byte stack yg boleh dipakai pencarian (task loop 8 KB: sisanya utk pemanggil + evaluasi + ISR)
+#endif
+static uintptr_t chsAiSp0 = 0;
+static inline bool chsAiStackLow() {           // stack tumbuh turun di Xtensa maupun x86; ukur jarak dari awal chsAiChoose
+  char c; uintptr_t a = (uintptr_t)&c;
+  return (chsAiSp0 > a ? chsAiSp0 - a : a - chsAiSp0) > (uintptr_t)CHS_AI_STACK_MAX;
+}
 static inline bool chsAiTimeUp() {
   if (chsAiCheckTime && (chsAiNodes & 255u) == 0 && (int32_t)(CHS_AI_NOW() - chsAiDeadline) >= 0) chsAiAbort = true;
   return chsAiAbort;
+}
+
+// ---- hash 64 bit utk tabel transposisi (BUKAN chsPosHash: itu dipakai buku pembuka di NVS, formatnya tidak boleh berubah) ----
+static inline uint64_t chsAiH64() {
+  uint64_t w[8]; memcpy(w, chsBd, 64);
+  uint64_t h = 0x9E3779B97F4A7C15ULL;
+  for (int i = 0; i < 8; i++) { h ^= w[i]; h *= 0xFF51AFD7ED558CCDULL; h ^= h >> 32; }
+  h ^= (uint64_t)(chsWhite ? 1u : 2u) | ((uint64_t)chsCastle << 2) | ((uint64_t)(uint8_t)(chsEp + 1) << 8);
+  h *= 0xC4CEB9FE1A85EC53ULL; h ^= h >> 29;
+  return h;
+}
+static inline int chsAiToTT(int s, int ply)   { return s > CHS_AI_MATE - 200 ? s + ply : (s < -CHS_AI_MATE + 200 ? s - ply : s); }
+static inline int chsAiFromTT(int s, int ply) { return s > CHS_AI_MATE - 200 ? s - ply : (s < -CHS_AI_MATE + 200 ? s + ply : s); }
+static inline bool chsAiHasPieces(bool white) {
+  for (int i = 0; i < 64; i++) { int8_t p = chsBd[i]; if (white ? (p >= 2 && p <= 5) : (p <= -2 && p >= -5)) return true; }
+  return false;
 }
 
 // ---------------------------------------------------------------- pencarian
@@ -524,7 +663,7 @@ static int chsAiQ(int alpha, int beta, int ply) {
   chsAiNodes++;
   if (chsAiTimeUp()) return 0;
   int stand = chsAiEval();
-  if (ply >= CHS_AI_PLY - 1) return stand;
+  if (ply >= CHS_AI_PLY - 1 || chsAiStackLow()) return stand;
   if (stand >= beta) return stand;
   if (stand > alpha) alpha = stand;
   uint16_t* mv = chsAiMv + ply * 256; int16_t* ky = chsAiKy + ply * 256;
@@ -533,17 +672,22 @@ static int chsAiQ(int alpha, int beta, int ply) {
     uint16_t m = mv[i]; int from = m & 63, to = (m >> 6) & 63;
     int8_t p = chsBd[from];
     bool capt = chsBd[to] != 0 || ((p == 1 || p == -1) && to == chsEp && (from & 7) != (to & 7)) || ((m >> 12) & 15);
-    if (capt) { int k = chsAiKey(m); mv[nc] = m; ky[nc] = (int16_t)k; nc++; }
+    if (!capt) continue;
+    if (!((m >> 12) & 15)) {                                        // delta pruning: tangkapan ini pun tak mungkin menaikkan alpha
+      int8_t q = chsBd[to]; int qt = q > 0 ? q : -q; if (!qt) qt = 1;
+      if (stand + chsAiVal[qt] + 200 < alpha) continue;
+    }
+    int k = chsAiKey(m); mv[nc] = m; ky[nc] = (int16_t)k; nc++;
   }
   for (int i = 0; i < nc; i++) {
     chsAiPick(mv, ky, nc, i);
-    CHS_SAVE_ST;
+    CHS_SAVE_AT(ply);
     bool mover = chsWhite;
     chsDo(mv[i]);
     int ks = chsKingSq(mover);
-    if (ks < 0 || chsAtt(ks, !mover)) { CHS_REST_ST; continue; }
+    if (ks < 0 || chsAtt(ks, !mover)) { CHS_REST_AT(ply); continue; }
     int sc = -chsAiQ(-beta, -alpha, ply + 1);
-    CHS_REST_ST;
+    CHS_REST_AT(ply);
     if (chsAiAbort) return 0;
     if (sc >= beta) return sc;
     if (sc > alpha) alpha = sc;
@@ -551,34 +695,100 @@ static int chsAiQ(int alpha, int beta, int ply) {
   return alpha;
 }
 
-static int chsAiNeg(int depth, int alpha, int beta, int ply) {
+// Negamax PVS + tabel transposisi + null-move + LMR + futility + killer/history.
+// Urutan: langkah TT (30000) > tangkapan MVV-LVA (>= 10000) > killer (9000/8999) > history (0..8000).
+static int chsAiNeg(int depth, int alpha, int beta, int ply, bool nullOk) {
   chsAiNodes++;
   if (chsAiTimeUp()) return 0;
   if (chsHalf >= 100) return 0;
+  uint64_t hk = chsAiH64(); uint32_t hk32 = (uint32_t)(hk >> 32);
+  if (chsAiPath) {
+    chsAiPath[ply] = (uint32_t)hk;
+    int lim = ply - (int)chsHalf; if (lim < 0) lim = 0;
+    for (int k = ply - 2; k >= lim; k -= 2) if (chsAiPath[k] == (uint32_t)hk) return 0;      // pengulangan di jalur pencarian = remis
+  }
   bool inchk = chsInCheck();
   if (inchk && ply < CHS_AI_PLY - 6) depth++;
   if (depth <= 0) return chsAiQ(alpha, beta, ply);
-  if (ply >= CHS_AI_PLY - 1) return chsAiEval();
+  if (ply >= CHS_AI_PLY - 1 || chsAiStackLow()) return chsAiEval();
+  int alpha0 = alpha; uint16_t ttm = 0;
+  ChsTT* te = chsAiTT ? &chsAiTT[(uint32_t)hk & chsAiTTMask] : nullptr;
+  if (te && te->k == hk32) {
+    ttm = te->m;
+    if (te->d >= depth) {
+      int s = chsAiFromTT(te->s, ply);
+      if (te->f == 0) return s;
+      if (te->f == 1 && s >= beta) return s;
+      if (te->f == 2 && s <= alpha) return s;
+    }
+  }
+  int stand = 0;
+  if (!inchk) {
+    stand = chsAiEval();
+    if (depth <= 2 && beta < CHS_AI_MATE - 1000 && stand - 130 * depth >= beta) return stand;              // reverse futility
+    if (nullOk && depth >= 3 && beta < CHS_AI_MATE - 1000 && stand >= beta && chsAiHasPieces(chsWhite)) { // null move
+      bool sw = chsWhite; int8_t se = chsEp; uint16_t sh = chsHalf;               // null move: papan tidak berubah
+      chsWhite = !chsWhite; chsEp = -1; chsHalf++;
+      int R = 2 + depth / 4;
+      int sc = -chsAiNeg(depth - 1 - R, -beta, -beta + 1, ply + 1, false);
+      chsWhite = sw; chsEp = se; chsHalf = sh;
+      if (chsAiAbort) return 0;
+      if (sc >= beta) return sc >= CHS_AI_MATE - 1000 ? beta : sc;
+    }
+  }
   uint16_t* mv = chsAiMv + ply * 256; int16_t* ky = chsAiKy + ply * 256;
   int n = chsGen(mv);
-  for (int i = 0; i < n; i++) ky[i] = (int16_t)chsAiKey(mv[i]);
-  int best = -CHS_AI_INF, legal = 0;
+  int side = chsWhite ? 0 : 1;
+  for (int i = 0; i < n; i++) {
+    uint16_t m = mv[i]; int k = chsAiKey(m);
+    if (m == ttm) k = 30000;
+    else if (k > 0) k += 10000;
+    else if (m == chsAiKil[ply][0]) k = 9000;
+    else if (m == chsAiKil[ply][1]) k = 8999;
+    else { int hv = chsAiHis ? chsAiHis[side * 4096 + (m & 63) * 64 + ((m >> 6) & 63)] : 0; k = hv > 8000 ? 8000 : hv; }
+    ky[i] = (int16_t)k;
+  }
+  int best = -CHS_AI_INF, legal = 0; uint16_t bestm = 0;
   for (int i = 0; i < n; i++) {
     chsAiPick(mv, ky, n, i);
-    CHS_SAVE_ST;
+    uint16_t m = mv[i]; bool quiet = ky[i] < 10000;
+    if (m == ttm) quiet = !(chsAiKey(m) > 0);
+    CHS_SAVE_AT(ply);
     bool mover = chsWhite;
-    chsDo(mv[i]);
+    chsDo(m);
     int ks = chsKingSq(mover);
-    if (ks < 0 || chsAtt(ks, !mover)) { CHS_REST_ST; continue; }
+    if (ks < 0 || chsAtt(ks, !mover)) { CHS_REST_AT(ply); continue; }
     legal++;
-    int sc = -chsAiNeg(depth - 1, -beta, -alpha, ply + 1);
-    CHS_REST_ST;
+    if (quiet && !inchk && depth <= 2 && legal > 1 && alpha > -CHS_AI_MATE + 1000 && stand + 150 + 140 * depth <= alpha) { CHS_REST_AT(ply); continue; }   // futility
+    int sc;
+    if (legal == 1) {
+      sc = -chsAiNeg(depth - 1, -beta, -alpha, ply + 1, true);
+    } else {
+      int red = 0;
+      if (depth >= 3 && quiet && !inchk && legal > 3) { red = 1 + (legal > 8 ? 1 : 0) + (depth >= 7 ? 1 : 0); if (red > depth - 2) red = depth - 2; }
+      sc = -chsAiNeg(depth - 1 - red, -alpha - 1, -alpha, ply + 1, true);
+      if (sc > alpha && red) sc = -chsAiNeg(depth - 1, -alpha - 1, -alpha, ply + 1, true);
+      if (sc > alpha && sc < beta) sc = -chsAiNeg(depth - 1, -beta, -alpha, ply + 1, true);
+    }
+    CHS_REST_AT(ply);
     if (chsAiAbort) return 0;
-    if (sc > best) best = sc;
+    if (sc > best) { best = sc; bestm = m; }
     if (sc > alpha) alpha = sc;
-    if (alpha >= beta) break;
+    if (alpha >= beta) {
+      if (quiet) {
+        if (chsAiKil[ply][0] != m) { chsAiKil[ply][1] = chsAiKil[ply][0]; chsAiKil[ply][0] = m; }
+        if (chsAiHis) { int16_t* h = &chsAiHis[side * 4096 + (m & 63) * 64 + ((m >> 6) & 63)]; int v = *h + depth * depth; *h = (int16_t)(v > 12000 ? 12000 : v); }
+      }
+      break;
+    }
   }
   if (!legal) return inchk ? -CHS_AI_MATE + ply : 0;
+  if (te) {
+    if (te->k != hk32 || te->a != chsAiAge || depth >= te->d) {
+      te->k = hk32; te->s = (int16_t)chsAiToTT(best, ply); te->m = bestm; te->d = (int8_t)depth; te->a = chsAiAge;
+      te->f = best <= alpha0 ? 2 : (best >= beta ? 1 : 0);
+    }
+  }
   return best;
 }
 
@@ -1054,10 +1264,14 @@ static uint16_t chsAiChoose(int maxDepth, uint32_t budgetMs, int margin, int mod
   for (int i = 0; i < pn; i++) if (chsLegal(pm[i])) chsAiRm[n++] = pm[i];
   if (n == 0) return 0;
   if (n == 1) return chsAiRm[0];
+  if (maxDepth > CHS_AI_MAXD) maxDepth = CHS_AI_MAXD;
   for (int i = 0; i < n; i++) chsAiKy[i] = (int16_t)chsAiKey(chsAiRm[i]);
   for (int i = 0; i < n; i++) chsAiPick(chsAiRm, chsAiKy, n, i);
   uint32_t t0 = CHS_AI_NOW();
+  { char c0; chsAiSp0 = (uintptr_t)&c0; }
   chsAiDeadline = t0 + budgetMs; chsAiNodes = 0;
+  chsAiAge++; memset(chsAiKil, 0, sizeof(chsAiKil)); if (chsAiHis) memset(chsAiHis, 0, 2 * 4096 * 2);
+  if (chsAiPath) chsAiPath[0] = (uint32_t)chsAiH64();
   for (int d = 1; d <= maxDepth; d++) {
     chsAiCheckTime = (d > 1); chsAiAbort = false;
     int curBest = -CHS_AI_INF; bool done = true;
@@ -1065,7 +1279,7 @@ static uint16_t chsAiChoose(int maxDepth, uint32_t budgetMs, int margin, int mod
       CHS_SAVE_ST;
       chsDo(chsAiRm[i]);
       int alpha = (curBest == -CHS_AI_INF) ? -CHS_AI_INF : curBest - margin;
-      int s = -chsAiNeg(d - 1, -CHS_AI_INF, -alpha, 1);
+      int s = -chsAiNeg(d - 1, -CHS_AI_INF, -alpha, 1, true);
       CHS_REST_ST;
       if (chsAiAbort) { done = false; break; }
       chsAiSc[i] = s; chsAiEx[i] = (s > alpha) ? 1 : 0;
@@ -1073,12 +1287,11 @@ static uint16_t chsAiChoose(int maxDepth, uint32_t budgetMs, int margin, int mod
     }
     if (!done) break;
     memcpy(chsAiFs, chsAiSc, (size_t)n * 4); memcpy(chsAiFx, chsAiEx, (size_t)n);
-    int b = 0;
-    for (int i = 1; i < n; i++) if (chsAiFx[i] && (!chsAiFx[b] || chsAiFs[i] > chsAiFs[b])) b = i;
-    if (b != 0) {
-      uint16_t tm = chsAiRm[0]; chsAiRm[0] = chsAiRm[b]; chsAiRm[b] = tm;
-      int32_t ts = chsAiFs[0]; chsAiFs[0] = chsAiFs[b]; chsAiFs[b] = ts;
-      uint8_t te = chsAiFx[0]; chsAiFx[0] = chsAiFx[b]; chsAiFx[b] = te;
+    for (int i = 1; i < n; i++) {                                              // urutkan akar: eksak dulu (skor menurun), lalu batas atas; iterasi berikut memangkas lebih awal
+      uint16_t tm = chsAiRm[i]; int32_t ts = chsAiFs[i]; uint8_t te = chsAiFx[i];
+      int64_t key = te ? (int64_t)ts + 100000 : (int64_t)ts; int j = i - 1;
+      while (j >= 0 && (chsAiFx[j] ? (int64_t)chsAiFs[j] + 100000 : (int64_t)chsAiFs[j]) < key) { chsAiRm[j + 1] = chsAiRm[j]; chsAiFs[j + 1] = chsAiFs[j]; chsAiFx[j + 1] = chsAiFx[j]; j--; }
+      chsAiRm[j + 1] = tm; chsAiFs[j + 1] = ts; chsAiFx[j + 1] = te;
     }
     if (curBest >= CHS_AI_MATE - 100 && margin == 0) break;                    // mat sudah ketemu
     if (d < maxDepth && (CHS_AI_NOW() - t0) * 3 > budgetMs) break;             // iterasi berikut hampir pasti tidak selesai
@@ -1279,9 +1492,9 @@ static unsigned long chsAiDueMs = 0, chsLastTouchMs = 0, chsTurnStartMs = 0;
 static uint8_t       chsUnsaved = 0;
 static const char* const chsLvName[5] = {"Mudah", "Sedang", "Sulit", "Cermin", "Nyx"};
 static const uint16_t chsAfkSec[4] = {0, 30, 60, 120};
-static const uint8_t  chsLvDepth[5]  = {2, 4, 6, 4, 4};
-static const uint16_t chsLvMs[5]     = {250, 700, 1800, 700, 900};
-static const int16_t  chsLvMargin[5] = {120, 10, 0, 70, 80};
+static const uint8_t  chsLvDepth[5]  = {2, 4, 6, 4, 10};
+static const uint16_t chsLvMs[5]     = {250, 700, 1800, 700, 1600};
+static const int16_t  chsLvMargin[5] = {120, 10, 0, 70, 30};
 static const uint8_t  chsLvMode[5]   = {1, 1, 0, 2, 3};    // 0 terbaik | 1 acak di antara yg layak | 2 gaya user | 3 Nyx (jebakan kebiasaan)
 
 static void chsPrefsLoad() {

@@ -83,6 +83,39 @@ int main() {
     CHECK(worst < (uint32_t)MS[lv] * 2 + 300, "level %d terlalu lambat %u ms", lv, worst);
   }
 
+  // ================= Kekuatan pencarian (TT, null-move, LMR, evaluasi baru) =================
+  // 1) Mat back-rank dalam 1 harus ditemukan, termasuk lewat mode Nyx (3)
+  setFen("6k1/5ppp/8/8/8/8/5PPP/3R2K1 w - - 0 1");                       // back-rank: Rd8#
+  m = chsAiChoose(4, 1000, 0, 3, 0); mstr(m, s);
+  CHECK(!strcmp(s, "d1d8"), "back-rank mat dalam 1 (mode Nyx), dapat %s", s);
+  // 2) Taktik: garpu kuda. Nc7+ menggarpu raja e8 dan menteri a8
+  setFen("q3k3/8/8/3N4/8/8/8/4K3 w - - 0 1");                            // Nc7+ garpu raja e8 + menteri a8
+  m = chsAiChoose(5, 1000, 0, 3, 0); mstr(m, s);
+  CHECK(!strcmp(s, "d5c7"), "garpu kuda Nc7+, dapat %s", s);
+  // 3) Tabel transposisi tidak boleh membuat hasil bergantung pada urutan panggilan: dua kali panggil posisi sama -> langkah sah & sama nilai
+  setFen("r1bqkb1r/pppp1ppp/2n2n2/4p3/2B1P3/5N2/PPPP1PPP/RNBQK2R w KQkq - 0 1");
+  uint16_t m1 = chsAiChoose(6, 4000, 0, 0, 0), m2 = chsAiChoose(6, 4000, 0, 0, 0);
+  { uint16_t chk; mstr(m1, s); CHECK(chsParse(s, (int)strlen(s), &chk) && chk == m1, "TT: langkah 1 tak sah"); mstr(m2, s); CHECK(chsParse(s, (int)strlen(s), &chk) && chk == m2, "TT: langkah 2 tak sah"); }
+  // 4) Konversi endgame (mop-up): K+R vs K dan K+Q vs K harus berakhir skakmat dalam 80 ply
+  static const char* const ENDG[2] = {"8/8/8/4k3/8/8/8/R3K3 w - - 0 1", "8/8/8/4k3/8/8/8/Q3K3 w - - 0 1"};
+  for (int e = 0; e < 2; e++) {
+    setFen(ENDG[e]); int pl = 0; bool mated = false; uint32_t worstE = 0;
+    while (pl < 80) {
+      if (!chsHasMove()) { mated = chsInCheck(); break; }
+      uint32_t t = hostMs();
+      uint16_t mm = chsWhite ? chsAiChoose(8, 300, 0, 0, pl) : chsAiChoose(4, 100, 0, 0, pl);
+      uint32_t dt = hostMs() - t; if (dt > worstE) worstE = dt;
+      CHECK(mm != 0, "endgame: langkah 0");
+      chsDo(mm); pl++;
+    }
+    printf("endgame %s: %s dalam %d ply (terlama %u ms)\n", e ? "K+Q vs K" : "K+R vs K", mated ? "SKAKMAT" : "belum mat", pl, worstE);
+    CHECK(mated, "endgame %d tidak berakhir skakmat dalam 80 ply", e);
+  }
+  // 5) Batas stack: pencarian tidak boleh melewati CHS_AI_STACK_MAX (+ margin eval) walau kedalaman diminta besar
+  { setFen("r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1");
+    uint32_t t = hostMs(); uint16_t mm = chsAiChoose(64, 400, 0, 0, 0); uint32_t dt = hostMs() - t;
+    CHECK(mm != 0 && dt < 800, "kedalaman besar harus tetap dibatasi waktu (%u ms)", dt); }
+
   // ================= TinyML: jaringan gaya belajar online =================
   // "user" sintetis dgn kebiasaan jelas; jaringan hanya melihat langkahnya (online, 1 langkah SGD + replay per langkah)
   // dan harus menebak langkah user di posisi BARU yg belum pernah dilihat.
