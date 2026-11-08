@@ -288,6 +288,63 @@ int main() {
     CHECK(!strcmp(s3, "h5f7"), "nyx harus tetap memilih mat, dapat %s", s3);
   }
 
+  // ===== NYX v2: model lawan campuran (Product of Experts, Newton rekursif) =====
+  {
+    // (d) serialisasi: bolak-balik utuh, data rusak ditolak
+    chsStyleReset(); chsMxTh[0] = 0.7f; chsMxTh[1] = 1.3f; chsMxTh[2] = 0.4f; chsMxIg = 0.9f; chsMxN = 77; chsMxA[0] = 5; chsMxA[1] = 0.5f; chsMxA[3] = 4; chsMxA[5] = 3;
+    uint8_t buf[CHS_MX_LEN + 4]; size_t L = chsMxSer(buf);
+    CHECK(L == CHS_MX_LEN, "panjang blob mix %u != %d", (unsigned)L, CHS_MX_LEN);
+    chsMxReset();
+    CHECK(chsMxDeser(buf, L) && fabsf(chsMxTh[0] - 0.7f) < 1e-6f && fabsf(chsMxTh[1] - 1.3f) < 1e-6f && fabsf(chsMxTh[2] - 0.4f) < 1e-6f && fabsf(chsMxIg - 0.9f) < 1e-6f && chsMxN == 77 && fabsf(chsMxA[1] - 0.5f) < 1e-6f, "blob mix tidak utuh setelah bolak-balik");
+    uint8_t bad[CHS_MX_LEN + 4]; memcpy(bad, buf, sizeof(bad)); memset(bad + 4, 0xFF, 4);                      // th0 = NaN
+    CHECK(!chsMxDeser(bad, L), "NaN harus ditolak");
+    memcpy(bad, buf, sizeof(bad)); bad[0] = 9; CHECK(!chsMxDeser(bad, L), "versi asing harus ditolak");
+    CHECK(!chsMxDeser(buf, L - 1), "blob terpotong harus ditolak");
+    chsMxReset(); CHECK(chsMxTh[0] == 1.0f && chsMxTh[1] == 0.0f && chsMxTh[2] == 0.0f && chsMxN == 0, "reset mix");
+  }
+  {
+    // (e) pengamatan: papan utuh, bobot dalam batas; pemain \"selalu langkah taktis terbaik\" (terprediksi) -> perolehan informasi tinggi & gerbang terbuka;
+    //     pemain acak murni -> gerbang tetap kecil (Nyx = minimax murni bila model tidak terbukti menebak lebih baik dari acak)
+    for (int who = 0; who < 2; who++) {
+      srand(21 + who); chsStyleReset(); chsAiHistN = 0; chsAiEnsure(); int bad = 0;
+      for (int g = 0; g < 8; g++) {
+        chsReset();
+        for (int ply = 0; ply < 60; ply++) {
+          uint16_t mv[256]; int n = chsGen(mv), L = 0; uint16_t lg[256];
+          for (int i = 0; i < n; i++) if (chsLegal(mv[i])) lg[L++] = mv[i];
+          if (!L) break;
+          int pick = rand() % L;
+          if (who == 0 && L > 1) {                                                    // taktis: argmax -Q setelah langkah
+            int bq = -999999; chsAiAbort = false; chsAiCheckTime = false;
+            for (int i = 0; i < L; i++) { CHS_SAVE_ST; chsDo(lg[i]); int v = -chsAiQ(-CHS_AI_INF, CHS_AI_INF, 2); CHS_REST_ST; if (v > bq) { bq = v; pick = i; } }
+          }
+          int8_t sb[64]; memcpy(sb, chsBd, 64); bool sw = chsWhite; uint8_t sc = chsCastle; int8_t se = chsEp; uint16_t sh = chsHalf;
+          chsStyleLearn(lg[pick], ply);
+          if (memcmp(sb, chsBd, 64) || sw != chsWhite || sc != chsCastle || se != chsEp || sh != chsHalf) bad++;
+          chsDo(lg[pick]);
+        }
+      }
+      bool inb = chsMxTh[0] >= 0 && chsMxTh[0] <= 3 && chsMxTh[1] >= -1 && chsMxTh[1] <= 4 && chsMxTh[2] >= -1 && chsMxTh[2] <= 3;
+      CHECK(bad == 0, "pengamatan merusak papan (%d)", bad);
+      CHECK(inb, "bobot di luar batas");
+      printf("mix %s: th=(%.2f %.2f %.2f) ig=%.2f N=%u gerbang=%.2f\n", who == 0 ? "taktis " : "acak   ", chsMxTh[0], chsMxTh[1], chsMxTh[2], chsMxIg, (unsigned)chsMxN, chsMxGate());
+      if (who == 0) CHECK(chsMxGate() > 0.5f && chsMxIg > 1.0f, "pemain taktis (terprediksi): gerbang harus terbuka, dapat %.2f (ig %.2f)", chsMxGate(), chsMxIg);
+      if (who == 1) CHECK(chsMxGate() < 0.3f, "pemain acak: gerbang harus kecil, dapat %.2f", chsMxGate());
+    }
+  }
+  {
+    // (f) bonus selalu terbatas dan tidak negatif di semua kandidat (soft-min entropik terjepit M <= F <= E)
+    srand(33); chsStyleReset(); chsAiHistN = 0; chsTrainN = 1000;
+    setFen("r1bqkb1r/pppp1ppp/2n2n2/4p3/2B1P3/5N2/PPPP1PPP/RNBQK2R w KQkq - 4 4");
+    uint16_t mv[256]; int n = chsGen(mv); int cnt = 0; float mx = 0, mn = 1e9f;
+    for (int i = 0; i < n; i++) if (chsLegal(mv[i])) {
+      float b = chsAiTrapBonus(mv[i], 6); cnt++; if (b > mx) mx = b; if (b < mn) mn = b;
+      CHECK(b >= 0 && b < 2000.0f, "bonus di luar batas: %.1f", b);
+    }
+    CHECK(cnt > 10 && mn >= 0, "bonus minimum negatif");
+    printf("nyx v2: bonus pada %d kandidat berkisar %.1f..%.1f (model belum terlatih -> kecil)\n", cnt, mn, mx);
+  }
+
   // papan utuh setelah pencarian
   chsReset(); int8_t sb[64]; memcpy(sb, chsBd, 64); chsAiChoose(5, 800, 0, 0, 0);
   CHECK(!memcmp(sb, chsBd, 64) && chsWhite && chsCastle == 15 && chsEp == -1, "papan berubah setelah pencarian");

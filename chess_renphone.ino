@@ -415,10 +415,31 @@ static uint8_t  chsBkC[CHS_BK_N];
 static int      chsBkN = 0;
 static uint16_t chsBkNext = 0;
 
+// ---- NYX v2: model lawan = Product-of-Experts (regresi logit bersyarat), dilatih online dgn Newton rekursif ----
+// logit(langkah) = th0*skor_gaya + th1*keuntungan_taktis(quiescence) + th2*keserakahan(nilai bidak yg dimakan)
+// th (3 bobot) + A (presisi 3x3 simetris: a00 a01 a02 a11 a12 a22) + ig (perolehan informasi, nat/langkah) disimpan di NVS \"mix\" (44 byte).
+#ifndef CHS_MX_KAPPA
+#define CHS_MX_KAPPA   0.010f                  // aversi risiko (per centipawan) utk soft-min entropik
+#endif
+#ifndef CHS_MX_IG0
+#define CHS_MX_IG0     1.2f                    // perolehan informasi (nat/langkah) yg dianggap \"model sudah layak dipercaya penuh\"
+#endif
+#define CHS_MX_RHO     0.97f                   // faktor lupa presisi (gaya pemain bisa berubah)
+#define CHS_MX_LEN     44
+static const float chsMxTh0[3] = {1.0f, 0.0f, 0.0f};
+static const float chsMxA0[6]  = {2.0f, 0.0f, 0.0f, 1.0f, 0.0f, 1.0f};
+static float    chsMxTh[3] = {1.0f, 0.0f, 0.0f};
+static float    chsMxA[6]  = {2.0f, 0.0f, 0.0f, 1.0f, 0.0f, 1.0f};
+static float    chsMxIg = 0.0f;                // rata-rata bergerak ln(p_model(langkah user)) - ln(1/n)
+static uint16_t chsMxN = 0;
+static bool     chsMxLive = true;              // false = lewati pengamatan (hemat waktu / uji)
+static float*   chsAiQv = nullptr;             // 256 nilai taktis langkah (scratch)
+static float*   chsAiGv = nullptr;             // 256 keserakahan langkah (scratch)
+
 static bool chsAiEnsure() {
   if (chsAiMem) return true;
   size_t szMv = (size_t)CHS_AI_PLY * 256 * 2, szFB = (size_t)256 * CHS_NIN * 4;
-  size_t total = szMv * 2 + 512 + 1024 * 2 + 256 * 2 + szFB + 1024 + (size_t)CHS_AI_HIST * 4 + (size_t)CHS_NP * 4 + (size_t)CHS_RB_N * CHS_RB_SZ + 64;
+  size_t total = szMv * 2 + 512 + 1024 * 2 + 256 * 2 + szFB + 1024 + (size_t)CHS_AI_HIST * 4 + (size_t)CHS_NP * 4 + 2048 + (size_t)CHS_RB_N * CHS_RB_SZ + 64;
   uint8_t* m = (uint8_t*)CHS_AI_ALLOC(total);
   if (!m) m = (uint8_t*)malloc(total);
   if (!m) return false;
@@ -436,6 +457,8 @@ static bool chsAiEnsure() {
   chsAiFS = (float*)p;    p += 1024;
   chsAiHist = (uint32_t*)p; p += (size_t)CHS_AI_HIST * 4;
   chsAiG = (float*)p;     p += (size_t)CHS_NP * 4;
+  chsAiQv = (float*)p;    p += 1024;
+  chsAiGv = (float*)p;    p += 1024;
   chsAiRb = p;
   chsRbN = 0; chsRbPos = 0;
   CHS_AI_AFTER_ALLOC();
@@ -444,7 +467,7 @@ static bool chsAiEnsure() {
 static void chsAiFree() {
   if (chsAiMem) CHS_AI_FREE(chsAiMem);
   chsAiMem = nullptr; chsAiMv = nullptr; chsAiKy = nullptr; chsAiRm = nullptr; chsAiSc = nullptr; chsAiFs = nullptr;
-  chsAiEx = nullptr; chsAiFx = nullptr; chsAiFB = nullptr; chsAiFS = nullptr; chsAiHist = nullptr; chsAiG = nullptr; chsAiRb = nullptr; chsRbN = 0; chsRbPos = 0; chsAiHistN = 0;
+  chsAiEx = nullptr; chsAiFx = nullptr; chsAiFB = nullptr; chsAiFS = nullptr; chsAiHist = nullptr; chsAiG = nullptr; chsAiQv = nullptr; chsAiGv = nullptr; chsAiRb = nullptr; chsRbN = 0; chsRbPos = 0; chsAiHistN = 0;
 }
 
 static inline int chsAbsI(int v) { return v < 0 ? -v : v; }
@@ -747,6 +770,81 @@ static void chsLearnStep(uint16_t played, int ply, float lr) {
 }
 static inline float chsLearnRate() { float lr = 0.15f / (1.0f + (float)chsTrainN / 150.0f); return lr < 0.01f ? 0.01f : lr; }
 
+// ---------------------------------------------------------------- NYX v2: model campuran (Product of Experts)
+static void chsMxReset() { memcpy(chsMxTh, chsMxTh0, sizeof(chsMxTh)); memcpy(chsMxA, chsMxA0, sizeof(chsMxA)); chsMxIg = 0.0f; chsMxN = 0; }
+static inline float chsMxClampQ(int v) { float q = -(float)v / 100.0f; return q < -8.0f ? -8.0f : (q > 8.0f ? 8.0f : q); }
+// keserakahan = nilai bidak yg dimakan (pion = 1, menteri = 9); en passant = 1
+static inline float chsMxGreed(uint16_t m) {
+  int from = m & 63, to = (m >> 6) & 63; int8_t p = chsBd[from], q = chsBd[to];
+  int qt = q > 0 ? q : -q;
+  if (!q && (p == 1 || p == -1) && to == chsEp && (from & 7) != (to & 7)) qt = 1;
+  return qt ? (float)chsAiVal[qt] / 100.0f : 0.0f;
+}
+// selesaikan A x = b (A simetris 3x3, urutan a00 a01 a02 a11 a12 a22) lewat adjugat
+static bool chsMxSolve(const float* a, const float* b, float* x) {
+  float c00 = a[3] * a[5] - a[4] * a[4], c01 = a[2] * a[4] - a[1] * a[5], c02 = a[1] * a[4] - a[3] * a[2];
+  float c11 = a[0] * a[5] - a[2] * a[2], c12 = a[1] * a[2] - a[0] * a[4], c22 = a[0] * a[3] - a[1] * a[1];
+  float det = a[0] * c00 + a[1] * c01 + a[2] * c02;
+  if (!(det > 1e-6f)) return false;
+  x[0] = (c00 * b[0] + c01 * b[1] + c02 * b[2]) / det;
+  x[1] = (c01 * b[0] + c11 * b[1] + c12 * b[2]) / det;
+  x[2] = (c02 * b[0] + c12 * b[1] + c22 * b[2]) / det;
+  return true;
+}
+// Dipanggil SEBELUM langkah user dijalankan. Satu langkah Newton atas log-likelihood (regresi logit bersyarat) pada
+// langkah yg benar-benar dipilih user: gradien = E_p[phi] - phi(dipilih), Hessian = Cov_p(phi). Presisi A menumpuk (dgn lupa),
+// jadi langkah makin kecil seiring bukti. Sekaligus mencatat perolehan informasi (prequential): seberapa lebih baik model
+// menebak langkah user dibanding tebakan acak -> dasar \"gerbang kepercayaan\" Nyx.
+static void chsMxObserve(uint16_t played, int ply) {
+  if (!chsAiQv || !chsAiGv) return;
+  uint16_t pm[256]; int pn = chsGen(pm), n = 0, j = -1;
+  uint16_t* lg = chsAiRm;
+  for (int i = 0; i < pn; i++) if (chsLegal(pm[i])) { lg[n] = pm[i]; if (pm[i] == played) j = n; n++; }
+  if (n < 2 || j < 0) return;                                      // langkah terpaksa tidak mengajarkan apa-apa
+  float ctx[CHS_NC]; chsAiCtx(ctx, n, ply);
+  float* S = chsAiFS; float* Q = chsAiQv; float* G = chsAiGv;
+  uint32_t tEnd = CHS_AI_NOW() + 100;                              // batas waktu: lewati pengamatan bila terlalu lama (gerbang tetap tertutup -> Nyx = minimax)
+  chsAiAbort = false; chsAiCheckTime = false;
+  for (int i = 0; i < n; i++) {
+    if ((int32_t)(CHS_AI_NOW() - tEnd) >= 0) return;
+    S[i] = chsStyleScore(lg[i], ctx); G[i] = chsMxGreed(lg[i]);
+    { CHS_SAVE_ST; chsDo(lg[i]); int v = chsAiQ(-CHS_AI_INF, CHS_AI_INF, 2); CHS_REST_ST; Q[i] = chsMxClampQ(v); }
+  }
+  float L[256], mx = -1e30f;
+  for (int i = 0; i < n; i++) { L[i] = chsMxTh[0] * S[i] + chsMxTh[1] * Q[i] + chsMxTh[2] * G[i]; if (L[i] > mx) mx = L[i]; }
+  float sum = 0; for (int i = 0; i < n; i++) { L[i] = expf(L[i] - mx); sum += L[i]; }
+  float pj = L[j] / sum; if (pj < 1e-6f) pj = 1e-6f;
+  float ig = logf(pj) + logf((float)n);
+  { int k = chsMxN < 12 ? (int)chsMxN + 1 : 12; chsMxIg += (ig - chsMxIg) / (float)k; if (chsMxN < 65535) chsMxN++; }
+  float mu[3] = {0, 0, 0}, e2[6] = {0, 0, 0, 0, 0, 0};
+  for (int i = 0; i < n; i++) {
+    float pi = L[i] / sum, f[3] = {S[i], Q[i], G[i]};
+    for (int a = 0; a < 3; a++) mu[a] += pi * f[a];
+    e2[0] += pi * f[0] * f[0]; e2[1] += pi * f[0] * f[1]; e2[2] += pi * f[0] * f[2];
+    e2[3] += pi * f[1] * f[1]; e2[4] += pi * f[1] * f[2]; e2[5] += pi * f[2] * f[2];
+  }
+  float fj[3] = {S[j], Q[j], G[j]}, grad[3];
+  for (int a = 0; a < 3; a++) grad[a] = mu[a] - fj[a];
+  float H[6] = {e2[0] - mu[0] * mu[0], e2[1] - mu[0] * mu[1], e2[2] - mu[0] * mu[2], e2[3] - mu[1] * mu[1], e2[4] - mu[1] * mu[2], e2[5] - mu[2] * mu[2]};
+  for (int a = 0; a < 6; a++) {
+    float v = CHS_MX_RHO * (chsMxA[a] - chsMxA0[a]) + chsMxA0[a] + H[a];
+    chsMxA[a] = v > 1e4f ? 1e4f : (v < -1e4f ? -1e4f : v);
+  }
+  float rhs[3] = {grad[0] + chsMxA0[0] * (chsMxTh[0] - chsMxTh0[0]), grad[1] + chsMxA0[3] * (chsMxTh[1] - chsMxTh0[1]), grad[2] + chsMxA0[5] * (chsMxTh[2] - chsMxTh0[2])};
+  float d[3];
+  if (chsMxSolve(chsMxA, rhs, d)) {
+    static const float lo[3] = {0.0f, -1.0f, -1.0f}, hi[3] = {3.0f, 4.0f, 3.0f};
+    for (int a = 0; a < 3; a++) { float v = chsMxTh[a] - 0.8f * d[a]; chsMxTh[a] = v < lo[a] ? lo[a] : (v > hi[a] ? hi[a] : v); }
+  }
+  chsStyleDirty = true;
+}
+// gerbang kepercayaan 0..1: perlu data cukup DAN bukti bahwa model memang menebak lebih baik dari acak
+static float chsMxGate() {
+  float a = (float)chsTrainN / 30.0f; if (a > 1.0f) a = 1.0f;
+  float n = (float)chsMxN, b = chsMxIg / CHS_MX_IG0 * (n / (n + 4.0f)); if (b < 0.0f) b = 0.0f; else if (b > 1.0f) b = 1.0f;
+  return a * b;
+}
+
 // Dipanggil SEBELUM langkah user dijalankan (posisi masih sebelum langkah).
 // Selain belajar dari langkah ini, ulang beberapa contoh lama (experience replay) supaya jaringan kecil ini
 // cepat belajar dari sedikit data.
@@ -754,6 +852,7 @@ static void chsStyleLearn(uint16_t played, int ply) {
   if (!chsAiEnsure()) return;
   chsNetEnsure();
   chsBookAdd(chsPosHash(), played);
+  if (chsMxLive) chsMxObserve(played, ply);                     // model campuran: dievaluasi dgn jaringan SEBELUM belajar dari langkah ini
   chsLearnStep(played, ply, chsLearnRate());
   if (chsLastHit >= 0) {                                        // akurasi tebakan: rata-rata bergerak (cepat di awal, lalu ~1/20)
     if (chsAccN < 20) chsAccN++;
@@ -780,7 +879,7 @@ static void chsStyleLearn(uint16_t played, int ply) {
 
 static void chsStyleReset() {
   memset(chsHab, 0, sizeof(chsHab)); chsAcc = 0; chsAccN = 0; chsRbDirty = true;
-  chsNetInit(); chsTrainN = 0; chsBkN = 0; chsBkNext = 0; chsRbN = 0; chsRbPos = 0; chsStyleDirty = true;
+  chsNetInit(); chsMxReset(); chsTrainN = 0; chsBkN = 0; chsBkNext = 0; chsRbN = 0; chsRbPos = 0; chsStyleDirty = true;
 }
 
 // ---- (de)serialisasi utk NVS ----
@@ -849,6 +948,20 @@ static bool chsRbDeser(const uint8_t* b, size_t len) {
   chsRbN = n; chsRbPos = n % CHS_RB_N; chsRbDirty = false;
   return true;
 }
+static size_t chsMxSer(uint8_t* o) {
+  o[0] = 1; o[1] = 0; o[2] = (uint8_t)chsMxN; o[3] = (uint8_t)(chsMxN >> 8);
+  memcpy(o + 4, chsMxTh, 12); memcpy(o + 16, chsMxA, 24); memcpy(o + 40, &chsMxIg, 4);
+  return CHS_MX_LEN;
+}
+static bool chsMxDeser(const uint8_t* b, size_t n) {
+  if (n < CHS_MX_LEN || b[0] != 1) return false;
+  float th[3], a[6], ig; memcpy(th, b + 4, 12); memcpy(a, b + 16, 24); memcpy(&ig, b + 40, 4);
+  for (int i = 0; i < 3; i++) if (!(th[i] > -5.0f && th[i] < 8.0f)) return false;
+  for (int i = 0; i < 6; i++) if (!(a[i] > -1e5f && a[i] < 1e5f)) return false;
+  if (!(a[0] > 0.0f && a[3] > 0.0f && a[5] > 0.0f) || !(ig > -20.0f && ig < 20.0f)) return false;
+  memcpy(chsMxTh, th, 12); memcpy(chsMxA, a, 24); chsMxIg = ig; chsMxN = (uint16_t)(b[2] | (b[3] << 8));
+  return true;
+}
 static size_t chsBookSer(uint8_t* o) {
   o[0] = (uint8_t)chsBkN; o[1] = (uint8_t)(chsBkN >> 8); o[2] = (uint8_t)chsBkNext; o[3] = (uint8_t)(chsBkNext >> 8);
   size_t p = 4;
@@ -879,17 +992,24 @@ static bool chsBookDeser(const uint8_t* b, size_t len) {
   return true;
 }
 
-// ---------------------------------------------------------------- level NYX: jebakan kebiasaan
+// ---------------------------------------------------------------- level NYX v2: jebakan kebiasaan, risiko-sadar
 // Pencarian minimax (di chsAiChoose) sudah menyaring kandidat yang AMAN (dalam margin). Di antara mereka, NYX memilih
-// yang paling "menghukum kebiasaan user":
-//   1. aiMove dijalankan; model gaya memprediksi peluang p_r tiap balasan sah user (softmax skor gaya)
-//   2. tiap balasan dinilai V_r = quiescence dari sisi AI (2-ply + tangkapan)
-//   3. E = sum p_r*V_r (hasil bila user bermain seperti biasanya), M = min V_r (hasil bila user membalas terbaik)
-//   4. keyakinan c = 1 - H(p)/ln(n): model yang ragu (peluang merata) tidak dipercaya
-//   bonus = c * (E - M)  (>= 0, centipawn)
-// Skor akhir kandidat: v = fs + w*GAMMA*min(bonus, CAP), w = min(1, chsTrainN/60) seperti level Cermin.
+// yang paling \"menghukum kebiasaan user\":
+//   1. aiMove dijalankan; tiap balasan sah user r diberi 3 ahli: skor GAYA (jaringan+kebiasaan), keuntungan TAKTIS
+//      (quiescence), keserakahan. Peluang p_r = softmax(th . fitur) -> Product of Experts; th dilatih online (chsMxObserve)
+//   2. V_r = quiescence dari sisi AI setelah balasan r; M = min V_r (user membalas terbaik)
+//   3. F = soft-min entropik: -(1/k) ln sum p_r exp(-k (V_r - M)) + M.  M <= F <= E.  k kecil -> rata-rata (E),
+//      k besar -> terburuk (M). Balasan yg jarang tapi menyakitkan ikut dihitung -> tidak terlalu optimis
+//   4. keyakinan c = 1 - H(p)/ln n (model ragu tidak dipercaya)
+//   bonus = c * (F - M)  (>= 0, centipawan)
+// Skor akhir kandidat: v = fs + w*GAMMA*min(bonus, CAP), w = gerbang perolehan informasi (chsMxGate): 0 bila model tidak
+// menebak lebih baik dari acak -> Nyx = minimax murni; membesar hanya bila terbukti menebak langkah user.
+#ifndef CHS_NYX_GAMMA
 #define CHS_NYX_GAMMA  0.9f
+#endif
+#ifndef CHS_NYX_CAP
 #define CHS_NYX_CAP    150.0f
+#endif
 #define CHS_NYX_TOPK   8
 static float chsAiTrapBonus(uint16_t aiMove, int ply) {
   CHS_SAVE_ST;
@@ -898,21 +1018,27 @@ static float chsAiTrapBonus(uint16_t aiMove, int ply) {
   for (int i = 0; i < rn; i++) if (chsLegal(rep[i])) rep[n++] = rep[i];
   if (n < 2) { CHS_REST_ST; return 0.0f; }                      // tidak ada pilihan balasan -> tidak ada kebiasaan yang bisa dihukum
   float ctx[CHS_NC]; chsAiCtx(ctx, n, ply + 1);
-  float* S = chsAiFS; float mx = -1e30f;
-  for (int r = 0; r < n; r++) { S[r] = chsStyleScore(rep[r], ctx); if (S[r] > mx) mx = S[r]; }
-  float sum = 0;
-  for (int r = 0; r < n; r++) { S[r] = expf(S[r] - mx); sum += S[r]; }
+  float* S = chsAiFS; float* V = chsAiQv; float* G = chsAiGv;
   chsAiAbort = false; chsAiCheckTime = false;
-  float E = 0, H = 0; int M = CHS_AI_INF;
+  float M = 1e30f;
   for (int r = 0; r < n; r++) {
-    float pr = S[r] / sum; int v;
-    { CHS_SAVE_ST; chsDo(rep[r]); v = chsAiQ(-CHS_AI_INF, CHS_AI_INF, 2); CHS_REST_ST; }
-    E += pr * (float)v; if (v < M) M = v;
+    float st = chsStyleScore(rep[r], ctx); G[r] = chsMxGreed(rep[r]);
+    { CHS_SAVE_ST; chsDo(rep[r]); V[r] = (float)chsAiQ(-CHS_AI_INF, CHS_AI_INF, 2); CHS_REST_ST; }
+    if (V[r] < M) M = V[r];
+    S[r] = chsMxTh[0] * st + chsMxTh[1] * chsMxClampQ((int)V[r]) + chsMxTh[2] * G[r];
+  }
+  float mx = -1e30f; for (int r = 0; r < n; r++) if (S[r] > mx) mx = S[r];
+  float sum = 0; for (int r = 0; r < n; r++) { S[r] = expf(S[r] - mx); sum += S[r]; }
+  float H = 0, Z = 0;
+  for (int r = 0; r < n; r++) {
+    float pr = S[r] / sum;
+    Z += pr * expf(-CHS_MX_KAPPA * (V[r] - M));
     if (pr > 1e-6f) H -= pr * logf(pr);
   }
   CHS_REST_ST;
+  float F = M - logf(Z) / CHS_MX_KAPPA;                         // soft-min entropik
   float conf = 1.0f - H / logf((float)n); if (conf < 0) conf = 0; else if (conf > 1) conf = 1;
-  float b = conf * (E - (float)M);
+  float b = conf * (F - M);
   return b < 0 ? 0.0f : b;
 }
 
@@ -973,7 +1099,7 @@ static uint16_t chsAiChoose(int maxDepth, uint32_t budgetMs, int margin, int mod
     for (int i = 0; i < n; i++) if (chsAiFx[i] && chsAiFs[i] == bestSc) { pick = i; break; }
   } else if (mode == 3) {
     // NYX: kandidat aman (dalam margin) + bonus jebakan kebiasaan (lihat chsAiTrapBonus)
-    float sw = (float)chsTrainN / 60.0f; if (sw > 1.0f) sw = 1.0f;
+    float sw = chsMxGate();                                              // gerbang perolehan informasi (0 = minimax murni)
     int idx[CHS_NYX_TOPK], ni = 0;
     for (int i = 0; i < n; i++) if (chsAiFx[i] && chsAiFs[i] >= thr) {   // TOPK kandidat dengan skor tertinggi
       int ps = ni;
@@ -1172,6 +1298,8 @@ static void chsPrefsLoad() {
     if (L >= 4 && L <= CHS_BK_MAXLEN) { p.getBytes("bk", sb, L); chsBookDeser(sb, L); }
     L = p.getBytesLength("hab");
     if (styOk && L == CHS_HAB_LEN) { p.getBytes("hab", sb, L); chsHabDeser(sb, L); }       // kebiasaan petak (baru; perangkat lama: kosong)
+    L = p.getBytesLength("mix");
+    if (styOk && L == CHS_MX_LEN) { p.getBytes("mix", sb, L); chsMxDeser(sb, L); }       // model campuran Nyx v2 (perangkat lama: nilai awal)
     free(sb);
   }
   p.end();
@@ -1191,8 +1319,8 @@ static void chsPrefsSaveCfg() {
   Preferences p;
   if (p.begin("chess", false)) { p.putUChar("lvl", chsAiLevel); p.putUChar("afk", chsAfkIdx); p.end(); }
 }
-// Semua blob dilayani buffer yg sama (sty 1804 | bk <= 900 | hab 900 | rb <= 1604 byte).
-static_assert(CHS_HAB_LEN <= CHS_STY_LEN + CHS_BK_MAXLEN + 16 && CHS_RB_MAXLEN <= CHS_STY_LEN + CHS_BK_MAXLEN + 16, "buffer NVS kurang");
+// Semua blob dilayani buffer yg sama (sty 1804 | bk <= 900 | hab 900 | mix 44 | rb <= 1604 byte).
+static_assert(CHS_HAB_LEN <= CHS_STY_LEN + CHS_BK_MAXLEN + 16 && CHS_MX_LEN <= CHS_STY_LEN + CHS_BK_MAXLEN + 16 && CHS_RB_MAXLEN <= CHS_STY_LEN + CHS_BK_MAXLEN + 16, "buffer NVS kurang");
 // withRb=false = simpan ringan berkala (jaringan + kebiasaan + buku); pengalaman (rb) hanya ditulis saat akhir partai / keluar,
 // supaya flash/NVS tidak ditulis 1,6 KB ekstra tiap 8 langkah.
 static void chsStyleSaveEx(bool withRb) {
@@ -1206,6 +1334,7 @@ static void chsStyleSaveEx(bool withRb) {
       size_t L = chsStyleSer(sb); p.putBytes("sty", sb, L);
       L = chsBookSer(sb); p.putBytes("bk", sb, L);
       L = chsHabSer(sb); p.putBytes("hab", sb, L);
+      L = chsMxSer(sb); p.putBytes("mix", sb, L);
     }
     if (rd) { size_t L = chsRbSer(sb); p.putBytes("rb", sb, L); }
     free(sb);
@@ -1499,7 +1628,7 @@ static void chsCommitEx(uint16_t m, bool learn) {
   char t[8]; chsMoveStr(m, t);
   size_t L = strlen(chsMoves);
   if (L + 8 > CHS_BUF - 40) return;
-  if (learn) { chsStyleLearn(m, (int)chsPly); chsUnsaved++; }       // belajar dari langkah USER sebelum langkah dijalankan
+  if (learn) { chsMxLive = (chsVsAI && chsAiLevel == 4); chsStyleLearn(m, (int)chsPly); chsUnsaved++; }       // belajar dari langkah USER sebelum langkah dijalankan (model lawan Nyx hanya diamati saat level Nyx dipilih: biayanya n x quiescence)
   if (L) chsMoves[L++] = ' ';
   strcpy(chsMoves + L, t);
   int8_t capP = chsBd[(m >> 6) & 63];
