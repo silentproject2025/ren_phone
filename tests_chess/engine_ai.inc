@@ -270,6 +270,79 @@ static int chsCountPlies(const char* mv) {
   }
   return n;
 }
+// ---- Adu mesin vs Gemini: bahan prompt (FEN, daftar langkah sah) + pembaca balasan. Murni (tanpa Arduino), diuji di PC. ----
+// FEN posisi sekarang. ply = jumlah setengah-langkah yg sudah dimainkan (utk nomor langkah penuh). Butuh cap >= 100.
+static int chsFen(char* o, int cap, int ply) {
+  static const char L[] = " pnbrqk";
+  int k = 0;
+  if (cap < 100) { if (cap > 0) o[0] = 0; return 0; }
+  for (int r = 7; r >= 0; r--) {
+    int e = 0;
+    for (int f = 0; f < 8; f++) {
+      int8_t p = chsBd[r * 8 + f];
+      if (!p) { e++; continue; }
+      if (e) { o[k++] = (char)('0' + e); e = 0; }
+      int t = p > 0 ? p : -p;
+      char c = L[t > 6 ? 0 : t];
+      o[k++] = (p > 0) ? (char)(c - 32) : c;
+    }
+    if (e) o[k++] = (char)('0' + e);
+    if (r) o[k++] = '/';
+  }
+  o[k++] = ' '; o[k++] = chsWhite ? 'w' : 'b'; o[k++] = ' ';
+  if (!chsCastle) o[k++] = '-';
+  else {
+    if (chsCastle & CHS_WK) o[k++] = 'K';
+    if (chsCastle & CHS_WQ) o[k++] = 'Q';
+    if (chsCastle & CHS_BK) o[k++] = 'k';
+    if (chsCastle & CHS_BQ) o[k++] = 'q';
+  }
+  o[k++] = ' ';
+  if (chsEp < 0) o[k++] = '-'; else { o[k++] = (char)('a' + (chsEp & 7)); o[k++] = (char)('1' + (chsEp >> 3)); }
+  k += snprintf(o + k, (size_t)(cap - k), " %u %d", (unsigned)chsHalf, ply / 2 + 1);
+  return k;
+}
+
+// semua langkah sah posisi sekarang: "e2e4 d2d4 ..." (UCI). Return jumlah langkah yg muat.
+static int chsLegalList(char* o, int cap) {
+  uint16_t mv[256]; int n = chsGen(mv), k = 0, c = 0;
+  if (cap < 8) { if (cap > 0) o[0] = 0; return 0; }
+  for (int i = 0; i < n; i++) {
+    if (!chsLegal(mv[i])) continue;
+    char t[8]; chsMoveStr(mv[i], t);
+    int L = (int)strlen(t);
+    if (k + L + 2 >= cap) break;
+    if (k) o[k++] = ' ';
+    memcpy(o + k, t, (size_t)L); k += L; c++;
+  }
+  o[k] = 0;
+  return c;
+}
+
+// cari langkah sah pertama di teks balasan Gemini. Menerima "e2e4", "**e2e4**", "e7e8q", "e7e8=Q", dan "e7e8" (promosi tanpa huruf -> vezir).
+// SAN ("Nf3") sengaja tidak ditebak: prompt sudah meminta UCI & memberi daftar langkah sah.
+static bool chsPickFromReply(const char* s, uint16_t* out) {
+  int n = (int)strlen(s);
+  for (int i = 0; i + 4 <= n; i++) {
+    if (i > 0) { char b = s[i - 1]; if ((b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9')) continue; }   // bukan di tengah kata
+    char a[7];
+    for (int j = 0; j < 4; j++) { char c = s[i + j]; a[j] = (c >= 'A' && c <= 'H') ? (char)(c + 32) : c; }
+    if (a[0] < 'a' || a[0] > 'h' || a[1] < '1' || a[1] > '8' || a[2] < 'a' || a[2] > 'h' || a[3] < '1' || a[3] > '8') continue;
+    char pc = 0;
+    if (i + 4 < n) {
+      char c = s[i + 4];
+      if (c == '=' && i + 5 < n) c = s[i + 5];
+      if (c >= 'A' && c <= 'Z') c = (char)(c + 32);
+      if (c == 'q' || c == 'r' || c == 'b' || c == 'n') pc = c;
+    }
+    if (pc) { a[4] = pc; a[5] = 0; if (chsParse(a, 5, out)) return true; }
+    a[4] = 0;
+    if (chsParse(a, 4, out)) return true;
+    a[4] = 'q'; a[5] = 0;
+    if (chsParse(a, 5, out)) return true;
+  }
+  return false;
+}
 // ==== ENGINE END ====
 // ==== AI BEGIN ====
 // Mesin AI + model GAYA PEMAIN yang belajar online. Dipasang di atas mesin aturan (papan global chsBd, dst),
