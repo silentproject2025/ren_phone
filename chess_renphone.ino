@@ -3951,6 +3951,7 @@ void chessEnter() {
 
 static void chsFreeMasks();
 static void chsVwClose();
+static void chsBenchPollIf();
 void chessExit() {
   chsActive = false;        // task melepas koneksi TLS sendiri
   chsConn = 0;
@@ -3966,7 +3967,7 @@ void chessExit() {
 void chessLoopPoll() {
   if (chsDirty) { chsDirty = false; if (curScreen() == SCR_CHESS) needRedraw = true; }
   if (curScreen() == SCR_CHESS && chsPressId >= 0 && millis() - chsPressMs >= CHS_PRESS_MS) { chsPressId = -1; needRedraw = true; }   // efek tekan selesai
-  if (chsBenchState && curScreen() == SCR_CHESS && chsScr == 3) chsBenchPoll();
+  chsBenchPollIf();                                  // NYX-SMP-FIX1: uji NPS bertahap (layar Jaringan)
   if (curScreen() != SCR_CHESS || chsScr != 1 || !chsMoves) return;
   if (chsGem) chsGemPoll(); else if (chsVsAI) chsAiPollVs(); else { chsProcessRx(); chsAfkPoll(); }
   if (chsConfirm && millis() - chsConfirmMs > 3500UL) { chsConfirm = false; needRedraw = true; }
@@ -4749,6 +4750,7 @@ static void chsBenchPoll() {                          // dipanggil chessLoopPoll
   uint32_t a = chsBnTms[0] ? (uint32_t)((uint64_t)chsBnTn[0] * 1000ULL / chsBnTms[0]) : 0, b = chsBnTms[1] ? (uint32_t)((uint64_t)chsBnTn[1] * 1000ULL / chsBnTms[1]) : 0;
   Serial.printf("[NYX-BENCH] percepatan NPS = x%.2f\n", a ? (double)b / (double)a : 0.0);
 }
+static void chsBenchPollIf() { if (chsBenchState && curScreen() == SCR_CHESS && chsScr == 3) chsBenchPoll(); }
 
 static uint8_t chsVw = 0;                 // 0 diagram, 1 peta bobot, 2 petak, 3 NPS
 static bool    chsVwDelta = false;        // true = tampilkan selisih dari bobot awal
