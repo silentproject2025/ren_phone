@@ -45,11 +45,51 @@
 static bool      emjInited = false;
 static uint16_t  emjSdN = 0;                         // >0 = set dari SD aktif
 static uint32_t* emjSdCp = nullptr;                  // kodepoint kanonik per sprite
-static uint16_t* emjSdPx[3] = { nullptr, nullptr, nullptr };
+// NYX-EMJCACHE-V1: sprite TIDAK dimuat semua. File tetap terbuka, sprite dibaca per kebutuhan lalu disimpan di cache LRU (per ukuran).
+#define EMJ_CACHE_N 128                              // sprite per ukuran di cache
+static File      emjFile;                            // /emoji.bin (tetap terbuka selama set SD aktif)
+static uint32_t  emjOff[3] = {0, 0, 0};              // offset awal blok piksel tiap ukuran di file
+static uint16_t* emjCPx[3] = { nullptr, nullptr, nullptr };   // cache piksel: EMJ_CACHE_N * n*n u16 (dialokasi saat ukuran dipakai)
+static uint16_t  emjCKey[3][EMJ_CACHE_N];            // indeks sprite + 1 (0 = slot kosong)
+static uint32_t  emjCUse[3][EMJ_CACHE_N];            // stempel pemakaian terakhir (LRU)
+static uint32_t  emjTick = 0;
+static uint8_t   emjFails = 0;
+static volatile bool emjBusy = false;
 static uint64_t* emjSdKey = nullptr;                 // (cp<<16 | idx) terurut, utk pencarian biner
 
 static inline int  emjCount() { return emjSdN ? (int)emjSdN : (int)EMJ_UNKNOWN; }   // sprite bawaan: 54 (+ kotak "?")
 static inline bool emjIsPuaCp(uint32_t cp) { return (cp >= EMJ_PUA0 && cp < EMJ_PUA0 + (uint32_t)emjCount()) || cp == EMJ_PUA_UNK; }
+
+// EMJ-CACHE BEGIN
+// Piksel sprite idx pada ukuran bi (0..2), atau nullptr bila tak terbaca (-> pemanggil menggambar kotak "?").
+static const uint16_t* emjSprite(int bi, int idx) {
+  if (bi < 0 || bi > 2 || idx < 0 || idx >= (int)emjSdN || emjBusy) return nullptr;
+  int n = emjSizes[bi];
+  size_t px = (size_t)n * n;
+  uint16_t* base = emjCPx[bi];
+  if (!base) {
+    base = (uint16_t*)heap_caps_malloc((size_t)EMJ_CACHE_N * px * 2, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!base) return nullptr;
+    memset(emjCKey[bi], 0, sizeof(emjCKey[bi])); memset(emjCUse[bi], 0, sizeof(emjCUse[bi]));
+    emjCPx[bi] = base;
+  }
+  emjTick++;
+  int victim = 0; uint32_t oldest = 0xFFFFFFFFu;
+  for (int i = 0; i < EMJ_CACHE_N; i++) {
+    if (emjCKey[bi][i] == (uint16_t)(idx + 1)) { emjCUse[bi][i] = emjTick; return base + (size_t)i * px; }
+    if (emjCUse[bi][i] < oldest) { oldest = emjCUse[bi][i]; victim = i; }
+  }
+  if (!emjFile) return nullptr;                      // file sudah ditutup (kartu bermasalah)
+  emjBusy = true;
+  uint16_t* dst = base + (size_t)victim * px;
+  bool ok = emjFile.seek(emjOff[bi] + (uint32_t)idx * (uint32_t)(px * 2)) && emjFile.read((uint8_t*)dst, px * 2) == px * 2;
+  emjBusy = false;
+  if (!ok) { emjCKey[bi][victim] = 0; emjCUse[bi][victim] = 0; if (++emjFails >= 3) emjFile.close(); return nullptr; }
+  emjFails = 0;
+  emjCKey[bi][victim] = (uint16_t)(idx + 1); emjCUse[bi][victim] = emjTick;
+  return dst;
+}
+// EMJ-CACHE END
 
 // ---------------------------------------------------------------------
 // pembungkus font
@@ -84,10 +124,9 @@ struct EmojiFont : public lgfx::IFont {
       if (d < bd || (d == bd && emjSizes[i] > emjSizes[bi])) { bd = d; bi = i; }
     }
     int n = emjSizes[bi];
-    const uint16_t* src;
-    if (idx >= 0 && emjSdN) src = emjSdPx[bi] + (size_t)idx * n * n;
-    else {
-      int k = idx < 0 ? EMJ_UNKNOWN : idx;
+    const uint16_t* src = (idx >= 0 && emjSdN) ? emjSprite(bi, idx) : nullptr;     // set SD: dari cache (dibaca dari SD bila belum ada)
+    if (!src) {
+      int k = (idx < 0 || emjSdN) ? EMJ_UNKNOWN : idx;                           // set SD gagal dibaca -> kotak "?"
       src = (bi == 0) ? emjPx10[k] : (bi == 1 ? emjPx16[k] : emjPx24[k]);
     }
     for (int dy = 0; dy < t; dy++) {
@@ -312,7 +351,7 @@ int emjCells(const char* p, int len) {
 }
 
 // ---------------------------------------------------------------------
-// set emoji dari SD (/emoji.bin) -> PSRAM
+// set emoji dari SD (/emoji.bin): indeks di PSRAM, sprite dibaca per kebutuhan + cache LRU (NYX-EMJCACHE-V1)
 // ---------------------------------------------------------------------
 static int emjCmpKey(const void* a, const void* b) {
   uint64_t x = *(const uint64_t*)a, y = *(const uint64_t*)b;
@@ -328,9 +367,10 @@ static bool emjReadAll(File& f, void* dst, size_t bytes) {
   return true;
 }
 static void emjFreeSd() {
+  if (emjFile) emjFile.close();
   if (emjSdCp) { free(emjSdCp); emjSdCp = nullptr; }
   if (emjSdKey) { free(emjSdKey); emjSdKey = nullptr; }
-  for (int i = 0; i < 3; i++) if (emjSdPx[i]) { free(emjSdPx[i]); emjSdPx[i] = nullptr; }
+  for (int i = 0; i < 3; i++) if (emjCPx[i]) { free(emjCPx[i]); emjCPx[i] = nullptr; }
 }
 // Panggil SEKALI di setup(), sesudah initSD() dan SEBELUM teks apa pun dinormalisasi.
 // Tanpa SD / tanpa file / file rusak / PSRAM kurang: tetap pakai set bawaan (aman).
@@ -352,13 +392,12 @@ void emjInit() {
   uint32_t caps = MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT;
   emjSdCp  = (uint32_t*)heap_caps_malloc((size_t)n * 4, caps);
   emjSdKey = (uint64_t*)heap_caps_malloc((size_t)n * 8, caps);
-  for (int i = 0; i < 3; i++) emjSdPx[i] = (uint16_t*)heap_caps_malloc(szPx[i], caps);
-  bool good = emjSdCp && emjSdKey && emjSdPx[0] && emjSdPx[1] && emjSdPx[2] && emjReadAll(f, emjSdCp, (size_t)n * 4);
-  for (int i = 0; good && i < 3; i++) good = emjReadAll(f, emjSdPx[i], szPx[i]);
-  f.close();
-  if (!good) { emjFreeSd(); return; }                          // set bawaan tetap dipakai
+  bool good = emjSdCp && emjSdKey && emjReadAll(f, emjSdCp, (size_t)n * 4);     // hanya indeks kodepoint; sprite dibaca nanti (cache LRU)
+  if (!good) { f.close(); emjFreeSd(); return; }                                // set bawaan tetap dipakai
+  emjOff[0] = 16 + (uint32_t)n * 4; emjOff[1] = emjOff[0] + (uint32_t)szPx[0]; emjOff[2] = emjOff[1] + (uint32_t)szPx[1];
   for (uint32_t i = 0; i < n; i++) emjSdKey[i] = ((uint64_t)emjSdCp[i] << 16) | i;
   qsort(emjSdKey, n, sizeof(uint64_t), emjCmpKey);
+  emjFile = f;                                                 // tetap terbuka (salinan handle)
   emjSdN = (uint16_t)n;                                        // terakhir: baru sekarang set SD aktif
 }
 
