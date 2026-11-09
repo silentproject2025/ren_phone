@@ -206,6 +206,9 @@ jobs:
           cp remote_renphone.ino build_sketch/
           cp chat_renphone.ino build_sketch/
           cp chess_renphone.ino build_sketch/
+          mkdir -p build_sketch/src
+          sed -n '/==== ENGINE BEGIN ====/,/==== ENGINE END ====/p;/==== AI BEGIN ====/,/==== AI END ====/p' chess_renphone.ino > build_sketch/src/chess_engine.inc
+          cp chess_smp.cpp build_sketch/src/
           cp emoji_renphone.ino build_sketch/
           cp emoji_data.h build_sketch/
           cp kamus_renphone.ino build_sketch/

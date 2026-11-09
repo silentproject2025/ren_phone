@@ -27,6 +27,7 @@
 // =====================================================================
 #include <PubSubClient.h>
 
+// NYX-SMP-V1: core ke-2 (Lazy SMP) + NPS - lihat chess_smp.cpp
 // ==== ENGINE BEGIN ====
 // Mesin aturan catur murni (tanpa Arduino/LovyanGFX) -- diuji perft di PC.
 // Petak: sq = rank*8 + file (a1 = 0, h1 = 7, a8 = 56). Bidak: +1..+6 putih, -1..-6 hitam
@@ -378,6 +379,16 @@ static bool chsPickFromReply(const char* s, uint16_t* out) {
 // (di luar blok AI supaya blok AI tetap bisa diuji di PC tanpa Arduino).
 static void chsRbLoadNvs();
 #define CHS_AI_AFTER_ALLOC() chsRbLoadNvs()
+// core ke-2 (Lazy SMP, lihat chess_smp.cpp): hook laporan NPS + henti-pembantu. Definisi chsAiReport ada di bagian UI di bawah.
+// -DCHS_SMP=0 = satu core persis seperti sebelumnya (chess_smp.cpp tetap ikut di-link, tak dipakai).
+#ifndef CHS_SMP
+#define CHS_SMP 1
+#endif
+static void chsAiReport(int d, uint32_t nm, uint32_t nh, uint32_t ms, int cores);
+#define CHS_AI_REPORT(d, nm, nh, ms, cores) chsAiReport((d), (nm), (nh), (ms), (cores))
+#if CHS_SMP
+#define CHS_AI_BEFORE_FREE() chsSmpShutdown()
+#endif
 
 // ==== AI BEGIN ====
 // Mesin AI + model GAYA PEMAIN yang belajar online. Dipasang di atas mesin aturan (papan global chsBd, dst),
@@ -433,6 +444,43 @@ static void chsRbLoadNvs();
 #define CHS_BK_N      128
 #ifndef CHS_TT_BITS
 #define CHS_TT_BITS   17                       // 2^17 entri x 12 byte = 1,5 MB (PSRAM, +768 KB: TT kini dipertahankan antar-langkah utk Nyx); 0 = tanpa tabel transposisi
+#endif
+
+// ---- NYX SMP: core ke-2 (Lazy SMP) ----------------------------------------------------------------------------------------------
+// Kode ber-tanda CHS_SMP hanya aktif bila CHS_SMP=1 (.ino & chess_smp.cpp menetapkan 1; PC harness lama = 0 -> perilaku persis seperti dulu).
+// Tiap core punya SALINAN mesin sendiri: chess_smp.cpp meng-include blok ENGINE+AI ini sekali lagi di translation unit terpisah, jadi semua
+// variabel static (papan, killer, history, tumpukan langkah) terpisah. Yang DIBAGI hanya tabel transposisi (TT) + beberapa kata kendali.
+// Task pembantu mencari posisi akar yg sama pada kedalaman utama+1 dan mengisi TT; pencarian utama memakai hasilnya (pemangkasan lebih awal).
+// Entri TT dibaca/ditulis sbg 3 kata 32 bit dgn kunci = hash ^ kata1 ^ kata2 (XOR lockless): entri "sobek" karena dua core menulis
+// bersamaan terdeteksi & dianggap meleset -- tanpa mutex, tanpa menunggu.
+#ifndef CHS_SMP
+#define CHS_SMP 0
+#endif
+#ifndef CHS_SMP_HELPER
+#define CHS_SMP_HELPER 0
+#endif
+#ifndef CHS_SMP_MIN_MS
+#define CHS_SMP_MIN_MS    400                  // core ke-2 hanya dipakai bila anggaran waktu >= ini (pondering 50/150 ms & level cepat tak perlu)
+#endif
+#ifndef CHS_SMP_MIN_DEPTH
+#define CHS_SMP_MIN_DEPTH 5                    // ... dan kedalaman maksimum >= ini (level berbatas kedalaman rendah selesai cepat tanpa bantuan)
+#endif
+#ifndef CHS_AI_REPORT
+#define CHS_AI_REPORT(d, nm, nh, ms, cores)    // hook laporan NPS (diisi .ino)
+#endif
+#ifndef CHS_AI_BEFORE_FREE
+#define CHS_AI_BEFORE_FREE()                   // hook: dipanggil sebelum memori kerja AI dibebaskan (hentikan task pembantu)
+#endif
+#ifndef CHS_AI_EXTRA_STOP
+#define CHS_AI_EXTRA_STOP() 0                  // hook: true = hentikan pencarian (dipakai task pembantu)
+#endif
+#if CHS_SMP
+bool     chsSmpBegin(const int8_t* bd, int white, int castle, int ep, int half, int age, int trust, uint32_t deadline, int maxDepth, void* tt, uint32_t ttMask);
+void     chsSmpEnd();
+uint32_t chsSmpNodes();
+void     chsSmpShutdown();
+extern volatile int chsSmpMainDepthV;
+static bool chsSmpOn = true;                   // saklar runtime (disimpan di NVS oleh .ino)
 #endif
 
 static const int16_t chsAiVal[7] = {0, 100, 320, 330, 500, 900, 0};
@@ -562,6 +610,7 @@ static bool chsAiEnsure() {
 }
 static void chsNnFree();
 static void chsAiFree() {
+  CHS_AI_BEFORE_FREE();
   chsNnFree();
   if (chsAiMem) CHS_AI_FREE(chsAiMem);
   if (chsAiTT) CHS_AI_FREE(chsAiTT);
@@ -2032,7 +2081,10 @@ static inline bool chsAiStackLow() {           // stack tumbuh turun di Xtensa m
   return (chsAiSp0 > a ? chsAiSp0 - a : a - chsAiSp0) > (uintptr_t)CHS_AI_STACK_MAX;
 }
 static inline bool chsAiTimeUp() {
-  if (chsAiCheckTime && (chsAiNodes & 255u) == 0 && (int32_t)(CHS_AI_NOW() - chsAiDeadline) >= 0) chsAiAbort = true;
+  if ((chsAiNodes & 255u) == 0) {
+    if (chsAiCheckTime && (int32_t)(CHS_AI_NOW() - chsAiDeadline) >= 0) chsAiAbort = true;
+    if (CHS_AI_EXTRA_STOP()) chsAiAbort = true;
+  }
   return chsAiAbort;
 }
 
@@ -2214,13 +2266,20 @@ static int chsAiNeg(int depth, int alpha, int beta, int ply, bool nullOk) {
   int alpha0 = alpha; uint16_t ttm = 0;
   bool pvn = (beta - alpha) > 1;
   ChsTT* te = chsAiTT ? &chsAiTT[(uint32_t)hk & chsAiTTMask] : nullptr;
-  if (te && te->k == hk32) {
-    ttm = te->m;                                                   // langkah TT dipakai utk urutan dari entri umur berapa pun
-    if ((te->a == chsAiAge || chsXTrust) && te->d >= depth) {                     // skor hanya dipercaya dari pencarian ini: skor lama bergantung riwayat (remis ulang, 50 langkah)
-      int s = chsAiFromTT(te->s, ply);
-      if (te->f == 0) return s;
-      if (te->f == 1 && s >= beta) return s;
-      if (te->f == 2 && s <= alpha) return s;
+  uint32_t tw1 = 0, tw2 = 0; bool tthit = false;
+  if (te) {                                                        // entri dibaca sbg 3 kata; kunci tersimpan = hash ^ kata1 ^ kata2 -> entri sobek (ditulis core lain di tengah baca) = meleset
+    const volatile uint32_t* tp = (const volatile uint32_t*)te;
+    uint32_t tw0 = tp[0]; tw1 = tp[1]; tw2 = tp[2];
+    tthit = ((tw0 ^ tw1 ^ tw2) == hk32);
+  }
+  if (tthit) {
+    ttm = (uint16_t)(tw1 >> 16);                                   // langkah TT dipakai utk urutan dari entri umur berapa pun
+    if ((((tw2 >> 16) & 255u) == (uint32_t)chsAiAge || chsXTrust) && (int)(int8_t)(tw2 & 255u) >= depth) {      // skor hanya dipercaya dari pencarian ini: skor lama bergantung riwayat (remis ulang, 50 langkah)
+      int s = chsAiFromTT((int)(int16_t)(tw1 & 0xFFFFu), ply);
+      uint32_t tf = (tw2 >> 8) & 255u;
+      if (tf == 0) return s;
+      if (tf == 1 && s >= beta) return s;
+      if (tf == 2 && s <= alpha) return s;
     }
   }
   int stand = 0; bool improving = false;
@@ -2244,7 +2303,7 @@ static int chsAiNeg(int depth, int alpha, int beta, int ply, bool nullOk) {
   if (!ttm && depth >= 5 && te) {                                  // tak ada langkah TT: pencarian dangkal utk mendapatkannya
     chsAiNeg(depth - 2, alpha, beta, ply, false);
     if (chsAiAbort) return 0;
-    if (te->k == hk32) ttm = te->m;
+    if (te) { const volatile uint32_t* tp = (const volatile uint32_t*)te; uint32_t u0 = tp[0], u1 = tp[1], u2 = tp[2]; if ((u0 ^ u1 ^ u2) == hk32) ttm = (uint16_t)(u1 >> 16); }
   }
 #endif
   uint16_t* mv = chsAiMv + ply * 256; int16_t* ky = chsAiKy + ply * 256;
@@ -2326,9 +2385,15 @@ static int chsAiNeg(int depth, int alpha, int beta, int ply, bool nullOk) {
   }
   if (!legal) return inchk ? -CHS_AI_MATE + ply : 0;
   if (te) {
-    if (te->k != hk32 || te->a != chsAiAge || depth >= te->d) {
-      te->k = hk32; te->s = (int16_t)chsAiToTT(best, ply); te->m = bestm; te->d = (int8_t)depth; te->a = chsAiAge;
-      te->f = best <= alpha0 ? 2 : (best >= beta ? 1 : 0);
+    const volatile uint32_t* tp = (const volatile uint32_t*)te;
+    uint32_t o0 = tp[0], o1 = tp[1], o2 = tp[2];
+    bool same = ((o0 ^ o1 ^ o2) == hk32);
+    if (!same || ((o2 >> 16) & 255u) != (uint32_t)chsAiAge || depth >= (int)(int8_t)(o2 & 255u)) {
+      uint32_t n1 = (uint32_t)(uint16_t)(int16_t)chsAiToTT(best, ply) | ((uint32_t)bestm << 16);
+      uint32_t nf = best <= alpha0 ? 2u : (best >= beta ? 1u : 0u);
+      uint32_t n2 = (uint32_t)(uint8_t)(int8_t)depth | (nf << 8) | ((uint32_t)chsAiAge << 16);
+      volatile uint32_t* tq = (volatile uint32_t*)te;              // urutan: data dulu, kunci (ter-XOR) terakhir
+      tq[1] = n1; tq[2] = n2; tq[0] = hk32 ^ n1 ^ n2;
     }
   }
   return best;
@@ -2794,6 +2859,50 @@ static float chsAiTrapBonus(uint16_t aiMove, int ply) {
   return b < 0 ? 0.0f : b;
 }
 
+// kosongkan TT (benchmark NPS memulai tiap uji dari nol; juga membuang sisa partai lama). Hanya dipanggil saat tak ada pencarian berjalan.
+static void chsAiTTClear() { if (chsAiTT) memset(chsAiTT, 0, ((size_t)chsAiTTMask + 1) * sizeof(ChsTT)); }
+
+#if CHS_SMP
+// Pencarian task pembantu (berjalan di chess_smp.cpp, pada SALINAN mesin milik pembantu). Hasilnya tak dipakai langsung: tujuannya mengisi TT bersama.
+// Kedalaman = kedalaman iterasi pemain utama + 1 (hasil lebih dalam di TT memangkas iterasi utama berikutnya); selesai satu kedalaman -> lanjut yg lebih dalam.
+static void chsAiHelperRun(int maxDepth, uint32_t deadline) {
+  if (!chsAiEnsure()) return;
+  uint16_t pm[256]; int pn = chsGen(pm), n = 0;
+  for (int i = 0; i < pn; i++) if (chsLegal(pm[i])) chsAiRm[n++] = pm[i];
+  if (n <= 1) return;
+  if (maxDepth > CHS_AI_MAXD) maxDepth = CHS_AI_MAXD;
+  for (int i = 0; i < n; i++) chsAiKy[i] = (int16_t)chsAiKey(chsAiRm[i]);
+  for (int i = 0; i < n; i++) chsAiPick(chsAiRm, chsAiKy, n, i);
+  { char c0; chsAiSp0 = (uintptr_t)&c0; }
+  chsAiDeadline = deadline; chsAiNodes = 0; chsAiCheckTime = true; chsAiAbort = false;
+  memset(chsAiKil, 0, sizeof(chsAiKil)); if (chsAiHis) memset(chsAiHis, 0, 2 * 4096 * 2);
+  if (chsAiPath) chsAiPath[0] = (uint32_t)chsAiH64();
+  if (!chsAiLmrOk) chsAiLmrInit();
+  memset(chsAiStAt, 0, sizeof(chsAiStAt));
+  int hd = 1;                                                      // kedalaman terakhir yg SELESAI
+  while (!chsAiAbort && hd < maxDepth) {
+    int d = chsSmpMainDepthV + 1; if (d <= hd) d = hd + 1; if (d < 2) d = 2; if (d > maxDepth) d = maxDepth;
+    int curBest = -CHS_AI_INF, bestIdx = -1; bool done = true;
+    for (int i = 0; i < n; i++) {
+      CHS_SAVE_ST;
+      chsDo(chsAiRm[i]);
+      int s;
+      if (bestIdx >= 0) {
+        s = -chsAiNeg(d - 1, -curBest - 1, -curBest, 1, true);
+        if (!chsAiAbort && s > curBest) s = -chsAiNeg(d - 1, -CHS_AI_INF, -curBest, 1, true);
+      } else s = -chsAiNeg(d - 1, -CHS_AI_INF, CHS_AI_INF, 1, true);
+      CHS_REST_ST;
+      if (chsAiAbort) { done = false; break; }
+      if (bestIdx < 0 || s > curBest) { curBest = s; bestIdx = i; }
+    }
+    if (!done) break;
+    hd = d;
+    if (bestIdx > 0) { uint16_t tm = chsAiRm[bestIdx]; for (int i = bestIdx; i > 0; i--) chsAiRm[i] = chsAiRm[i - 1]; chsAiRm[0] = tm; }   // langkah terbaik ke depan utk iterasi berikut
+    if (curBest >= CHS_AI_MATE - 100 || curBest <= -CHS_AI_MATE + 100) break;
+  }
+}
+#endif
+
 // ---------------------------------------------------------------- pemilih langkah
 // maxDepth/budgetMs = batas pencarian. margin = selisih skor (centipawn) dari langkah terbaik yg masih dianggap "layak".
 // mode 0 = terbaik | 1 = acak di antara yg layak | 2 = paling cocok dgn GAYA user di antara yg layak |
@@ -2822,8 +2931,16 @@ static uint16_t chsAiChoose(int maxDepth, uint32_t budgetMs, int margin, int mod
   if (chsNnForce == 1 || (chsNnForce < 0 && CHS_NN_NYX && mode == 3)) chsNnOn = chsNnEnsure();
   if (chsNnOn) { chsNnRefresh(0); chsNnVal[0] = 1; }
 #endif
+  int smpCores = 1; uint32_t smpNodesH = 0;
+#if CHS_SMP
+  if (chsSmpOn && !chsNnOn && chsAiTT && budgetMs >= CHS_SMP_MIN_MS && maxDepth >= CHS_SMP_MIN_DEPTH)      // core ke-2 (Lazy SMP): hanya pencarian panjang; NN utama aktif -> evaluasi beda -> 1 core
+    if (chsSmpBegin(chsBd, chsWhite ? 1 : 0, chsCastle, chsEp, chsHalf, chsAiAge, chsXTrust, chsAiDeadline, maxDepth, chsAiTT, chsAiTTMask)) smpCores = 2;
+#endif
   int dDone = 0, mg = margin > 0 ? 0 : margin;        // pencarian utama di akar SELALU PVS jendela-nol (mg = 0); kandidat dalam margin diverifikasi sesudahnya
   for (int d = 1; d <= maxDepth; d++) {
+#if CHS_SMP
+    chsSmpMainDepthV = d;                                                     // pembantu mencari 1 kedalaman di depan iterasi ini
+#endif
     chsAiCheckTime = (d > 1); chsAiAbort = false;
     int curBest = -CHS_AI_INF; bool done = true; int bestIdx = -1;
     for (int i = 0; i < n; i++) {
@@ -2863,6 +2980,9 @@ static uint16_t chsAiChoose(int maxDepth, uint32_t budgetMs, int margin, int mod
     if (curBest >= CHS_AI_MATE - 100 && mg == 0) break;                        // mat sudah ketemu
     if (d < maxDepth && (CHS_AI_NOW() - t0) * CHS_X_TFRAC > budgetMs) break;   // iterasi berikut hampir pasti tidak selesai
   }
+#if CHS_SMP
+  if (smpCores == 2) { chsSmpEnd(); smpNodesH = chsSmpNodes(); }               // pencarian utama selesai (waktu/kedalaman/mat): hentikan pembantu, ambil jumlah node-nya
+#endif
   if (margin > 0 && dDone >= 2) {                                              // verifikasi kandidat: langkah yg skornya masih mungkin >= terbaik - margin (tes jendela-nol)
     int bs = -CHS_AI_INF; for (int i = 0; i < n; i++) if (chsAiFx[i] && chsAiFs[i] > bs) bs = chsAiFs[i];
     if (bs > -CHS_AI_INF && bs < CHS_AI_MATE - 1000) {
@@ -2878,6 +2998,7 @@ static uint16_t chsAiChoose(int maxDepth, uint32_t budgetMs, int margin, int mod
       chsAiAbort = false;
     }
   }
+  CHS_AI_REPORT(dDone, chsAiNodes, smpNodesH, CHS_AI_NOW() - t0, smpCores);   // NPS: node (utama + pembantu) / waktu pencarian
   // hindari mengulang posisi saat AI sudah unggul (aturan 3 kali ulang belum ada di mesin ini)
   if (chsAiHistN > 1) {
     for (int i = 0; i < n; i++) if (chsAiFx[i] && chsAiFs[i] > 150) {
@@ -3086,6 +3207,9 @@ static void chsPrefsLoad() {
   if (!p.begin("chess", true)) return;
   uint8_t lv = p.getUChar("lvl", 1); if (lv < 5) chsAiLevel = lv;
   uint8_t af = p.getUChar("afk", 2); if (af < 4) chsAfkIdx = af;
+#if CHS_SMP
+  chsSmpOn = p.getUChar("smp", 1) != 0;
+#endif
   uint8_t* sb = (uint8_t*)malloc(CHS_STY_LEN + CHS_BK_MAXLEN + 16);          // heap, bukan stack (task loop cuma 8 KB)
   if (sb) {
     size_t L = p.getBytesLength("sty");
@@ -3114,7 +3238,11 @@ static void chsRbLoadNvs() {
 }
 static void chsPrefsSaveCfg() {
   Preferences p;
-  if (p.begin("chess", false)) { p.putUChar("lvl", chsAiLevel); p.putUChar("afk", chsAfkIdx); p.end(); }
+  if (p.begin("chess", false)) { p.putUChar("lvl", chsAiLevel); p.putUChar("afk", chsAfkIdx);
+#if CHS_SMP
+  p.putUChar("smp", chsSmpOn ? 1 : 0);
+#endif
+  p.end(); }
 }
 // Semua blob dilayani buffer yg sama (sty 1804 | bk <= 900 | hab 900 | mix 44 | rb <= 1604 byte).
 static_assert(CHS_HAB_LEN <= CHS_STY_LEN + CHS_BK_MAXLEN + 16 && CHS_MX_LEN <= CHS_STY_LEN + CHS_BK_MAXLEN + 16 && CHS_RB_MAXLEN <= CHS_STY_LEN + CHS_BK_MAXLEN + 16, "buffer NVS kurang");
@@ -3838,6 +3966,7 @@ void chessExit() {
 void chessLoopPoll() {
   if (chsDirty) { chsDirty = false; if (curScreen() == SCR_CHESS) needRedraw = true; }
   if (curScreen() == SCR_CHESS && chsPressId >= 0 && millis() - chsPressMs >= CHS_PRESS_MS) { chsPressId = -1; needRedraw = true; }   // efek tekan selesai
+  if (chsBenchState && curScreen() == SCR_CHESS && chsScr == 3) chsBenchPoll();
   if (curScreen() != SCR_CHESS || chsScr != 1 || !chsMoves) return;
   if (chsGem) chsGemPoll(); else if (chsVsAI) chsAiPollVs(); else { chsProcessRx(); chsAfkPoll(); }
   if (chsConfirm && millis() - chsConfirmMs > 3500UL) { chsConfirm = false; needRedraw = true; }
@@ -4553,7 +4682,75 @@ static void chsDrawGame(LGFX_Sprite& s) {
 //   Tab: Jaringan (diagram) | Bobot (peta W1 16x26) | Petak (7 papan 8x8). Chip "Selisih" = beda dari bobot awal.
 //   Bobot awal (utk selisih) dihitung ulang di PSRAM hanya selama layar ini dibuka.
 // =====================================================================
-static uint8_t chsVw = 0;                 // 0 diagram, 1 peta bobot, 2 petak
+// =====================================================================
+// NPS + UJI KECEPATAN (core ke-2). chsAiReport dipanggil chsAiChoose tiap selesai mencari: cetak ke Serial dan simpan utk tab "NPS" di layar Jaringan.
+// Uji NPS = 3 posisi tetap x CHS_BENCH_MS, sekali dgn 1 core lalu sekali dgn 2 core (TT dikosongkan tiap posisi); berjalan bertahap di chessLoopPoll.
+// =====================================================================
+#define CHS_BENCH_MS 1000
+static uint32_t chsStNm = 0, chsStNh = 0, chsStMs = 0;
+static int      chsStD = 0, chsStCores = 1;
+static void chsAiReport(int d, uint32_t nm, uint32_t nh, uint32_t ms, int cores) {
+  chsStD = d; chsStNm = nm; chsStNh = nh; chsStMs = ms; chsStCores = cores;
+  uint32_t nps = ms ? (uint32_t)(((uint64_t)nm + nh) * 1000ULL / ms) : 0;
+  Serial.printf("[NYX-NPS] d=%d  node=%lu+%lu  %lu ms  NPS=%lu  core=%d\n", d, (unsigned long)nm, (unsigned long)nh, (unsigned long)ms, (unsigned long)nps, cores);
+}
+static uint8_t       chsBenchState = 0;               // 0 diam | 1 uji 1 core (menunggu 1 frame) | 2 uji 2 core
+static unsigned long chsBenchReqMs = 0;
+static bool          chsBnOk = false, chsBnTwo = false;
+static uint32_t      chsBnTn[2] = {0, 0}, chsBnTms[2] = {0, 0};
+static int           chsBnDs[2] = {0, 0};
+static const char* const chsBenchFen[3] = {
+  "r1bqkb1r/pppp1ppp/2n2n2/4p3/2B1P3/5N2/PPPP1PPP/RNBQK2R w KQkq - 4 4",
+  "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1",
+  "8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - 0 1" };
+static void chsBenchSetFen(const char* fen) {
+  memset(chsBd, 0, 64); int r = 7, f = 0; const char* p = fen;
+  for (; *p && *p != ' '; p++) {
+    if (*p == '/') { r--; f = 0; } else if (*p >= '1' && *p <= '8') f += *p - '0';
+    else { const char* k = "pnbrqk"; char lc = (char)(*p | 32); int t = (int)(strchr(k, lc) - k) + 1; chsBd[r * 8 + f] = (*p >= 'a') ? -t : t; f++; }
+  }
+  if (*p) p++;
+  chsWhite = (*p == 'w'); if (*p) p++; if (*p) p++;
+  chsCastle = 0; for (; *p && *p != ' '; p++) { if (*p == 'K') chsCastle |= CHS_WK; if (*p == 'Q') chsCastle |= CHS_WQ; if (*p == 'k') chsCastle |= CHS_BK; if (*p == 'q') chsCastle |= CHS_BQ; }
+  chsEp = -1; chsHalf = 0;
+}
+static void chsBenchMode(int m) {                     // satu mode (m=0: 1 core, m=1: 2 core) pada 3 posisi
+  if (!chsAiEnsure()) return;
+  uiBoostKick();
+  CHS_SAVE_ST;
+  int svHist = chsAiHistN; chsAiHistN = 0;
+#if CHS_SMP
+  bool svOn = chsSmpOn; chsSmpOn = (m == 1);
+#endif
+  uint32_t tn = 0, tms = 0; int ds = 0;
+  for (int i = 0; i < 3; i++) {
+    chsBenchSetFen(chsBenchFen[i]);
+    chsAiTTClear();
+    chsStNm = 0; chsStNh = 0; chsStMs = 0; chsStD = 0; chsStCores = 1;
+    chsAiChoose(14, CHS_BENCH_MS, 0, 0, 0);
+    tn += chsStNm + chsStNh; tms += chsStMs; ds += chsStD;
+    if (m == 1 && chsStCores == 2) chsBnTwo = true;
+  }
+  chsAiTTClear();
+#if CHS_SMP
+  chsSmpOn = svOn;
+#endif
+  chsAiHistN = svHist;
+  CHS_REST_ST;
+  chsBnTn[m] = tn; chsBnTms[m] = tms; chsBnDs[m] = ds;
+  Serial.printf("[NYX-BENCH] %s: node=%lu  %lu ms  NPS=%lu  depth rata2=%.1f\n", m ? "2 core" : "1 core", (unsigned long)tn, (unsigned long)tms,
+                (unsigned long)(tms ? (uint64_t)tn * 1000ULL / tms : 0), (double)ds / 3.0);
+}
+static void chsBenchPoll() {                          // dipanggil chessLoopPoll saat layar Jaringan terbuka
+  if (!chsBenchState) return;
+  if ((unsigned long)(millis() - chsBenchReqMs) < 250UL) return;       // beri 1 frame utk menggambar "Menguji..."
+  if (chsBenchState == 1) { chsBnTwo = false; chsBenchMode(0); chsBenchState = 2; chsBenchReqMs = millis(); needRedraw = true; return; }
+  chsBenchMode(1); chsBenchState = 0; chsBnOk = true; needRedraw = true;
+  uint32_t a = chsBnTms[0] ? (uint32_t)((uint64_t)chsBnTn[0] * 1000ULL / chsBnTms[0]) : 0, b = chsBnTms[1] ? (uint32_t)((uint64_t)chsBnTn[1] * 1000ULL / chsBnTms[1]) : 0;
+  Serial.printf("[NYX-BENCH] percepatan NPS = x%.2f\n", a ? (double)b / (double)a : 0.0);
+}
+
+static uint8_t chsVw = 0;                 // 0 diagram, 1 peta bobot, 2 petak, 3 NPS
 static bool    chsVwDelta = false;        // true = tampilkan selisih dari bobot awal
 static int8_t  chsVwSel = -1;             // neuron tersembunyi terpilih (tab 0)
 static int16_t chsVwCell = -1;            // sel / petak terpilih (tab 1, 2)
@@ -4566,7 +4763,7 @@ static const char* const chsFeatName[CHS_NIN] = {
   "fase", "materi", "diskak", "no.langkah", "mobilitas", "ada menteri" };
 static const char* const chsPcName[7] = { "Pion", "Kuda", "Gajah", "Benteng", "Menteri", "Raja", "Asal" };
 
-static void chsVwClose() { if (chsVwInit) { CHS_AI_FREE(chsVwInit); chsVwInit = nullptr; } }
+static void chsVwClose() { chsBenchState = 0; if (chsVwInit) { CHS_AI_FREE(chsVwInit); chsVwInit = nullptr; } }
 static void chsVwOpen() {
   chsNetEnsure();
   if (!chsVwInit) chsVwInit = (float*)CHS_AI_ALLOC(CHS_NP * sizeof(float));
@@ -4588,10 +4785,10 @@ static void chsVwGeom() {
   ChsVwG& g = chsg; g.ax = 4; g.ay = STATUS_H + 3; g.aw = SCR_W - 8; g.ah = backY() - 4 - g.ay;
   g.bx = g.ax; g.by = g.ay + 22; g.bw = g.aw; g.fy = g.ay + g.ah - 20; g.bh = g.fy - 2 - g.by;
 }
-static void chsVwTabRect(int i, int* x, int* y, int* w, int* h) {     // i 0..2 = tab, 3 = chip Selisih
-  chsVwGeom(); const ChsVwG& g = chsg; int chip = 54, gap = 4; int tw = (g.aw - chip - 4 * gap) / 3;
+static void chsVwTabRect(int i, int* x, int* y, int* w, int* h) {     // i 0..3 = tab (Jaringan, Bobot, Petak, NPS), 4 = chip Selisih
+  chsVwGeom(); const ChsVwG& g = chsg; int chip = 54, gap = 4; int tw = (g.aw - chip - 5 * gap) / 4;
   *y = g.ay; *h = 18;
-  if (i < 3) { *x = g.ax + i * (tw + gap); *w = tw; } else { *x = g.ax + g.aw - chip; *w = chip; }
+  if (i < 4) { *x = g.ax + i * (tw + gap); *w = tw; } else { *x = g.ax + g.aw - chip; *w = chip; }
 }
 
 // --- tab 0: diagram ---
@@ -4701,18 +4898,96 @@ static void chsVwDrawBd(LGFX_Sprite& s) {
   }
 }
 
+// --- tab 3: NPS (kecepatan mesin: 1 core vs 2 core) ---
+static void chsFmtK(char* o, size_t n, uint32_t v) {
+  if (v >= 10000) snprintf(o, n, "%u.%uk", (unsigned)(v / 1000), (unsigned)((v % 1000) / 100));
+  else if (v >= 1000) snprintf(o, n, "%u.%02uk", (unsigned)(v / 1000), (unsigned)((v % 1000) / 10));
+  else snprintf(o, n, "%u", (unsigned)v);
+}
+static void chsVwNpsBtn(int i, int* x, int* y, int* w, int* h) {     // 0 = Uji NPS, 1 = saklar core ke-2
+  chsVwGeom(); const ChsVwG& g = chsg; int gap = 6; int bw = (g.aw - gap) / 2;
+  *y = g.fy - 26; *h = 22; *w = bw; *x = g.ax + (i ? bw + gap : 0);
+}
+static void chsVwDrawNps(LGFX_Sprite& s) {
+  chsVwGeom(); const ChsVwG& g = chsg;
+  char b[96], ln[96], k1[16], k2[16], k3[16];
+  int x = g.ax + 4, y = g.by + 4, mc = g.aw / 6 - 1;
+  bool two = false;
+#if CHS_SMP
+  two = chsSmpOn;
+#endif
+  snprintf(b, sizeof(b), "Mesin: %s", two ? "2 core (Lazy SMP)" : "1 core");
+  s.setTextColor(two ? (uint16_t)T().accent : (uint16_t)T().subtext); s.setCursor(x, y); chsClip(b, ln, mc); s.print(ln); y += 12;
+  if (chsStMs) {
+    uint32_t nps = (uint32_t)(((uint64_t)chsStNm + chsStNh) * 1000ULL / chsStMs);
+    chsFmtK(k1, sizeof(k1), nps);
+    snprintf(b, sizeof(b), "Terakhir: d%d  %u ms  NPS %s", chsStD, (unsigned)chsStMs, k1);
+    s.setTextColor(T().text); s.setCursor(x, y); chsClip(b, ln, mc); s.print(ln); y += 10;
+    chsFmtK(k1, sizeof(k1), chsStNm); chsFmtK(k2, sizeof(k2), chsStNh);
+    if (chsStCores == 2) snprintf(b, sizeof(b), "node %s utama + %s core 2", k1, k2); else snprintf(b, sizeof(b), "node %s (1 core)", k1);
+    s.setTextColor(T().subtext); s.setCursor(x, y); chsClip(b, ln, mc); s.print(ln); y += 14;
+  } else {
+    s.setTextColor(T().subtext); s.setCursor(x, y); chsClip("Terakhir: belum ada (main lawan AI / Uji NPS)", ln, mc); s.print(ln); y += 14;
+  }
+  s.setTextColor(T().text); s.setCursor(x, y); chsClip("Uji: 3 posisi x 1 dtk per mode", ln, mc); s.print(ln); y += 12;
+  if (chsBenchState) {
+    s.setTextColor(T().accent); s.setCursor(x, y);
+    chsClip(chsBenchState == 1 ? "Menguji 1 core... jangan sentuh layar" : "Menguji 2 core... jangan sentuh layar", ln, mc); s.print(ln);
+  } else if (chsBnOk) {
+    uint32_t a = chsBnTms[0] ? (uint32_t)((uint64_t)chsBnTn[0] * 1000ULL / chsBnTms[0]) : 0, c = chsBnTms[1] ? (uint32_t)((uint64_t)chsBnTn[1] * 1000ULL / chsBnTms[1]) : 0;
+    chsFmtK(k1, sizeof(k1), a); chsFmtK(k2, sizeof(k2), c);
+    snprintf(b, sizeof(b), "1 core: %s n/s  (d %.1f)", k1, (double)chsBnDs[0] / 3.0);
+    s.setTextColor(T().text); s.setCursor(x, y); chsClip(b, ln, mc); s.print(ln); y += 10;
+    snprintf(b, sizeof(b), "2 core: %s n/s  (d %.1f)", k2, (double)chsBnDs[1] / 3.0);
+    s.setCursor(x, y); chsClip(b, ln, mc); s.print(ln); y += 10;
+    if (chsBnTwo && a) { snprintf(b, sizeof(b), "Percepatan NPS: x%.2f", (double)c / (double)a); s.setTextColor(T().good); }
+    else { snprintf(b, sizeof(b), "Core ke-2 tidak berjalan"); s.setTextColor(T().danger); }
+    s.setCursor(x, y); chsClip(b, ln, mc); s.print(ln);
+  }
+  for (int i = 0; i < 2; i++) {
+    int bx, by, bw, bh; chsVwNpsBtn(i, &bx, &by, &bw, &bh);
+    if (i == 0) {
+      iosRR(s, bx, by, bw, bh, 7, chsBenchState ? (uint16_t)T().surface2 : (uint16_t)T().accent);
+      s.setTextColor(chsBenchState ? (uint16_t)T().subtext : (uint16_t)T().bg); chsPrintC(s, bx, bw, by + 7, "Uji NPS");
+    } else {
+      iosRR(s, bx, by, bw, bh, 7, T().surface2);
+      s.setTextColor(two ? (uint16_t)T().accent : (uint16_t)T().subtext); chsPrintC(s, bx, bw, by + 7, two ? "Core ke-2: ON" : "Core ke-2: OFF");
+    }
+  }
+  snprintf(b, sizeof(b), "NPS = node per detik (utama + core 2)");
+  s.setTextColor(T().subtext); s.setCursor(g.ax + 2, g.fy); chsClip(b, ln, g.aw / 6); s.print(ln);
+}
+static void chsVwTouchNps(int x, int y) {
+  for (int i = 0; i < 2; i++) {
+    int bx, by, bw, bh; chsVwNpsBtn(i, &bx, &by, &bw, &bh);
+    if (x < bx || x >= bx + bw || y < by || y >= by + bh + 4) continue;
+    if (chsBenchState) return;
+    if (i == 0) {
+      if (chsActive || chsVsAI || chsGem) { showToast("Keluar dari partai dulu", 1800); return; }
+      if (!chsAiEnsure()) { showToast("PSRAM tidak cukup utk AI", 2200); return; }
+      chsBenchState = 1; chsBenchReqMs = millis(); needRedraw = true;
+    } else {
+#if CHS_SMP
+      chsSmpOn = !chsSmpOn; chsPrefsSaveCfg(); showToast(chsSmpOn ? "Core ke-2 aktif" : "1 core saja", 1400); needRedraw = true;
+#endif
+    }
+    return;
+  }
+}
+
 static void chsDrawNet(LGFX_Sprite& s) {
   chsVwGeom(); const ChsVwG& g = chsg;
-  static const char* const tn[3] = { "Jaringan", "Bobot", "Petak" };
+  static const char* const tn[4] = { "Jaringan", "Bobot", "Petak", "NPS" };
   s.setTextSize(1);
-  for (int i = 0; i < 3; i++) {
+  for (int i = 0; i < 4; i++) {
     int x, y, w, h; chsVwTabRect(i, &x, &y, &w, &h); bool on = (chsVw == i);
     iosRR(s, x, y, w, h, 7, on ? (uint16_t)T().accent : (uint16_t)T().surface2);
     s.setTextColor(on ? (uint16_t)T().bg : (uint16_t)T().text); chsPrintC(s, x, w, y + 5, tn[i]);
   }
-  { int x, y, w, h; chsVwTabRect(3, &x, &y, &w, &h);
+  { int x, y, w, h; chsVwTabRect(4, &x, &y, &w, &h);
     iosRR(s, x, y, w, h, 7, chsVwDelta ? (uint16_t)T().accent : (uint16_t)T().surface2);
     s.setTextColor(chsVwDelta ? (uint16_t)T().bg : (chsVwInit ? (uint16_t)T().text : (uint16_t)T().subtext)); chsPrintC(s, x, w, y + 5, "Selisih"); }
+  if (chsVw == 3) { chsVwDrawNps(s); return; }
   if (chsVw == 0) chsVwDrawNet(s); else if (chsVw == 1) chsVwDrawHm(s); else chsVwDrawBd(s);
   char b[96], ln[96];
   if (chsVwInfo[0]) strncpy(b, chsVwInfo, sizeof(b) - 1), b[sizeof(b) - 1] = 0;
@@ -4728,15 +5003,17 @@ static void chsDrawNet(LGFX_Sprite& s) {
 static void chsTouchNet(int x, int y, bool isNew) {
   if (!isNew) return;
   if (isBack(x, y)) { chsVwClose(); chsScr = 0; needRedraw = true; return; }
-  for (int i = 0; i < 4; i++) {
+  for (int i = 0; i < 5; i++) {
     int tx, ty, tw, th; chsVwTabRect(i, &tx, &ty, &tw, &th);
     if (x >= tx && x < tx + tw && y >= ty && y < ty + th + 4) {
-      if (i < 3) chsVw = (uint8_t)i;
+      if (i < 4) chsVw = (uint8_t)i;
+      else if (chsVw == 3) { }                       // chip Selisih tak berlaku di tab NPS
       else if (chsVwInit) chsVwDelta = !chsVwDelta;
       else showToast("RAM tidak cukup utk selisih", 1800);
       chsVwSel = -1; chsVwCell = -1; chsVwInfo[0] = 0; needRedraw = true; return;
     }
   }
+  if (chsVw == 3) { chsVwTouchNps(x, y); return; }
   chsVwGeom(); const ChsVwG& g = chsg;
   if (chsVw == 0) {
     int j = ((y - (g.by + 4)) * (CHS_NH - 1) + (g.bh - 8) / 2) / (g.bh - 8);
