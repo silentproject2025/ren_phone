@@ -123,6 +123,7 @@ struct CamRx {
     // ---- preview ----
     const uint8_t* src = d; uint32_t sn = dn;      // data JPEG yang benar2 disalin (tanpa id header)
     if (first) {
+      if (rxOn && rxSlot >= 0) { CAMRX_ENTER(); slotSt[rxSlot] = CAMRX_FREE; CAMRX_EXIT(); bad++; }   // NYX-CAMFREEZE-V1: frame sebelumnya tak pernah selesai (potongan AKHIR hilang) -> bebaskan slotnya, kalau tidak bocor & preview freeze
       rxOn = false; rxSlot = -1;
       bool skip = (fl & RPF_HDRSKIP) != 0;
       if (skip) {                                   // header dihilangkan: pakai cache, tapi hanya kalau id-nya cocok
