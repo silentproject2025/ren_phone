@@ -12,7 +12,7 @@
 //    chsSmpEnd()    -> minta berhenti, tunggu pembantu parkir lagi
 //    chsSmpNodes()  -> jumlah node pembantu (untuk NPS)
 //  Task dibuat sekali (stack 10 KB di PSRAM, core = kebalikan core loop()), lalu diparkir.
-//  Prioritas 1 (sama dgn loop) dan menyerahkan CPU 1 tick tiap ~25 ms supaya IDLE-watchdog core itu
+//  Prioritas 1 (sama dgn loop) dan menyerahkan CPU 1 tick tiap ~100 ms supaya IDLE-watchdog core itu
 //  & WiFi tidak kelaparan.
 //
 //  Bisa juga dibuild di PC (g++ -pthread) untuk uji: lihat tests_chess/run_smp.sh.
@@ -61,7 +61,7 @@ static inline bool smpStopOrYield() {            // dipanggil mesin tiap 256 nod
   if (chsSmpStopV) return true;
 #if CHS_SMP_ESP
   uint32_t t = millis();
-  if ((uint32_t)(t - smpLastYield) >= 25u) { smpLastYield = t; vTaskDelay(1); }
+  if ((uint32_t)(t - smpLastYield) >= 100u) { smpLastYield = t; vTaskDelay(1); }     // NYX-SPEED: tiap 100 ms (dulu 25 ms = ~4% waktu pembantu terbuang); IDLE-watchdog baru lapar setelah 5 dtk
 #endif
   return false;
 }

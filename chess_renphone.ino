@@ -29,6 +29,11 @@
 
 // NYX-SMP-V1 + NYX-SMP-BENCH2: core ke-2 (Lazy SMP) + NPS - lihat chess_smp.cpp
 // ==== ENGINE BEGIN ====
+#if defined(__GNUC__) && !defined(CHS_NO_OPT_PRAGMA)
+// NYX-SPEED: mesin dikompilasi -O2 (sisa sketch -Os) -- inlining + pemindahan/penjadwalan instruksi; -DCHS_NO_OPT_PRAGMA = kembali ke -Os (A/B lewat tab NPS)
+#pragma GCC push_options
+#pragma GCC optimize ("O2")
+#endif
 // Mesin aturan catur murni (tanpa Arduino/LovyanGFX) -- diuji perft di PC.
 // Petak: sq = rank*8 + file (a1 = 0, h1 = 7, a8 = 56). Bidak: +1..+6 putih, -1..-6 hitam
 // (1=Pion 2=Kuda 3=Gajah 4=Benteng 5=Menteri 6=Raja). Langkah (16 bit): dari | ke<<6 | promosi<<12.
@@ -37,11 +42,51 @@
 #define CHS_BK 4
 #define CHS_BQ 8
 
-static int8_t   chsBd[64];
+alignas(8) static int8_t chsBd[64];   // selaras 8 byte: salin/hash papan jadi beberapa instruksi kata, bukan memcpy byte-demi-byte
 static bool     chsWhite = true;      // true = giliran putih
 static uint8_t  chsCastle = 15;       // hak rokade (CHS_*)
 static int8_t   chsEp = -1;           // petak target en-passant (-1 = tidak ada)
 static uint16_t chsHalf = 0;          // penghitung 50 langkah (setengah-langkah)
+
+// ---- NYX-SPEED: tabel geometri papan (pengganti cek batas rr/cc di tiap langkah sinar) ----
+static const int8_t  chsDirOff[8] = {8, -8, 1, -1, 9, 7, -7, -9};          // selisih indeks petak per arah (urutan sama dgn 'dirs' lama)
+static const uint8_t chsRayN[64][8] = {   // jumlah langkah ke tepi papan per arah
+  {7,0,7,0,7,0,0,0}, {7,0,6,1,6,1,0,0}, {7,0,5,2,5,2,0,0}, {7,0,4,3,4,3,0,0},
+  {7,0,3,4,3,4,0,0}, {7,0,2,5,2,5,0,0}, {7,0,1,6,1,6,0,0}, {7,0,0,7,0,7,0,0},
+  {6,1,7,0,6,0,1,0}, {6,1,6,1,6,1,1,1}, {6,1,5,2,5,2,1,1}, {6,1,4,3,4,3,1,1},
+  {6,1,3,4,3,4,1,1}, {6,1,2,5,2,5,1,1}, {6,1,1,6,1,6,1,1}, {6,1,0,7,0,6,0,1},
+  {5,2,7,0,5,0,2,0}, {5,2,6,1,5,1,2,1}, {5,2,5,2,5,2,2,2}, {5,2,4,3,4,3,2,2},
+  {5,2,3,4,3,4,2,2}, {5,2,2,5,2,5,2,2}, {5,2,1,6,1,5,1,2}, {5,2,0,7,0,5,0,2},
+  {4,3,7,0,4,0,3,0}, {4,3,6,1,4,1,3,1}, {4,3,5,2,4,2,3,2}, {4,3,4,3,4,3,3,3},
+  {4,3,3,4,3,4,3,3}, {4,3,2,5,2,4,2,3}, {4,3,1,6,1,4,1,3}, {4,3,0,7,0,4,0,3},
+  {3,4,7,0,3,0,4,0}, {3,4,6,1,3,1,4,1}, {3,4,5,2,3,2,4,2}, {3,4,4,3,3,3,4,3},
+  {3,4,3,4,3,3,3,4}, {3,4,2,5,2,3,2,4}, {3,4,1,6,1,3,1,4}, {3,4,0,7,0,3,0,4},
+  {2,5,7,0,2,0,5,0}, {2,5,6,1,2,1,5,1}, {2,5,5,2,2,2,5,2}, {2,5,4,3,2,2,4,3},
+  {2,5,3,4,2,2,3,4}, {2,5,2,5,2,2,2,5}, {2,5,1,6,1,2,1,5}, {2,5,0,7,0,2,0,5},
+  {1,6,7,0,1,0,6,0}, {1,6,6,1,1,1,6,1}, {1,6,5,2,1,1,5,2}, {1,6,4,3,1,1,4,3},
+  {1,6,3,4,1,1,3,4}, {1,6,2,5,1,1,2,5}, {1,6,1,6,1,1,1,6}, {1,6,0,7,0,1,0,6},
+  {0,7,7,0,0,0,7,0}, {0,7,6,1,0,0,6,1}, {0,7,5,2,0,0,5,2}, {0,7,4,3,0,0,4,3},
+  {0,7,3,4,0,0,3,4}, {0,7,2,5,0,0,2,5}, {0,7,1,6,0,0,1,6}, {0,7,0,7,0,0,0,7},
+};
+static const uint8_t chsKnN[64] = {2,3,4,4,4,4,3,2,3,4,6,6,6,6,4,3,4,6,8,8,8,8,6,4,4,6,8,8,8,8,6,4,4,6,8,8,8,8,6,4,4,6,8,8,8,8,6,4,3,4,6,6,6,6,4,3,2,3,4,4,4,4,3,2};
+static const uint8_t chsKnT[64][8] = {   // petak tujuan kuda (urutan sama dgn 'kn' lama)
+  {10,17,0,0,0,0,0,0}, {11,18,16,0,0,0,0,0}, {12,19,17,8,0,0,0,0}, {13,20,18,9,0,0,0,0},
+  {14,21,19,10,0,0,0,0}, {15,22,20,11,0,0,0,0}, {23,21,12,0,0,0,0,0}, {22,13,0,0,0,0,0,0},
+  {18,25,2,0,0,0,0,0}, {19,26,24,3,0,0,0,0}, {20,27,25,16,0,4,0,0}, {21,28,26,17,1,5,0,0},
+  {22,29,27,18,2,6,0,0}, {23,30,28,19,3,7,0,0}, {31,29,20,4,0,0,0,0}, {30,21,5,0,0,0,0,0},
+  {26,33,1,10,0,0,0,0}, {27,34,32,0,2,11,0,0}, {28,35,33,24,8,1,3,12}, {29,36,34,25,9,2,4,13},
+  {30,37,35,26,10,3,5,14}, {31,38,36,27,11,4,6,15}, {39,37,28,12,5,7,0,0}, {38,29,13,6,0,0,0,0},
+  {34,41,9,18,0,0,0,0}, {35,42,40,8,10,19,0,0}, {36,43,41,32,16,9,11,20}, {37,44,42,33,17,10,12,21},
+  {38,45,43,34,18,11,13,22}, {39,46,44,35,19,12,14,23}, {47,45,36,20,13,15,0,0}, {46,37,21,14,0,0,0,0},
+  {42,49,17,26,0,0,0,0}, {43,50,48,16,18,27,0,0}, {44,51,49,40,24,17,19,28}, {45,52,50,41,25,18,20,29},
+  {46,53,51,42,26,19,21,30}, {47,54,52,43,27,20,22,31}, {55,53,44,28,21,23,0,0}, {54,45,29,22,0,0,0,0},
+  {50,57,25,34,0,0,0,0}, {51,58,56,24,26,35,0,0}, {52,59,57,48,32,25,27,36}, {53,60,58,49,33,26,28,37},
+  {54,61,59,50,34,27,29,38}, {55,62,60,51,35,28,30,39}, {63,61,52,36,29,31,0,0}, {62,53,37,30,0,0,0,0},
+  {58,33,42,0,0,0,0,0}, {59,32,34,43,0,0,0,0}, {60,56,40,33,35,44,0,0}, {61,57,41,34,36,45,0,0},
+  {62,58,42,35,37,46,0,0}, {63,59,43,36,38,47,0,0}, {60,44,37,39,0,0,0,0}, {61,45,38,0,0,0,0,0},
+  {41,50,0,0,0,0,0,0}, {40,42,51,0,0,0,0,0}, {48,41,43,52,0,0,0,0}, {49,42,44,53,0,0,0,0},
+  {50,43,45,54,0,0,0,0}, {51,44,46,55,0,0,0,0}, {52,45,47,0,0,0,0,0}, {53,46,0,0,0,0,0,0},
+};
 
 static void chsReset() {
   static const int8_t back[8] = {4, 2, 3, 5, 6, 3, 2, 4};
@@ -52,34 +97,30 @@ static void chsReset() {
 
 // apakah petak sq diserang oleh sisi byWhite?
 static bool chsAtt(int sq, bool byWhite) {
-  int r = sq >> 3, c = sq & 7;
-  int8_t sg = byWhite ? 1 : -1;
-  int pr = byWhite ? r - 1 : r + 1;
-  if (pr >= 0 && pr < 8) {
-    if (c > 0 && chsBd[pr * 8 + c - 1] == sg) return true;
-    if (c < 7 && chsBd[pr * 8 + c + 1] == sg) return true;
+  const int8_t sg = byWhite ? 1 : -1;
+  const int c = sq & 7;
+  if (byWhite) {                                                   // pion putih menyerang dari petak di bawahnya
+    if (sq >= 8) { if (c > 0 && chsBd[sq - 9] == sg) return true; if (c < 7 && chsBd[sq - 7] == sg) return true; }
+  } else {
+    if (sq < 56) { if (c > 0 && chsBd[sq + 7] == sg) return true; if (c < 7 && chsBd[sq + 9] == sg) return true; }
   }
-  static const int8_t kn[8][2] = {{1,2},{2,1},{2,-1},{1,-2},{-1,-2},{-2,-1},{-2,1},{-1,2}};
-  for (int i = 0; i < 8; i++) {
-    int rr = r + kn[i][0], cc = c + kn[i][1];
-    if (rr < 0 || rr > 7 || cc < 0 || cc > 7) continue;
-    if (chsBd[rr * 8 + cc] == sg * 2) return true;
-  }
-  static const int8_t dr[8][2] = {{1,0},{-1,0},{0,1},{0,-1},{1,1},{1,-1},{-1,1},{-1,-1}};
+  const uint8_t* kt = chsKnT[sq]; const int kc = chsKnN[sq]; const int8_t kk = (int8_t)(sg * 2);
+  for (int i = 0; i < kc; i++) if (chsBd[kt[i]] == kk) return true;
+  const uint8_t* rn = chsRayN[sq];
   for (int d = 0; d < 8; d++) {
-    int rr = r + dr[d][0], cc = c + dr[d][1];
-    if (rr >= 0 && rr < 8 && cc >= 0 && cc < 8 && chsBd[rr * 8 + cc] == sg * 6) return true;
-    while (rr >= 0 && rr < 8 && cc >= 0 && cc < 8) {
-      int8_t p = chsBd[rr * 8 + cc];
+    const int n = rn[d]; if (!n) continue;
+    const int off = chsDirOff[d]; int s = sq;
+    for (int k = 1; k <= n; k++) {
+      s += off;
+      int8_t p = chsBd[s];
       if (p) {
+        if (k == 1 && p == sg * 6) return true;
         if ((p > 0) == byWhite) {
           int t = p > 0 ? p : -p;
-          if (d < 4 && (t == 4 || t == 5)) return true;
-          if (d >= 4 && (t == 3 || t == 5)) return true;
+          if (d < 4 ? (t == 4 || t == 5) : (t == 3 || t == 5)) return true;
         }
         break;
       }
-      rr += dr[d][0]; cc += dr[d][1];
     }
   }
   return false;
@@ -96,8 +137,6 @@ static int chsGen(uint16_t* out) {
   int n = 0;
   bool w = chsWhite;
   int8_t sg = w ? 1 : -1;
-  static const int8_t dirs[8][2] = {{1,0},{-1,0},{0,1},{0,-1},{1,1},{1,-1},{-1,1},{-1,-1}};
-  static const int8_t kn[8][2] = {{1,2},{2,1},{2,-1},{1,-2},{-1,-2},{-2,-1},{-2,1},{-1,2}};
   for (int sq = 0; sq < 64; sq++) {
     int8_t p = chsBd[sq];
     if (!p || ((p > 0) != w)) continue;
@@ -120,14 +159,21 @@ static int chsGen(uint16_t* out) {
         else if (!q && to == chsEp) out[n++] = (uint16_t)(sq | (to << 6));
       }
     } else if (t == 2 || t == 6) {
-      for (int i = 0; i < 8; i++) {
-        int rr, cc;
-        if (t == 2) { rr = r + kn[i][0]; cc = c + kn[i][1]; }
-        else        { rr = r + dirs[i][0]; cc = c + dirs[i][1]; }
-        if (rr < 0 || rr > 7 || cc < 0 || cc > 7) continue;
-        int8_t q = chsBd[rr * 8 + cc];
-        if (q && ((q > 0) == w)) continue;
-        out[n++] = (uint16_t)(sq | ((rr * 8 + cc) << 6));
+      if (t == 2) {
+        const uint8_t* kt = chsKnT[sq]; const int kc = chsKnN[sq];
+        for (int i = 0; i < kc; i++) {
+          int to = kt[i]; int8_t q = chsBd[to];
+          if (q && ((q > 0) == w)) continue;
+          out[n++] = (uint16_t)(sq | (to << 6));
+        }
+      } else {
+        const uint8_t* rn = chsRayN[sq];
+        for (int i = 0; i < 8; i++) {
+          if (!rn[i]) continue;
+          int to = sq + chsDirOff[i]; int8_t q = chsBd[to];
+          if (q && ((q > 0) == w)) continue;
+          out[n++] = (uint16_t)(sq | (to << 6));
+        }
       }
       if (t == 6) {
         int home = w ? 4 : 60;
@@ -142,14 +188,68 @@ static int chsGen(uint16_t* out) {
       }
     } else {
       int d0 = (t == 3) ? 4 : 0, d1 = (t == 4) ? 4 : 8;
+      const uint8_t* rn = chsRayN[sq];
       for (int d = d0; d < d1; d++) {
-        int rr = r + dirs[d][0], cc = c + dirs[d][1];
-        while (rr >= 0 && rr < 8 && cc >= 0 && cc < 8) {
-          int8_t q = chsBd[rr * 8 + cc];
+        const int nn = rn[d], off = chsDirOff[d]; int to = sq;
+        for (int k = 0; k < nn; k++) {
+          to += off;
+          int8_t q = chsBd[to];
           if (q && ((q > 0) == w)) break;
-          out[n++] = (uint16_t)(sq | ((rr * 8 + cc) << 6));
+          out[n++] = (uint16_t)(sq | (to << 6));
           if (q) break;
-          rr += dirs[d][0]; cc += dirs[d][1];
+        }
+      }
+    }
+  }
+  return n;
+}
+
+// NYX-SPEED: pembangkit langkah TANGKAPAN / PROMOSI / en-passant saja (utk quiescence, node terbanyak). Urutan relatif sama persis dgn chsGen,
+// jadi hasil pencarian identik; bedanya langkah diam tak pernah dibangkitkan dan tak perlu disaring lagi.
+static int chsGenCaps(uint16_t* out) {
+  int n = 0;
+  const bool w = chsWhite;
+  for (int sq = 0; sq < 64; sq++) {
+    int8_t p = chsBd[sq];
+    if (!p || ((p > 0) != w)) continue;
+    int t = p > 0 ? p : -p;
+    if (t == 1) {
+      int c = sq & 7, r = sq >> 3;
+      int dr = w ? 1 : -1, r1 = r + dr, promoR = w ? 7 : 0;
+      if (r1 < 0 || r1 > 7) continue;
+      if (r1 == promoR && chsBd[r1 * 8 + c] == 0) n = chsAddPawn(out, n, sq, r1 * 8 + c, true);
+      for (int dc = -1; dc <= 1; dc += 2) {
+        int cc = c + dc;
+        if (cc < 0 || cc > 7) continue;
+        int to = r1 * 8 + cc;
+        int8_t q = chsBd[to];
+        if (q && ((q > 0) != w)) n = chsAddPawn(out, n, sq, to, r1 == promoR);
+        else if (!q && to == chsEp) out[n++] = (uint16_t)(sq | (to << 6));
+      }
+    } else if (t == 2) {
+      const uint8_t* kt = chsKnT[sq]; const int kc = chsKnN[sq];
+      for (int i = 0; i < kc; i++) {
+        int to = kt[i]; int8_t q = chsBd[to];
+        if (q && ((q > 0) != w)) out[n++] = (uint16_t)(sq | (to << 6));
+      }
+    } else if (t == 6) {
+      const uint8_t* rn = chsRayN[sq];
+      for (int i = 0; i < 8; i++) {
+        if (!rn[i]) continue;
+        int to = sq + chsDirOff[i]; int8_t q = chsBd[to];
+        if (q && ((q > 0) != w)) out[n++] = (uint16_t)(sq | (to << 6));
+      }
+    } else {
+      int d0 = (t == 3) ? 4 : 0, d1 = (t == 4) ? 4 : 8;
+      const uint8_t* rn = chsRayN[sq];
+      for (int d = d0; d < d1; d++) {
+        const int nn = rn[d], off = chsDirOff[d]; int to = sq;
+        for (int k = 0; k < nn; k++) {
+          to += off;
+          int8_t q = chsBd[to];
+          if (!q) continue;
+          if ((q > 0) != w) out[n++] = (uint16_t)(sq | (to << 6));
+          break;
         }
       }
     }
@@ -182,9 +282,15 @@ static void chsDo(uint16_t m) {
   chsWhite = !w;
 }
 
-static int chsKingSq(bool white) {
-  int8_t k = white ? 6 : -6;
-  for (int i = 0; i < 64; i++) if (chsBd[i] == k) return i;
+static int chsKingSq(bool white) {                      // pindai 4 petak per kata (papan selaras 8 byte); hasil sama dgn pindai byte-demi-byte
+  const uint32_t pat = (uint32_t)(uint8_t)(white ? 6 : -6) * 0x01010101u;
+  for (int i = 0; i < 16; i++) {
+    uint32_t w; memcpy(&w, chsBd + i * 4, 4);
+    uint32_t x = w ^ pat;
+    if ((x - 0x01010101u) & ~x & 0x80808080u) {
+      for (int j = 0; j < 4; j++) if (chsBd[i * 4 + j] == (white ? 6 : -6)) return i * 4 + j;
+    }
+  }
   return -1;
 }
 
@@ -373,6 +479,9 @@ static bool chsPickFromReply(const char* s, uint16_t* out) {
   }
   return false;
 }
+#if defined(__GNUC__) && !defined(CHS_NO_OPT_PRAGMA)
+#pragma GCC pop_options
+#endif
 // ==== ENGINE END ====
 
 // hook: begitu memori kerja AI siap, pengalaman (replay) terakhir dimuat dari NVS. Definisinya ada di bagian prefs di bawah
@@ -391,6 +500,11 @@ static void chsAiReport(int d, uint32_t nm, uint32_t nh, uint32_t ms, int cores)
 #endif
 
 // ==== AI BEGIN ====
+#if defined(__GNUC__) && !defined(CHS_NO_OPT_PRAGMA)
+// NYX-SPEED: mesin dikompilasi -O2 (sisa sketch -Os) -- inlining + pemindahan/penjadwalan instruksi; -DCHS_NO_OPT_PRAGMA = kembali ke -Os (A/B lewat tab NPS)
+#pragma GCC push_options
+#pragma GCC optimize ("O2")
+#endif
 // Mesin AI + model GAYA PEMAIN yang belajar online. Dipasang di atas mesin aturan (papan global chsBd, dst),
 // tanpa Arduino/LovyanGFX -> diuji di PC (tests_chess/). HANYA dipanggil dari loop UI: pencarian memakai-ulang
 // papan global lalu mengembalikannya persis seperti semula.
@@ -634,7 +748,7 @@ static uint32_t chsPosHash() {
 #define CHS_REST_ST  do { memcpy(chsBd, _sb, 64); chsWhite = _sw; chsCastle = _sc; chsEp = _se; chsHalf = _sh; } while (0)
 // Versi per-ply utk rekursi pencarian: salinan papan ada di array global (RAM internal), bukan di stack -> frame lebih kecil.
 struct ChsSv { bool w; uint8_t c; int8_t e; uint16_t h; };
-static int8_t chsAiSvB[CHS_AI_PLY + 2][64];
+alignas(8) static int8_t chsAiSvB[CHS_AI_PLY + 2][64];
 static ChsSv  chsAiSvS[CHS_AI_PLY + 2];
 #define CHS_SAVE_AT(pl) do { memcpy(chsAiSvB[pl], chsBd, 64); chsAiSvS[pl].w = chsWhite; chsAiSvS[pl].c = chsCastle; chsAiSvS[pl].e = chsEp; chsAiSvS[pl].h = chsHalf; } while (0)
 #define CHS_REST_AT(pl) do { memcpy(chsBd, chsAiSvB[pl], 64); chsWhite = chsAiSvS[pl].w; chsCastle = chsAiSvS[pl].c; chsEp = chsAiSvS[pl].e; chsHalf = chsAiSvS[pl].h; } while (0)
@@ -1952,22 +2066,20 @@ static const int16_t chsEvPass[8] = {0, 8, 14, 24, 42, 72, 120, 0};
 static const int8_t  chsEvKn[8][2] = {{1,2},{2,1},{-1,2},{-2,1},{1,-2},{2,-1},{-1,-2},{-2,-1}};
 static const int8_t  chsEvDr[8][2] = {{1,1},{1,-1},{-1,1},{-1,-1},{1,0},{-1,0},{0,1},{0,-1}};
 static int chsEvMob(int sq, int8_t p, int t) {
-  int sg = p > 0 ? 1 : -1, r = sq >> 3, f = sq & 7, cnt = 0;
+  const int sg = p > 0 ? 1 : -1; int cnt = 0;
   if (t == 2) {
-    for (int k = 0; k < 8; k++) {
-      int rr = r + chsEvKn[k][0], ff = f + chsEvKn[k][1];
-      if (rr < 0 || rr > 7 || ff < 0 || ff > 7) continue;
-      if (chsBd[rr * 8 + ff] * sg <= 0) cnt++;
-    }
+    const uint8_t* kt = chsKnT[sq]; const int kc = chsKnN[sq];
+    for (int k = 0; k < kc; k++) if (chsBd[kt[k]] * sg <= 0) cnt++;
     return cnt;
   }
-  int k0 = (t == 3) ? 0 : 4;
-  for (int k = k0; k < k0 + 4; k++) {
-    int rr = r + chsEvDr[k][0], ff = f + chsEvDr[k][1];
-    while (rr >= 0 && rr <= 7 && ff >= 0 && ff <= 7) {
-      int q = chsBd[rr * 8 + ff] * sg;
+  const uint8_t* rn = chsRayN[sq];
+  const int d0 = (t == 3) ? 4 : 0;                       // gajah = 4 arah diagonal, benteng = 4 arah lurus
+  for (int d = d0; d < d0 + 4; d++) {
+    const int nn = rn[d], off = chsDirOff[d]; int s = sq;
+    for (int k = 0; k < nn; k++) {
+      s += off;
+      int q = chsBd[s] * sg;
       if (q == 0) cnt++; else { if (q < 0) cnt++; break; }
-      rr += chsEvDr[k][0]; ff += chsEvDr[k][1];
     }
   }
   return cnt;
@@ -2108,40 +2220,36 @@ static inline bool chsAiHasPieces(bool white) {
 static inline int chsSeeVal(int t) { static const int16_t v[7] = {0, 100, 320, 330, 500, 900, 20000}; return v[t]; }
 // petak penyerang termurah milik 'white' ke sq di papan b (-1 = tidak ada); bidak yg sudah "dimakan" dihapus dari b sehingga sinar-X ikut terbuka
 static int chsSeeLva(const int8_t* b, int sq, bool white) {
-  int r = sq >> 3, c = sq & 7; int8_t sg = white ? 1 : -1;
-  int pr = white ? r - 1 : r + 1;
-  if (pr >= 0 && pr < 8) {
-    if (c > 0 && b[pr * 8 + c - 1] == sg) return pr * 8 + c - 1;
-    if (c < 7 && b[pr * 8 + c + 1] == sg) return pr * 8 + c + 1;
+  const int c = sq & 7; const int8_t sg = white ? 1 : -1;
+  if (white) {
+    if (sq >= 8) { if (c > 0 && b[sq - 9] == sg) return sq - 9; if (c < 7 && b[sq - 7] == sg) return sq - 7; }
+  } else {
+    if (sq < 56) { if (c > 0 && b[sq + 7] == sg) return sq + 7; if (c < 7 && b[sq + 9] == sg) return sq + 9; }
   }
-  static const int8_t kn[8][2] = {{1,2},{2,1},{2,-1},{1,-2},{-1,-2},{-2,-1},{-2,1},{-1,2}};
-  for (int i = 0; i < 8; i++) {
-    int rr = r + kn[i][0], cc = c + kn[i][1];
-    if (rr < 0 || rr > 7 || cc < 0 || cc > 7) continue;
-    if (b[rr * 8 + cc] == sg * 2) return rr * 8 + cc;
-  }
-  static const int8_t dr[8][2] = {{1,0},{-1,0},{0,1},{0,-1},{1,1},{1,-1},{-1,1},{-1,-1}};
+  const uint8_t* kt = chsKnT[sq]; const int kc = chsKnN[sq]; const int8_t kk = (int8_t)(sg * 2);
+  for (int i = 0; i < kc; i++) if (b[kt[i]] == kk) return kt[i];
+  const uint8_t* rn = chsRayN[sq];
   int best = -1, bt = 9;
   for (int d = 0; d < 8; d++) {
-    int rr = r + dr[d][0], cc = c + dr[d][1]; bool first = true;
-    while (rr >= 0 && rr < 8 && cc >= 0 && cc < 8) {
-      int8_t p = b[rr * 8 + cc];
+    const int n = rn[d], off = chsDirOff[d]; int s = sq;
+    for (int k = 1; k <= n; k++) {
+      s += off;
+      int8_t p = b[s];
       if (p) {
         if ((p > 0) == white) {
           int t = p > 0 ? p : -p;
-          bool ok = (t == 6 && first) || (d < 4 ? (t == 4 || t == 5) : (t == 3 || t == 5));
-          if (ok && t < bt) { bt = t; best = rr * 8 + cc; }
+          bool ok = (t == 6 && k == 1) || (d < 4 ? (t == 4 || t == 5) : (t == 3 || t == 5));
+          if (ok && t < bt) { bt = t; best = s; }
         }
         break;
       }
-      first = false; rr += dr[d][0]; cc += dr[d][1];
     }
   }
   return best;
 }
 static int chsSee(uint16_t m) {
   int from = m & 63, to = (m >> 6) & 63, promo = (m >> 12) & 15;
-  int8_t b[64]; memcpy(b, chsBd, 64);
+  alignas(8) int8_t b[64]; memcpy(b, chsBd, 64);
   int8_t p = b[from]; int t = p > 0 ? p : -p; bool w = p > 0;
   int8_t q = b[to]; int qt = q > 0 ? q : -q;
   if (!q && t == 1 && to == chsEp && (from & 7) != (to & 7)) { qt = 1; b[(from & ~7) | (to & 7)] = 0; }
@@ -2209,12 +2317,10 @@ static int chsAiQ(int alpha, int beta, int ply) {
   if (stand >= beta) return stand;
   if (stand > alpha) alpha = stand;
   uint16_t* mv = chsAiMv + ply * 256; int16_t* ky = chsAiKy + ply * 256;
-  int n = chsGen(mv), nc = 0;
+  int n = chsGenCaps(mv), nc = 0;                                   // hanya tangkapan/promosi/e.p. (urutan sama dgn chsGen -> hasil identik)
   for (int i = 0; i < n; i++) {
     uint16_t m = mv[i]; int from = m & 63, to = (m >> 6) & 63;
     int8_t p = chsBd[from];
-    bool capt = chsBd[to] != 0 || ((p == 1 || p == -1) && to == chsEp && (from & 7) != (to & 7)) || ((m >> 12) & 15);
-    if (!capt) continue;
     if (!((m >> 12) & 15)) {                                        // delta pruning: tangkapan ini pun tak mungkin menaikkan alpha
       int8_t q = chsBd[to]; int qt = q > 0 ? q : -q; if (!qt) qt = 1;
       if (stand + chsAiVal[qt] + 200 < alpha) continue;
@@ -3048,6 +3154,9 @@ static uint16_t chsAiChoose(int maxDepth, uint32_t budgetMs, int margin, int mod
   if (pick < 0) pick = 0;
   return chsAiRm[pick];
 }
+#if defined(__GNUC__) && !defined(CHS_NO_OPT_PRAGMA)
+#pragma GCC pop_options
+#endif
 // ==== AI END ====
 
 // ---------------------------------------------------------------------
