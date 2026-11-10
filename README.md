@@ -363,7 +363,7 @@ Emoji tampil di seluruh teks NyxOS (keyboard, Notepad, Chat, AI Chat/Gemini, dan
 | Set | Keterangan |
 |---|---|
 | **Bawaan** | 54 sprite gambar sendiri (`emoji_data.h`, dibuat `tools/gen_emoji.py`). Selalu ada sebagai cadangan. |
-| **Dari SD** | Berkas `/emoji.bin` di root kartu SD, dibuat `tools/make_emoji_bin.py` dari PNG Noto Emoji atau Twemoji. Dimuat sekali saat boot ke PSRAM dan menggantikan set bawaan. Mengganti berkas cukup dengan restart. |
+| **Dari SD** | Berkas `/emoji.bin` di root kartu SD, dibuat `tools/make_emoji_bin.py` dari PNG Noto Emoji atau Twemoji. Saat boot hanya indeks kodepoint yang dimuat ke PSRAM; sprite dibaca dari SD saat pertama dibutuhkan dan disimpan di cache LRU. Menggantikan set bawaan. Mengganti berkas cukup dengan restart. |
 
 **Membuat `emoji.bin`** (contoh di Termux; butuh Pillow: `pkg install python-pillow`, atau `pip install pillow`)
 
@@ -381,7 +381,7 @@ Sumber yang dikenali (folder hasil `git clone`, dicari rekursif, atau berkas zip
 - **Hanya emoji tunggal (satu kodepoint) dari `U+231A` ke atas.** Urutan multi-kodepoint tidak punya sprite sendiri. Penanda warna kulit, ZWJ, `VS-16`, dan keycap dibuang saat tampil: 👍🏽 tampil sebagai 👍, 👨‍💻 tampil sebagai dua sprite terpisah (👨 dan 💻), dan `1️⃣` tampil sebagai `1`. Bendera tampil sebagai kotak `?`.
 - Emoji yang tidak ada di set digambar sebagai kotak `?` (bukan hilang atau merusak teks).
 - **Maksimal 4000 sprite** (slot PUA `E000` sampai `EF9F`; `EFFF` dicadangkan untuk kotak `?`). Batas ini hampir tidak tercapai karena Noto hanya punya sekitar seribu empat ratusan emoji tunggal.
-- **Memori.** Seluruh berkas dibaca ke PSRAM saat boot (kartu SD tidak dipakai lagi sesudahnya). Satu emoji memakan ±1,8 KB untuk tiga ukuran, jadi 1000 emoji ≈ 1,8 MB dan 4000 emoji ≈ 7,5 MB, hampir seluruh PSRAM 8 MB. Set yang jauh di bawah batas itu lebih aman.
+- **Memori dan SD.** Berkas `emoji.bin` berukuran `16 + N × 1868` byte (N emoji; tiga ukuran sprite): 1.390 emoji ≈ 2,6 MB. Berkas **tidak** dimuat utuh: PSRAM hanya menyimpan indeks kodepoint (±12 byte per emoji) ditambah cache LRU berisi 128 sprite per ukuran, dialokasikan saat ukuran itu pertama dipakai (10 px ±25 KB, 16 px ±64 KB, 24 px ±144 KB). Berkas SD tetap terbuka selama set aktif dan sprite dibaca lewat penampung kecil di RAM internal. Konsekuensinya, kartu SD harus tetap terpasang: bila gagal dibaca, emoji yang belum ada di cache tampil sebagai kotak `?` (tiga kegagalan berturut-turut menutup berkas; emoji yang sudah di cache tetap tampil). Membuka halaman emoji pertama kali memberi jeda singkat karena ±30 sprite dibaca dari SD.
 - Berkas tidak ada, kartu SD tidak terbaca, header atau ukuran tidak cocok, ukuran berkas kurang, atau PSRAM tidak cukup: set bawaan dipakai tanpa pesan galat.
 - **Chat:** nama pengguna hanya ASCII (emoji pada nama tidak dikirim). Emoji pada pesan dikirim sebagai UTF-8 standar.
 
@@ -545,6 +545,15 @@ Dua baris teks di bawah tampilan memuat info sentuhan terakhir (neuron, kotak, a
 Cara memakainya: mainkan beberapa partai melawan AI, buka **Bobot** dengan **Selisih** menyala untuk melihat fitur apa yang dipelajari AI dari gayamu, lalu buka **Petak** untuk melihat kebiasaan petak bukaanmu (misalnya `e4` dan `f3` yang menyala).
 
 **Adu mesin vs Gemini (menguji kekuatan AI).** Pada layar setup Catur, di sebelah chip **Jaringan** ada chip **Gemini**. Mesin lokal (tingkat yang dipilih di baris *Lawan AI | tingkat | AFK*) bertanding melawan Gemini lewat kunci API yang sama dengan AI Chat (`/gemini_key.txt`), dan kamu menonton. Gemini diberi FEN, riwayat langkah, dan **daftar langkah sah**, lalu diminta membalas satu langkah UCI. Balasan yang tak sah diulang (maksimal 3 kali per langkah); tiga kali berturut-turut tak sah berarti Gemini kalah. Bila jaringan atau API gagal, partai dijeda dengan pesan galat dan bisa dilanjutkan dengan **Lanjut**. Tombol kiri panel: **Jeda/Lanjut**, lalu **Main lagi** (warna ditukar) setelah partai selesai. Skor per tingkat (`M` mesin menang, `G` Gemini menang, `S` seri) tersimpan di NVS dan tampil di panel. Perlu WiFi. Model bawaan sama dengan AI Chat; untuk lawan yang berbeda, isi `CHS_GEM_MODEL` di `chess_renphone.ino`. Logika giliran, pembacaan balasan, dan hitungan skor diuji di komputer dengan Gemini tiruan (`tests_chess/run_gem.sh`); panggilan API sungguhan dan tampilan layar belum diuji pada perangkat.
+
+**Dua core dan pengukur NPS (Nyx, Lazy SMP)** `eksperimental`
+
+Pencarian Nyx dapat memakai kedua core ESP32-S3. Core lain dari `loop()` menjalankan **salinan mesin sendiri** (`chess_smp.cpp`, di-build sebagai file terpisah; CI menyalin blok ENGINE+AI dari `chess_renphone.ino` ke `build_sketch/src/chess_engine.inc`), sehingga papan, killer, dan history terpisah. Yang dibagi hanya tabel transposisi (TT) di PSRAM, tanpa mutex: entri dibaca/ditulis sebagai tiga kata 32 bit dengan kunci ter-XOR, jadi entri yang "sobek" karena dua core menulis bersamaan terdeteksi dan dianggap meleset. Core pembantu mencari satu kedalaman di depan iterasi utama dan mengisi TT; pencarian utama memakainya untuk memangkas lebih awal.
+
+- Aktif hanya bila anggaran waktu ≥ 400 ms dan kedalaman maksimum ≥ 5 (jadi tidak untuk pondering, Mudah, dan Sedang) serta jaringan NN utama tidak aktif. Task `nyxHelper` (stack 10 KB di PSRAM, prioritas 1, core kebalikan `loop()`) dibuat sekali lalu diparkir, dan menyerahkan CPU 1 tick tiap ±25 ms.
+- **Melihat NPS:** Serial Monitor mencetak `[NYX-NPS] d=… node=utama+pembantu … ms NPS=… core=N` setiap AI selesai mencari. Di layar **Jaringan** ada tab **NPS**: pencarian terakhir, tombol **Uji NPS** (3 posisi tetap × 1 detik, sekali 1 core dan sekali 2 core, ±6 detik; hanya saat tidak ada partai), dan saklar **Core ke-2** (disimpan di NVS kunci `smp`). Hasil uji juga dicetak sebagai `[NYX-BENCH]`.
+- Matikan saat build dengan `-DCHS_SMP=0` (satu core persis seperti sebelumnya).
+- **Hasil ukur di perangkat:** 19,2k → 29,9k node/detik (×1,55), tetapi kedalaman rata-rata dalam 1 detik 6,0 → 5,7. Jadi kecepatan mentah naik, **kekuatan belum terbukti naik**: dua core berebut PSRAM dan cache, dan core utama melambat. Uji yang lebih adil (waktu mencapai kedalaman tertentu) belum ada. Di komputer, `tests_chess/run_smp.sh` menguji kebenaran (langkah selalu sah, mat dan taktik tetap benar, mulai/henti berulang tanpa deadlock), bukan kecepatan.
 
 **Batasan.** Tidak ada jam catur, dan belum ada aturan ulangan tiga posisi. Fitur ini baru diuji di komputer (aturan dan *perft*, kekuatan tiap level, pelatihan serta serialisasi model gaya); perilaku nyata di dua perangkat dan pada broker sungguhan belum terkonfirmasi.
 ### 5.3 Kendali jarak jauh
@@ -888,6 +897,8 @@ WiFi / lwIP (milik ESP-IDF)         callTask   (Telepon, prio 3)
 
 `loop()` (UI, input, redraw) berjalan di core yang ditetapkan `CONFIG_ARDUINO_RUNNING_CORE`; default Arduino-ESP32 adalah **Core 1**. Firmware mencetak `[CORE] setup/loop berjalan di core N` saat boot, jadi periksa Serial Monitor. Bila `loop()` ternyata di Core 1, DOOM/NES/Telepon berbagi CPU dengan UI.
 
+Task `nyxHelper` (core ke-2 untuk pencarian Catur Nyx, lihat [5.2.3](#523-catur-online-dan-lawan-ai-beta)) berjalan di core kebalikan `loop()`, hanya hidup selama Nyx mencari, dengan stack 10 KB di PSRAM dan prioritas 1.
+
 **Prioritas task** (angka lebih besar = lebih diutamakan; `loopTask` = 1):
 
 | Task | Prioritas | Alasan |
@@ -1006,6 +1017,9 @@ Proyek ini ditujukan sebagai perangkat pribadi dan eksperimental. Pertimbangkan 
 | Telepon dengan akun `sip.linphone.org` hanya bisa menerima | Akun tersebut hanya berfungsi satu jalur pada firmware ini | Gunakan akun `sip2sip.info`. |
 | Emoji tampil sebagai kotak `?` | Emoji tidak ada di set aktif (bendera, urutan ZWJ, atau emoji di luar `emoji.bin`) | Gunakan emoji tunggal, atau buat ulang `emoji.bin` dari sumber yang lebih lengkap. |
 | Emoji yang tampil hanya 54 sprite bawaan | `/emoji.bin` tidak dipakai: tidak ada di root SD, SD tidak terbaca, header atau ukuran tidak cocok, atau PSRAM tidak cukup | Salin ulang `emoji.bin` ke root SD, buat ulang dengan `tools/make_emoji_bin.py`, kurangi jumlah emoji, lalu restart. |
+| Preview Kamera diam beberapa detik setelah berjalan, tetapi HP tidak mati | Potongan **terakhir** sebuah frame hilang di link UART (lebih sering di baud tinggi) dan slot buffer preview yang sedang diisi bocor (`cam_rx.h` versi lama); setelah tiga kebocoran semua frame dibuang | Sudah diperbaiki: slot yang tak pernah selesai dibebaskan saat frame berikutnya mulai. Bila masih terjadi, lihat angka *dropped* dan *bad* di tab Sistem app Kamera dan turunkan baud link. |
+| Emoji tampil acak-acakan (bukan kotak `?`) | Belum dipastikan. `emoji.bin` yang utuh dan benar sudah dikonfirmasi tidak menyebabkannya; preview web Remote (JPEG, ±2 fps) juga dapat memburamkan detail kecil | Jalankan `python preview_emoji_bin.py emoji.bin cek.png` (cek ukuran COCOK dan tampilan sprite), lalu bandingkan dengan foto layar HP asli, bukan preview web. |
+| Tab NPS menampilkan "Core ke-2 tidak berjalan" | Task pembantu gagal dibuat (PSRAM tidak cukup untuk stack 10 KB) atau saklar Core ke-2 mati | Nyalakan saklar **Core ke-2**; periksa PSRAM bebas di HWmonitor. |
 | Catur menampilkan "Atur broker Catur dulu" atau "Broker Catur belum diatur" | Host, username, atau password broker Catur belum diisi | Isi di app Catur lalu **Simpan**, taruh `/chess.cfg` di SD, atau salin dari pengaturan Chat. |
 | Catur menampilkan "Username/password salah" atau "Tidak bisa menghubungi broker" | Kredensial salah, WiFi belum tersambung, atau broker tidak tersedia | Periksa akun dan host broker; pastikan WiFi aktif; bila ada ACL, izinkan `renphone/chess/#`. |
 | Layar Jaringan Catur menampilkan "RAM tidak cukup utk selisih" | Bobot awal untuk chip **Selisih** tidak muat di PSRAM | Tutup app lain lalu buka ulang layar Jaringan; tab Jaringan, Bobot, dan Petak tetap dapat dipakai tanpa Selisih. |
@@ -1067,6 +1081,7 @@ phone_notif_center.ino          Notifikasi dan Dynamic Island
                                 wakeword, gamepad, power, doom, nes_*, features, dan lainnya)
 ppu_engine_renphone.ino         NyxPPU
 emoji_renphone.ino              Dukungan emoji (pembungkus font, keyboard emoji, pemuat /emoji.bin dari SD)
+preview_emoji_bin.py            Menggambar isi emoji.bin jadi PNG dan memeriksa ukurannya (untuk memeriksa berkas emoji di komputer/Termux)
 emoji_data.h                    54 sprite emoji bawaan (cadangan bila /emoji.bin tidak ada)
 kamus_renphone.ino              Kamus keyboard: baris saran, autokoreksi, kata pelajaran (NVS), kamus SD
 kamus_core.h                    Logika murni kamus (saran, jarak edit, autokoreksi); tanpa Arduino, diuji di komputer
@@ -1091,6 +1106,7 @@ backup_renphone.ino             Backup & Restore pengaturan (NVS ke SD, opsional
 backup_core.h  backup_crypto.h  Format berkas .nbk dan CRC32; SHA-256, PBKDF2, AES-256-CTR (murni C++, diuji di komputer)
 tests_backup/                   Uji backup dan kripto di komputer (kripto dibandingkan dengan Python hashlib/cryptography)
 chess_renphone.ino              Catur: mesin aturan, AI (negamax + model gaya pemain), online lewat MQTT
+chess_smp.cpp                   Core ke-2 untuk Nyx (Lazy SMP): task pembantu + salinan mesin; di-build bersama chess_engine.inc yang dibuat CI dari chess_renphone.ino
 tests_chess/                    Uji mesin catur (perft), AI, dan serialisasi model gaya di komputer; bench_nyx.cpp = percobaan kasar level Nyx; `bench_nyx2.cpp` (di root) = perbandingan minimax vs Nyx lawan tiga jenis bot
 ebook_renphone.ino ebook_core.h App Buku dan mesinnya (inflate, ZIP, EPUB, HTML ke teks, tata letak)
 tests_ebook/                    Uji mesin Buku di komputer
@@ -1189,3 +1205,5 @@ FT6236 berbagi bus I2C dengan MPU6050 (SDA 15, SCL 7, alamat 0x38); RST/INT tida
 sentuhan terbalik -> `RP_TOUCH_SWAP_XY` / `RP_TOUCH_FLIP_X` / `RP_TOUCH_FLIP_Y`. Sentuh kapasitif tidak memakai wizard kalibrasi.
 
 **Multi-touch (2 jari).** FT6236 melaporkan dua jari. Jari kedua dipakai game (DOOM, NES, Inferno) sehingga joystick dan tombol aksi atau arah pandang bisa dipakai bersamaan. Aktif secara bawaan; matikan dengan `-DRP_MULTITOUCH=0`.
+
+<!-- NYX-README-V1 -->
