@@ -55,6 +55,7 @@ static uint32_t  emjCUse[3][EMJ_CACHE_N];            // stempel pemakaian terakh
 static uint32_t  emjTick = 0;
 static uint8_t   emjFails = 0;
 static volatile bool emjBusy = false;
+static uint8_t   emjStage[24 * 24 * 2] __attribute__((aligned(4)));   // NYX-EMJCACHE-FIX1: penampung baca SD di RAM internal (sprite terbesar 24x24 RGB565)
 static uint64_t* emjSdKey = nullptr;                 // (cp<<16 | idx) terurut, utk pencarian biner
 
 static inline int  emjCount() { return emjSdN ? (int)emjSdN : (int)EMJ_UNKNOWN; }   // sprite bawaan: 54 (+ kotak "?")
@@ -82,7 +83,8 @@ static const uint16_t* emjSprite(int bi, int idx) {
   if (!emjFile) return nullptr;                      // file sudah ditutup (kartu bermasalah)
   emjBusy = true;
   uint16_t* dst = base + (size_t)victim * px;
-  bool ok = emjFile.seek(emjOff[bi] + (uint32_t)idx * (uint32_t)(px * 2)) && emjFile.read((uint8_t*)dst, px * 2) == px * 2;
+  bool ok = emjFile.seek(emjOff[bi] + (uint32_t)idx * (uint32_t)(px * 2)) && emjFile.read(emjStage, px * 2) == px * 2;   // baca ke RAM internal dulu (bukan DMA langsung ke PSRAM)
+  if (ok) memcpy(dst, emjStage, px * 2);
   emjBusy = false;
   if (!ok) { emjCKey[bi][victim] = 0; emjCUse[bi][victim] = 0; if (++emjFails >= 3) emjFile.close(); return nullptr; }
   emjFails = 0;
