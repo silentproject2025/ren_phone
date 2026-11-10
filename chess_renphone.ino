@@ -27,7 +27,7 @@
 // =====================================================================
 #include <PubSubClient.h>
 
-// NYX-SMP-V1: core ke-2 (Lazy SMP) + NPS - lihat chess_smp.cpp
+// NYX-SMP-V1 + NYX-SMP-BENCH2: core ke-2 (Lazy SMP) + NPS - lihat chess_smp.cpp
 // ==== ENGINE BEGIN ====
 // Mesin aturan catur murni (tanpa Arduino/LovyanGFX) -- diuji perft di PC.
 // Petak: sq = rank*8 + file (a1 = 0, h1 = 7, a8 = 56). Bidak: +1..+6 putih, -1..-6 hitam
@@ -4690,8 +4690,10 @@ static void chsDrawGame(LGFX_Sprite& s) {
 #define CHS_BENCH_MS 1000
 static uint32_t chsStNm = 0, chsStNh = 0, chsStMs = 0;
 static int      chsStD = 0, chsStCores = 1;
+static uint32_t chsLsNm = 0, chsLsNh = 0, chsLsMs = 0; static int chsLsD = 0, chsLsCores = 1;   // panel "Terakhir": hanya pencarian >= 100 ms
 static void chsAiReport(int d, uint32_t nm, uint32_t nh, uint32_t ms, int cores) {
   chsStD = d; chsStNm = nm; chsStNh = nh; chsStMs = ms; chsStCores = cores;
+  if (ms >= 100) { chsLsD = d; chsLsNm = nm; chsLsNh = nh; chsLsMs = ms; chsLsCores = cores; }
   uint32_t nps = ms ? (uint32_t)(((uint64_t)nm + nh) * 1000ULL / ms) : 0;
   Serial.printf("[NYX-NPS] d=%d  node=%lu+%lu  %lu ms  NPS=%lu  core=%d\n", d, (unsigned long)nm, (unsigned long)nh, (unsigned long)ms, (unsigned long)nps, cores);
 }
@@ -4730,6 +4732,8 @@ static void chsBenchMode(int m) {                     // satu mode (m=0: 1 core,
     chsStNm = 0; chsStNh = 0; chsStMs = 0; chsStD = 0; chsStCores = 1;
     chsAiChoose(14, CHS_BENCH_MS, 0, 0, 0);
     tn += chsStNm + chsStNh; tms += chsStMs; ds += chsStD;
+    Serial.printf("[NYX-BENCH] pos%d %s: d=%d  node=%lu+%lu  %lu ms  NPS=%lu\n", i + 1, m ? "2 core" : "1 core", chsStD, (unsigned long)chsStNm, (unsigned long)chsStNh,
+                  (unsigned long)chsStMs, (unsigned long)(chsStMs ? ((uint64_t)chsStNm + chsStNh) * 1000ULL / chsStMs : 0));
     if (m == 1 && chsStCores == 2) chsBnTwo = true;
   }
   chsAiTTClear();
@@ -4750,7 +4754,52 @@ static void chsBenchPoll() {                          // dipanggil chessLoopPoll
   uint32_t a = chsBnTms[0] ? (uint32_t)((uint64_t)chsBnTn[0] * 1000ULL / chsBnTms[0]) : 0, b = chsBnTms[1] ? (uint32_t)((uint64_t)chsBnTn[1] * 1000ULL / chsBnTms[1]) : 0;
   Serial.printf("[NYX-BENCH] percepatan NPS = x%.2f\n", a ? (double)b / (double)a : 0.0);
 }
-static void chsBenchPollIf() { if (chsBenchState && curScreen() == SCR_CHESS && chsScr == 3) chsBenchPoll(); }
+// --- uji "waktu mencapai kedalaman D" (lebih adil daripada NPS: tak terpengaruh pembulatan kedalaman) ---
+#define CHS_DEP_TARGET 7
+#define CHS_DEP_CAP_MS 12000
+static uint8_t       chsDepState = 0;                 // 0 diam | 1..6 = langkah (mode*3 + posisi) + 1; mode 0 = 1 core, 1 = 2 core
+static unsigned long chsDepReqMs = 0;
+static bool          chsDpOk = false;
+static uint32_t      chsDpMs[2][3], chsDpNn[2][3];
+static uint8_t       chsDpD[2][3];
+static void chsDepthStep(int k) {
+  int m = k / 3, i = k % 3;
+  if (!chsAiEnsure()) return;
+  uiBoostKick();
+  CHS_SAVE_ST;
+  int svHist = chsAiHistN; chsAiHistN = 0;
+#if CHS_SMP
+  bool svOn = chsSmpOn; chsSmpOn = (m == 1);
+#endif
+  chsBenchSetFen(chsBenchFen[i]);
+  chsAiTTClear();
+  chsStNm = 0; chsStNh = 0; chsStMs = 0; chsStD = 0; chsStCores = 1;
+  chsAiChoose(CHS_DEP_TARGET, CHS_DEP_CAP_MS, 0, 0, 0);
+  chsAiTTClear();
+#if CHS_SMP
+  chsSmpOn = svOn;
+#endif
+  chsAiHistN = svHist;
+  CHS_REST_ST;
+  chsDpMs[m][i] = chsStMs; chsDpNn[m][i] = chsStNm + chsStNh; chsDpD[m][i] = (uint8_t)chsStD;
+  Serial.printf("[NYX-DEPTH] pos%d %s: d=%d  node=%lu+%lu  %lu ms  NPS=%lu  core=%d\n", i + 1, m ? "2 core" : "1 core", chsStD, (unsigned long)chsStNm, (unsigned long)chsStNh,
+                (unsigned long)chsStMs, (unsigned long)(chsStMs ? ((uint64_t)chsStNm + chsStNh) * 1000ULL / chsStMs : 0), chsStCores);
+}
+static void chsDepthPoll() {
+  if (!chsDepState) return;
+  if ((unsigned long)(millis() - chsDepReqMs) < 250UL) return;       // beri 1 frame utk menggambar "Menguji..."
+  chsDepthStep(chsDepState - 1);
+  if (chsDepState >= 6) {
+    chsDepState = 0; chsDpOk = true;
+    uint32_t a = chsDpMs[0][0] + chsDpMs[0][1] + chsDpMs[0][2], b = chsDpMs[1][0] + chsDpMs[1][1] + chsDpMs[1][2];
+    Serial.printf("[NYX-DEPTH] total waktu: 1 core %lu ms, 2 core %lu ms, lebih cepat x%.2f\n", (unsigned long)a, (unsigned long)b, b ? (double)a / (double)b : 0.0);
+  } else { chsDepState++; chsDepReqMs = millis(); }
+  needRedraw = true;
+}
+static void chsBenchPollIf() {
+  if (curScreen() != SCR_CHESS || chsScr != 3) return;
+  if (chsBenchState) chsBenchPoll(); else if (chsDepState) chsDepthPoll();
+}
 
 static uint8_t chsVw = 0;                 // 0 diagram, 1 peta bobot, 2 petak, 3 NPS
 static bool    chsVwDelta = false;        // true = tampilkan selisih dari bobot awal
@@ -4765,7 +4814,7 @@ static const char* const chsFeatName[CHS_NIN] = {
   "fase", "materi", "diskak", "no.langkah", "mobilitas", "ada menteri" };
 static const char* const chsPcName[7] = { "Pion", "Kuda", "Gajah", "Benteng", "Menteri", "Raja", "Asal" };
 
-static void chsVwClose() { chsBenchState = 0; if (chsVwInit) { CHS_AI_FREE(chsVwInit); chsVwInit = nullptr; } }
+static void chsVwClose() { chsBenchState = 0; chsDepState = 0; if (chsVwInit) { CHS_AI_FREE(chsVwInit); chsVwInit = nullptr; } }
 static void chsVwOpen() {
   chsNetEnsure();
   if (!chsVwInit) chsVwInit = (float*)CHS_AI_ALLOC(CHS_NP * sizeof(float));
@@ -4906,10 +4955,11 @@ static void chsFmtK(char* o, size_t n, uint32_t v) {
   else if (v >= 1000) snprintf(o, n, "%u.%02uk", (unsigned)(v / 1000), (unsigned)((v % 1000) / 10));
   else snprintf(o, n, "%u", (unsigned)v);
 }
-static void chsVwNpsBtn(int i, int* x, int* y, int* w, int* h) {     // 0 = Uji NPS, 1 = saklar core ke-2
-  chsVwGeom(); const ChsVwG& g = chsg; int gap = 6; int bw = (g.aw - gap) / 2;
-  *y = g.fy - 26; *h = 22; *w = bw; *x = g.ax + (i ? bw + gap : 0);
+static void chsVwNpsBtn(int i, int* x, int* y, int* w, int* h) {     // 0 = Uji NPS, 1 = Uji kedalaman, 2 = saklar core ke-2
+  chsVwGeom(); const ChsVwG& g = chsg; int gap = 4; int bw = (g.aw - 2 * gap) / 3;
+  *y = g.fy - 26; *h = 22; *w = bw; *x = g.ax + i * (bw + gap);
 }
+static void chsFmtSec(char* o, size_t n, uint32_t ms) { snprintf(o, n, "%u.%u", (unsigned)(ms / 1000), (unsigned)((ms % 1000) / 100)); }
 static void chsVwDrawNps(LGFX_Sprite& s) {
   chsVwGeom(); const ChsVwG& g = chsg;
   char b[96], ln[96], k1[16], k2[16], k3[16];
@@ -4920,21 +4970,20 @@ static void chsVwDrawNps(LGFX_Sprite& s) {
 #endif
   snprintf(b, sizeof(b), "Mesin: %s", two ? "2 core (Lazy SMP)" : "1 core");
   s.setTextColor(two ? (uint16_t)T().accent : (uint16_t)T().subtext); s.setCursor(x, y); chsClip(b, ln, mc); s.print(ln); y += 12;
-  if (chsStMs) {
-    uint32_t nps = (uint32_t)(((uint64_t)chsStNm + chsStNh) * 1000ULL / chsStMs);
+  if (chsLsMs) {                                       // hanya pencarian >= 100 ms (yg lebih singkat: NPS-nya tak bermakna)
+    uint32_t nps = (uint32_t)(((uint64_t)chsLsNm + chsLsNh) * 1000ULL / chsLsMs);
     chsFmtK(k1, sizeof(k1), nps);
-    snprintf(b, sizeof(b), "Terakhir: d%d  %u ms  NPS %s", chsStD, (unsigned)chsStMs, k1);
+    snprintf(b, sizeof(b), "Terakhir: d%d  %u ms  NPS %s", chsLsD, (unsigned)chsLsMs, k1);
     s.setTextColor(T().text); s.setCursor(x, y); chsClip(b, ln, mc); s.print(ln); y += 10;
-    chsFmtK(k1, sizeof(k1), chsStNm); chsFmtK(k2, sizeof(k2), chsStNh);
-    if (chsStCores == 2) snprintf(b, sizeof(b), "node %s utama + %s core 2", k1, k2); else snprintf(b, sizeof(b), "node %s (1 core)", k1);
+    chsFmtK(k1, sizeof(k1), chsLsNm); chsFmtK(k2, sizeof(k2), chsLsNh);
+    if (chsLsCores == 2) snprintf(b, sizeof(b), "node %s utama + %s core 2", k1, k2); else snprintf(b, sizeof(b), "node %s (1 core)", k1);
     s.setTextColor(T().subtext); s.setCursor(x, y); chsClip(b, ln, mc); s.print(ln); y += 14;
   } else {
-    s.setTextColor(T().subtext); s.setCursor(x, y); chsClip("Terakhir: belum ada (main lawan AI / Uji NPS)", ln, mc); s.print(ln); y += 14;
+    s.setTextColor(T().subtext); s.setCursor(x, y); chsClip("Terakhir: belum ada (main lawan AI / uji)", ln, mc); s.print(ln); y += 14;
   }
-  s.setTextColor(T().text); s.setCursor(x, y); chsClip("Uji: 3 posisi x 1 dtk per mode", ln, mc); s.print(ln); y += 12;
   if (chsBenchState) {
     s.setTextColor(T().accent); s.setCursor(x, y);
-    chsClip(chsBenchState == 1 ? "Menguji 1 core... jangan sentuh layar" : "Menguji 2 core... jangan sentuh layar", ln, mc); s.print(ln);
+    chsClip(chsBenchState == 1 ? "Menguji 1 core... jangan sentuh layar" : "Menguji 2 core... jangan sentuh layar", ln, mc); s.print(ln); y += 10;
   } else if (chsBnOk) {
     uint32_t a = chsBnTms[0] ? (uint32_t)((uint64_t)chsBnTn[0] * 1000ULL / chsBnTms[0]) : 0, c = chsBnTms[1] ? (uint32_t)((uint64_t)chsBnTn[1] * 1000ULL / chsBnTms[1]) : 0;
     chsFmtK(k1, sizeof(k1), a); chsFmtK(k2, sizeof(k2), c);
@@ -4944,30 +4993,49 @@ static void chsVwDrawNps(LGFX_Sprite& s) {
     s.setCursor(x, y); chsClip(b, ln, mc); s.print(ln); y += 10;
     if (chsBnTwo && a) { snprintf(b, sizeof(b), "Percepatan NPS: x%.2f", (double)c / (double)a); s.setTextColor(T().good); }
     else { snprintf(b, sizeof(b), "Core ke-2 tidak berjalan"); s.setTextColor(T().danger); }
-    s.setCursor(x, y); chsClip(b, ln, mc); s.print(ln);
+    s.setCursor(x, y); chsClip(b, ln, mc); s.print(ln); y += 10;
   }
-  for (int i = 0; i < 2; i++) {
+  y += 4;
+  if (chsDepState) {
+    s.setTextColor(T().accent); s.setCursor(x, y);
+    snprintf(b, sizeof(b), "Uji D%d %d/6 (%s)... jangan sentuh", CHS_DEP_TARGET, (int)chsDepState, chsDepState <= 3 ? "1 core" : "2 core"); chsClip(b, ln, mc); s.print(ln);
+  } else if (chsDpOk) {
+    char t1[3][12], t2[3][12]; uint32_t sa = 0, sb = 0; bool capped = false;
+    for (int i = 0; i < 3; i++) { chsFmtSec(t1[i], 12, chsDpMs[0][i]); chsFmtSec(t2[i], 12, chsDpMs[1][i]); sa += chsDpMs[0][i]; sb += chsDpMs[1][i]; if (chsDpD[0][i] < CHS_DEP_TARGET || chsDpD[1][i] < CHS_DEP_TARGET) capped = true; }
+    snprintf(b, sizeof(b), "D%d 1c: %s/%s/%s dtk", CHS_DEP_TARGET, t1[0], t1[1], t1[2]);
+    s.setTextColor(T().text); s.setCursor(x, y); chsClip(b, ln, mc); s.print(ln); y += 10;
+    snprintf(b, sizeof(b), "D%d 2c: %s/%s/%s dtk", CHS_DEP_TARGET, t2[0], t2[1], t2[2]);
+    s.setCursor(x, y); chsClip(b, ln, mc); s.print(ln); y += 10;
+    double r = sb ? (double)sa / (double)sb : 0.0;
+    snprintf(b, sizeof(b), "Waktu: %s x%.2f%s", r > 1.05 ? "lebih cepat" : (r < 0.95 ? "LEBIH LAMBAT" : "sama"), r, capped ? " *batas" : "");
+    s.setTextColor(r > 1.05 ? (uint16_t)T().good : (r < 0.95 ? (uint16_t)T().danger : (uint16_t)T().text)); s.setCursor(x, y); chsClip(b, ln, mc); s.print(ln);
+  }
+  for (int i = 0; i < 3; i++) {
     int bx, by, bw, bh; chsVwNpsBtn(i, &bx, &by, &bw, &bh);
-    if (i == 0) {
-      iosRR(s, bx, by, bw, bh, 7, chsBenchState ? (uint16_t)T().surface2 : (uint16_t)T().accent);
-      s.setTextColor(chsBenchState ? (uint16_t)T().subtext : (uint16_t)T().bg); chsPrintC(s, bx, bw, by + 7, "Uji NPS");
+    bool busy = chsBenchState || chsDepState;
+    if (i < 2) {
+      iosRR(s, bx, by, bw, bh, 7, busy ? (uint16_t)T().surface2 : (uint16_t)T().accent);
+      s.setTextColor(busy ? (uint16_t)T().subtext : (uint16_t)T().bg);
+      if (i == 0) chsPrintC(s, bx, bw, by + 7, "Uji NPS"); else { snprintf(b, sizeof(b), "Uji D%d", CHS_DEP_TARGET); chsPrintC(s, bx, bw, by + 7, b); }
     } else {
       iosRR(s, bx, by, bw, bh, 7, T().surface2);
-      s.setTextColor(two ? (uint16_t)T().accent : (uint16_t)T().subtext); chsPrintC(s, bx, bw, by + 7, two ? "Core ke-2: ON" : "Core ke-2: OFF");
+      s.setTextColor(two ? (uint16_t)T().accent : (uint16_t)T().subtext); chsPrintC(s, bx, bw, by + 7, two ? "Core2: ON" : "Core2: OFF");
     }
   }
   snprintf(b, sizeof(b), "NPS = node per detik (utama + core 2)");
   s.setTextColor(T().subtext); s.setCursor(g.ax + 2, g.fy); chsClip(b, ln, g.aw / 6); s.print(ln);
 }
 static void chsVwTouchNps(int x, int y) {
-  for (int i = 0; i < 2; i++) {
+  for (int i = 0; i < 3; i++) {
     int bx, by, bw, bh; chsVwNpsBtn(i, &bx, &by, &bw, &bh);
     if (x < bx || x >= bx + bw || y < by || y >= by + bh + 4) continue;
-    if (chsBenchState) return;
-    if (i == 0) {
+    if (chsBenchState || chsDepState) return;
+    if (i < 2) {
       if (chsActive || chsVsAI || chsGem) { showToast("Keluar dari partai dulu", 1800); return; }
       if (!chsAiEnsure()) { showToast("PSRAM tidak cukup utk AI", 2200); return; }
-      chsBenchState = 1; chsBenchReqMs = millis(); needRedraw = true;
+      if (i == 0) { chsBenchState = 1; chsBenchReqMs = millis(); }
+      else { chsDpOk = false; chsDepState = 1; chsDepReqMs = millis(); }
+      needRedraw = true;
     } else {
 #if CHS_SMP
       chsSmpOn = !chsSmpOn; chsPrefsSaveCfg(); showToast(chsSmpOn ? "Core ke-2 aktif" : "1 core saja", 1400); needRedraw = true;
