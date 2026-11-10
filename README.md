@@ -173,7 +173,7 @@ Setiap *push* memicu workflow **Build Firmware Binaries** yang menerbitkan Relea
 
 Penamaan tag: `build-<nomor>` untuk S3, `cam-<nomor>` untuk CAM, dan `channel-<branch>` untuk channel OTA per branch. Branch `main`, `master`, dan `remote-control` diterbitkan sebagai rilis biasa; branch lain selalu berstatus *prerelease*.
 
-Saat dijalankan manual (*Run workflow*), workflow menyediakan dua input: `use_custom_libs` (pakai atau lewati library core kustom) dan `loop_core` (`default`, `0`, atau `1`; memilih core tempat `loop()`/UI berjalan, untuk tes A/B performa game).
+Saat dijalankan manual (*Run workflow*), workflow menyediakan dua input: `use_custom_libs` (pakai atau lewati library core kustom) dan `loop_core` (`default`, `0`, atau `1`; memilih core tempat `loop()`/UI berjalan, untuk tes A/B performa game). Ada dua input catur: `simd_pie` (`on` bawaan, atau `off` = jalur skalar, flag `-DCHS_NN_NO_PIE`, untuk tes A/B) dan `nyx_nn` (`off` bawaan, atau `on` = `-DCHS_NN_NYX=1`, level Nyx memakai evaluasi jaringan saraf). SIMD PIE (instruksi vektor ESP32-S3) hanya mempercepat evaluasi NN, jadi baru terpakai bila `nyx_nn=on`; NN masih eksperimen, dan saat NN aktif core ke-2 (Lazy SMP) otomatis tidak dipakai. Build dari push memakai nilai bawaan.
 
 Workflow **Web Flasher (GitHub Pages)** memanggil otomatis setelah Release dibuat dan menyusun halaman flasher berbasis browser. Halaman tersebut membedakan firmware **stabil** (dari `main`/`master`) dan **uji coba** (dari branch lain), serta menyediakan tombol unduh `.bin`, checksum SHA-256, dan tautan repositori.
 

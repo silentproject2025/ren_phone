@@ -16,6 +16,16 @@ on:
         type: choice
         options: [ "default", "0", "1" ]
         default: "default"
+      simd_pie:
+        description: "SIMD PIE (instruksi vektor ESP32-S3) utk evaluasi NN catur. on = bawaan (dipakai bila NN aktif); off = jalur skalar (tes A/B)"
+        type: choice
+        options: [ "on", "off" ]
+        default: "on"
+      nyx_nn:
+        description: "Level Nyx memakai evaluasi jaringan saraf (NN, -DCHS_NN_NYX=1)? EKSPERIMEN; hanya dengan ini SIMD PIE terpakai. Core ke-2 (Lazy SMP) otomatis tidak dipakai saat NN aktif"
+        type: choice
+        options: [ "off", "on" ]
+        default: "off"
 
 permissions:
   contents: write
@@ -179,6 +189,8 @@ jobs:
       - name: Compile Sketch
         env:
           LOOP_CORE_IN: ${{ inputs.loop_core }}
+          SIMD_PIE_IN: ${{ inputs.simd_pie }}
+          NYX_NN_IN: ${{ inputs.nyx_nn }}
         run: |
           # Pencocokan di shell (persis), BUKAN ekspresi Actions: di ekspresi, '' == '0' bernilai
           # true (keduanya dikonversi jadi angka 0), sehingga build dari push ikut memakai opsi kosong.
@@ -186,6 +198,11 @@ jobs:
             0|1) LOOP_OPT=",LoopCore=$LOOP_CORE_IN" ;;
             *)   LOOP_OPT="" ;;
           esac
+          # NYX-SIMD-OPT-V1: opsi catur. Pencocokan persis di shell; input kosong (build dari push) = perilaku lama.
+          CHS_FLAGS=""
+          [ "$SIMD_PIE_IN" = "off" ] && CHS_FLAGS="$CHS_FLAGS -DCHS_NN_NO_PIE"
+          [ "$NYX_NN_IN" = "on" ] && CHS_FLAGS="$CHS_FLAGS -DCHS_NN_NYX=1"
+          echo "Opsi catur: simd_pie=${SIMD_PIE_IN:-on} nyx_nn=${NYX_NN_IN:-off} flag='${CHS_FLAGS}'"
           for f in *.ino *.h; do
             if grep -qaP '\x00' "$f"; then echo "::error::$f berisi byte NUL (file terpotong)"; exit 1; fi
           done
@@ -299,7 +316,7 @@ jobs:
           echo "Varian layar: $VARIANT ${DISP_FLAG}"
           arduino-cli compile --fqbn esp32:esp32:esp32s3 \
             --board-options "FlashSize=16M,PSRAM=opi,PartitionScheme=app3M_fat9M_16MB${LOOP_OPT}" \
-            --build-property "compiler.cpp.extra_flags=-DRP_BUILD_NUM=${{ github.run_number }} -DRP_BRANCH=${RP_BRANCH} -DRP_VERSION=${RP_VERSION} ${DISP_FLAG} -I${NOF_INCLUDE}" \
+            --build-property "compiler.cpp.extra_flags=-DRP_BUILD_NUM=${{ github.run_number }} -DRP_BRANCH=${RP_BRANCH} -DRP_VERSION=${RP_VERSION} ${DISP_FLAG}${CHS_FLAGS} -I${NOF_INCLUDE}" \
             --build-property "compiler.c.extra_flags=-I${NOF_INCLUDE}" \
             build_sketch --output-dir build
 
