@@ -21,6 +21,11 @@ on:
         type: choice
         options: [ "on", "off" ]
         default: "on"
+      chess_opt:
+        description: "NYX-MAX: tingkat optimasi mesin catur. O3 = bawaan (tercepat, kode lebih besar); O2 = lebih kecil (tes A/B / bila partisi app penuh)"
+        type: choice
+        options: [ "O3", "O2" ]
+        default: "O3"
       nyx_nn:
         description: "Level Nyx memakai evaluasi jaringan saraf (NN, -DCHS_NN_NYX=1)? EKSPERIMEN; hanya dengan ini SIMD PIE terpakai. Core ke-2 (Lazy SMP) otomatis tidak dipakai saat NN aktif"
         type: choice
@@ -191,6 +196,7 @@ jobs:
           LOOP_CORE_IN: ${{ inputs.loop_core }}
           SIMD_PIE_IN: ${{ inputs.simd_pie }}
           NYX_NN_IN: ${{ inputs.nyx_nn }}
+          CHESS_OPT_IN: ${{ inputs.chess_opt }}
         run: |
           # Pencocokan di shell (persis), BUKAN ekspresi Actions: di ekspresi, '' == '0' bernilai
           # true (keduanya dikonversi jadi angka 0), sehingga build dari push ikut memakai opsi kosong.
@@ -202,7 +208,8 @@ jobs:
           CHS_FLAGS=""
           [ "$SIMD_PIE_IN" = "off" ] && CHS_FLAGS="$CHS_FLAGS -DCHS_NN_NO_PIE"
           [ "$NYX_NN_IN" = "on" ] && CHS_FLAGS="$CHS_FLAGS -DCHS_NN_NYX=1"
-          echo "Opsi catur: simd_pie=${SIMD_PIE_IN:-on} nyx_nn=${NYX_NN_IN:-off} flag='${CHS_FLAGS}'"
+          [ "$CHESS_OPT_IN" = "O2" ] && CHS_FLAGS="$CHS_FLAGS -DCHS_OPT3=0"
+          echo "Opsi catur: simd_pie=${SIMD_PIE_IN:-on} nyx_nn=${NYX_NN_IN:-off} chess_opt=${CHESS_OPT_IN:-O3} flag='${CHS_FLAGS}'"
           for f in *.ino *.h; do
             if grep -qaP '\x00' "$f"; then echo "::error::$f berisi byte NUL (file terpotong)"; exit 1; fi
           done

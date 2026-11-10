@@ -30,9 +30,17 @@
 // NYX-SMP-V1 + NYX-SMP-BENCH2: core ke-2 (Lazy SMP) + NPS - lihat chess_smp.cpp
 // ==== ENGINE BEGIN ====
 #if defined(__GNUC__) && !defined(CHS_NO_OPT_PRAGMA)
-// NYX-SPEED: mesin dikompilasi -O2 (sisa sketch -Os) -- inlining + pemindahan/penjadwalan instruksi; -DCHS_NO_OPT_PRAGMA = kembali ke -Os (A/B lewat tab NPS)
+// NYX-MAX: mesin dikompilasi -O3 (sisa sketch -Os) -- inlining agresif + vektorisasi + penjadwalan instruksi.
+// -DCHS_OPT3=0 = -O2 (A/B; dipilih lewat input workflow chess_opt); -DCHS_NO_OPT_PRAGMA = kembali ke -Os (A/B lewat tab NPS)
+#ifndef CHS_OPT3
+#define CHS_OPT3 1
+#endif
 #pragma GCC push_options
+#if CHS_OPT3
+#pragma GCC optimize ("O3")
+#else
 #pragma GCC optimize ("O2")
+#endif
 #endif
 // Mesin aturan catur murni (tanpa Arduino/LovyanGFX) -- diuji perft di PC.
 // Petak: sq = rank*8 + file (a1 = 0, h1 = 7, a8 = 56). Bidak: +1..+6 putih, -1..-6 hitam
@@ -528,9 +536,17 @@ static void chsAiReport(int d, uint32_t nm, uint32_t nh, uint32_t ms, int cores)
 
 // ==== AI BEGIN ====
 #if defined(__GNUC__) && !defined(CHS_NO_OPT_PRAGMA)
-// NYX-SPEED: mesin dikompilasi -O2 (sisa sketch -Os) -- inlining + pemindahan/penjadwalan instruksi; -DCHS_NO_OPT_PRAGMA = kembali ke -Os (A/B lewat tab NPS)
+// NYX-MAX: mesin dikompilasi -O3 (sisa sketch -Os) -- inlining agresif + vektorisasi + penjadwalan instruksi.
+// -DCHS_OPT3=0 = -O2 (A/B; dipilih lewat input workflow chess_opt); -DCHS_NO_OPT_PRAGMA = kembali ke -Os (A/B lewat tab NPS)
+#ifndef CHS_OPT3
+#define CHS_OPT3 1
+#endif
 #pragma GCC push_options
+#if CHS_OPT3
+#pragma GCC optimize ("O3")
+#else
 #pragma GCC optimize ("O2")
+#endif
 #endif
 // Mesin AI + model GAYA PEMAIN yang belajar online. Dipasang di atas mesin aturan (papan global chsBd, dst),
 // tanpa Arduino/LovyanGFX -> diuji di PC (tests_chess/). HANYA dipanggil dari loop UI: pencarian memakai-ulang
@@ -3106,7 +3122,7 @@ static uint16_t chsAiChoose(int maxDepth, uint32_t budgetMs, int margin, int mod
     }
 #endif
     if (!done) break;
-    memcpy(chsAiFs, chsAiSc, (size_t)n * 4); memcpy(chsAiFx, chsAiEx, (size_t)n); dDone = d;
+    memcpy(chsAiFs, chsAiSc, (size_t)(n & 255) * 4); memcpy(chsAiFx, chsAiEx, (size_t)(n & 255));   // n <= 218 (langkah sah maks); mask = jaminan batas utk kompilator (-O3) dDone = d;
     for (int i = 1; i < n; i++) {                                              // urutkan akar: eksak dulu (skor menurun), lalu batas atas; iterasi berikut memangkas lebih awal
       uint16_t tm = chsAiRm[i]; int32_t ts = chsAiFs[i]; uint8_t te = chsAiFx[i];
       int64_t key = te ? (int64_t)ts + 100000 : (int64_t)ts; int j = i - 1;
@@ -3336,8 +3352,8 @@ static unsigned long chsAiDueMs = 0, chsLastTouchMs = 0, chsTurnStartMs = 0;
 static uint8_t       chsUnsaved = 0;
 static const char* const chsLvName[5] = {"Mudah", "Sedang", "Sulit", "Cermin", "Nyx"};
 static const uint16_t chsAfkSec[4] = {0, 30, 60, 120};
-static const uint8_t  chsLvDepth[5]  = {2, 4, 6, 4, 14};
-static const uint16_t chsLvMs[5]     = {250, 700, 1800, 700, 2400};
+static const uint8_t  chsLvDepth[5]  = {2, 4, 12, 4, 14};   // NYX-MAX: Sulit 6 -> 12 (kedalaman 6 dicapai dlm ms; tanpa ini waktu 4 dtk tak terpakai)
+static const uint16_t chsLvMs[5]     = {250, 700, 4000, 700, 7000};   // NYX-MAX: Sulit 1,8 -> 4 dtk, Nyx 2,4 -> 7 dtk (kedua core + cache besar membuatnya jauh lebih dalam); Mudah/Sedang/Cermin sengaja tetap cepat
 static const int16_t  chsLvMargin[5] = {120, 10, 0, 70, 15};
 static const uint8_t  chsLvMode[5]   = {1, 1, 0, 2, 3};    // 0 terbaik | 1 acak di antara yg layak | 2 gaya user | 3 Nyx (jebakan kebiasaan)
 
@@ -3811,7 +3827,7 @@ static uint16_t chsAiMoveFor(int lv) {
 #define CHS_PONDER 1
 #endif
 #ifndef CHS_PONDER_MAX_MS
-#define CHS_PONDER_MAX_MS 5000
+#define CHS_PONDER_MAX_MS 10000
 #endif
 static uint32_t chsPonderKey = 0, chsPonderUsed = 0; static uint16_t chsPonderPred = 0;
 static void chsAiPonder() {
