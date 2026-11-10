@@ -311,6 +311,33 @@ static bool chsInCheck() {
   return ks >= 0 && chsAtt(ks, !chsWhite);
 }
 
+// NYX-SPEED2: uji legalitas sesudah langkah (dipanggil SETELAH chsDo). Bila raja sebelumnya tidak sedang skak & langkah bukan langkah raja / e.p.,
+// raja hanya bisa terancam lewat garis yg dibuka petak asal -> cukup pindai SATU sinar dari raja, bukan chsAtt penuh. Hasil sama persis dgn uji lama.
+static bool chsLegalAfter(uint16_t m, bool special, int ks0, bool wasChk, bool mover) {
+  if (special || wasChk || ks0 < 0) { int ks = chsKingSq(mover); return ks >= 0 && !chsAtt(ks, !mover); }
+  int from = m & 63;
+  int dr = (from >> 3) - (ks0 >> 3), dc = (from & 7) - (ks0 & 7);
+  int ar = dr < 0 ? -dr : dr, ac = dc < 0 ? -dc : dc;
+  if (dr && dc && ar != ac) return true;                          // petak asal tak segaris dgn raja
+  int sr = dr > 0 ? 1 : (dr < 0 ? -1 : 0), sc = dc > 0 ? 1 : (dc < 0 ? -1 : 0);
+  bool diag = dr && dc;
+  int r = (ks0 >> 3) + sr, c = (ks0 & 7) + sc;
+  while (r >= 0 && r < 8 && c >= 0 && c < 8) {
+    int8_t p = chsBd[r * 8 + c];
+    if (p) {
+      if ((p > 0) != mover) { int t = p > 0 ? p : -p; if (diag ? (t == 3 || t == 5) : (t == 4 || t == 5)) return false; }
+      return true;
+    }
+    r += sr; c += sc;
+  }
+  return true;
+}
+// langkah khusus (raja / en-passant): wajib uji penuh. Dihitung SEBELUM chsDo.
+static inline bool chsMvSpecial(uint16_t m, int ks0) {
+  int from = m & 63, to = (m >> 6) & 63; int8_t p = chsBd[from];
+  return from == ks0 || ((p == 1 || p == -1) && to == chsEp && (from & 7) != (to & 7));
+}
+
 static bool chsHasMove() {
   uint16_t mv[256];
   int n = chsGen(mv);
@@ -2317,6 +2344,8 @@ static int chsAiQ(int alpha, int beta, int ply) {
   if (stand >= beta) return stand;
   if (stand > alpha) alpha = stand;
   uint16_t* mv = chsAiMv + ply * 256; int16_t* ky = chsAiKy + ply * 256;
+  const int ks0 = chsKingSq(chsWhite);
+  const bool wasChk = ks0 >= 0 && chsAtt(ks0, !chsWhite);
   int n = chsGenCaps(mv), nc = 0;                                   // hanya tangkapan/promosi/e.p. (urutan sama dgn chsGen -> hasil identik)
   for (int i = 0; i < n; i++) {
     uint16_t m = mv[i]; int from = m & 63, to = (m >> 6) & 63;
@@ -2336,9 +2365,9 @@ static int chsAiQ(int alpha, int beta, int ply) {
     CHS_SAVE_AT(ply);
     bool mover = chsWhite;
     CHS_NN_QPUSH(ply, mv[i]);
+    const bool spc = chsMvSpecial(mv[i], ks0);
     chsDo(mv[i]);
-    int ks = chsKingSq(mover);
-    if (ks < 0 || chsAtt(ks, !mover)) { CHS_REST_AT(ply); continue; }
+    if (!chsLegalAfter(mv[i], spc, ks0, wasChk, mover)) { CHS_REST_AT(ply); continue; }
     int sc = -chsAiQ(-beta, -alpha, ply + 1);
     CHS_REST_AT(ply);
     if (chsAiAbort) return 0;
@@ -2365,7 +2394,8 @@ static int chsAiNeg(int depth, int alpha, int beta, int ply, bool nullOk) {
 #if CHS_X_MDP
   { int ma = -CHS_AI_MATE + ply; if (alpha < ma) alpha = ma; int mb = CHS_AI_MATE - ply - 1; if (beta > mb) beta = mb; if (alpha >= beta) return alpha; }
 #endif
-  bool inchk = chsInCheck();
+  const int ks0 = chsKingSq(chsWhite);
+  bool inchk = ks0 >= 0 && chsAtt(ks0, !chsWhite);
   if (inchk && ply < CHS_AI_PLY - 6) depth++;
   if (depth <= 0) return chsAiQ(alpha, beta, ply);
   if (ply >= CHS_AI_PLY - 1 || chsAiStackLow()) return chsAiEvalP(ply);
@@ -2439,10 +2469,10 @@ static int chsAiNeg(int depth, int alpha, int beta, int ply, bool nullOk) {
     bool bad = cap && m != ttm && ky[i] < 700;
     CHS_SAVE_AT(ply);
     bool mover = chsWhite;
+    const bool spc = chsMvSpecial(m, ks0);
     CHS_NN_PUSH(ply, m);
     chsDo(m);
-    int ks = chsKingSq(mover);
-    if (ks < 0 || chsAtt(ks, !mover)) { CHS_REST_AT(ply); continue; }
+    if (!chsLegalAfter(m, spc, ks0, inchk, mover)) { CHS_REST_AT(ply); continue; }
     legal++;
     bool gc = false, gcK = false;
     if (quiet && !inchk && legal > 1 && alpha > -CHS_AI_MATE + 1000) {
