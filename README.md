@@ -494,7 +494,7 @@ Panduan ringkas tersedia juga pada [`call-sip/README.md`](./call-sip/README.md).
 
 #### 5.2.3 Catur (online dan lawan AI) `BETA`
 
-Catur lengkap (skak, skakmat, pat, rokade, *en passant*, promosi bidak, aturan 50 langkah) dengan dua cara bermain. Papan diputar otomatis untuk pemain Hitam, dan panel di bawah papan dapat disembunyikan.
+Catur lengkap (skak, skakmat, pat, rokade, *en passant*, promosi bidak, aturan 50 langkah, ulangan tiga posisi) dengan dua cara bermain. Papan diputar otomatis untuk pemain Hitam, dan panel di bawah papan dapat disembunyikan.
 
 | Mode | Cara kerja |
 |---|---|
@@ -531,13 +531,19 @@ Status: logika dan keamanannya diuji di komputer (`test_chess.cpp`: langkah sela
 
 **Cermin dan AFK.** Mesin AI memakai pencarian *negamax* alpha-beta dengan *quiescence* dan evaluasi materi serta tabel posisi. Level Cermin menambahkan tiga komponen kecil yang **belajar langsung di ESP32** setiap kali pemilik melangkah: jaringan saraf mini (26 masukan, 16 neuron tersembunyi, 1 keluaran; 449 parameter) yang menilai seberapa mirip suatu langkah dengan pilihan pemilik, **buku pembuka pribadi** (posisi dan langkah yang paling sering dimainkan), dan **tabel kebiasaan petak** (misalnya selalu membuka dengan `e4` atau gemar memajukan kuda ke `f3`). Model disimpan di NVS sehingga tidak hilang saat app ditutup. Pada permainan online, bila pemain diam melewati batas **AFK** (30, 60, atau 120 detik; dapat dimatikan), AI bergaya-pemilik memainkan gilirannya agar lawan tidak menunggu. Karena AI hanya memilih di antara langkah yang masih dekat terbaik, partai tidak dibuang begitu saja.
 
-**NYX-MAX: kekuatan catur sampai batas hardware (belum diukur pada perangkat).** Tiga tuas dinaikkan sekaligus:
+**NYX-MAX: kekuatan catur sampai batas hardware.** Tiga tuas dinaikkan sekaligus:
 
 - **Kompilasi -O3** untuk blok ENGINE + AI (dulu -O2; sisa sketch tetap -Os). Input workflow `chess_opt` = `O3` (bawaan) atau `O2` (kode lebih kecil, untuk A/B atau bila partisi app 3 MB penuh). Flag: `-DCHS_OPT3=0`.
-- **Cache CPU maksimum** (library SDK kustom, workflow *Build Arduino Libs*): cache data 64 KB, cache instruksi 32 KB, keduanya 8-way, garis cache data 64 B. Ini menyerang hambatan yang tercatat di atas: dua core berebut cache saat membaca tabel transposisi di PSRAM. Harganya **±48 KB RAM internal** (dcache 64 KB = -32 KB, icache 32 KB = -16 KB); bila muncul "RAM padat" lebih sering, jalankan ulang workflow itu dengan `dcache_kb=32` dan/atau `icache_kb=16`. Library kustom harus dibangun ulang sekali agar berlaku.
+- **Cache CPU maksimum** (library SDK kustom, workflow *Build Arduino Libs*): cache data 64 KB, cache instruksi 32 KB, keduanya 8-way. Garis cache 64 B sengaja **mati** (opsi `psram_cache_line_64b`): buffer DMA dari PSRAM wajib rata 64 B dan diduga memicu crash saat boot. Ini menyerang hambatan yang tercatat di atas: dua core berebut cache saat membaca tabel transposisi di PSRAM. Harganya **±48 KB RAM internal** (dcache 64 KB = -32 KB, icache 32 KB = -16 KB); bila muncul "RAM padat" lebih sering, jalankan ulang workflow itu dengan `dcache_kb=32` dan/atau `icache_kb=16`. Library kustom harus dibangun ulang sekali agar berlaku. Pembangunan pertama sudah terkonfirmasi di CI: `DATA_CACHE_64KB`, `INSTRUCTION_CACHE_32KB`, dan kedua 8-way semuanya masuk ke `sdkconfig` hasil (dampaknya pada kecepatan di perangkat tetap belum diukur).
 - **Waktu berpikir**: Sulit 1,8 → 4 detik, Nyx 2,4 → 7 detik, batas pondering 5 → 10 detik per giliranmu. Mudah, Sedang, dan Cermin sengaja tetap cepat.
 
 Yang sengaja **tidak** diubah: CPU sudah 240 MHz; PSRAM OPI sudah 80 MHz (120 MHz eksperimental dan tidak stabil di banyak papan); tabel transposisi tetap 1,5 MB karena pada ±30 ribu node/detik pencarian 7 detik hanya ±200 ribu node, jadi tabel lebih besar tidak menambah apa pun dan hanya memakan PSRAM.
+
+**Hasil ukur di perangkat (tab NPS, *Uji NPS*, 3 posisi tetap × 1 detik).** Sebelum NYX-MAX: 19,2k node/detik (1 core) dan 29,9k (2 core, ×1,55). Sesudah: **22,7k** (1 core, ±+18%) dan **38,1k** (2 core, ±+27%), percepatan dua core **×1,68**. Satu kali uji; angka bergeser beberapa persen antar-uji, jadi baca sebagai arah, bukan angka pasti. Kedalaman nyata yang dicapai Sulit dan Nyx dengan waktu baru belum diukur.
+
+**Catatan aman (pelajaran saat pengujian).** Bila setelah mengganti library SDK kustom perangkat **restart sendiri tepat setelah layar boot**, kembalikan opsi cache ke yang pasti aman: `psram_cache_line_64b` mati, `dcache_kb=32`, `icache_kb=16` (sama dengan bawaan IDF), lalu naikkan satu per satu. Garis cache 64 B adalah tersangka utama karena menuntut buffer DMA dari PSRAM rata 64 B. Konfigurasi bawaan README ini (garis 64 B mati, data 64 KB, instruksi 32 KB) sudah dicoba dan boot normal di perangkat.
+
+**Evaluasi v2 (tidak aktif).** `chess_renphone.ino` memuat saklar `CHS_EV2_DEF` (bitmask, bawaan 0) untuk evaluasi tambahan: 1 = tapered, 2 = mobilitas menteri, 4 = kuda outpost, 8 = pion terlindungi, 16 = jarak raja ke pion bebas. Di adu-main PC `tests_chess/arena.py` (40 ms per langkah, 100–160 partai) tidak satu pun terbukti menang: gabungan semua -28 Elo, tapered +60 pada 100 partai lalu di bawah 50% pada partai ulang, outpost +24, jarak raja +17, mobilitas menteri -35, pion terlindungi -35, tapered+outpost -4 (batas kepercayaan lebar, ±60 Elo). Karena itu dibiarkan mati; perilaku AI sama seperti sebelumnya.
 
 **Layar Jaringan (melihat isi otak AI).** Pada layar setup Catur, di bawah baris *Lawan AI | tingkat | AFK*, ada chip kecil **Jaringan** di kanan. Layar ini menampilkan **bobot hasil latihan** jaringan gaya langsung di HP; yang ditampilkan adalah hasil belajarnya, bukan grafik *loss* atau log tiap langkah latihan. Tombol Kembali menutupnya. Pada semua tampilan, warna aksen tema berarti bobot positif dan merah berarti bobot negatif; makin pekat berarti makin besar dibandingkan nilai terbesar yang sedang tampil.
 
@@ -563,7 +569,9 @@ Pencarian Nyx dapat memakai kedua core ESP32-S3. Core lain dari `loop()` menjala
 - Matikan saat build dengan `-DCHS_SMP=0` (satu core persis seperti sebelumnya).
 - **Hasil ukur di perangkat:** 19,2k → 29,9k node/detik (×1,55), tetapi kedalaman rata-rata dalam 1 detik 6,0 → 5,7. Jadi kecepatan mentah naik, **kekuatan belum terbukti naik**: dua core berebut PSRAM dan cache, dan core utama melambat. Uji yang lebih adil (waktu mencapai kedalaman tertentu) belum ada. Di komputer, `tests_chess/run_smp.sh` menguji kebenaran (langkah selalu sah, mat dan taktik tetap benar, mulai/henti berulang tanpa deadlock), bukan kecepatan.
 
-**Batasan.** Tidak ada jam catur, dan belum ada aturan ulangan tiga posisi. Fitur ini baru diuji di komputer (aturan dan *perft*, kekuatan tiap level, pelatihan serta serialisasi model gaya); perilaku nyata di dua perangkat dan pada broker sungguhan belum terkonfirmasi.
+**Ulangan tiga posisi.** Bila posisi yang sama (papan, giliran, hak rokade, *en passant*) muncul tiga kali, partai berakhir seri ("Seri: ulangan tiga posisi"). Dihitung dari daftar langkah partai, jadi sama di kedua perangkat pada mode online. Diuji di PC (`ren_uci`: perintah `status`).
+
+**Batasan.** Tidak ada jam catur. Fitur ini baru diuji di komputer (aturan dan *perft*, kekuatan tiap level, pelatihan serta serialisasi model gaya); perilaku nyata di dua perangkat dan pada broker sungguhan belum terkonfirmasi.
 ### 5.3 Kendali jarak jauh
 
 #### 5.3.1 Remote Control `OK`
@@ -995,7 +1003,7 @@ Proyek ini ditujukan sebagai perangkat pribadi dan eksperimental. Pertimbangkan 
 **Fitur lain**
 
 - **Chat:** layar menampilkan ASCII dan emoji (huruf lain tampil `?`); tidak ada notifikasi saat aplikasi tertutup.
-- **Catur:** tidak ada jam catur dan belum ada aturan ulangan tiga posisi. Belum diuji pada perangkat; mode online membutuhkan broker MQTT dengan akun sendiri (terpisah dari Chat).
+- **Catur:** tidak ada jam catur. Belum diuji pada perangkat; mode online membutuhkan broker MQTT dengan akun sendiri (terpisah dari Chat).
 - **Backup & Restore:** maksimal 6 berkas, satu berkas maksimal 96 KB, nilai NVS di atas 32 KB dilewati. Pemulihan menimpa nilai yang ada di berkas dan tidak menghapus pengaturan yang dibuat sesudahnya. Backup tanpa enkripsi dapat dibaca siapa pun yang memegang SD. Belum diuji pada perangkat.
 - **Emoji:** hanya emoji tunggal (satu kodepoint). Bendera, urutan ZWJ, keycap, dan varian warna kulit tidak punya sprite sendiri; maksimal 4000 sprite, dan set besar memakan PSRAM (±1,8 KB per emoji). Rinciannya ada di [bagian 5.1](#51-antarmuka-sistem-ok).
 - **Baterai:** persentase adalah estimasi. Jika INA219 tidak terdeteksi, persentase dan tegangan berhenti diperbarui (tidak ada *fallback* ADC).
@@ -1018,6 +1026,7 @@ Proyek ini ditujukan sebagai perangkat pribadi dan eksperimental. Pertimbangkan 
 | Fitur HTTPS (Gemini, NASA, Trivia) menghasilkan `HTTP -1` | Fragmentasi RAM internal, atau AP Remote sedang aktif | Matikan AP Remote; periksa *largest free block* di HWmonitor; coba ulang. |
 | Tidak ada suara dari aplikasi mana pun | TWS belum tersambung, ESP32-CAM tidak terpasang, atau SD pada modul CAM belum dicabut | Sambungkan TWS melalui aplikasi Musik; periksa pengkabelan dan firmware CAM. |
 | Video diputar tanpa suara | TWS tidak tersambung, atau audio bukan MP3 44,1 kHz | Konversi ulang dengan perintah `ffmpeg` pada [bagian 5.4.2](#542-pemutar-avi--mjpeg-ok). |
+| Perangkat restart sendiri tepat setelah layar boot, setelah mengganti library SDK kustom | Pengaturan cache baru (terutama `psram_cache_line_64b`) tidak cocok; pengaman boot mengembalikan firmware lama setelah beberapa kali gagal | Bangun ulang library dengan garis 64 B mati, `dcache_kb=32`, `icache_kb=16`; periksa Pengaturan → Tentang (reset terakhir) dan `/crashlog.txt` di SD. Lihat bagian Catur, "Catatan aman". |
 | Layar bergaris, goyang, atau warnanya acak | SPI 80 MHz melampaui batas kabel | Turunkan ke 60 MHz pada Pengaturan, lalu restart. |
 | Panggilan tersambung tetapi bisu atau satu arah | NAT atau CGNAT tanpa relay | Konfigurasikan TURN, atau gunakan mode LAN. |
 | Pendaftaran SIP gagal | Transport tidak sesuai penyedia, atau kredensial salah | Coba `transport=udp` pada `sip.cfg`; periksa Server, username, dan password. |
@@ -1115,7 +1124,7 @@ backup_core.h  backup_crypto.h  Format berkas .nbk dan CRC32; SHA-256, PBKDF2, A
 tests_backup/                   Uji backup dan kripto di komputer (kripto dibandingkan dengan Python hashlib/cryptography)
 chess_renphone.ino              Catur: mesin aturan, AI (negamax + model gaya pemain), online lewat MQTT
 chess_smp.cpp                   Core ke-2 untuk Nyx (Lazy SMP): task pembantu + salinan mesin; di-build bersama chess_engine.inc yang dibuat CI dari chess_renphone.ino
-tests_chess/                    Uji mesin catur (perft), AI, dan serialisasi model gaya di komputer; bench_nyx.cpp = percobaan kasar level Nyx; `bench_nyx2.cpp` (di root) = perbandingan minimax vs Nyx lawan tiga jenis bot
+tests_chess/                    Uji mesin catur (perft), AI, dan serialisasi model gaya di komputer; `arena.py` = adu-main dua konfigurasi `ren_uci` (opsi `Ev2`, perintah `status`/`legal`) tanpa dependensi; bench_nyx.cpp = percobaan kasar level Nyx; `bench_nyx2.cpp` (di root) = perbandingan minimax vs Nyx lawan tiga jenis bot
 ebook_renphone.ino ebook_core.h App Buku dan mesinnya (inflate, ZIP, EPUB, HTML ke teks, tata letak)
 tests_ebook/                    Uji mesin Buku di komputer
 nofrendo_core/ esp_doom_core/   Core pihak ketiga (di-vendor)

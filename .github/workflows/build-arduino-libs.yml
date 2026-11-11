@@ -15,9 +15,9 @@ on:
         default: "auto"
         required: true
       psram_cache_line_64b:
-        description: "Cache data line 64B (akses PSRAM beruntun jauh lebih cepat: catur/DOOM/sprite). NYX-MAX: kini bawaan AKTIF; matikan utk A/B"
+        description: "EKSPERIMEN: cache data line 64B (bisa mempercepat PSRAM, tapi buffer DMA dari PSRAM wajib rata 64 B -> curiga crash saat boot). Default mati; uji A/B"
         type: boolean
-        default: true
+        default: false
       dcache_kb:
         description: "NYX-MAX: ukuran cache DATA (akses PSRAM lewat cache ini). 64 = maksimum chip, memakai 32 KB RAM internal lebih banyak dari 32 (bawaan IDF)"
         type: choice
@@ -124,7 +124,7 @@ jobs:
             echo 'CONFIG_MBEDTLS_DYNAMIC_FREE_CONFIG_DATA=y'
             echo 'CONFIG_FREERTOS_TASK_CREATE_ALLOW_EXT_MEM=y'
             if [ -n "$AI" ]; then echo "CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=$AI"; fi
-            if [ "${{ inputs.psram_cache_line_64b }}" != "false" ]; then
+            if [ "${{ inputs.psram_cache_line_64b }}" = "true" ]; then
               echo 'CONFIG_ESP32S3_DATA_CACHE_LINE_64B=y'
             fi
             # NYX-MAX: cache CPU sebesar mungkin (batas hardware ESP32-S3). Asosiatif 8-way = lebih sedikit tabrakan
@@ -193,7 +193,10 @@ jobs:
             if grep -q "^$OPT=y" "$OUT/sdkconfig"; then echo "OK   $OPT=y"; else echo "::warning::$OPT tidak aktif di sdkconfig hasil build (dependensi Kconfig tidak terpenuhi atau dimatikan lewat input)"; fi
           done
           echo "=== cache CPU di sdkconfig hasil (NYX-MAX) ==="
-          for OPT in CONFIG_ESP32S3_DATA_CACHE_LINE_64B CONFIG_ESP32S3_DATA_CACHE_8WAYS CONFIG_ESP32S3_INSTRUCTION_CACHE_8WAYS; do
+          if [ "${{ inputs.psram_cache_line_64b }}" = "true" ]; then
+            grep -q '^CONFIG_ESP32S3_DATA_CACHE_LINE_64B=y' "$OUT/sdkconfig" && echo "OK   CONFIG_ESP32S3_DATA_CACHE_LINE_64B=y" || echo "::warning::DATA_CACHE_LINE_64B tidak aktif di sdkconfig hasil build"
+          fi
+          for OPT in CONFIG_ESP32S3_DATA_CACHE_8WAYS CONFIG_ESP32S3_INSTRUCTION_CACHE_8WAYS; do
             if grep -q "^$OPT=y" "$OUT/sdkconfig"; then echo "OK   $OPT=y"; else echo "::warning::$OPT tidak aktif di sdkconfig hasil build"; fi
           done
           if [ "${{ inputs.dcache_kb }}" = "64" ]; then

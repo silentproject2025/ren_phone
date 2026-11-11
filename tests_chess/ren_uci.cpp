@@ -27,12 +27,13 @@ int main() {
       printf("id name RenPhoneEngine\nid author ren\n");
       printf("option name Depth type spin default 8 min 1 max 14\n");
       printf("option name Margin type spin default 0 min 0 max 300\n");
-      printf("option name Mode type spin default 1 min 0 max 3\nuciok\n");
+      printf("option name Mode type spin default 1 min 0 max 3\n");
+      printf("option name Ev2 type spin default 0 min 0 max 255\nuciok\n");
     } else if (!strcmp(line, "isready")) printf("readyok\n");
     else if (!strcmp(line, "ucinewgame")) { chsReset(); moves[0] = 0; ply = 0; }
     else if (!strncmp(line, "setoption", 9)) {
       int v = atoi(strstr(line, "value") ? strstr(line, "value") + 5 : "0");
-      if (strstr(line, "Depth")) gDepth = v; else if (strstr(line, "Margin")) gMargin = v; else if (strstr(line, "Mode")) gMode = v;
+      if (strstr(line, "Ev2")) chsEv2 = v; else if (strstr(line, "Depth")) gDepth = v; else if (strstr(line, "Margin")) gMargin = v; else if (strstr(line, "Mode")) gMode = v;
     } else if (!strncmp(line, "position", 8)) {
       const char* m = strstr(line, "moves");
       moves[0] = 0;
@@ -50,6 +51,13 @@ int main() {
       uint16_t m = chsAiChoose(gDepth, ms, gMargin, gMode, ply);
       char s[8]; if (m) chsMoveStr(m, s); else strcpy(s, "0000");
       printf("bestmove %s\n", s);
+    } else if (!strcmp(line, "status")) {                       // wasit: 0 lanjut, 1 mat, 2 pat, 3 50 lgk, 4 materi, 7 ulangan 3 posisi
+      int st = chsStatus(); if (st == 0 && chsRepThree(moves)) st = 7;
+      printf("status %d\n", st);
+    } else if (!strcmp(line, "legal")) {                        // daftar langkah sah posisi sekarang
+      uint16_t mv[256]; int n = chsGen(mv); printf("legal");
+      for (int i = 0; i < n; i++) if (chsLegal(mv[i])) { char t[8]; chsMoveStr(mv[i], t); printf(" %s", t); }
+      printf("\n");
     } else if (!strcmp(line, "quit")) break;
   }
   return 0;

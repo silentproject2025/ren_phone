@@ -789,6 +789,33 @@ static uint32_t chsPosHash() {
 
 #define CHS_SAVE_ST  int8_t _sb[64]; memcpy(_sb, chsBd, 64); bool _sw = chsWhite; uint8_t _sc = chsCastle; int8_t _se = chsEp; uint16_t _sh = chsHalf
 #define CHS_REST_ST  do { memcpy(chsBd, _sb, 64); chsWhite = _sw; chsCastle = _sc; chsEp = _se; chsHalf = _sh; } while (0)
+// NYX-MAX: aturan ULANGAN TIGA POSISI. Dihitung dari daftar langkah partai (mv = "e2e4 e7e5 ..."): posisi akhir (papan + giliran + rokade + e.p.) muncul >= 3 kali.
+// Dua kali memainkan ulang dari awal (tanpa array riwayat); papan/giliran dipulihkan sesudahnya, jadi aman dipanggil di posisi hidup.
+static bool chsRepThree(const char* mv) {
+  if (!mv || !*mv) return false;
+  CHS_SAVE_ST;
+  bool res = false; uint32_t fin = 0;
+  for (int pass = 0; pass < 2 && !res; pass++) {
+    int cnt = 0;
+    chsReset();
+    const char* p = mv;
+    if (pass == 1 && chsPosHash() == fin) cnt++;
+    bool bad = false;
+    while (*p) {
+      while (*p == ' ') p++;
+      if (!*p) break;
+      const char* q = p; while (*q && *q != ' ') q++;
+      uint16_t m;
+      if (!chsParse(p, (int)(q - p), &m)) { bad = true; break; }
+      chsDo(m); p = q;
+      if (pass == 1 && chsPosHash() == fin) cnt++;
+    }
+    if (bad) break;
+    if (pass == 0) fin = chsPosHash(); else res = cnt >= 3;
+  }
+  CHS_REST_ST;
+  return res;
+}
 // Versi per-ply utk rekursi pencarian: salinan papan ada di array global (RAM internal), bukan di stack -> frame lebih kecil.
 struct ChsSv { bool w; uint8_t c; int8_t e; uint16_t h; };
 alignas(8) static int8_t chsAiSvB[CHS_AI_PLY + 2][64];
@@ -2133,8 +2160,16 @@ static inline int chsEvMop(int lk, int wk) {            // lk = raja pihak yg ka
   int md = chsAbsI(lr - wr) + chsAbsI(lf - wf);
   return cd * 6 + (14 - md) * 3;
 }
+// NYX-MAX evaluasi v2 (bit): 1 = tapered (peralihan mulus awal->akhir permainan, bukan saklar), 2 = mobilitas menteri,
+// 4 = kuda outpost, 8 = pion terlindungi pion, 16 = jarak raja ke pion bebas di endgame. Bisa diubah saat uji (UCI "Ev2").
+#ifndef CHS_EV2_DEF
+#define CHS_EV2_DEF 0
+#endif
+static int chsEv2 = CHS_EV2_DEF;
+static inline int chsChebyshev(int a, int b) { int dr = chsAbsI((a >> 3) - (b >> 3)), df = chsAbsI((a & 7) - (b & 7)); return dr > df ? dr : df; }
 static int chsAiEvalClassic() {
   int sc = 0, npm = 0, mat[2] = {0, 0};
+  int8_t knSq[2][4]; int nkn[2] = {0, 0};
   int8_t pcnt[2][8], bmax[8], wmin[8];
   for (int f = 0; f < 8; f++) { pcnt[0][f] = pcnt[1][f] = 0; bmax[f] = -1; wmin[f] = 8; }
   int ksq[2] = {-1, -1}, nb[2] = {0, 0}, np[2] = {0, 0}, nr[2] = {0, 0};
@@ -2150,15 +2185,30 @@ static int chsAiEvalClassic() {
     if (t == 1) {
       pcnt[w][f]++; if (np[w] < 8) pawnSq[w][np[w]++] = (int8_t)sq;
       if (w == 0) { if (r < wmin[f]) wmin[f] = (int8_t)r; } else { if (r > bmax[f]) bmax[f] = (int8_t)r; }
-    } else if (t == 2) { v += (chsEvMob(sq, p, t) - 4) * 4;
+    } else if (t == 2) { v += (chsEvMob(sq, p, t) - 4) * 4; if (nkn[w] < 4) knSq[w][nkn[w]++] = (int8_t)sq;
     } else if (t == 3) { v += (chsEvMob(sq, p, t) - 6) * 3; nb[w]++;
-    } else if (t == 4) { v += (chsEvMob(sq, p, t) - 7) * 2; if (nr[w] < 4) rks[w][nr[w]++] = (int8_t)sq; }
+    } else if (t == 4) { v += (chsEvMob(sq, p, t) - 7) * 2; if (nr[w] < 4) rks[w][nr[w]++] = (int8_t)sq;
+    } else if (t == 5 && (chsEv2 & 2)) { v += chsEvMob(sq, p, 3) + chsEvMob(sq, p, 4) - 14; }
     sc += w == 0 ? v : -v;
   }
   bool eg = npm <= 2600;
+  int ph = npm * 64 / 6400; if (ph > 64) ph = 64;                    // fase: 64 = awal permainan, 0 = endgame murni
   for (int w = 0; w < 2; w++) {
     int s = 0;
-    if (ksq[w] >= 0) { int r = ksq[w] >> 3, f = ksq[w] & 7; s += eg ? chsPstKe[w == 0 ? (7 - r) * 8 + f : r * 8 + f] : chsPst[5][w == 0 ? (7 - r) * 8 + f : r * 8 + f]; }
+    if (ksq[w] >= 0) { int r = ksq[w] >> 3, f = ksq[w] & 7; int ki = w == 0 ? (7 - r) * 8 + f : r * 8 + f;
+      if (chsEv2 & 1) s += (chsPst[5][ki] * ph + chsPstKe[ki] * (64 - ph)) / 64;
+      else s += eg ? chsPstKe[ki] : chsPst[5][ki]; }
+    if (chsEv2 & 4) {                                              // kuda outpost: di baris 4-6 relatif, dilindungi pion, tak bisa diusir pion lawan
+      for (int i = 0; i < nkn[w]; i++) {
+        int sq = knSq[w][i], r = sq >> 3, f = sq & 7, rel = w == 0 ? r : 7 - r;
+        if (rel < 3 || rel > 5 || f < 1 || f > 6) continue;
+        int dir = w == 0 ? 1 : -1; int8_t pw = (int8_t)dir;
+        if (chsBd[(r - dir) * 8 + f - 1] != pw && chsBd[(r - dir) * 8 + f + 1] != pw) continue;
+        bool safe = true;
+        for (int ff = f - 1; ff <= f + 1; ff += 2) { if (w == 0 ? (bmax[ff] > r) : (wmin[ff] < r)) { safe = false; break; } }
+        if (safe) s += 20;
+      }
+    }
     if (nb[w] >= 2) s += 30;
     for (int i = 0; i < np[w]; i++) {                               // pion
       int sq = pawnSq[w][i], r = sq >> 3, f = sq & 7, rel = w == 0 ? r : 7 - r;
@@ -2168,7 +2218,12 @@ static int chsAiEvalClassic() {
       for (int ff = (f > 0 ? f - 1 : 0); ff <= (f < 7 ? f + 1 : 7); ff++) {
         if (w == 0 ? (bmax[ff] > r) : (wmin[ff] < r)) { pass = false; break; }
       }
-      if (pass) { int b = chsEvPass[rel]; s += eg ? b + b / 2 : b; }
+      if (pass) { int b = chsEvPass[rel];
+        if (chsEv2 & 1) s += b + b * (64 - ph) / 128; else s += eg ? b + b / 2 : b;
+        if ((chsEv2 & 16) && ph < 40 && rel >= 3 && ksq[0] >= 0 && ksq[1] >= 0) s += (chsChebyshev(ksq[1 - w], sq) - chsChebyshev(ksq[w], sq)) * 2 * (40 - ph) / 40;
+      }
+      if (chsEv2 & 8) { int dir = w == 0 ? 1 : -1; int8_t pw = (int8_t)dir; int pr = r - dir;
+        if (pr >= 0 && pr <= 7 && ((f > 0 && chsBd[pr * 8 + f - 1] == pw) || (f < 7 && chsBd[pr * 8 + f + 1] == pw))) s += 5; }
     }
     for (int i = 0; i < nr[w]; i++) {                               // benteng
       int sq = rks[w][i], f = sq & 7, rel = w == 0 ? (sq >> 3) : 7 - (sq >> 3);
@@ -3122,7 +3177,7 @@ static uint16_t chsAiChoose(int maxDepth, uint32_t budgetMs, int margin, int mod
     }
 #endif
     if (!done) break;
-    memcpy(chsAiFs, chsAiSc, (size_t)(n & 255) * 4); memcpy(chsAiFx, chsAiEx, (size_t)(n & 255));   // n <= 218 (langkah sah maks); mask = jaminan batas utk kompilator (-O3) dDone = d;
+    memcpy(chsAiFs, chsAiSc, (size_t)(n & 255) * 4); memcpy(chsAiFx, chsAiEx, (size_t)(n & 255)); dDone = d;   // n <= 218 (langkah sah maks); mask = jaminan batas utk kompilator (-O3)
     for (int i = 1; i < n; i++) {                                              // urutkan akar: eksak dulu (skor menurun), lalu batas atas; iterasi berikut memangkas lebih awal
       uint16_t tm = chsAiRm[i]; int32_t ts = chsAiFs[i]; uint8_t te = chsAiFx[i];
       int64_t key = te ? (int64_t)ts + 100000 : (int64_t)ts; int j = i - 1;
@@ -3252,7 +3307,7 @@ static uint16_t chsGenNo = 0, chsPly = 0;
 static char   chsRes[3] = "";
 static uint16_t chsRemoteGen = 0, chsRemotePly = 0;
 static char   chsRemoteRes[3] = "";
-static int    chsEnd = 0;                      // 0 lanjut, 1 mat, 2 pat, 3 50 lgk, 4 material, 5 batas, 6 menyerah
+static int    chsEnd = 0;                      // 0 lanjut, 1 mat, 2 pat, 3 50 lgk, 4 material, 5 batas, 6 menyerah, 7 ulangan 3 posisi
 static int    chsSel = -1, chsLast = -1;       // petak terpilih; langkah terakhir (dari | ke<<6)
 static bool   chsHL[64];
 static bool   chsPromoOn = false;
@@ -3432,6 +3487,7 @@ static void chsTaskFunc(void*);
 
 static void chsUpdateEnd() {
   chsEnd = chsRes[0] ? 6 : chsStatus();
+  if (chsEnd == 0 && chsRepThree(chsMoves)) chsEnd = 7;                    // NYX-MAX: ulangan tiga posisi
   if (chsEnd == 0 && chsPly >= CHS_MAX_PLY) chsEnd = 5;
   chsInChk = (chsEnd == 0) && chsInCheck();
 }
@@ -4443,7 +4499,7 @@ static void chsTokAt(int idx, char* out) {     // token langkah ke-idx dari daft
 // 1 = aku menang, -1 = aku kalah, 0 = seri, 2 = tak ada hasil / penonton
 static int chsResultForMe() {
   if (chsEnd == 0) return 2;
-  if (chsEnd >= 2 && chsEnd <= 5) return 0;
+  if ((chsEnd >= 2 && chsEnd <= 5) || chsEnd == 7) return 0;   // seri (7 = ulangan tiga posisi)
   bool whiteWon = (chsEnd == 1) ? !chsWhite : (chsRes[1] == 'B');
   if (chsRole != 1 && chsRole != 2) return 2;
   return (whiteWon == (chsRole == 1)) ? 1 : -1;
@@ -4456,6 +4512,7 @@ static const char* chsEndText() {
     case 3: return "Seri: aturan 50 langkah";
     case 4: return "Seri: bidak tidak cukup";
     case 5: return "Seri: batas 280 langkah";
+    case 7: return "Seri: ulangan tiga posisi";
     case 6: if (chsGem && chsGemForfeit) return chsRes[1] == 'W' ? "Gemini (putih) 3x tak sah. Kalah" : "Gemini (hitam) 3x tak sah. Kalah";
             return chsRes[1] == 'W' ? "Putih menyerah. Hitam menang" : "Hitam menyerah. Putih menang";
   }
