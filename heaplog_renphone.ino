@@ -9,6 +9,9 @@
 //  Catatan: SD baru siap setelah initSD(), jadi titik sebelum itu disimpan
 //  dulu di RAM kecil (<1 KB) lalu ikut tertulis saat flush pertama.
 //
+//  v2: log juga DITAMPILKAN DI LAYAR (detik ke-12 sejak boot, ditahan ~45 dtk supaya
+//  bisa difoto) + cek baca-balik SD (status SD:OK / SD:ISI-RUSAK / SD:GAGAL-TULIS).
+//
 //  JANGAN pakai tipe buatan sendiri di signature fungsi (prototype otomatis
 //  arduino-cli). BELUM PERNAH di-compile di environment (gak ada toolchain).
 // =====================================================================
@@ -45,10 +48,22 @@ void rpHL(const char* label){
                 (unsigned)(rphlPsram[i]/1024), (unsigned)rphlTasks[i], (unsigned)rphlMs[i]);
 }
 
+static const char* rphlSdStr = "SD:BELUM";
+
+// baca-balik: file yg baru ditulis harus diawali teks "RAM internal"
+static void rpHLVerify(){
+  File r = SD_MMC.open("/heaplog.txt", FILE_READ);
+  if(!r){ rphlSdStr = "SD:GAGAL-BACA"; return; }
+  char b[13]; memset(b, 0, sizeof(b));
+  int n = r.read((uint8_t*)b, 12);
+  r.close();
+  rphlSdStr = (n == 12 && memcmp(b, "RAM internal", 12) == 0) ? "SD:OK" : "SD:ISI-RUSAK";
+}
+
 void rpHLFlush(){
-  if(!sdReady) return;
+  if(!sdReady){ rphlSdStr = "SD:TIDAK-SIAP"; Serial.println("[HeapLog] SD tidak siap"); return; }
   File f = SD_MMC.open("/heaplog.txt", FILE_WRITE);   // FILE_WRITE = timpa file lama
-  if(!f) return;
+  if(!f){ rphlSdStr = "SD:GAGAL-TULIS"; Serial.println("[HeapLog] gagal buka file tulis"); return; }
   f.printf("RAM internal -- heaplog (satuan KB)\n");
   f.printf("SDK: %s\n", ESP.getSdkVersion());
   f.printf("PSRAM total: %u KB\n", (unsigned)(ESP.getPsramSize()/1024));
@@ -62,12 +77,50 @@ void rpHLFlush(){
              (unsigned)(rphlPsram[i]/1024), (unsigned)rphlTasks[i], (unsigned)rphlMs[i]);
   }
   f.close();
+  rpHLVerify();
+  Serial.printf("[HeapLog] %s\n", rphlSdStr);
+}
+
+// tampilkan tabel di layar (menimpa UI sementara; UI digambar ulang sesudahnya)
+static void rpHLShow(){
+  float sc = (display.width() >= 440) ? 1.5f : 1.0f;
+  int lh = (int)(8.0f * sc) + 3;
+  char buf[96];
+  display.fillScreen(0x0000);
+  display.setTextFont(1);
+  display.setTextSize(sc);
+  display.setTextColor(0xFFFF, 0x0000);
+  display.setCursor(2, 2);
+  snprintf(buf, sizeof(buf), "HEAPLOG KB  %s", rphlSdStr);
+  display.print(buf);
+  display.setCursor(2, 2 + lh);
+  display.print("titik  B=bebas M=blokMax T=total P=psram K=task");
+  for(int i = 0; i < rphlN; i++){
+    snprintf(buf, sizeof(buf), "%-19.19s B%3u M%3u T%3u P%4u K%u %us",
+             rphlLabel[i],
+             (unsigned)(rphlFree[i]/1024), (unsigned)(rphlLargest[i]/1024),
+             (unsigned)(rphlTotal[i]/1024), (unsigned)(rphlPsram[i]/1024),
+             (unsigned)rphlTasks[i], (unsigned)(rphlMs[i]/1000));
+    display.setCursor(2, 2 + (i + 2) * lh);
+    display.print(buf);
+  }
+  display.setTextSize(1);
 }
 
 // dipanggil dari awal loop(): catat lagi saat idle (setelah WiFi/NTP sempat jalan)
 void rpHLLoopPoll(){
   static uint8_t st = 0;
   unsigned long ms = millis();
-  if(st == 0 && ms > 20000UL){ st = 1; rpHL("idle_20dtk"); rpHLFlush(); }
-  else if(st == 1 && ms > 60000UL){ st = 2; rpHL("idle_60dtk"); rpHLFlush(); }
+  if(st == 0 && ms > 12000UL){
+    st = 1;
+    rpHL("idle_12dtk");
+    rpHLFlush();
+    rpHLShow();
+    delay(45000);        // tahan 45 dtk supaya layarnya bisa difoto (UI membeku sementara)
+    needRedraw = true;
+  } else if(st == 1 && ms > 90000UL){
+    st = 2;
+    rpHL("idle_90dtk");
+    rpHLFlush();
+  }
 }
