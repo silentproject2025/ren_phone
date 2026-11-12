@@ -19,7 +19,7 @@
 
   // ---- panel ----
   #ifndef RP_ST7796_INVERT
-  #define RP_ST7796_INVERT    0            // layar warnanya negatif/pucat -> ganti 1
+  #define RP_ST7796_INVERT    1            // default 1 (kebanyakan modul 3,5" ST7796 butuh INVON). Warna negatif/pucat -> ganti 0
   #endif
   #ifndef RP_ST7796_RGB_ORDER
   #define RP_ST7796_RGB_ORDER 0            // merah<->biru tertukar -> ganti 1

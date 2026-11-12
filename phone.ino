@@ -11805,7 +11805,9 @@ bool bootTouchLatched=false;
 unsigned long bootSkipT0=0, bootTouchSince=0;
 bool bootSkipPoll(){
   if(bootSkipReq) return true;
+#if !RP_TOUCH_CAPACITIVE
   if(!display.touch()) return false;
+#endif
   unsigned long now=millis();
   lgfx::touch_point_t tp;
   bool down=display.getTouch(&tp);
@@ -19755,7 +19757,13 @@ void setup(){
   // komentar v45 di akhir runBootSequence() utk detail akar masalahnya).
   // Sengaja DIHAPUS -- backlight baru dinyalain di UJUNG setup(), setelah
   // lock screen pertama beres digambar.
+#if RP_TOUCH_CAPACITIVE
+  // ST7796/FT6236: display.touch() = nullptr (tidak ada ITouch LovyanGFX) -> JANGAN dijadikan syarat,
+  // kalau tidak touchBegin() tidak pernah jalan dan sentuh mati total.
+  loadOrRunCalibration();
+#else
   if(display.touch())loadOrRunCalibration(); // kalibrasi SEKARANG selalu match dgn rotasi runtime
+#endif
   loadTheme();
   loadFontPref();
   initAppColors();
