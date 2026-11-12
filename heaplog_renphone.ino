@@ -9,8 +9,8 @@
 //  Catatan: SD baru siap setelah initSD(), jadi titik sebelum itu disimpan
 //  dulu di RAM kecil (<1 KB) lalu ikut tertulis saat flush pertama.
 //
-//  v2: log juga DITAMPILKAN DI LAYAR (detik ke-12 sejak boot, ditahan ~45 dtk supaya
-//  bisa difoto) + cek baca-balik SD (status SD:OK / SD:ISI-RUSAK / SD:GAGAL-TULIS).
+//  v3: sampel RAM tiap 10-15 dtk sampai detik ke-90, lalu tabel DITAMPILKAN DI LAYAR di detik
+//  ke-100 (ditahan 60 dtk supaya bisa difoto) + cek baca-balik SD (status SD:OK / SD:ISI-RUSAK / SD:GAGAL-TULIS).
 //
 //  JANGAN pakai tipe buatan sendiri di signature fungsi (prototype otomatis
 //  arduino-cli). BELUM PERNAH di-compile di environment (gak ada toolchain).
@@ -83,9 +83,9 @@ void rpHLFlush(){
 
 // tampilkan tabel di layar (menimpa UI sementara; UI digambar ulang sesudahnya)
 static void rpHLShow(){
-  float sc = (display.width() >= 440) ? 1.5f : 1.0f;
+  float sc = (display.width() >= 440) ? 1.25f : 1.0f;
   int lh = (int)(8.0f * sc) + 3;
-  char buf[96];
+  char buf[110];
   display.fillScreen(0x0000);
   display.setTextFont(1);
   display.setTextSize(sc);
@@ -94,12 +94,13 @@ static void rpHLShow(){
   snprintf(buf, sizeof(buf), "HEAPLOG KB  %s", rphlSdStr);
   display.print(buf);
   display.setCursor(2, 2 + lh);
-  display.print("titik  B=bebas M=blokMax T=total P=psram K=task");
+  display.print("B=bebas M=blokMax T=total L=min P=psram K=task");
   for(int i = 0; i < rphlN; i++){
-    snprintf(buf, sizeof(buf), "%-19.19s B%3u M%3u T%3u P%4u K%u %us",
+    snprintf(buf, sizeof(buf), "%-17.17s B%3u M%3u T%3u L%3u P%4u K%u %us",
              rphlLabel[i],
              (unsigned)(rphlFree[i]/1024), (unsigned)(rphlLargest[i]/1024),
-             (unsigned)(rphlTotal[i]/1024), (unsigned)(rphlPsram[i]/1024),
+             (unsigned)(rphlTotal[i]/1024), (unsigned)(rphlMin[i]/1024),
+             (unsigned)(rphlPsram[i]/1024),
              (unsigned)rphlTasks[i], (unsigned)(rphlMs[i]/1000));
     display.setCursor(2, 2 + (i + 2) * lh);
     display.print(buf);
@@ -111,16 +112,19 @@ static void rpHLShow(){
 void rpHLLoopPoll(){
   static uint8_t st = 0;
   unsigned long ms = millis();
-  if(st == 0 && ms > 12000UL){
-    st = 1;
-    rpHL("idle_12dtk");
+  // v3: sampel diam-diam (tanpa SD/layar) supaya tren RAM seiring waktu kelihatan
+  static const uint32_t TS[7] = {12000UL, 20000UL, 30000UL, 45000UL, 60000UL, 75000UL, 90000UL};
+  static const char* LB[7] = {"idle_12dtk","idle_20dtk","idle_30dtk","idle_45dtk","idle_60dtk","idle_75dtk","idle_90dtk"};
+  if(st < 7){
+    if(ms > TS[st]){ rpHL(LB[st]); st++; }
+    return;
+  }
+  if(st == 7 && ms > 100000UL){
+    st = 8;
+    rpHL("idle_100dtk");
     rpHLFlush();
     rpHLShow();
-    delay(45000);        // tahan 45 dtk supaya layarnya bisa difoto (UI membeku sementara)
+    delay(60000);        // tahan 60 dtk supaya layarnya bisa difoto (UI membeku sementara)
     needRedraw = true;
-  } else if(st == 1 && ms > 90000UL){
-    st = 2;
-    rpHL("idle_90dtk");
-    rpHLFlush();
   }
 }
