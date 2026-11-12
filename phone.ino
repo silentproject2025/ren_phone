@@ -5810,6 +5810,8 @@ void ownerDrawAvatar(LGFX_Sprite&,int,int,int);
 bool ownerPickActive(); void ownerPickReset(); void ownerPickChosen(const char*);
 void ownerSetAvatarUi(const char*);
 
+void rpHL(const char*); void rpHLFlush(); void rpHLLoopPoll();
+
 void aboutEnter(); void aboutExit(); void drawAbout(LGFX_Sprite&); void aboutTouch(int,int,bool,bool);
 void aboutLoopPoll();
 // ---- backup_renphone.ino: Backup & Restore pengaturan ----
@@ -19631,6 +19633,7 @@ bool getInputPoint(lgfx::touch_point_t &tp){
 
 void setup(){
   Serial.begin(115200);
+  rpHL("awal_setup");
   // v117: catat core tempat setup()/loop() (loopTask Arduino) berjalan. README lama menyebut
   // Core 0, tetapi default Arduino-ESP32 adalah Core 1 (CONFIG_ARDUINO_RUNNING_CORE). Task berat
   // (DOOM, NES, Telepon) dipin ke Core 1, jadi kalau loop() juga di Core 1 mereka berbagi CPU
@@ -19648,6 +19651,7 @@ void setup(){
   // dan cuma sekali sejak boot (gak bisa di-undo, gapapa krn emang gak
   // pernah dipakai).
   esp_bt_controller_mem_release(ESP_BT_MODE_BTDM);
+  rpHL("setelah_BT_release");
 
   // v31: daftarkan idle hook per core (dipakai app HWmonitor buat estimasi
   // beban CPU tiap core -- lihat catatan lengkap di blok "APP: HWMONITOR").
@@ -19706,6 +19710,7 @@ void setup(){
   // "diamankan" duluan selagi PSRAM masih bersih, dan dipertahankan
   // (di-cache) seumur boot itu.
   mjpegEnsureBuffer();
+  rpHL("setelah_mjpeg_buf");
 
   // v103: SPI Overclock -- HARUS sebelum display.init() (freq bus perlu
   // sudah final sebelum transaksi SPI pertama ke panel dikirim). Lihat
@@ -19713,6 +19718,7 @@ void setup(){
   spiOcIdx = loadSpiOcPref();
   display.setSpiFreqMHz(SPI_OC_OPTIONS[spiOcIdx]);
   display.init();
+  rpHL("setelah_display_init");
   vibInit(); // v23: motor getar di GPIO 18
 
   // =============================================================
@@ -19750,7 +19756,9 @@ void setup(){
 
   canvas.setPsram(true);
   canvas.createSprite(display.width(),display.height());
+  rpHL("setelah_canvas");
 
+  rpHL("sebelum_boot_anim");
   runBootSequence(); // v116: "Event Horizon" -> logo OS "NyxOS" -> transisi ke UI (skrg ikut orientasi tersimpan)
   // v45: dulu ada `display.setBrightness(brightness);` di sini -- itu yg
   // bikin backlight nyala penuh SEBELUM lock screen digambar (lihat
@@ -19768,14 +19776,18 @@ void setup(){
   loadFontPref();
   initAppColors();
   drawColor=T().text;
+  rpHL("sebelum_initSD");
   initSD();
+  rpHL("setelah_initSD");
   initFfat(); // v47: siapin fallback wallpaper (flash internal) pas SD Card gak kedetek
   emjInit();  // emoji: muat set dari SD (/emoji.bin) SEBELUM teks apa pun dinormalisasi (loadNote dst)
   loadNote();
   loadGeminiKey();
   loadWallpaper(); // v47: muat wallpaper custom kalau ada (fallback warna solid tema kalau gak ada)
   canvasApp.setPsram(true);
+  rpHL("sebelum_canvasApp");
   canvasApp.createSprite(320,240-STATUS_H-44);
+  rpHL("setelah_canvasApp");
   canvasApp.fillSprite(T().bg);
   applyOrientation(savedOrient, false); // rapikan SCR_W/H, canvas & canvasApp (rotasi sudah benar dari awal)
   locked = true;
@@ -19839,9 +19851,13 @@ void setup(){
   // WiFi.begin() lalu langsung return) -- progresnya dipoll pelan2 lewat
   // wifiConnectStep() di loop(), jadi UI responsif sejak detik pertama,
   // ikon WiFi status bar nyusul update sendiri di background.
+  rpHL("sebelum_wifi");
   loadWifiCreds();
   connectWifi();
+  rpHL("setelah_connectWifi");
   wakeBegin(); // v115: siapin wake word (alokasi PSRAM, load template, jalanin task kalau user sempat ngaktifin)
+  rpHL("akhir_setup");
+  rpHLFlush();
 }
 
 // =================================================================
@@ -19990,6 +20006,7 @@ unsigned long lastClk=0,lastSen=0,lastMpu=0,lastBatt=0;
 unsigned long hwmonLastPoll=0; // v31: timer polling app HWmonitor (pola sama dgn lastSen dkk)
 unsigned long lastLoopMs=0; // v14: dipakai normalisasi decay momentum scroll thdp waktu nyata (dt)
 void loop(){
+  rpHLLoopPoll();
   { static Screen s_hePrev=SCR_HOME; Screen s_heC=curScreen();   // v130: home anim -- catat saat masuk Home
     if(s_heC!=s_hePrev){ if(s_heC==SCR_HOME) homeEnterMs=millis(); s_hePrev=s_heC; } }
   unsigned long nowMs=millis();
