@@ -78,6 +78,7 @@ static String otaSel = "";             // channel terpilih (sudah bersih)
 static String otaCustom = "";          // daftar branch tambahan, dipisah koma
 static bool   otaChanLoaded = false;
 static String otaNewBranch = "";
+static bool   otaCrossDisp = false;    // true = ambil firmware untuk LAYAR LAIN (hanya RAM: hilang saat reboot, sengaja)
 static bool   otaNewBranchPending = false;
 
 // samakan PERSIS dgn workflow:  tr -c 'A-Za-z0-9_-' '-'
@@ -154,6 +155,28 @@ static void otaResetCheck() {
 
 String otaBranchName()  { return String(RP_STR(RP_BRANCH)); }   // branch firmware yg SEDANG jalan
 String otaChannelName() { otaChanLoad(); return otaSel; }       // branch yg dipilih utk diunduh
+
+// ---- OPSI: pasang firmware untuk LAYAR LAIN (mis. HP ILI9341 -> firmware ST7796) ----
+// Dipakai saat panel mau diganti: pasang dulu firmware layar baru selagi layar lama masih bisa
+// dipakai, baru tukar panelnya. Hanya RAM (tidak disimpan) -> tiap reboot kembali ke "layar ini".
+static const char* otaOtherDispId()  { return strcmp(RP_DISP_ID, "st7796") == 0 ? "ili9341" : "st7796"; }
+static const char* otaTargetDispId() { return otaCrossDisp ? otaOtherDispId() : RP_DISP_ID; }
+bool otaCrossDispOn() { return otaCrossDisp; }
+void otaDispLabel(char* out, int n) {
+  snprintf(out, n, "%s", strcmp(otaTargetDispId(), "st7796") == 0 ? "7796" : "9341");
+}
+void otaCrossDispToggle() {
+  otaCrossDisp = !otaCrossDisp;
+  otaResetCheck();
+  if (otaCrossDisp) {
+    String m = String("Target firmware layar ") + (strcmp(otaTargetDispId(), "st7796") == 0 ? "ST7796" : "ILI9341") +
+               ". Layar ini bisa gelap setelah pasang!";
+    showToast(m.c_str(), 3500);
+  } else {
+    showToast("Target: firmware layar ini", 1800);
+  }
+  needRedraw = true;
+}
 
 void otaChannelCycle() {
   otaChanLoad();
@@ -318,7 +341,10 @@ void otaCheckAndFill() {
   if (!wifiConnected) { showToast("Sambungkan WiFi dulu di Setting"); return; }
   otaChanLoad();
   String ch = otaSel;
-  if (!ch.endsWith(RP_CH_SUFFIX)) ch += RP_CH_SUFFIX;   // build ST7796 -> channel-<branch>-st7796 (ILI9341: suffix kosong)
+  // suffix channel mengikuti LAYAR TARGET (bukan layar build ini): st7796 -> channel-<branch>-st7796, ili9341 -> tanpa suffix
+  const char* tgtDisp = otaTargetDispId();
+  const char* tgtSuffix = (strcmp(tgtDisp, "st7796") == 0) ? "-st7796" : "";
+  if (!ch.endsWith(tgtSuffix)) ch += tgtSuffix;
 
   updBusy = true;
   updDrawBusy("Memeriksa channel...");
@@ -345,12 +371,13 @@ void otaCheckAndFill() {
     showToast("Info channel rusak / tidak valid", 2500);
     return;
   }
-  // Firmware beda LAYAR (ILI9341 vs ST7796) tidak boleh saling timpa -> layar bisa gelap total.
+  // Firmware beda LAYAR (ILI9341 vs ST7796) tidak boleh saling timpa -> layar bisa gelap total,
+  // KECUALI user sengaja menyalakan opsi "layar lain" (otaCrossDisp): lalu yang dicocokkan adalah layar TARGET.
   // info.txt lama tanpa "display=" dianggap ili9341.
   {
     String disp = otaKv(body, "display");
     if (disp.length() == 0) disp = "ili9341";
-    if (disp != RP_DISP_ID) {
+    if (disp != tgtDisp) {
       showToast("Firmware untuk layar lain. Dibatalkan", 3500);
       otaResetCheck();
       return;
@@ -366,13 +393,13 @@ void otaCheckAndFill() {
 
   otaLatestNum = build;
   otaCheckedOk = true;
-  bool switching = (ch != otaBranchName());
+  bool switching = (ch != otaBranchName()) || otaCrossDisp;   // opsi layar lain: selalu boleh dipasang (walau build tidak lebih baru)
   if (switching || build > (int)RP_BUILD_NUM) {
     otaStateVal = 2;
     updUrl = base + "firmware.bin";
     otaExpUrl = updUrl; otaExpMd5 = md5; otaExpSize = size;
     if (switching) {
-      String m = String("Pindah ke '") + ch + "' b" + String(build) + ". Ketuk Unduh & Pasang";
+      String m = String(otaCrossDisp ? "LAYAR LAIN: '" : "Pindah ke '") + ch + "' b" + String(build) + ". Ketuk Unduh & Pasang";
       showToast(m.c_str(), 3200);
     } else {
       showToast("Ada update! Ketuk Unduh & Pasang", 2600);

@@ -5704,7 +5704,7 @@ void updEnter(); void updExit();
 void drawUpdate(LGFX_Sprite&); void updTouch(int,int,bool,bool);
 // ---- ota_check_renphone.ino: channel (branch) + pengaman boot/rollback ----
 void otaGuardBoot(); void otaGuardPoll(); void otaGuardArm();
-String otaBranchName(); String otaChannelName(); void otaChannelCycle(); void otaAddBranchBegin(); void otaAddBranchPoll(); void otaVersionLabel(char* out, int n);
+String otaBranchName(); String otaChannelName(); bool otaCrossDispOn(); void otaCrossDispToggle(); void otaDispLabel(char*,int); void otaChannelCycle(); void otaAddBranchBegin(); void otaAddBranchPoll(); void otaVersionLabel(char* out, int n);
 bool otaRollbackReady(); void otaRollbackRefresh(); bool otaRollbackNow(bool);
 void otaHdrReset(); bool otaHdrFeed(const uint8_t*,size_t,size_t); bool otaPreInstall(const String&,int,String&); void otaApplyExpect(const String&); int otaSlotSizeKB();
 // ---- Chat MQTT: forward declarations (chat_renphone.ino) ----
@@ -10928,10 +10928,12 @@ bool updCheckConfirm(const String& action){
 #define UPD_CH_H         15
 #define UPD_RB_W         26
 #define UPD_ADD_W        22
-#define UPD_CHP_W        108
+#define UPD_CHP_W        (SCR_W>=300 ? 108 : 78)
+#define UPD_DSP_W        34
 #define UPD_RB_X         (SCR_W-6-UPD_RB_W)
 #define UPD_ADD_X        (UPD_RB_X-4-UPD_ADD_W)
 #define UPD_CHP_X        (UPD_ADD_X-4-UPD_CHP_W)
+#define UPD_DSP_X        (UPD_CHP_X-4-UPD_DSP_W)   // pill target layar firmware (9341/7796)
 // ---- layar progres (digambar langsung ke display) ----
 #define UPD_PG_BARX      24
 #define UPD_PG_BARW      (SCR_W-48)
@@ -11502,6 +11504,13 @@ static void updDrawChanRow(LGFX_Sprite& s){
   s.setCursor(UPD_CHP_X+6, UPD_CH_Y+4); s.print(cn.c_str());
   s.setTextColor(T().subtext);
   s.setCursor(UPD_CHP_X+UPD_CHP_W-10, UPD_CH_Y+4); s.print(">");
+  // pill target layar: ketuk 2x = pasang firmware untuk layar LAIN (merah = aktif)
+  { bool xOn = otaCrossDispOn();
+    bool xPend = (updPendingConfirm == "xdisp") && millis()<=updPendingUntil;
+    iosRR(s, UPD_DSP_X, UPD_CH_Y, UPD_DSP_W, UPD_CH_H, 6, (xOn||xPend) ? T().danger : T().surface2);
+    char dl[8]; otaDispLabel(dl, sizeof(dl));
+    s.setTextColor((xOn||xPend) ? T().bg : T().subtext);
+    updCenterText(s, UPD_DSP_X, UPD_DSP_W, UPD_CH_Y+4, xPend ? "?" : dl); }
   // "+" tambah branch
   iosRR(s, UPD_ADD_X, UPD_CH_Y, UPD_ADD_W, UPD_CH_H, 6, T().surface2);
   s.setTextColor(T().accent);
@@ -11592,7 +11601,7 @@ void drawUpdate(LGFX_Sprite& s){
   }
 
   // ---- bagian WiFi ----
-  s.setTextColor(T().subtext); s.setCursor(10, UPD_WIFI_LABEL_Y); s.print("DARI WIFI");
+  s.setTextColor(T().subtext); s.setCursor(10, UPD_WIFI_LABEL_Y); s.print(SCR_W>=300 ? "DARI WIFI" : "WIFI");
   updDrawChanRow(s);
   iosRR(s, 6, UPD_URL_Y, SCR_W-12, UPD_URL_H, 6, T().surface);
   int maxU = (SCR_W-28)/6;
@@ -11659,13 +11668,18 @@ void updTouch(int x,int y,bool held,bool isNew){
     }
   }
 
-  // baris channel: [pill channel] [+ tambah branch] [rollback]
-  if(y>=UPD_CH_Y-3 && y<=UPD_CH_Y+UPD_CH_H+1 && x>=UPD_CHP_X-2){
+  // baris channel: [target layar] [pill channel] [+ tambah branch] [rollback]
+  if(y>=UPD_CH_Y-3 && y<=UPD_CH_Y+UPD_CH_H+1 && x>=UPD_DSP_X-2){
     if(x>=UPD_RB_X-2){
       if(!otaRollbackReady()){ showToast("Tidak ada versi sebelumnya di slot lain", 2200); return; }
       if(updCheckConfirm("rb")) otaRollbackNow(true);
     } else if(x>=UPD_ADD_X-2){ otaAddBranchBegin(); }
-    else { otaChannelCycle(); }
+    else if(x>=UPD_CHP_X-2){ otaChannelCycle(); }
+    else {
+      // mematikan opsi langsung; menyalakan butuh ketuk 2x (risiko layar gelap)
+      if(otaCrossDispOn()) otaCrossDispToggle();
+      else if(updCheckConfirm("xdisp")) otaCrossDispToggle();
+    }
     return;
   }
 

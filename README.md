@@ -1214,6 +1214,13 @@ Build ini **terpisah** dari build ILI9341 biasa; kodenya sama, dipilih lewat fla
 
 HP menolak OTA kalau `display=` di `info.txt` tidak cocok dengan layarnya.
 
+**Pasang firmware layar lain lewat OTA (mis. HP ILI9341 -> firmware ST7796).** Di app Update, baris WiFi punya pill kecil
+`9341` / `7796` di kiri pill channel. Ketuk 2x untuk mengaktifkan (jadi merah): "Cek update" lalu membaca channel
+layar sebaliknya (`channel-<branch>-st7796` atau tanpa suffix) dan mencocokkan `display=` dengan layar target itu, bukan layar build yang
+sedang jalan. Build yang diambil selalu boleh dipasang walau nomornya tidak lebih baru. Opsi ini hanya di RAM, jadi hilang saat reboot.
+Kegunaannya: ganti panel. Pasang firmware layar baru selagi panel lama masih terpasang, baru tukar panelnya.
+Kalau dipasang tanpa menukar panel, layar akan gelap/kacau dan sentuh XPT2046 vs FT6236 tidak cocok; pulihkan lewat SD `/update` atau USB.
+
 **Wiring bawaan:** pin SPI layar sama dengan ILI9341 (SCLK 12, MOSI 11, MISO 13, DC 2, CS 10, RST 14, BL 21).
 FT6236 berbagi bus I2C dengan MPU6050 (SDA 15, SCL 7, alamat 0x38); RST/INT tidak dipakai. Ganti lewat
 `RP_TOUCH_SDA / RP_TOUCH_SCL / RP_TOUCH_RST` di `display_conf.h`.
