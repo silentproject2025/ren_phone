@@ -43,6 +43,10 @@
   #ifndef RP_TOUCH_ADDR
   #define RP_TOUCH_ADDR       0x38
   #endif
+  // TOUCH_PROBE_V1: clock I2C (Hz). Sentuh tidak stabil/kabel panjang -> coba 100000 atau 200000.
+  #ifndef RP_TOUCH_I2C_HZ
+  #define RP_TOUCH_I2C_HZ     400000
+  #endif
   // Kalau sentuhan terbalik/tertukar setelah dites di layar asli, ubah salah satu saja:
   #ifndef RP_TOUCH_SWAP_XY
   #define RP_TOUCH_SWAP_XY    0            // 1 = tukar sumbu X<->Y (setelah rotasi)

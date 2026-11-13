@@ -1249,10 +1249,17 @@ public:
   bool touchBegin(){
     if(RP_TOUCH_RST>=0){ pinMode(RP_TOUCH_RST,OUTPUT); digitalWrite(RP_TOUCH_RST,LOW); delay(10); digitalWrite(RP_TOUCH_RST,HIGH); delay(60); }
     Wire.begin(RP_TOUCH_SDA, RP_TOUCH_SCL);   // aman dipanggil ulang dgn pin sama (mpuInit juga memanggilnya)
-    Wire.setClock(400000);
-    Wire.beginTransmission(RP_TOUCH_ADDR);
-    _touchOk = (Wire.endTransmission()==0);
-    Serial.printf("[touch] FT6236 @0x%02X %s (SDA=%d SCL=%d)\n", RP_TOUCH_ADDR, _touchOk?"TERDETEKSI":"TIDAK ADA", RP_TOUCH_SDA, RP_TOUCH_SCL);
+    Wire.setClock(RP_TOUCH_I2C_HZ);
+    // TOUCH_PROBE_V1: reset CTP digabung ke reset LCD -> FT6236 butuh ~300 ms sejak reset. Ulangi probe (maks 1,5 dtk).
+    uint32_t _t0=millis(); int _try=0;
+    do {
+      Wire.beginTransmission(RP_TOUCH_ADDR);
+      _touchOk = (Wire.endTransmission()==0);
+      _try++;
+      if(_touchOk) break;
+      delay(50);
+    } while(millis()-_t0 < 1500);
+    Serial.printf("[touch] FT6236 @0x%02X %s (SDA=%d SCL=%d, coba %d, %lu ms, I2C %lu Hz)\n", RP_TOUCH_ADDR, _touchOk?"TERDETEKSI":"TIDAK ADA", RP_TOUCH_SDA, RP_TOUCH_SCL, _try, (unsigned long)(millis()-_t0), (unsigned long)RP_TOUCH_I2C_HZ);
     return _touchOk;
   }
   bool touchOk() const { return _touchOk; }
@@ -12555,8 +12562,14 @@ unsigned long gTouchStartMs=0;
 // Dipakai untuk: auto-rotate layar, deteksi goyang (shake), dan
 // app "Orientasi 3D" (visualisasi 3D real-time).
 // =================================================================
+// TOUCH_PROBE_V1: build ST7796 = satu bus I2C dgn FT6236 -> pin ikut RP_TOUCH_SDA/SCL
+#ifdef RP_TOUCH_SDA
+#define MPU_SDA_PIN RP_TOUCH_SDA
+#define MPU_SCL_PIN RP_TOUCH_SCL
+#else
 #define MPU_SDA_PIN 15
 #define MPU_SCL_PIN 7
+#endif
 #define MPU_ADDR    0x68
 
 bool  mpuReady   = false;
@@ -12604,7 +12617,11 @@ bool mpuReadBytes(uint8_t reg, uint8_t* buf, uint8_t len){
 }
 bool mpuInit(){
   Wire.begin(MPU_SDA_PIN, MPU_SCL_PIN);
+#ifdef RP_TOUCH_I2C_HZ
+  Wire.setClock(RP_TOUCH_I2C_HZ);   // TOUCH_PROBE_V1: satu clock utk seluruh bus
+#else
   Wire.setClock(400000);
+#endif
   uint8_t who = 0;
   if(!mpuReadBytes(0x75, &who, 1) || who != 0x68){
     mpuReady = false;
