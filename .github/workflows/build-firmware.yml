@@ -198,6 +198,7 @@ jobs:
           NYX_NN_IN: ${{ inputs.nyx_nn }}
           CHESS_OPT_IN: ${{ inputs.chess_opt }}
         run: |
+          set -o pipefail  # NYX-ERRSUM
           # Pencocokan di shell (persis), BUKAN ekspresi Actions: di ekspresi, '' == '0' bernilai
           # true (keduanya dikonversi jadi angka 0), sehingga build dari push ikut memakai opsi kosong.
           case "$LOOP_CORE_IN" in
@@ -326,7 +327,33 @@ jobs:
             --board-options "FlashSize=16M,PSRAM=opi,PartitionScheme=app3M_fat9M_16MB${LOOP_OPT}" \
             --build-property "compiler.cpp.extra_flags=-DRP_BUILD_NUM=${{ github.run_number }} -DRP_BRANCH=${RP_BRANCH} -DRP_VERSION=${RP_VERSION} ${DISP_FLAG}${CHS_FLAGS} -I${NOF_INCLUDE}" \
             --build-property "compiler.c.extra_flags=-I${NOF_INCLUDE}" \
-            build_sketch --output-dir build
+            build_sketch --output-dir build 2>&1 | tee compile.log
+
+      - name: Ringkasan error (hanya jalan kalau compile gagal)
+        if: failure()
+        run: |
+          [ -f compile.log ] || { echo "compile.log tidak ada (gagal sebelum compile)"; exit 0; }
+          PAT='error:|Error:|dangerous relocation|undefined reference|overflowed|too big|cannot encode|multiple definition|No such file|ld returned|Sketch too big'
+          N_ASSERT=$(grep -c "assertion fail" compile.log || true)
+          {
+            echo "## Ringkasan error compile (${VARIANT:-?})"
+            echo
+            echo "Baris 'assertion fail' (linker crash): **${N_ASSERT}** kali"
+            grep -m1 "assertion fail" compile.log | cut -c1-300 | sed 's/^/    /' || true
+            echo
+            echo "### Error pertama (selain assertion)"
+            echo '```'
+            grep -v "assertion fail" compile.log | grep -v "^/builds/idf" | grep -n -iE "$PAT" | head -25 | cut -c1-300
+            echo '```'
+            echo "### 25 baris terakhir (selain assertion)"
+            echo '```'
+            grep -v "assertion fail" compile.log | grep -v "^/builds/idf" | tail -25 | cut -c1-300
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          # juga jadi Annotations (mudah dibaca di app GitHub HP)
+          grep -v "assertion fail" compile.log | grep -iE "$PAT" | head -8 | cut -c1-280 | while IFS= read -r L; do
+            echo "::error::${L}"
+          done
 
       - name: Diagnostik prototipe (hanya jalan kalau compile gagal)
         if: failure()
