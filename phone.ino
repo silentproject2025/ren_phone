@@ -19567,76 +19567,12 @@ void hwmonTouch(int x,int y,bool held,bool isNew){
 // disederhanakan balik jadi cuma pass-through ke touchscreen fisik.
 // =============================================
 
-// ---- filter sentuhan v2 (apply_touch_deadzone_v2.py): sementara, kaca retak -> ghost touch ----
-// TOUCH_FILTER_V2
-// Semua nilai px dihitung di koordinat layar SAAT INI (ikut portrait/landscape).
-#define TOUCH_DEAD_W   40   // kotak mati pojok kiri-bawah: lebar (px), 0 = nonaktif
-#define TOUCH_DEAD_H   40   // kotak mati pojok kiri-bawah: tinggi (px)
-#define TOUCH_EDGE_L   0    // strip mati tepi KIRI  (px), 0 = nonaktif
-#define TOUCH_EDGE_R   0    // strip mati tepi KANAN (px), 0 = nonaktif
-#define TOUCH_EDGE_T   0    // strip mati tepi ATAS  (px), 0 = nonaktif
-#define TOUCH_EDGE_B   0    // strip mati tepi BAWAH (px), 0 = nonaktif
-#define TOUCH_MIN_Z    0    // tekanan minimum (tp.size), 0 = nonaktif -- isi setelah lihat log
-#define TOUCH_OOR_PX   10   // titik di luar layar lebih dari ini dianggap ghost
-#define TOUCH_DEBUG    1    // 1 = cetak log [touch] ke Serial Monitor, 0 = diam
-// TOUCH_GHOST_RECT (apply_touch_deadzone_v3.py): kotak mati di lokasi ghost terukur,
-// koordinat LANDSCAPE (320x240), tepi kanan-tengah. Aktif cuma saat landscape.
-#define TOUCH_GHOST_X0 285
-#define TOUCH_GHOST_X1 340
-#define TOUCH_GHOST_Y0 95
-#define TOUCH_GHOST_Y1 140
-
-static bool touchBlocked(const lgfx::touch_point_t &t){
-  int x=(int)t.x, y=(int)t.y;
-  if(x < -TOUCH_OOR_PX || y < -TOUCH_OOR_PX || x >= SCR_W+TOUCH_OOR_PX || y >= SCR_H+TOUCH_OOR_PX) return true;
-#if RP_TOUCH_CAPACITIVE
-  return false;   // kotak mati/ghost di bawah = tambalan kaca retak ILI9341 lama, bukan utk layar ini
-#endif
-  if(TOUCH_DEAD_W>0 && x<TOUCH_DEAD_W && y>=SCR_H-TOUCH_DEAD_H) return true;
-  if(TOUCH_EDGE_L>0 && x<TOUCH_EDGE_L) return true;
-  if(TOUCH_EDGE_R>0 && x>=SCR_W-TOUCH_EDGE_R) return true;
-  if(TOUCH_EDGE_T>0 && y<TOUCH_EDGE_T) return true;
-  if(TOUCH_EDGE_B>0 && y>=SCR_H-TOUCH_EDGE_B) return true;
-  if(SCR_W>SCR_H && x>=TOUCH_GHOST_X0 && x<=TOUCH_GHOST_X1 && y>=TOUCH_GHOST_Y0 && y<=TOUCH_GHOST_Y1) return true;
-  if(TOUCH_MIN_Z>0 && (int)t.size<TOUCH_MIN_Z) return true;
-  return false;
-}
-
-static void touchLog(const char* tag, const lgfx::touch_point_t &t){
-#if TOUCH_DEBUG
-  static uint32_t lastMs=0;
-  uint32_t now=millis();
-  if(now-lastMs<150) return;   // jangan banjiri Serial kalau ghost nempel terus
-  lastMs=now;
-  Serial.printf("[touch] %s x=%d y=%d z=%d (layar %dx%d)\n", tag, (int)t.x, (int)t.y, (int)t.size, SCR_W, SCR_H);
-#else
-  (void)tag; (void)t;
-#endif
-}
-
-// TOUCH_LATCH_V5 (apply_touch_deadzone_v5.py)
-#define TOUCH_LATCH_MS 150   // layar harus sepi sekian ms (sejak sentuhan terakhir) sebelum sentuhan diterima lagi setelah ghost
-
+// TOUCH_SIMPLE_V6 (apply_touch_remove_filter_patch.py): filter deadzone/ghost/latch dihapus.
+// Remote Control (web) menang atas touchscreen fisik; selebihnya pass-through apa adanya.
 bool getInputPoint(lgfx::touch_point_t &tp){
-  static bool prevDown=false;
-  static bool latched=false;       // ghost baru saja kena blok -> tolak semua sentuhan
-  static uint32_t lastTouchMs=0;   // waktu sampel sentuhan terakhir (apa pun)
-  uint32_t now=millis();
-
-  { int rx=0,ry=0; // Remote Control: sentuhan dari web menang atas touchscreen fisik
+  { int rx=0,ry=0;
     if(rcInputPoll(&rx,&ry)){ tp.x=rx; tp.y=ry; tp.size=64; return true; } }
-
-  if(latched && now-lastTouchMs>=TOUCH_LATCH_MS) latched=false;   // sudah cukup sepi
-
-  if(!display.getTouch(&tp)){ prevDown=false; return false; }
-  lastTouchMs=now;
-
-  if(touchBlocked(tp)){ touchLog("BLOKIR", tp); latched=true; prevDown=false; return false; }
-  if(latched){ touchLog("TAHAN", tp); prevDown=false; return false; }
-
-  if(!prevDown) touchLog("SENTUH", tp);   // cuma pas sentuhan baru mulai
-  prevDown=true;
-  return true;
+  return display.getTouch(&tp);
 }
 
 void setup(){
