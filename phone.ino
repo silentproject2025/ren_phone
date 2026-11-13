@@ -7312,7 +7312,7 @@ void homeArmZoom(int idx,int tx,int ty,float sc){
 // gangguan. Balik ke clock normal (hemat daya) & polling aktif lagi
 // pas keluar game.
 // =============================================
-#define CPU_MHZ_NORMAL 160
+#define CPU_MHZ_NORMAL 240   // CPU240_V1 (apply_cpu240.py): dulu 160, CPU selalu di batas maksimum chip
 #define CPU_MHZ_GAME   240
 bool gameModeActive = false;
 
@@ -19634,6 +19634,7 @@ bool getInputPoint(lgfx::touch_point_t &tp){
 
 void setup(){
   Serial.begin(115200);
+  setCpuFrequencyMhz(CPU_MHZ_NORMAL);   // CPU240_V1: pastikan 240 MHz sejak awal (apa pun default board)
   rpHL("awal_setup");
   // v117: catat core tempat setup()/loop() (loopTask Arduino) berjalan. README lama menyebut
   // Core 0, tetapi default Arduino-ESP32 adalah Core 1 (CONFIG_ARDUINO_RUNNING_CORE). Task berat
