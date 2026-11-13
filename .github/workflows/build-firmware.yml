@@ -349,6 +349,12 @@ jobs:
             echo '```'
             grep -v "assertion fail" compile.log | grep -v "^/builds/idf" | tail -25 | cut -c1-300
             echo '```'
+            # COMPILELOG_V1: konteks linker apa adanya (termasuk baris assertion/pesan ld yg disaring di atas)
+            echo "### 40 baris sebelum collect2 (apa adanya)"
+            echo '```'
+            CL=$(grep -n "collect2: error" compile.log | head -1 | cut -d: -f1)
+            if [ -n "$CL" ]; then S=$((CL>40 ? CL-40 : 1)); sed -n "${S},${CL}p" compile.log | cut -c1-300; else echo "(tidak ada baris collect2)"; fi
+            echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
           # juga jadi Annotations (mudah dibaca di app GitHub HP)
           grep -v "assertion fail" compile.log | grep -iE "$PAT" | head -8 | cut -c1-280 | while IFS= read -r L; do
@@ -359,6 +365,7 @@ jobs:
         if: failure()
         run: |
           mkdir -p diag
+          [ -f compile.log ] && cp compile.log diag/compile.log   # COMPILELOG_V1
           NOF_INCLUDE="$(pwd)/build_sketch/src"
           arduino-cli version > diag/versions.txt 2>&1 || true
           arduino-cli core list >> diag/versions.txt 2>&1 || true
