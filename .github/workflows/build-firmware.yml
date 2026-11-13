@@ -67,7 +67,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.arduino15/staging
-          key: arduino-dl-${{ runner.os }}-${{ steps.dlkey.outputs.month }}
+          key: arduino-dl-v2-${{ runner.os }}-${{ steps.dlkey.outputs.month }}
 
       - name: Update Board Manager and Install Core & Libraries
         run: |
@@ -137,7 +137,7 @@ jobs:
               --json assets -q '.assets[] | select(.name=="esp32s3-libs.tar.gz") | "\(.size)-\(.updatedAt)"' 2>/dev/null | tr -c 'A-Za-z0-9._-' '_' || true)
             [ -n "$LIBS_ID" ] || LIBS_ID=none
           fi
-          echo "prefix=arduino-build-${{ runner.os }}-${{ matrix.variant }}-core${CORE_NOW}-libs${LIBS_ID}" >> "$GITHUB_OUTPUT"
+          echo "prefix=arduino-build-v2-${{ runner.os }}-${{ matrix.variant }}-core${CORE_NOW}-libs${LIBS_ID}" >> "$GITHUB_OUTPUT"
           echo "Kunci cache compile: core=${CORE_NOW} libs=${LIBS_ID}"
 
       - name: Cache compile Arduino
