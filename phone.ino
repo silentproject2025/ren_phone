@@ -4220,8 +4220,14 @@ void drawDynamicIsland(LGFX_Sprite& s){
 // =============================================
 // BACK BUTTON
 // =============================================
+// BACK_BIGGER_V1 (apply_back_button_bigger.py)
+#if RP_TOUCH_CAPACITIVE
+#define BACK_W 84
+#define BACK_H 34
+#else
 #define BACK_W 68
 #define BACK_H 24
+#endif
 int backX(){ return 4; }
 int backY(){ return SCR_H-BACK_H-3; }
 
@@ -4255,16 +4261,16 @@ void drawBack(LGFX_Sprite& s){
   // iOS: pil kaca + chevron + "Kembali" (warna aksen), plus home-indicator tipis di dasar layar
   int bx=backX(), by=backY(), cy=by+BACK_H/2;
   drawGlassCard(s,bx,by,BACK_W,BACK_H,BACK_H/2,T().surface2,170);
-  iosChevron(s,bx+11,cy,T().accent);
+  iosChevron(s,bx+(BACK_W>68?14:11),cy,T().accent);
   s.setTextColor(T().accent); s.setTextSize(1);
-  s.setCursor(bx+21,by+8); s.print("Kembali");
+  s.setCursor(bx+(BACK_W>68?26:21),by+(BACK_H-8)/2); s.print("Kembali");
   int hiW=96, hiX=SCR_W/2-hiW/2; // UI-MODERN: lebih lebar & tebal (4px)
   if(hiX>bx+BACK_W+6) nyxAaRR(s, hiX,SCR_H-6,hiW,4,2,blend565(T().bg,T().text,170));
 }
 
 bool isBack(int x,int y){
-  if(!kbVisible && backHidden()) return y>=SCR_H-16 && abs(x-SCR_W/2)<=60;   // cadangan: ketuk home indicator
-  return !kbVisible && x>=backX() && x<=backX()+BACK_W && y>=backY() && y<=backY()+BACK_H;
+  if(!kbVisible && backHidden()) return y>=SCR_H-28 && abs(x-SCR_W/2)<=80;   // cadangan: ketuk home indicator (diperlebar)
+  return !kbVisible && x>=0 && x<=backX()+BACK_W+14 && y>=backY()-4 && y<=SCR_H;   // hitbox diperluas (lihat BACK_BIGGER_V1)
 }
 
 // =============================================
