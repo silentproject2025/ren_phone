@@ -5858,6 +5858,7 @@ bool ownerPickActive(); void ownerPickReset(); void ownerPickChosen(const char*)
 void ownerSetAvatarUi(const char*);
 
 void rpHL(const char*); void rpHLFlush(); void rpHLLoopPoll();
+bool rpHLBootOn(); bool rpHLWanted(); void rpHLToggle();   // HEAPLOG_TOGGLE_V1
 
 void aboutEnter(); void aboutExit(); void drawAbout(LGFX_Sprite&); void aboutTouch(int,int,bool,bool);
 void aboutLoopPoll();
@@ -8844,7 +8845,7 @@ int loadSpiOcPref(){
 // PENGATURAN ala iOS -- state layout & sentuhan (daftar scroll, tap-saat-lepas)
 // =====================================================================
 enum { SR_TITLE=0, SR_SECT, SR_BRIGHT, SR_THEME, SR_FONT, SR_ROT, SR_SPI, SR_SPIAPPLY,
-       SR_SCAN, SR_WIFI, SR_NONET, SR_SSID, SR_PASS, SR_CONNECT, SR_MPU, SR_TCAL, SR_OWNER, SR_ABOUT, SR_POWER, SR_HOMEEDIT, SR_BACKUP };
+       SR_SCAN, SR_WIFI, SR_NONET, SR_SSID, SR_PASS, SR_CONNECT, SR_MPU, SR_TCAL, SR_OWNER, SR_ABOUT, SR_POWER, SR_HOMEEDIT, SR_BACKUP, SR_HEAPLOG };
 #define SETT_MAXROWS 40
 int settRT[SETT_MAXROWS], settRG[SETT_MAXROWS], settRY[SETT_MAXROWS], settRH[SETT_MAXROWS], settRA[SETT_MAXROWS];
 const char* settRL[SETT_MAXROWS];
@@ -8888,6 +8889,7 @@ void settBuildLayout(){
   settAddRow(SR_SECT,0,26,0,"KINERJA",y);
   settAddRow(SR_SPI,g,38,0,nullptr,y);
   if(spiOcPendingIdx!=spiOcIdx) settAddRow(SR_SPIAPPLY,g,34,0,nullptr,y);
+  settAddRow(SR_HEAPLOG,g,38,0,nullptr,y);   // HEAPLOG_TOGGLE_V1
   g++;
 
   settAddRow(SR_SECT,0,26,0,"WI-FI",y);
@@ -8935,7 +8937,7 @@ void settChevron(LGFX_Sprite& s,int cx,int cy,uint16_t col){ // ">" tipis
 bool settHasChip(int t){
   switch(t){
     case SR_BRIGHT: case SR_THEME: case SR_FONT: case SR_ROT: case SR_HOMEEDIT: case SR_SPI:
-    case SR_SCAN: case SR_SSID: case SR_PASS: case SR_MPU: case SR_TCAL: case SR_ABOUT: case SR_POWER: case SR_BACKUP:
+    case SR_SCAN: case SR_SSID: case SR_PASS: case SR_MPU: case SR_TCAL: case SR_ABOUT: case SR_POWER: case SR_BACKUP: case SR_HEAPLOG:
       return true;
   }
   return false;
@@ -8956,6 +8958,7 @@ void settChip(LGFX_Sprite& s,int type,int x,int y){ // x,y = pojok kiri-atas chi
     case SR_TCAL:     col=CHIP_RED;    break;
     case SR_ABOUT:    col=CHIP_GRAY;   break;
     case SR_BACKUP:   col=CHIP_TEAL;   break;
+    case SR_HEAPLOG:  col=CHIP_GRAY;   break;
     case SR_POWER:    col=CHIP_RED;    break;
     default: return;
   }
@@ -9012,6 +9015,9 @@ void settChip(LGFX_Sprite& s,int type,int x,int y){ // x,y = pojok kiri-atas chi
     case SR_BACKUP:    // panah turun ke baki
       s.fillRect(cx-1,cy-8,3,8,W); s.fillTriangle(cx-5,cy-1,cx+5,cy-1,cx,cy+5,W);
       s.fillRect(cx-7,cy+7,15,2,W);
+      break;
+    case SR_HEAPLOG:   // grafik batang
+      s.fillRect(cx-6,cy+1,3,6,W); s.fillRect(cx-1,cy-3,3,10,W); s.fillRect(cx+4,cy-7,3,14,W);
       break;
     case SR_ABOUT:     // "i"
       nyxAaCircle(s, cx,cy-5,2,W); s.fillRect(cx-1,cy-1,3,8,W);
@@ -9135,6 +9141,11 @@ void drawSettings(LGFX_Sprite& s){
           s.setCursor(sx+k*(sw/2)+(sw/2)/2-s.textWidth(lb)/2,sy+7); s.print(lb);
         }
         } break;
+      case SR_HEAPLOG:
+        s.setTextColor(T().text); s.setCursor(xl,ty-4); s.print("Heaplog (RAM)");
+        s.setTextColor(T().subtext); s.setCursor(xl,ty+6); s.print(rpHLWanted()!=rpHLBootOn()?"Setelah restart":"Log RAM saat boot");
+        iosSwitch(s,xr-34,ry+(rh-20)/2,rpHLWanted());
+        break;
       case SR_SPIAPPLY:
         s.setTextSize(1); uiText(s,cx+cw/2-s.textWidth("Terapkan & Mulai Ulang")/2-1,ty,"Terapkan & Mulai Ulang",T().accent,false,true);
         break;
@@ -9268,6 +9279,10 @@ void settTap(int x,int y){
       int sw=108, sx=xr-sw;
       if(x>=sx && x<=sx+sw){ spiOcPendingIdx=(x<sx+sw/2)?0:1; needRedraw=true; }
       } break;
+    case SR_HEAPLOG:
+      rpHLToggle();
+      showToast(rpHLWanted()?"Heaplog aktif (setelah restart)":"Heaplog nonaktif (setelah restart)");
+      needRedraw=true; break;
     case SR_SPIAPPLY:
       spiOcIdx=spiOcPendingIdx; saveSpiOcPref();
       showToast("Menerapkan & restart...");

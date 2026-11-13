@@ -30,7 +30,25 @@ static uint32_t rphlMs[RPHL_MAX];
 static uint16_t rphlTasks[RPHL_MAX];
 static int      rphlN = 0;
 
+// HEAPLOG_TOGGLE_V1 (apply_heaplog_off.py): heaplog MATI bawaan, saklar di Setting > KINERJA.
+static int8_t rphlOn = -1;       // nilai yg dipakai sejak boot (dibaca sekali dari NVS)
+static bool   rphlWant = false;  // nilai tersimpan (berubah kalau saklar digeser; berlaku setelah restart)
+static void rphlLoadPref(){
+  if(rphlOn >= 0) return;
+  Preferences p; p.begin("ui", false);
+  rphlWant = p.getBool("heaplog", false);
+  p.end();
+  rphlOn = rphlWant ? 1 : 0;
+}
+bool rpHLBootOn(){ rphlLoadPref(); return rphlOn == 1; }
+bool rpHLWanted(){ rphlLoadPref(); return rphlWant; }
+void rpHLToggle(){
+  rphlLoadPref(); rphlWant = !rphlWant;
+  Preferences p; p.begin("ui", false); p.putBool("heaplog", rphlWant); p.end();
+}
+
 void rpHL(const char* label){
+  if(!rpHLBootOn()) return;
   if(rphlN >= RPHL_MAX) return;
   int i = rphlN++;
   rphlLabel[i]   = label;
@@ -61,6 +79,7 @@ static void rpHLVerify(){
 }
 
 void rpHLFlush(){
+  if(!rpHLBootOn()) return;
   if(!sdReady){ rphlSdStr = "SD:TIDAK-SIAP"; Serial.println("[HeapLog] SD tidak siap"); return; }
   File f = SD_MMC.open("/heaplog.txt", FILE_WRITE);   // FILE_WRITE = timpa file lama
   if(!f){ rphlSdStr = "SD:GAGAL-TULIS"; Serial.println("[HeapLog] gagal buka file tulis"); return; }
@@ -110,6 +129,7 @@ static void rpHLShow(){
 
 // dipanggil dari awal loop(): catat lagi saat idle (setelah WiFi/NTP sempat jalan)
 void rpHLLoopPoll(){
+  if(!rpHLBootOn()) return;
   static uint8_t st = 0;
   unsigned long ms = millis();
   // v3: sampel diam-diam (tanpa SD/layar) supaya tren RAM seiring waktu kelihatan
