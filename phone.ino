@@ -1262,10 +1262,13 @@ public:
   // jari berikutnya = slot 1; slot dibebaskan saat jarinya diangkat. Jari tunggal SELALU masuk
   // slot 0 -> semua app lama (yg cuma baca 1 titik via getTouch) berperilaku sama seperti sebelumnya.
   bool getTouch(lgfx::touch_point_t* tp){ return touchSlot(0,tp); }
+  // TOUCH_RESP_V1 (apply_touch_responsive.py)
   bool touchSlot(int s, lgfx::touch_point_t* tp){
     touchPoll();
-    if(s<0||s>1||!_sDown[s]) return false;
-    *tp=_sPt[s]; return true;
+    if(s<0||s>1) return false;
+    if(_sDown[s]){ *tp=_sPt[s]; _sNew[s]=false; return true; }
+    if(_sHold[s]){ *tp=_sPt[s]; _sHold[s]=false; _sNew[s]=false; return true; }   // ketukan kilat: tampil 1 pembacaan
+    return false;
   }
   // koordinat NATIVE -> koordinat layar pada rotasi aktif (+ koreksi RP_TOUCH_*)
   void touchMap(int rx,int ry,int&x,int&y){
@@ -1286,10 +1289,23 @@ public:
     if(!_touchOk) return;
     uint32_t now=millis();
     if(now-_tPollMs < 4) return;               // jangan banjiri bus I2C: pakai hasil terakhir
+    static portMUX_TYPE _tMux = portMUX_INITIALIZER_UNLOCKED;
+    portENTER_CRITICAL(&_tMux); bool busy=_tBusy; _tBusy=true; portEXIT_CRITICAL(&_tMux);
+    if(busy) return;                           // sedang dibaca konteks lain
     _tPollMs=now;
+    touchPollInner();
+    _tBusy=false;
+  }
+  void touchPollInner(){
     uint8_t b[13];
     Wire.beginTransmission(RP_TOUCH_ADDR); Wire.write((uint8_t)0x02);
     bool ok = (Wire.endTransmission(false)==0) && (Wire.requestFrom((int)RP_TOUCH_ADDR,13)==13);
+    if(!ok){
+      while(Wire.available()) Wire.read();
+      // gagal baca sesaat BUKAN "jari diangkat": pertahankan keadaan terakhir (maks 5x berturut-turut)
+      if(_tFail<255) _tFail++;
+      if(_tFail<=5) return;
+    } else _tFail=0;
     int n=0; int rid[2]={0,1}, rx[2]={0,0}, ry[2]={0,0};
     if(ok){
       for(int i=0;i<13;i++) b[i]=Wire.read();
@@ -1307,11 +1323,17 @@ public:
 #endif
     // 1) slot yg sudah ada: cari titik dgn id yg sama
     bool used[2]={false,false};
+    int act=(_sDown[0]?1:0)+(_sDown[1]?1:0);
     for(int s=0;s<2;s++){
       if(!_sDown[s]) continue;
       int found=-1;
       for(int i=0;i<n;i++) if(!used[i] && rid[i]==_sHw[s]){ found=i; break; }
-      if(found<0){ _sDown[s]=false; continue; }   // jari diangkat
+      if(found<0 && act==1 && n==1 && !used[0]){ found=0; _sHw[s]=rid[0]; }   // FT6236 menukar id -> rebind, jangan putus
+      if(found<0){                                // jari diangkat
+        _sDown[s]=false;
+        if(_sNew[s]) _sHold[s]=true;              // belum sempat dibaca loop() -> tahan 1 pembacaan
+        continue;
+      }
       used[found]=true;
       int x,y; touchMap(rx[found],ry[found],x,y);
       _sPt[s].x=x; _sPt[s].y=y; _sPt[s].size=64; _sPt[s].id=s;
@@ -1321,7 +1343,7 @@ public:
       if(used[i]) continue;
       int s=!_sDown[0]?0:(!_sDown[1]?1:-1);
       if(s<0) break;
-      _sDown[s]=true; _sHw[s]=rid[i];
+      _sDown[s]=true; _sNew[s]=true; _sHw[s]=rid[i];
       int x,y; touchMap(rx[i],ry[i],x,y);
       _sPt[s].x=x; _sPt[s].y=y; _sPt[s].size=64; _sPt[s].id=s;
     }
@@ -1330,6 +1352,10 @@ private:
   bool _touchOk=false;
   bool _sDown[2]={false,false};
   int  _sHw[2]={0,0};
+  bool _sNew[2]={false,false};   // TOUCH_RESP_V1: turun tapi belum dibaca loop()
+  bool _sHold[2]={false,false};  // TOUCH_RESP_V1: sudah naik, tapi 1 pembacaan terakhir masih ditahan
+  uint8_t _tFail=0;
+  volatile bool _tBusy=false;
   uint32_t _tPollMs=0;
   lgfx::touch_point_t _sPt[2];
 public:
@@ -11730,7 +11756,15 @@ unsigned long getPushLastUs(){ return nyxPushLastUs; }
 // justru karena push() lama synchronous 100% (jaminan "bus pasti idle
 // begitu push() selesai"). Versi async ngerusak jaminan itu -> dua
 // transfer numpuk di kabel yg sama. Balik ke synchronous biasa.
-void push(){ if(nyxThFreezeFrame()) return; unsigned long t0=micros(); canvas.pushSprite(0,0); nyxPushLastUs=micros()-t0; rcFrameMark(); }
+void push(){ if(nyxThFreezeFrame()) return;
+#if RP_TOUCH_CAPACITIVE
+  display.touchPoll();   // TOUCH_RESP_V1: sampling lebih rapat di tengah putaran render
+#endif
+  unsigned long t0=micros(); canvas.pushSprite(0,0); nyxPushLastUs=micros()-t0;
+#if RP_TOUCH_CAPACITIVE
+  display.touchPoll();
+#endif
+  rcFrameMark(); }
 void renderCurrentFrame(){
   if(nyxThFreezeFrame()) return;   // NYX_TH_V4
   // v68 FIX: font custom (Mono/Sans/Tebal/Serif) ternyata KETINGGIAN buat
