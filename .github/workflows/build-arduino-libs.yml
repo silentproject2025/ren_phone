@@ -219,6 +219,18 @@ jobs:
           grep -E '^CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=' "$OUT/sdkconfig" || echo "::warning::ALWAYSINTERNAL tidak ditemukan di sdkconfig hasil (pakai bawaan 16384)"
           echo "=== window TCP lwIP di sdkconfig hasil ==="
           grep -E '^CONFIG_LWIP_TCP_(WND_DEFAULT|SND_BUF_DEFAULT|RECVMBOX_SIZE)=' "$OUT/sdkconfig" || echo "::warning::opsi window TCP tidak ditemukan di sdkconfig hasil"
+          # NYX-STRIP-DBG-V1: buang info debug (DWARF) dari semua .a sebelum dipaketkan. Dugaan: arsip kustom yg masih
+          # membawa DWARF bikin ld toolchain esp-x32/2601 crash (assertion elf32-xtensa.c:952, jutaan kali) saat link.
+          # Simbol tetap ada (hanya --strip-debug), jadi link biasa tidak terpengaruh.
+          echo "=== ukuran lib SEBELUM strip ==="; du -sh "$OUT/lib" || true
+          STRIP_BIN=$(find "$HOME/.arduino15" "$HOME/lib-builder" -type f \( -name 'xtensa-esp32s3-elf-strip' -o -name 'xtensa-esp-elf-strip' \) 2>/dev/null | head -n1)
+          echo "strip: ${STRIP_BIN:-TIDAK KETEMU}"
+          if [ -n "$STRIP_BIN" ]; then
+            find "$OUT/lib" -name '*.a' -print0 | xargs -0 -n 20 "$STRIP_BIN" --strip-debug || echo "::warning::strip --strip-debug gagal"
+            echo "=== ukuran lib SESUDAH strip ==="; du -sh "$OUT/lib" || true
+          else
+            echo "::warning::binary strip tidak ketemu, arsip dipaketkan apa adanya"
+          fi
           mkdir -p "$HOME/pkg"
           tar -czf "$HOME/pkg/esp32s3-libs.tar.gz" -C "$(dirname "$OUT")" esp32s3
           cp "$RUNNER_TEMP/core-version.txt" "$HOME/pkg/core-version.txt"
