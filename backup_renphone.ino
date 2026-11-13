@@ -681,3 +681,112 @@ void backupTouch(int x, int y, bool held, bool isNew) {
   bkDown = false;
   if (!bkMoved) bkTap(bkPx, bkPy);
 }
+
+// =====================================================================
+// BACKUP OTOMATIS (tanpa menekan apa pun)
+// =====================================================================
+// NVS tetap tempat kerja semua fitur (dibaca ke RAM saat boot, cepat, tak butuh SD). Di atasnya:
+//   * backupAutoPoll() : tiap BK_AUTO_EVERY_MS (dan sekali ~45 dtk setelah boot) seluruh NVS disisir
+//                        ke /backup/auto.nbk. Ditulis HANYA bila isinya berubah (CRC beda), jadi SD
+//                        tidak dipakai menulis terus-menerus.
+//   * backupAutoBoot() : dipanggil sekali di setup() setelah initSD(). Kalau NVS ini belum pernah
+//                        dikenali (penanda nyxbak/auto belum ada: flash baru di-erase / unit baru)
+//                        dan /backup/auto.nbk ada, isinya dipulihkan lalu HP restart sekali.
+// Sandi & API key ikut HANYA bila sakelar "Sertakan sandi & API key" nyala DAN enkripsi mati
+// (berkas otomatis tidak bisa menanyakan sandi, jadi tidak pernah dienkripsi).
+#define BK_AUTO_FILE      BK_DIR "/auto.nbk"
+#define BK_AUTO_TMP       BK_DIR "/auto.tmp"
+#define BK_AUTO_FIRST_MS  45000UL
+#define BK_AUTO_EVERY_MS  (10UL * 60UL * 1000UL)
+
+static bool bkAutoMarker(bool set) {
+  Preferences p;
+  if (set) { if (!p.begin(BK_NVS_NS, false)) return false; p.putBool("auto", true); p.end(); return true; }
+  if (!p.begin(BK_NVS_NS, true)) return false;           // namespace belum ada = NVS baru
+  bool v = p.getBool("auto", false); p.end();
+  return v;
+}
+
+static bool bkAutoTail(const char* path, uint32_t* crc) {   // CRC32 ada di 4 byte terakhir berkas
+  if (!SD_MMC.exists(path)) return false;
+  File g = SD_MMC.open(path, FILE_READ);
+  if (!g) return false;
+  size_t n = (size_t)g.size(); uint8_t b[4]; bool ok = false;
+  if (n >= BK_HDR + 5 && g.seek(n - 4) && g.read(b, 4) == 4) {
+    *crc = (uint32_t)b[0] | ((uint32_t)b[1] << 8) | ((uint32_t)b[2] << 16) | ((uint32_t)b[3] << 24); ok = true;
+  }
+  g.close();
+  return ok;
+}
+
+static void bkAutoSave() {
+  if (!sdReady) return;
+  uint8_t* buf = bkAlloc(BK_BUF_MAX);
+  if (!buf) return;                                       // PSRAM tidak cukup: coba lagi nanti
+  if (!bkAutoMarker(false)) bkAutoMarker(true);
+  bool sec = false, enc = false;
+  { Preferences p; if (p.begin(BK_NVS_NS, true)) { sec = p.getBool("sec", false); enc = p.getBool("enc", false); p.end(); } }
+  size_t len = 0; int cnt = 0;
+  if (bkCollect(buf, BK_BUF_MAX, sec && !enc, &len, &cnt) == 0 && len > BK_HDR + 4) {
+    uint32_t nc = (uint32_t)buf[len - 4] | ((uint32_t)buf[len - 3] << 8) | ((uint32_t)buf[len - 2] << 16) | ((uint32_t)buf[len - 1] << 24);
+    uint32_t oc = 0;
+    if (!(bkAutoTail(BK_AUTO_FILE, &oc) && oc == nc)) {   // berubah (atau belum ada) -> tulis
+      if (!SD_MMC.exists(BK_DIR)) SD_MMC.mkdir(BK_DIR);
+      bool ok = false;
+      File f = SD_MMC.open(BK_AUTO_TMP, FILE_WRITE);
+      if (f) { ok = (f.write(buf, len) == len); f.close(); }
+      if (ok) {                                           // baca ulang & cek CRC sebelum menggantikan berkas lama
+        ok = false;
+        File g = SD_MMC.open(BK_AUTO_TMP, FILE_READ);
+        if (g && (size_t)g.size() == len) {
+          uint8_t* chk = bkAlloc(len);
+          if (chk) { BkHdr h; ok = (g.read(chk, len) == len) && bkVerify(chk, len, h); free(chk); }
+        }
+        if (g) g.close();
+      }
+      if (ok) {
+        if (SD_MMC.exists(BK_AUTO_FILE)) SD_MMC.remove(BK_AUTO_FILE);
+        ok = SD_MMC.rename(BK_AUTO_TMP, BK_AUTO_FILE);
+      }
+      if (!ok) SD_MMC.remove(BK_AUTO_TMP);
+      Serial.printf("[BACKUP-AUTO] %s (%d nilai, %u byte)\n", ok ? "tersimpan" : "GAGAL menulis", cnt, (unsigned)len);
+    }
+  }
+  bkZero(buf, BK_BUF_MAX); free(buf);                     // isi bisa memuat sandi -> timpa nol
+}
+
+void backupAutoPoll() {
+  static uint32_t next = 0;
+  if (!sdReady || bkRestartAt) return;
+  uint32_t now = millis();
+  if (next == 0) { next = now + BK_AUTO_FIRST_MS; return; }
+  if ((int32_t)(now - next) < 0) return;
+  next = now + BK_AUTO_EVERY_MS;
+  bkAutoSave();
+}
+
+void backupAutoBoot() {
+  if (!sdReady) return;
+  if (bkAutoMarker(false)) return;                        // NVS ini sudah dikenal: tidak ada yang dipulihkan
+  const char* cand[2] = { BK_AUTO_FILE, BK_AUTO_TMP };
+  for (int i = 0; i < 2; i++) {
+    if (!SD_MMC.exists(cand[i])) continue;
+    File f = SD_MMC.open(cand[i], FILE_READ);
+    if (!f) continue;
+    size_t n = (size_t)f.size();
+    if (n < BK_HDR + 5 || n > BK_BUF_MAX) { f.close(); continue; }
+    uint8_t* buf = bkAlloc(n);
+    if (!buf) { f.close(); continue; }
+    bool rd = (f.read(buf, n) == n); f.close();
+    int fail = 0, ok = rd ? bkApply(buf, n, &fail) : -1;  // bkApply memeriksa CRC penuh & menolak berkas rusak
+    bkZero(buf, n); free(buf);
+    if (ok > 0) {
+      bkAutoMarker(true);
+      Serial.printf("[BACKUP-AUTO] NVS kosong: %d nilai dipulihkan dari %s (gagal %d). Restart...\n", ok, cand[i], fail);
+      delay(200);
+      ESP.restart();
+      return;
+    }
+  }
+  bkAutoMarker(true);                                     // tidak ada yang bisa dipulihkan: tandai supaya tidak dicoba lagi
+}

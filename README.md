@@ -761,6 +761,7 @@ Menyimpan seluruh pengaturan NyxOS ke kartu SD dan memulihkannya, misalnya sebel
 | **Hapus** | Membuang satu berkas backup (juga dengan konfirmasi ketuk dua kali). |
 | **Sertakan sandi & API key** | Sakelar, **mati** secara bawaan. Sandi WiFi, akun SIP, akun Chat, API key Gemini, dan sandi AP Remote Control hanya ikut bila sakelar ini dinyalakan. |
 | **Enkripsi dengan sandi** | Sakelar. Backup berikutnya dienkripsi dengan sandi 6 sampai 64 karakter yang ditanyakan setiap kali (dua kali saat membuat) dan **tidak disimpan**. |
+| **Backup otomatis** | Tanpa menekan apa pun: sekitar 45 detik setelah boot lalu tiap 10 menit, seluruh NVS disalin ke `/backup/auto.nbk`, **hanya bila isinya berubah**. Bila NVS kosong (flash di-*erase* atau unit baru) dan `auto.nbk` ada, semua pengaturan dipulihkan otomatis saat boot dan HP restart sekali. Sandi dan API key ikut hanya bila sakelar *Sertakan sandi & API key* nyala **dan** enkripsi mati (berkas otomatis tidak bisa menanyakan sandi). Tidak termasuk dalam batas 6 berkas. Perubahan dalam 10 menit terakhir sebelum daya putus belum tersalin. |
 
 **Keamanan berkas.**
 

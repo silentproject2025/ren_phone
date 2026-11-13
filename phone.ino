@@ -5864,6 +5864,7 @@ void aboutEnter(); void aboutExit(); void drawAbout(LGFX_Sprite&); void aboutTou
 void aboutLoopPoll();
 // ---- backup_renphone.ino: Backup & Restore pengaturan ----
 void backupEnter(); void backupExit(); void drawBackup(LGFX_Sprite&); void backupTouch(int,int,bool,bool);
+void backupAutoBoot(); void backupAutoPoll();   // backup otomatis NVS -> SD (/backup/auto.nbk) + pulihkan otomatis saat NVS kosong
 
 // ---- homeedit_renphone.ino: Atur Home ----
 void homeEditEnter(); void homeEditExit(); void drawHomeEdit(LGFX_Sprite&); void homeEditTouch(int,int,bool,bool);
@@ -19806,6 +19807,7 @@ void setup(){
   rpHL("sebelum_initSD");
   initSD();
   rpHL("setelah_initSD");
+  backupAutoBoot(); // NVS baru/kosong + ada /backup/auto.nbk -> pulihkan semua pengaturan lalu restart sekali
   initFfat(); // v47: siapin fallback wallpaper (flash internal) pas SD Card gak kedetek
   emjInit();  // emoji: muat set dari SD (/emoji.bin) SEBELUM teks apa pun dinormalisasi (loadNote dst)
   loadNote();
@@ -20617,6 +20619,7 @@ void loop(){
     // hwmonPoll() buat hitung persen sibuk per core, lihat komentarnya)
     if(curScreen()==SCR_HWMON && millis()-hwmonLastPoll>500){ hwmonPoll(); needRedraw=true; hwmonLastPoll=millis(); }
     ownerLoopPoll(); // Profil: tutup Galeri setelah foto profil dipilih
+    backupAutoPoll(); // simpan salinan otomatis seluruh NVS ke SD kalau ada yang berubah (tiap 10 mnt)
     if(curScreen()==SCR_ABOUT) aboutLoopPoll();
     // v58 FIX bug "Labirin gak bisa digerakin sama sekali": SCR_MAZE lupa
     // didaftarin di sini pas game-nya dibikin (v56/v57). Tanpa ini,
