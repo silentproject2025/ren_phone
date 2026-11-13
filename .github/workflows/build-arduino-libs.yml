@@ -14,6 +14,10 @@ on:
         description: "Branch esp32-arduino-lib-builder (samakan dgn IDF core, mis. release/v5.5)"
         default: "auto"
         required: true
+      idf_branch:
+        description: "NYX-IDF-INPUT: branch ESP-IDF utk build.sh -I. Core esp32 3.3.x = release/v5.5. Kosong = bawaan lib-builder"
+        default: "release/v5.5"
+        required: false
       psram_cache_line_64b:
         description: "EKSPERIMEN: cache data line 64B (bisa mempercepat PSRAM, tapi buffer DMA dari PSRAM wajib rata 64 B -> curiga crash saat boot). Default mati; uji A/B"
         type: boolean
@@ -180,7 +184,13 @@ jobs:
           CORE_VER=$(cat "$RUNNER_TEMP/core-version.txt")
           AR_BRANCH="release/v${CORE_VER%.*}.x"
           echo "Arduino branch: $AR_BRANCH"
-          env -u GITHUB_REPOSITORY ./build.sh -t esp32s3 -A "$AR_BRANCH"
+          IDF_BR="${{ inputs.idf_branch }}"
+          echo "IDF branch: ${IDF_BR:-<bawaan lib-builder>}"
+          if [ -n "$IDF_BR" ]; then
+            env -u GITHUB_REPOSITORY ./build.sh -t esp32s3 -A "$AR_BRANCH" -I "$IDF_BR"
+          else
+            env -u GITHUB_REPOSITORY ./build.sh -t esp32s3 -A "$AR_BRANCH"
+          fi
 
       - name: Cek hasil + paketkan
         run: |
