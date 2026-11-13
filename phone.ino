@@ -2519,10 +2519,13 @@ bool doGeminiHttpRequest(const String& promptText, String& outResponse) {
   // bakal nge-log error alokasi yg SPESIFIK (bukan tebakan kita lagi),
   // kelihatan di baris "[Gemini] httpCode=... err=..." bawah, atau
   // pesan "E (...) esp-tls-mbedtls: ..."/"mbedtls_ssl_..." di Serial.
-  const size_t MIN_BLOCK_FOR_TLS = 20000;
+  const size_t MIN_BLOCK_FOR_TLS = 12000; // diturunkan dr 20000: mbedTLS sudah di PSRAM (lib kustom)
   size_t lb = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
   if (lb < MIN_BLOCK_FOR_TLS) {
-    outResponse = "Error: RAM internal terlalu terfragmentasi/rendah utk TLS. Tutup app lain / restart perangkat.";
+    char eb[200];
+    snprintf(eb, sizeof(eb), "Error: RAM internal terlalu terfragmentasi/rendah utk TLS (blok %u KB, bebas %u KB, perlu %u KB). Tutup app lain / restart perangkat.",
+             (unsigned)(lb/1024), (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL)/1024), (unsigned)(MIN_BLOCK_FOR_TLS/1024));
+    outResponse = eb;
     aiClientPtr = nullptr;
     return false;
   }
@@ -2759,7 +2762,7 @@ void triggerGeminiAI() {
   // kesempatan ke lwIP buat rilis blok TLS lama tanpa ada overhead stack
   // task yg motong. Retry ringan (maks 3x, jeda 150ms = 450ms total,
   // sengaja singkat drpd bikin UI kerasa nge-freeze pas ketuk kirim).
-  const size_t MIN_BLOCK_TO_START = 20000;
+  const size_t MIN_BLOCK_TO_START = 12000; // diturunkan dr 20000 (lihat catatan di atas)
   for (int i = 0; i < 3 && largestBlock < MIN_BLOCK_TO_START; i++) {
     delay(150);
     largestBlock = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
@@ -2769,7 +2772,12 @@ void triggerGeminiAI() {
                 freeInternal, largestBlock, ESP.getFreePsram());
 
   if (largestBlock < MIN_BLOCK_TO_START) {
-    aiResponse = "Error: RAM internal kritis rendah. Tutup app lain / restart perangkat.";
+    {
+      char eb[200];
+      snprintf(eb, sizeof(eb), "Error: RAM internal kritis rendah (blok %u KB, bebas %u KB, perlu %u KB). Tutup app lain / restart perangkat.",
+               (unsigned)(largestBlock/1024), (unsigned)(freeInternal/1024), (unsigned)(MIN_BLOCK_TO_START/1024));
+      aiResponse = eb;
+    }
     needRedrawNow();
     return;
   }
