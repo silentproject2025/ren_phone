@@ -134,11 +134,13 @@ Konsekuensi desain yang penting:
 | Blok | Sinyal → GPIO |
 |---|---|
 | Layar | SCLK 12 · MOSI 11 · MISO 13 · DC 2 · CS 10 · RST 14 · BL 21 |
-| Sentuh | SCLK 6 · MOSI 5 · MISO 4 · CS 9 |
+| Sentuh (ILI9341, XPT2046 SPI) | SCLK 6 · MOSI 5 · MISO 4 · CS 9 |
+| Sentuh (ST7796, FT6236 I2C, `Wire`) | SDA 15 · SCL 7 · alamat 0x38 |
 | SD (SDIO 1-bit) | CLK 39 · CMD 38 · D0 40 |
 | Mikrofon | SCK 47 · WS 46 · SD 45 |
 | Link ke CAM | S3 TX 41 → CAM RX 13 · S3 RX 42 ← CAM TX 14 · GND bersama |
-| MPU6050 dan INA219 | ILI9341: SDA 15 · SCL 7 (`Wire`) · ST7796: SDA 5 · SCL 4 (`Wire1`, bus sendiri) |
+| MPU6050 dan INA219 (ILI9341) | SDA 15 · SCL 7 (`Wire`) |
+| MPU6050 dan INA219 (ST7796) | SDA 5 · SCL 4 (`Wire1`, bus sendiri; bus 15/7 khusus sentuh) |
 | Lainnya | Motor getar 18 · Neopixel 48 |
 
 ### 3.3 Catatan perakitan ESP32-CAM
@@ -729,7 +731,7 @@ Daya dibaca dari sensor **INA219** melalui I2C. Aplikasi memiliki lima tab (Ring
 - opsi **Arah arus** untuk membalik tanda arus jika pengkabelan shunt terbalik, dan status "Mengisi" yang memicu animasi di lock screen;
 - tab **Per App** `BETA`: mAh yang keluar dari baterai dicatat per app (app yang sedang di layar; kategori *Home* dan *Terkunci* terpisah), diurutkan dari yang paling boros. Statistik tersimpan di NVS dan direset otomatis saat baterai penuh (atau lewat tombol Reset). Ini estimasi: pemakaian latar belakang (mis. musik) ikut tercatat pada app yang sedang terbuka.
 
-**Pengkabelan:** VCC 3,3 V, GND, SDA 15, SCL 7. Resistor shunt dipasang seri pada kabel positif baterai. Nilai bawaan: shunt 100 mΩ, gain /8, kapasitas 2300 mAh, resistansi dalam 150 mΩ.
+**Pengkabelan:** VCC 3,3 V, GND, SDA 15, SCL 7 (build ST7796: SDA 5, SCL 4). Resistor shunt dipasang seri pada kabel positif baterai. Nilai bawaan: shunt 100 mΩ, gain /8, kapasitas 2300 mAh, resistansi dalam 150 mΩ.
 
 > Persentase baterai merupakan **estimasi** (bukan chip *fuel-gauge* khusus). Isi Kapasitas dan R dalam dengan benar pada tab Baterai agar angkanya masuk akal.
 
@@ -1048,7 +1050,7 @@ Proyek ini ditujukan sebagai perangkat pribadi dan eksperimental. Pertimbangkan 
 | ESP32-CAM sering restart | *Brownout* akibat catu daya lemah | Gunakan pin 5V dengan catu yang kuat. |
 | Muncul pesan *Channel belum dipublikasikan* | Branch belum pernah di-build | Jalankan workflow build untuk branch tersebut satu kali. |
 | Pembaruan OTA ditolak | Basis kode firmware berbeda | Perilaku yang disengaja; gunakan firmware dari basis kode yang sama. |
-| Persen baterai dan tegangan tidak berubah | INA219 tidak terdeteksi | Periksa pengkabelan SDA 15 dan SCL 7 serta alamat I2C. |
+| Persen baterai dan tegangan tidak berubah | INA219 tidak terdeteksi | Periksa pengkabelan SDA 15 dan SCL 7 (build ST7796: SDA 5 dan SCL 4) serta alamat I2C. |
 | Wake Word sulit mengenali | Ruangan bising atau sampel kurang representatif | Rekam ulang 4 sampel di lingkungan tenang; sesuaikan slider *Sensitivitas*. |
 | Build CI gagal dengan `undefined reference to ...` | Berkas `.ino` baru belum didaftarkan pada langkah `cp` di `build-firmware.yml` | Tambahkan baris `cp <berkas>.ino build_sketch/`, lalu push ulang. |
 | Animasi mengisi daya tidak muncul | HP tidak sedang terkunci, charger sudah terpasang sejak boot, atau INA219 tidak mendeteksi arus charge | Kunci HP, tunggu 10 detik, cabut charger 3 detik, lalu colok lagi; cek status "Mengisi" di tab Baterai dan opsi Arah arus. |
@@ -1225,7 +1227,7 @@ Kalau dipasang tanpa menukar panel, layar akan gelap/kacau dan sentuh XPT2046 vs
 FT6236 memakai bus I2C **sendiri** (`Wire`: SDA 15, SCL 7, alamat 0x38); RST/INT tidak dipakai. Ganti lewat
 `RP_TOUCH_SDA / RP_TOUCH_SCL / RP_TOUCH_RST` di `display_conf.h`.
 
-**Bus sensor terpisah.** Di build ST7796, MPU6050 dan INA219 pindah ke bus I2C kedua (`Wire1`): **SDA 5, SCL 4**
+**Bus sensor terpisah.** Di build ST7796, perangkat I2C selain sentuh (MPU6050 dan INA219) memakai bus I2C kedua (`Wire1`): **SDA 5, SCL 4**
 (bekas pin SPI sentuh XPT2046, yang di build ini tidak dipakai). Perlu pull-up 4,7k-10k ke 3V3 (kebanyakan modul sudah punya).
 Ganti lewat `RP_SENS_SDA / RP_SENS_SCL / RP_SENS_I2C_HZ`; hindari GPIO 33-37 (PSRAM octal), 26-32 (flash), 19/20 (USB), 0/3/45/46.
 Build ILI9341 tidak berubah (MPU6050 dan INA219 tetap di SDA 15 / SCL 7).
