@@ -138,7 +138,7 @@ Konsekuensi desain yang penting:
 | SD (SDIO 1-bit) | CLK 39 · CMD 38 · D0 40 |
 | Mikrofon | SCK 47 · WS 46 · SD 45 |
 | Link ke CAM | S3 TX 41 → CAM RX 13 · S3 RX 42 ← CAM TX 14 · GND bersama |
-| MPU6050 dan INA219 | SDA 15 · SCL 7 (satu bus I2C) |
+| MPU6050 dan INA219 | ILI9341: SDA 15 · SCL 7 (`Wire`) · ST7796: SDA 5 · SCL 4 (`Wire1`, bus sendiri) |
 | Lainnya | Motor getar 18 · Neopixel 48 |
 
 ### 3.3 Catatan perakitan ESP32-CAM
@@ -1222,8 +1222,13 @@ Kegunaannya: ganti panel. Pasang firmware layar baru selagi panel lama masih ter
 Kalau dipasang tanpa menukar panel, layar akan gelap/kacau dan sentuh XPT2046 vs FT6236 tidak cocok; pulihkan lewat SD `/update` atau USB.
 
 **Wiring bawaan:** pin SPI layar sama dengan ILI9341 (SCLK 12, MOSI 11, MISO 13, DC 2, CS 10, RST 14, BL 21).
-FT6236 berbagi bus I2C dengan MPU6050 (SDA 15, SCL 7, alamat 0x38); RST/INT tidak dipakai. Ganti lewat
+FT6236 memakai bus I2C **sendiri** (`Wire`: SDA 15, SCL 7, alamat 0x38); RST/INT tidak dipakai. Ganti lewat
 `RP_TOUCH_SDA / RP_TOUCH_SCL / RP_TOUCH_RST` di `display_conf.h`.
+
+**Bus sensor terpisah.** Di build ST7796, MPU6050 dan INA219 pindah ke bus I2C kedua (`Wire1`): **SDA 5, SCL 4**
+(bekas pin SPI sentuh XPT2046, yang di build ini tidak dipakai). Perlu pull-up 4,7k-10k ke 3V3 (kebanyakan modul sudah punya).
+Ganti lewat `RP_SENS_SDA / RP_SENS_SCL / RP_SENS_I2C_HZ`; hindari GPIO 33-37 (PSRAM octal), 26-32 (flash), 19/20 (USB), 0/3/45/46.
+Build ILI9341 tidak berubah (MPU6050 dan INA219 tetap di SDA 15 / SCL 7).
 
 **Kalau setelah flash:** warna negatif -> `RP_ST7796_INVERT 1`; merah/biru tertukar -> `RP_ST7796_RGB_ORDER 1`;
 sentuhan terbalik -> `RP_TOUCH_SWAP_XY` / `RP_TOUCH_FLIP_X` / `RP_TOUCH_FLIP_Y`. Sentuh kapasitif tidak memakai wizard kalibrasi.

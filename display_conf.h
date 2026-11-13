@@ -1,4 +1,6 @@
 #pragma once
+#define RP_STR_(x) #x
+#define RP_STR(x)  RP_STR_(x)   // angka pin -> string (utk teks "cek wiring")
 // display_conf.h -- PROFIL LAYAR. Dibaca phone.ino, hw_conf.h, about_renphone.ino.
 //
 // Default (tanpa flag apa pun) = ILI9341 240x320 + sentuh resistif XPT2046
@@ -29,7 +31,7 @@
   #endif
 
   // ---- sentuh FT6236 (I2C 0x38) ----
-  // Default: SATU bus dengan MPU6050 (SDA 15 / SCL 7) lewat Wire -> tanpa pin baru.
+  // Bus ini (Wire, SDA 15 / SCL 7) KHUSUS FT6236. MPU6050/INA219 ada di bus kedua (RP_SENS_*, Wire1) di bawah.
   // RST/INT = -1 artinya tidak dipakai (INT tidak perlu, sentuh di-polling).
   #ifndef RP_TOUCH_SDA
   #define RP_TOUCH_SDA        15
@@ -58,6 +60,24 @@
   #define RP_TOUCH_FLIP_Y     0            // 1 = balik sumbu Y
   #endif
 
+  // SENS_BUS_V1: bus I2C KEDUA (Wire1) khusus MPU6050 + INA219. Bus 15/7 di atas sekarang
+  // eksklusif untuk sentuh FT6236. Pin default = pin SPI sentuh XPT2046 (5/4) yang di build
+  // ST7796 tidak dipakai. Wajib ada pull-up 4,7k-10k ke 3V3 (kebanyakan modul MPU6050/INA219 sudah punya).
+  // Hindari GPIO 33-37 (PSRAM octal), 26-32 (flash), 19/20 (USB), 0/3/45/46 (strapping).
+  #ifndef RP_SENS_SDA
+  #define RP_SENS_SDA         5
+  #endif
+  #ifndef RP_SENS_SCL
+  #define RP_SENS_SCL         4
+  #endif
+  #ifndef RP_SENS_I2C_HZ
+  #define RP_SENS_I2C_HZ      400000
+  #endif
+  #define RP_SENS_WIRE        Wire1
+  #if (RP_SENS_SDA==RP_TOUCH_SDA) || (RP_SENS_SDA==RP_TOUCH_SCL) || (RP_SENS_SCL==RP_TOUCH_SDA) || (RP_SENS_SCL==RP_TOUCH_SCL)
+    #error "RP_SENS_SDA/SCL tidak boleh sama dengan pin sentuh RP_TOUCH_SDA/SCL (bus terpisah)"
+  #endif
+
   // Multi-touch: FT6236 melaporkan 2 jari. 1 = jari kedua dipakai game (DOOM/NES/Inferno).
   #ifndef RP_MULTITOUCH
   #define RP_MULTITOUCH       1
@@ -77,6 +97,17 @@
   #define RP_DISP_NATIVE_H    320
   #define RP_TOUCH_CAPACITIVE 0
   #define RP_MULTITOUCH       0
+  // SENS_BUS_V1: build ILI9341 = perilaku lama (MPU6050 + INA219 di Wire, SDA 15 / SCL 7)
+  #ifndef RP_SENS_SDA
+  #define RP_SENS_SDA         15
+  #endif
+  #ifndef RP_SENS_SCL
+  #define RP_SENS_SCL         7
+  #endif
+  #ifndef RP_SENS_I2C_HZ
+  #define RP_SENS_I2C_HZ      400000
+  #endif
+  #define RP_SENS_WIRE        Wire
   #define RP_CH_SUFFIX        ""
   #define RP_DISP_SPI_FREQ    60000000
   #define RP_DOOM_PANEL_W     320

@@ -20,8 +20,8 @@
 // puncak/min, estimasi sisa waktu / waktu penuh, deteksi charging,
 // grafik riwayat arus/tegangan/daya, siklus pengisian.
 //
-// WIRING:  INA219  VCC->3.3V  GND->GND  SDA->GPIO15  SCL->GPIO7
-//          (satu bus dgn MPU6050; alamat INA219 0x40-0x4F tidak bentrok)
+// WIRING:  INA219  VCC->3.3V  GND->GND  SDA->RP_SENS_SDA  SCL->RP_SENS_SCL (display_conf.h)
+//          ILI9341: GPIO15/7 (Wire) | ST7796: GPIO5/4 (Wire1). Satu bus dgn MPU6050; alamat 0x40-0x4F tidak bentrok
 //          Resistor shunt dipasang SERI di kabel (+) baterai:
 //              baterai(+) -> VIN+  ..  VIN- -> beban/charger
 //          Konvensi: arus POSITIF = baterai dipakai (discharge),
@@ -123,6 +123,9 @@ static int16_t  inaHistP[INA_HIST_N];
 static uint16_t inaHistHead = 0, inaHistCount = 0;
 static uint32_t inaHistLast = 0;
 
+#include <Wire.h>
+#include "display_conf.h"   // RP_SENS_WIRE / RP_SENS_SDA / RP_SENS_SCL (bus sensor)
+
 // UI
 static uint8_t  inaTab = 0, inaGraphMetric = 0;
 static int      inaRepRow = -1, inaRepDir = 0;
@@ -132,20 +135,20 @@ static uint32_t inaRepT0 = 0, inaRepLast = 0;
 // I2C level rendah
 // =====================================================================
 static bool inaWrite16(uint8_t reg, uint16_t val) {
-  Wire.beginTransmission(inaAddr);
-  Wire.write(reg);
-  Wire.write((uint8_t)(val >> 8));
-  Wire.write((uint8_t)(val & 0xFF));
-  return Wire.endTransmission() == 0;
+  RP_SENS_WIRE.beginTransmission(inaAddr);
+  RP_SENS_WIRE.write(reg);
+  RP_SENS_WIRE.write((uint8_t)(val >> 8));
+  RP_SENS_WIRE.write((uint8_t)(val & 0xFF));
+  return RP_SENS_WIRE.endTransmission() == 0;
 }
 
 static bool inaRead16(uint8_t reg, uint16_t &val) {
-  Wire.beginTransmission(inaAddr);
-  Wire.write(reg);
-  if (Wire.endTransmission() != 0) return false;
-  if (Wire.requestFrom((int)inaAddr, 2) != 2) return false;
-  uint8_t hi = Wire.read();
-  uint8_t lo = Wire.read();
+  RP_SENS_WIRE.beginTransmission(inaAddr);
+  RP_SENS_WIRE.write(reg);
+  if (RP_SENS_WIRE.endTransmission() != 0) return false;
+  if (RP_SENS_WIRE.requestFrom((int)inaAddr, 2) != 2) return false;
+  uint8_t hi = RP_SENS_WIRE.read();
+  uint8_t lo = RP_SENS_WIRE.read();
   val = ((uint16_t)hi << 8) | lo;
   return true;
 }
@@ -181,8 +184,8 @@ static bool inaApplyConfig() {
 }
 
 static bool inaProbeAddr(uint8_t a) {
-  Wire.beginTransmission(a);
-  if (Wire.endTransmission() != 0) return false;
+  RP_SENS_WIRE.beginTransmission(a);
+  if (RP_SENS_WIRE.endTransmission() != 0) return false;
   uint8_t save = inaAddr; inaAddr = a;
   uint16_t cfg = 0;
   bool ok = inaRead16(INA_REG_CONFIG, cfg) && ((cfg & 0x8000) == 0);
@@ -584,7 +587,7 @@ static void inaDrawSummary(LGFX_Sprite& s, int top, int bottom) {
     s.setTextColor(T().danger); s.setCursor(12, top + 6); s.print("INA219 tidak terdeteksi");
     s.setTextColor(T().subtext); s.setTextWrap(true);
     s.setCursor(12, top + 24);
-    s.print("Cek wiring: VCC 3.3V, GND, SDA = GPIO15, SCL = GPIO7. Shunt dipasang seri di kabel (+) baterai (baterai -> VIN+, beban -> VIN-). Alamat 0x40-0x4F (A0/A1). Buka tab Sensor > Scan ulang setelah memperbaiki.");
+    s.print("Cek wiring: VCC 3.3V, GND, SDA = GPIO" RP_STR(RP_SENS_SDA) ", SCL = GPIO" RP_STR(RP_SENS_SCL) ". Shunt dipasang seri di kabel (+) baterai (baterai -> VIN+, beban -> VIN-). Alamat 0x40-0x4F (A0/A1). Buka tab Sensor > Scan ulang setelah memperbaiki.");
     s.setTextWrap(false);
     return;
   }

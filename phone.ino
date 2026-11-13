@@ -1242,13 +1242,13 @@ public:
   }
 
 #if RP_TOUCH_CAPACITIVE
-  // ---- FT6236 (I2C) lewat Wire: SATU driver I2C dgn MPU6050 -> tidak bentrok ----
+  // ---- FT6236 (I2C) lewat Wire: bus KHUSUS sentuh (MPU6050/INA219 pindah ke Wire1, lihat RP_SENS_*) ----
   // Method ini MENYEMBUNYIKAN LGFXBase::getTouch() (display bertipe LGFX, bukan pointer
   // ke base), jadi semua pemanggil display.getTouch(&tp) otomatis pakai ini. Output:
   // koordinat layar pada rotasi aktif (sama seperti hasil getTouch XPT2046 terkalibrasi).
   bool touchBegin(){
     if(RP_TOUCH_RST>=0){ pinMode(RP_TOUCH_RST,OUTPUT); digitalWrite(RP_TOUCH_RST,LOW); delay(10); digitalWrite(RP_TOUCH_RST,HIGH); delay(60); }
-    Wire.begin(RP_TOUCH_SDA, RP_TOUCH_SCL);   // aman dipanggil ulang dgn pin sama (mpuInit juga memanggilnya)
+    Wire.begin(RP_TOUCH_SDA, RP_TOUCH_SCL);
     Wire.setClock(RP_TOUCH_I2C_HZ);
     // TOUCH_PROBE_V1: reset CTP digabung ke reset LCD -> FT6236 butuh ~300 ms sejak reset. Ulangi probe (maks 1,5 dtk).
     uint32_t _t0=millis(); int _try=0;
@@ -8743,8 +8743,8 @@ void drawSensor(LGFX_Sprite& s){
     s.setCursor(bx+10,by+12);s.print("MPU6050 tidak terdeteksi");
     s.setTextColor(T().subtext);
     s.setCursor(bx+10,by+32);s.print("Cek wiring:");
-    s.setCursor(bx+10,by+46);s.print("SDA -> GPIO 15");
-    s.setCursor(bx+10,by+58);s.print("SCL -> GPIO 7");
+    s.setCursor(bx+10,by+46);s.printf("SDA -> GPIO %d",(int)RP_SENS_SDA);
+    s.setCursor(bx+10,by+58);s.printf("SCL -> GPIO %d",(int)RP_SENS_SCL);
     s.setCursor(bx+10,by+70);s.print("VCC -> 3V3, GND -> GND");
     iosRR(s,bx+10,by+bh-30,bw-20,22,6,T().accent);
     s.setTextColor(T().bg);s.setCursor(bx+bw/2-30,by+bh-24);s.print("Coba Lagi");
@@ -12573,18 +12573,15 @@ unsigned long gTouchStartMs=0;
 
 // =================================================================
 // SENSOR: MPU6050 (accelerometer + gyroscope) via I2C
-// Wiring: SDA=GPIO15, SCL=GPIO7, VCC=3V3, GND=GND, alamat I2C=0x68
+// Wiring: SDA/SCL = RP_SENS_SDA/RP_SENS_SCL (display_conf.h; ILI9341: 15/7, ST7796: 5/4 di Wire1),
+//         VCC=3V3, GND=GND, alamat I2C=0x68
 // Dipakai untuk: auto-rotate layar, deteksi goyang (shake), dan
 // app "Orientasi 3D" (visualisasi 3D real-time).
 // =================================================================
-// TOUCH_PROBE_V1: build ST7796 = satu bus I2C dgn FT6236 -> pin ikut RP_TOUCH_SDA/SCL
-#ifdef RP_TOUCH_SDA
-#define MPU_SDA_PIN RP_TOUCH_SDA
-#define MPU_SCL_PIN RP_TOUCH_SCL
-#else
-#define MPU_SDA_PIN 15
-#define MPU_SCL_PIN 7
-#endif
+// SENS_BUS_V1: bus sensor (MPU6050 + INA219) dipisah dari bus sentuh FT6236.
+// ILI9341: Wire 15/7 (lama) | ST7796: Wire1 di RP_SENS_SDA/SCL (display_conf.h)
+#define MPU_SDA_PIN RP_SENS_SDA
+#define MPU_SCL_PIN RP_SENS_SCL
 #define MPU_ADDR    0x68
 
 bool  mpuReady   = false;
@@ -12617,26 +12614,22 @@ void loadMpuCal(){
 }
 
 bool mpuWriteReg(uint8_t reg, uint8_t val){
-  Wire.beginTransmission(MPU_ADDR);
-  Wire.write(reg); Wire.write(val);
-  return Wire.endTransmission() == 0;
+  RP_SENS_WIRE.beginTransmission(MPU_ADDR);
+  RP_SENS_WIRE.write(reg); RP_SENS_WIRE.write(val);
+  return RP_SENS_WIRE.endTransmission() == 0;
 }
 bool mpuReadBytes(uint8_t reg, uint8_t* buf, uint8_t len){
-  Wire.beginTransmission(MPU_ADDR);
-  Wire.write(reg);
-  if(Wire.endTransmission(false) != 0) return false;
-  uint8_t got = Wire.requestFrom((int)MPU_ADDR, (int)len);
+  RP_SENS_WIRE.beginTransmission(MPU_ADDR);
+  RP_SENS_WIRE.write(reg);
+  if(RP_SENS_WIRE.endTransmission(false) != 0) return false;
+  uint8_t got = RP_SENS_WIRE.requestFrom((int)MPU_ADDR, (int)len);
   if(got != len) return false;
-  for(uint8_t i=0;i<len;i++) buf[i] = Wire.read();
+  for(uint8_t i=0;i<len;i++) buf[i] = RP_SENS_WIRE.read();
   return true;
 }
 bool mpuInit(){
-  Wire.begin(MPU_SDA_PIN, MPU_SCL_PIN);
-#ifdef RP_TOUCH_I2C_HZ
-  Wire.setClock(RP_TOUCH_I2C_HZ);   // TOUCH_PROBE_V1: satu clock utk seluruh bus
-#else
-  Wire.setClock(400000);
-#endif
+  RP_SENS_WIRE.begin(MPU_SDA_PIN, MPU_SCL_PIN);
+  RP_SENS_WIRE.setClock(RP_SENS_I2C_HZ);
   uint8_t who = 0;
   if(!mpuReadBytes(0x75, &who, 1) || who != 0x68){
     mpuReady = false;
@@ -19812,13 +19805,13 @@ void setup(){
   homeAodWake(); // v99: sama, tapi buat AOD Home -- mulai hitung idle-nya dari titik boot ini jg
   needRedraw = true;
 
-  mpuInit();                                // MPU6050 (SDA=15, SCL=7)
+  mpuInit();                                // MPU6050 (bus sensor RP_SENS_SDA/SCL)
   loadMpuCal();                              // BARU v10: muat offset kalibrasi tersimpan (kalau ada)
   autoRotateEnabled = loadAutoRotatePref();
   shakeEnabled = loadShakePref();
   vibEnabled = loadVibPref(); // v94: mode senyap sekarang persisten dr NVS
   loadNpxPref(); // v24: LED Neopixel -- pulihkan status on/off, mode, & warna terakhir
-  inaBegin();                               // INA219 (I2C bareng MPU6050, SDA=15 SCL=7)
+  inaBegin();                               // INA219 (bus sensor yg sama dgn MPU6050)
   battUpdate();
 
   if(sdReady && !SD_MMC.exists(MJPEG_FOLDER)){
