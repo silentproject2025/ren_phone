@@ -8831,11 +8831,23 @@ bool settShowPass=false;int settFocus=-1;
 const int SPI_OC_OPTIONS[2] = {60,80};
 int spiOcIdx = 0;        // v104: yg BENERAN aktif skrg (dimuat NVS di boot, dipakai jg oleh doomEnter/doomExit)
 int spiOcPendingIdx = 0; // v104: hasil rombak total -- pilihan yg lagi "dicoba" di layar Settings, BELUM diterapkan/direstart sampai user ketuk pil-nya sendiri. Disinkronkan ulang ke spiOcIdx tiap kali layar Settings dibuka, lihat settingsEnter().
-void saveSpiOcPref(){ Preferences p; p.begin("ui",false); p.putInt("spimhz",SPI_OC_OPTIONS[spiOcIdx]); p.end(); }
+// SPI_NVS_VERIFY_V1: dulu putInt() tidak dicek -> kalau NVS gagal menulis (penuh / namespace bermasalah) pilihan 60MHz
+// "hilang" diam-diam dan boot berikutnya balik ke nilai lama (80). Sekarang: tulis, baca ulang, laporkan hasilnya.
+bool saveSpiOcPref(){
+  Preferences p;
+  if(!p.begin("ui",false)){ Serial.println("[spi] NVS begin(ui) GAGAL"); return false; }
+  int want=SPI_OC_OPTIONS[spiOcIdx];
+  size_t w=p.putInt("spimhz",want);
+  int back=p.getInt("spimhz",-1);
+  p.end();
+  Serial.printf("[spi] simpan %d MHz: putInt=%u baca-ulang=%d -> %s\n",want,(unsigned)w,back,(w>0&&back==want)?"OK":"GAGAL");
+  return (w>0 && back==want);
+}
 int loadSpiOcPref(){
   Preferences p; p.begin("ui",true);
   int v = p.getInt("spimhz", SPI_OC_OPTIONS[0]); // default 60MHz kalau NVS kosong/first boot
   p.end();
+  Serial.printf("[spi] NVS spimhz=%d MHz (dipakai saat boot ini)\n",v);
   for(int i=0;i<2;i++) if(SPI_OC_OPTIONS[i]==v) return i;
   return 0; // fallback: kalau NVS somehow kesimpen angka yg gak ada di daftar, jangan crash -- balik ke paling aman
 }
@@ -9284,7 +9296,12 @@ void settTap(int x,int y){
       showToast(rpHLWanted()?"Heaplog aktif (setelah restart)":"Heaplog nonaktif (setelah restart)");
       needRedraw=true; break;
     case SR_SPIAPPLY:
-      spiOcIdx=spiOcPendingIdx; saveSpiOcPref();
+      { int oldIdx=spiOcIdx; spiOcIdx=spiOcPendingIdx;
+        if(!saveSpiOcPref()){   // SPI_NVS_VERIFY_V1: jangan restart kalau gagal simpan -- kasih tahu user
+          spiOcIdx=oldIdx;
+          showToast("Gagal simpan ke NVS (cek serial)");
+          needRedraw=true; break;
+        } }
       showToast("Menerapkan & restart...");
       renderCurrentFrame(); push(); // toast harus sempat kelihatan sebelum layar mati karena restart
       delay(500); ESP.restart();
