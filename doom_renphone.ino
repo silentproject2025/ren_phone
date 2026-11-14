@@ -132,7 +132,12 @@ static volatile bool doomStopRequested = false;
 static Orientation doomPrevOrient;
 static String doomErrorMsg = "";               // non-kosong -> drawDoom() tampilkan pesan ini, task TIDAK pernah start
 
+// DOOM_RACE_FIX_V1: doomBusy = TRUE sejak SEBELUM task dibuat sampai task BENAR-BENAR selesai.
+// doomPlaying baru true SETELAH DoomGlue_Begin() selesai, padahal di dalam Begin() core 1 sudah
+// menggambar frame Doom -> tidak cukup utk melindungi `display` dari core 0.
+static volatile bool doomBusy = false;
 bool doomIsPlaying(){ return doomPlaying; }
+bool doomIsBusy(){ return doomBusy; }
 
 extern volatile uint32_t padFrames; // gamepad_renphone.ino
 static void doomTaskFunc(void* arg){
@@ -189,12 +194,17 @@ static void doomTaskFunc(void* arg){
   doomOvlFree();
   doomPlaying = false;
   doomTaskHandle = nullptr;
+  doomBusy = false;   // DOOM_RACE_FIX_V1: display boleh dipakai core 0 lagi
   vTaskDelete(nullptr);
 }
 
 void doomEnter(){
   doomErrorMsg = "";
 
+  if(doomBusy || doomTaskHandle != nullptr){ // DOOM_RACE_FIX_V1: jangan bikin task ke-2
+    doomErrorMsg = "DOOM sebelumnya masih menutup.\nTunggu sebentar lalu buka lagi.";
+    return;
+  }
   if(!sdReady){
     doomErrorMsg = "Kartu SD tidak terpasang.\nDOOM butuh WAD di SD.";
     return;
@@ -235,6 +245,11 @@ void doomEnter(){
   enterGameMode(); // boost CPU_MHZ_GAME, sama spt Snake/Inferno/dll
 
   doomStopRequested = false;
+  // DOOM_RACE_FIX_V1: gambar "Memuat..." SEKALI dari core 0 (task belum ada -> aman), lalu
+  // serahkan display ke core 1. Mulai titik ini core 0 DILARANG menyentuh display
+  // (loop() + push() di phone.ino cek doomIsBusy()).
+  drawDoom(canvas); push();
+  doomBusy = true;
   const uint32_t DOOM_STACK_SZ = 32768;
   BaseType_t res;
   if(!doomTaskStack){
@@ -248,6 +263,7 @@ void doomEnter(){
     res = xTaskCreatePinnedToCore(doomTaskFunc, "doomTask", DOOM_STACK_SZ, NULL, 1, &doomTaskHandle, 1);
   }
   if(res != pdPASS){
+    doomBusy = false;   // DOOM_RACE_FIX_V1
     doomErrorMsg = "Gagal membuat task DOOM (RAM internal habis).";
     if(spiOcIdx != 0) display.setSpiFreqMHz(SPI_OC_OPTIONS[spiOcIdx]); // v104: gagal start -> balikin SPI, jangan nyangkut di 60MHz
     exitGameMode();
@@ -262,7 +278,10 @@ void doomExit(){
     // lanjut -- max ~2 detik, cukup longgar drpd nge-block selamanya
     // kalau ada yg aneh di dalam doomgeneric.
     uint32_t waitStart = millis();
-    while(doomPlaying && millis()-waitStart < 2000) delay(10);
+    // DOOM_RACE_FIX_V1: tunggu doomBusy (termasuk fase Begin/"Memuat..."), bukan doomPlaying.
+    while(doomBusy && millis()-waitStart < 12000) delay(10);
+    if(doomBusy) Serial.println("[doom] PERINGATAN: task belum selesai setelah 12 dtk");
+    else delay(30);   // kasih idle task waktu bersihin TCB statis sebelum doomEnter berikutnya
   }
   // v104: balikin SPI ke pilihan user di Settings -- aman di sini krn
   // loop di atas udah mastiin task Doom (yg gambar langsung ke `display`)

@@ -5983,6 +5983,7 @@ bool nesIsPlaying(); // FIX race SPI: true selagi task nofrendo pegang display l
 void doomEnter(); void doomExit();
 void drawDoom(LGFX_Sprite&); void doomTouch(int,int,bool,bool);
 bool doomIsPlaying(); // true selagi task DoomGlue pegang SPI display langsung
+bool doomIsBusy();    // DOOM_RACE_FIX_V1: true sejak sebelum task dibuat s/d task selesai (termasuk fase "Memuat...")
 // ---- v97: PPU DEMO -- forward declarations (engine NyxPPU, lihat file
 // ppu_engine_renphone.ino terpisah, pola sama persis dgn app2 lain) ----
 void ppuAppEnter(); void ppuAppExit();
@@ -12053,6 +12054,7 @@ unsigned long getPushLastUs(){ return nyxPushLastUs; }
 // begitu push() selesai"). Versi async ngerusak jaminan itu -> dua
 // transfer numpuk di kabel yg sama. Balik ke synchronous biasa.
 void push(){ if(nyxThFreezeFrame()) return;
+  if(curScreen()==SCR_DOOM && doomIsBusy()) return;   // DOOM_RACE_FIX_V1: core 0 dilarang nyentuh display selagi task DOOM hidup
 #if RP_TOUCH_CAPACITIVE
   display.touchPoll();   // TOUCH_RESP_V1: sampling lebih rapat di tengah putaran render
 #endif
@@ -20574,7 +20576,7 @@ void loop(){
     // buka CC ini sengaja DIABAIKAN selama NES beneran lagi jalan;
     // layar Pilih ROM/error tetap aman krn itu digambar normal via
     // canvas (nesIsPlaying() return false di kondisi itu).
-    bool nesBlocksCC = (curScreen()==SCR_NES && nesIsPlaying());
+    bool nesBlocksCC = (curScreen()==SCR_NES && nesIsPlaying()) || (curScreen()==SCR_DOOM && doomIsBusy());   // DOOM_RACE_FIX_V1
     // v90: swipe-turun dari tepi atas SEKARANG dibagi 2 zona horizontal --
     // separuh KIRI = Notification Shade (histori notif), separuh KANAN =
     // Control Center (quick-toggle). Sebelumnya SELURUH tepi atas cuma
@@ -21050,7 +21052,7 @@ void loop(){
     // nesOverlay_afterFrame(). needRedraw tetap direset spy gak numpuk.
     if(curScreen()==SCR_NES && nesIsPlaying()){
       needRedraw=false;
-    } else if(curScreen()==SCR_DOOM && doomIsPlaying()){
+    } else if(curScreen()==SCR_DOOM && doomIsBusy()){   /* DOOM_RACE_FIX_V1 */
       // Sama persis alasannya dgn guard SCR_NES di atas: selagi task
       // DoomGlue beneran jalan, task itu pegang SPI display LANGSUNG
       // (lihat RenPhoneDoomDisplay::beginFrame/writeRow/endFrame di
