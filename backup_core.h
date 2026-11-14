@@ -15,6 +15,7 @@
 #pragma once
 #include <stdint.h>
 #include <string.h>
+#include <strings.h>
 #include <stdio.h>
 
 #define BK_HDR        14
@@ -159,10 +160,11 @@ static inline int bkNext(const uint8_t* b, size_t end, size_t& pos, BkRec& r) {
 // "nyx_007.nbk" -> 7 ; selain itu -1. (nama boleh berawalan path)
 static inline int bkParseName(const char* name) {
   const char* s = strrchr(name, '/'); s = s ? s + 1 : name;
-  if (strncmp(s, "nyx_", 4) != 0) return -1;
+  // FAT bisa mengembalikan nama HURUF BESAR (NYX_001.NBK) kalau LFN mati -> bandingkan tanpa peduli huruf besar/kecil.
+  if (strncasecmp(s, "nyx_", 4) != 0) return -1;
   int n = 0, d = 0; const char* p = s + 4;
   while (*p >= '0' && *p <= '9' && d < 4) { n = n * 10 + (*p - '0'); p++; d++; }
-  if (d == 0 || strcmp(p, ".nbk") != 0) return -1;
+  if (d == 0 || strcasecmp(p, ".nbk") != 0) return -1;
   return n;
 }
 static inline void bkMakeName(char* out, size_t cap, int num) { snprintf(out, cap, "/backup/nyx_%03d.nbk", num); }
