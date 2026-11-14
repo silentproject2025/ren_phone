@@ -748,12 +748,98 @@ static void galAlbumStat(int ai) {
 static void galOpenAlbum(int ai) {
   if (ai < 0 || ai >= galAlbumCount) return;
   galAlbumScrollSave = galScrollY;
+  galDirDelArmUntil = 0;   // GAL_DELDIR_V1
   strncpy(galCurDir, galAlbums[ai].path, 63); galCurDir[63] = 0;
   strncpy(galCurTitle, galAlbums[ai].title, 23); galCurTitle[23] = 0;
   galLoadItems();
   galMode = GM_GRID;
   galScrollY = 0; galScrollVel = 0; galPressIdx = -1;
   galBeginTransition(0, false);
+}
+
+// =====================================================================
+// GAL_DELDIR_V1: HAPUS FOLDER (album) -- bertahap, 4 file per putaran loop
+// =====================================================================
+static uint32_t galDirDelArmUntil = 0;   // tombol "Hapus" sedang "Yakin?" sampai waktu ini
+static bool     galDelBusy = false;      // sedang menghapus -> sentuhan diabaikan
+static int      galDelTotal = 0, galDelDone = 0, galDelFail = 0;
+static char     galDelDir[64];
+
+static bool galDirDelOk() {
+  return galMode == GM_GRID && !galDelBusy && sdReady && galCurDir[0] && strcmp(galCurDir, "/") != 0 && !ownerPickActive();
+}
+
+// kumpulkan sampai `cap` nama file media di folder (cap < 0 = hanya hitung semuanya). Tidak menghapus apa pun
+// selagi iterasi (di FAT itu bisa melewatkan entri) -> pemanggil menghapus SETELAH dir ditutup.
+static int galDirCollect(const char* dir, char names[][44], int cap) {
+  char full[96];
+  snprintf(full, sizeof(full), "%s%s", GAL_MP, dir);
+  DIR* d = opendir(full);
+  if (!d) return 0;
+  int n = 0;
+  struct dirent* e;
+  while ((e = readdir(d)) != nullptr) {
+    if (e->d_type == DT_DIR) continue;
+    const char* nm = e->d_name;
+    size_t l = strlen(nm);
+    if (l == 0 || l >= 44 || nm[0] == '.') continue;
+    if (galKindOf(nm) < 0) continue;
+    if (cap >= 0) { strcpy(names[n], nm); if (++n >= cap) break; }
+    else n++;
+  }
+  closedir(d);
+  return n;
+}
+
+static void galDelDirStart() {
+  strncpy(galDelDir, galCurDir, sizeof(galDelDir) - 1); galDelDir[sizeof(galDelDir) - 1] = 0;
+  galDelTotal = galDirCollect(galDelDir, nullptr, -1);
+  galDelDone = 0; galDelFail = 0;
+  galDelBusy = true; galDirDelArmUntil = 0;
+  needRedraw = true;
+}
+
+static void galDelDirFinish() {
+  galDelBusy = false;
+  bool gone = (galDelFail == 0) && SD_MMC.rmdir(galDelDir);   // rmdir hanya berhasil kalau folder sudah kosong
+  char m[56];
+  if (gone)             snprintf(m, sizeof(m), "Folder dihapus (%d file)", galDelDone);
+  else if (galDelFail)  snprintf(m, sizeof(m), "%d file gagal dihapus", galDelFail);
+  else                  snprintf(m, sizeof(m), "%d file dihapus; folder masih ada isi lain", galDelDone);
+  showToast(m);
+  if (galDelFail) vibError(); else vibSuccess();
+  // kembali ke daftar album (sama dengan galBack() dari grid), dipindai ulang
+  galMode = GM_ALBUMS; galItemCount = 0; galWantCnt = 0; galAlbumsDirty = true;
+  if (!galScanActive) galScanStart();
+  galScrollY = galAlbumScrollSave; galScrollVel = 0; galPressIdx = -1;
+  galBeginTransition(1, false);
+  needRedraw = true;
+}
+
+static void galDelDirStep() {
+  char names[4][44];
+  int n = galDirCollect(galDelDir, names, 4);
+  int removed = 0;
+  for (int i = 0; i < n; i++) {
+    char p[GAL_PATH_MAX];
+    galJoin(p, sizeof(p), galDelDir, names[i]);
+    galForgetFile(p);                       // buang thumbnail cache-nya DULU (butuh ukuran & waktu file asli)
+    if (SD_MMC.remove(p)) removed++;
+  }
+  galDelDone += removed;
+  galDelFail = n - removed;                 // file yg bandel di batch ini (bukan akumulasi)
+  needRedraw = true;
+  if (n == 0 || removed == 0) galDelDirFinish();   // habis, atau macet (semua di batch gagal) -> selesai
+}
+
+static void galDrawDelProgress(LGFX_Sprite& s) {
+  if (!galDelBusy) return;
+  char m[32];
+  snprintf(m, sizeof(m), "Menghapus %d/%d", galDelDone, galDelTotal);
+  int w = 150, x = (SCR_W - w) / 2, y = SCR_H / 2 - 12;
+  iosRR(s, x, y, w, 24, 8, T().accent);
+  s.setTextColor(TFT_BLACK); s.setTextSize(1);
+  s.setCursor(x + w / 2 - s.textWidth(m) / 2, y + 8); s.print(m);
 }
 
 // =====================================================================
@@ -1184,7 +1270,16 @@ static void galDrawGrid(LGFX_Sprite& s) {
   if (videos > 0) snprintf(info, sizeof(info), "%d foto, %d video%s", photos, videos, galItemsTrunc ? "+" : "");
   else            snprintf(info, sizeof(info), "%d foto%s", photos, galItemsTrunc ? "+" : "");
   s.setTextColor(T().subtext); s.setTextSize(1);
-  s.setCursor(SCR_W - 8 - s.textWidth(info), 27); s.print(info);
+  bool canDel = galDirDelOk();   // GAL_DELDIR_V1
+  s.setCursor(SCR_W - 8 - (canDel ? 60 : 0) - s.textWidth(info), 27); s.print(info);
+  if (canDel) {
+    bool arm = millis() < galDirDelArmUntil;
+    iosRR(s, SCR_W - 60, 23, 52, 16, 6, arm ? T().danger : T().surface2);
+    s.setTextColor(arm ? 0xFFFF : T().subtext);
+    const char* dl = arm ? "Yakin?" : "Hapus";
+    s.setCursor(SCR_W - 60 + 26 - s.textWidth(dl) / 2, 27); s.print(dl);
+    s.setTextColor(T().subtext);
+  }
 
   if (galItemCount == 0) {
     s.setTextColor(T().subtext);
@@ -1313,6 +1408,7 @@ static void galDrawContent(LGFX_Sprite& s) {
     return;
   }
   if (galMode == GM_ALBUMS) galDrawAlbums(s); else galDrawGrid(s);
+  galDrawDelProgress(s);   // GAL_DELDIR_V1
   drawBack(s); drawToast(s);
 }
 
@@ -1491,6 +1587,7 @@ static void galBack() {
 void galTouch(int x, int y, bool held, bool isNew) {
   (void)held;
   if (!isNew) return;
+  if (galDelBusy) return;   // GAL_DELDIR_V1: sedang menghapus folder -> abaikan sentuhan
   if (galMode == GM_VIEW && !galViewOverlay) return;      // tombol tersembunyi: ketuk apa saja = tampilkan
   if (isBack(x, y)) { galBack(); return; }
   if (galMode == GM_ALBUMS && sdReady && galMem && galHit(x, y, SCR_W - 60, 20, 52, 22)) {
@@ -1501,6 +1598,16 @@ void galTouch(int x, int y, bool held, bool isNew) {
     } else {
       galClearArmUntil = millis() + 2500;
       showToast("Ketuk lagi untuk hapus cache");
+    }
+    needRedraw = true;
+  }
+  if (galDirDelOk() && galHit(x, y, SCR_W - 60, 20, 52, 22)) {   // GAL_DELDIR_V1: tombol Hapus folder
+    if (millis() < galDirDelArmUntil) {
+      galDelDirStart();
+    } else {
+      galDirDelArmUntil = millis() + 3000;
+      char m[56]; snprintf(m, sizeof(m), "Ketuk lagi: hapus folder & %d%s file", galItemCount, galItemsTrunc ? "+" : "");
+      showToast(m);
     }
     needRedraw = true;
   }
@@ -1726,6 +1833,7 @@ void galPointerTick(bool touched, bool wasT, int tx, int ty) {
   float dt = (dtl <= 0 || dtl > 50) ? 16.0f : (float)dtl;
   galLastTickMs = now;
   if (!galMem) return;
+  if (galDelBusy) { galDelDirStep(); return; }   // GAL_DELDIR_V1: hapus folder bertahap
   if (galViewPending && galMode == GM_VIEW) {            // frame "Memuat..." sudah tampil -> decode sekarang
     galDecodeCurrent();
     if (galSnapReady) galRunTransition(galAnimKind);   // animasi jalan setelah decode selesai
@@ -1748,6 +1856,7 @@ void galPointerTick(bool touched, bool wasT, int tx, int ty) {
   }
   if (galDelArmUntil && millis() >= galDelArmUntil) { galDelArmUntil = 0; needRedraw = true; }
   if (galClearArmUntil && millis() >= galClearArmUntil) { galClearArmUntil = 0; needRedraw = true; }
+  if (galDirDelArmUntil && millis() >= galDirDelArmUntil) { galDirDelArmUntil = 0; needRedraw = true; }   // GAL_DELDIR_V1
 }
 
 // =====================================================================
@@ -1770,6 +1879,7 @@ void galEnter() {
   galPtrDown = false; galPtrDrag = false;
   galViewReady = false; galViewPending = false; galViewFail = false; galViewIdx = -1;
   galDelArmUntil = 0; galClearArmUntil = 0; galWantCnt = 0;
+  galDirDelArmUntil = 0; galDelBusy = false;   // GAL_DELDIR_V1
   galSnapReady = false; galNewValid = false; galPressIdx = -1; galFadeActive = false;
   galAdjInvalidate(); galAdjDisabled = false; galSwipeOn = false; galSwipeDx = 0; galLastTouchMs = millis();
   galLastTickMs = millis();
