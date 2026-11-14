@@ -88,11 +88,9 @@ jobs:
         run: |
           CORE_VER=$(cat "$RUNNER_TEMP/core-version.txt")
           BRANCH="${{ inputs.lib_builder_branch }}"
-          # auto = ikuti branch ESP-IDF (mis. release/v5.5); master bisa beda struktur (tanpa configs/)
-          if [ "$BRANCH" = "auto" ]; then
-            BRANCH="${{ inputs.idf_branch }}"
-            [ -z "$BRANCH" ] && BRANCH="master"
-          fi
+          # auto = master (lib-builder tidak punya branch release/v5.5; yang ada release/v3.3, v4.4, v5.1, v5.3, v5.4, v6.0, v6.1).
+          # Versi IDF dipilih lewat input idf_branch (build.sh -I), bukan lewat branch lib-builder.
+          [ "$BRANCH" = "auto" ] && BRANCH="master"
           echo "Branch: $BRANCH"
           git ls-remote --exit-code --heads https://github.com/espressif/esp32-arduino-lib-builder "$BRANCH" \
             || (echo "::error::branch $BRANCH tidak ada" && git ls-remote --heads https://github.com/espressif/esp32-arduino-lib-builder | grep release; exit 1)
