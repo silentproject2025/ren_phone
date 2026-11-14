@@ -47,6 +47,7 @@ extern fixed_t *cachedxstep;
 extern fixed_t *cachedystep;
 
 void R_InitPlanes (void);
+int  R_AllocPlanes (void);
 void R_ShutdownPlanes(void);
 void R_ClearPlanes (void);
 

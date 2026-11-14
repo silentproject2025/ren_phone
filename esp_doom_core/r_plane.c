@@ -108,7 +108,12 @@ void R_ShutdownPlanes(void)
     ceilingplane = NULL;
 }
 
-void R_InitPlanes(void)
+// Alokasi visplanes + openings (idempotent). Dipanggil lebih awal dari
+// I_ZoneBase() SEBELUM zone 6 MiB diambil, supaya blok ~126 KB ini pasti
+// dapat tempat. Dulu dialokasikan sesudah zone: begitu WiFi STA/TLS sudah
+// memfragmentasi PSRAM, calloc openings gagal -> I_Error -> exit(-1) -> reboot.
+// Return 1 kalau keduanya siap.
+int R_AllocPlanes(void)
 {
     if (visplanes == NULL)
     {
@@ -121,11 +126,6 @@ void R_InitPlanes(void)
             MAXVISPLANES,
             sizeof(visplane_t),
             MALLOC_CAP_SPIRAM);
-
-        if (!visplanes)
-        {
-            I_Error("No PSRAM for visplanes");
-        }
     }
 
     if (openings == NULL)
@@ -134,11 +134,23 @@ void R_InitPlanes(void)
             MAXOPENINGS,
             sizeof(short),
             MALLOC_CAP_SPIRAM);
+    }
 
-        if (!openings)
-        {
+    return (visplanes != NULL && openings != NULL);
+}
+
+void R_InitPlanes(void)
+{
+    if (!R_AllocPlanes())
+    {
+        printf("[doom] PSRAM: free=%u largest=%u\n",
+               (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
+               (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM));
+
+        if (visplanes == NULL)
+            I_Error("No PSRAM for visplanes");
+        else
             I_Error("No PSRAM for openings");
-        }
     }
 }
 

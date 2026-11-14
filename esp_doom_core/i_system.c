@@ -56,7 +56,7 @@
 #endif
 
 #define DEFAULT_RAM 6 /* MiB */
-#define MIN_RAM     6  /* MiB */
+#define MIN_RAM     4  /* MiB */  /* turun otomatis kalau PSRAM sempit */
 
 
 typedef struct atexit_listentry_s atexit_listentry_t;
@@ -92,34 +92,47 @@ void I_Tactile(int on, int off, int total)
 // by trying progressively smaller zone sizes until one is found that
 // works.
 
+#ifdef ARDUINO
+#include <esp_heap_caps.h>
+extern int R_AllocPlanes(void);
+// Sisa PSRAM yang disisakan untuk alokasi setelah zone: screenbuffer 64K,
+// wad 36K, drawsegs 13K, vissprites 2K + cadangan fragmentasi.
+#define ZONE_PSRAM_RESERVE (256 * 1024)
+#endif
+
 static byte *AutoAllocMemory(int *size, int default_ram, int min_ram)
 {
     byte *zonemem;
 
-    // Allocate the zone memory.  This loop tries progressively smaller
-    // zone sizes until a size is found that can be allocated.
-    // If we used the -mb command line parameter, only the parameter
-    // provided is accepted.
+#ifdef ARDUINO
+    // Ambil visplanes+openings dulu selagi PSRAM masih lega.
+    R_AllocPlanes();
+#endif
 
     zonemem = NULL;
 
     while (zonemem == NULL)
     {
-        // We need a reasonable minimum amount of RAM to start.
-
         if (default_ram < min_ram)
         {
             I_Error("Unable to allocate %i MiB of RAM for zone", default_ram);
         }
 
-        // Try to allocate the zone memory.
-
         *size = default_ram * 1024 * 1024;
 
-        zonemem = malloc(*size);
+#ifdef ARDUINO
+        // Jangan habiskan PSRAM: turunkan zone kalau sisa tidak cukup.
+        if ((size_t)*size + ZONE_PSRAM_RESERVE >
+                heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM)
+            || (size_t)*size + ZONE_PSRAM_RESERVE >
+                heap_caps_get_free_size(MALLOC_CAP_SPIRAM))
+        {
+            default_ram -= 1;
+            continue;
+        }
+#endif
 
-        // Failed to allocate?  Reduce zone size until we reach a size
-        // that is acceptable.
+        zonemem = malloc(*size);
 
         if (zonemem == NULL)
         {
