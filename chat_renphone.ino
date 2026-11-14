@@ -540,8 +540,11 @@ static int chatMsgLayout(int idx, int maxCh, int* nLines, int* maxLen, int* gap,
   return g + (sn ? CB_NAMEH : 0) + (hq ? CB_QUOTE_H : 0) + CB_PADT + n * CB_LINE + CB_TIMEH + CB_PADB;
 }
 
+// CHAT_LAYOUT_FIX_V1: lebar teks = sel x 6 px (ASCII 1 sel, emoji 2 sel), BUKAN s.textWidth()
+static int chatTW(const char* t) { return emjCells(t, (int)strlen(t)) * 6; }
+
 static void chatPrintCentered(LGFX_Sprite& s, int x, int w, int y, const char* t) {
-  s.setCursor(x + (w - s.textWidth(t)) / 2, y);
+  s.setCursor(x + (w - chatTW(t)) / 2, y);
   s.print(t);
 }
 
@@ -685,7 +688,7 @@ void drawChat(LGFX_Sprite& s) {
     if (outH > 0) {
       y -= outH;
       uint8_t os = chatOutState;
-      int minW = (os == 2) ? 26 * 6 : 11 * 6;
+      int minW = (os == 2) ? 29 * 6 : 11 * 6;   // CHAT_LAYOUT_FIX_V1: "Gagal - ketuk utk kirim ulang" = 29 karakter
       int bw = (outMl * 6 > minW ? outMl * 6 : minW) + 2 * CB_PADX;
       int bh = CB_PADT + outN * CB_LINE + CB_TIMEH + CB_PADB;
       int bx = SCR_W - 6 - bw, by = y + outGap;
@@ -706,7 +709,7 @@ void drawChat(LGFX_Sprite& s) {
       }
       const char* st = (os == 2) ? "Gagal - ketuk utk kirim ulang" : "Mengirim...";
       s.setTextColor(os == 2 ? (uint16_t)T().danger : blend565(T().bg, T().accent, 90));
-      s.setCursor(bx + bw - CB_PADX - s.textWidth(st), by + CB_PADT + outN * CB_LINE); s.print(st);
+      s.setCursor(bx + bw - CB_PADX - chatTW(st), by + CB_PADT + outN * CB_LINE); s.print(st);
       chatOutX = bx; chatOutY = by; chatOutW = bw; chatOutH = bh;
     } else { chatOutW = 0; chatOutH = 0; }
 
@@ -762,9 +765,9 @@ void drawChat(LGFX_Sprite& s) {
         snprintf(hm, sizeof(hm), "%02d:%02d", tmv.tm_hour, tmv.tm_min);
       } else snprintf(hm, sizeof(hm), "--:--");
       s.setTextColor(mine ? blend565(T().bg, T().accent, 90) : (uint16_t)T().subtext);
-      s.setCursor(bx + bw - CB_PADX - s.textWidth(hm), by + CB_PADT + qo + n * CB_LINE); s.print(hm);
+      s.setCursor(bx + bw - CB_PADX - chatTW(hm), by + CB_PADT + qo + n * CB_LINE); s.print(hm);
       if (mine) {                                       // tanda terkirim: sudah diterima broker (pesan kembali dari langganan)
-        int kx = bx + bw - CB_PADX - s.textWidth(hm) - 11, ky = by + CB_PADT + qo + n * CB_LINE + 3;
+        int kx = bx + bw - CB_PADX - chatTW(hm) - 11, ky = by + CB_PADT + qo + n * CB_LINE + 3;
         uint16_t kc = blend565(T().bg, T().accent, 60);
         s.drawLine(kx, ky + 2, kx + 2, ky + 4, kc); s.drawLine(kx + 2, ky + 4, kx + 7, ky - 1, kc);
       }
