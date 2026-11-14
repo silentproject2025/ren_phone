@@ -235,7 +235,7 @@ void doomEnter(){
   enterGameMode(); // boost CPU_MHZ_GAME, sama spt Snake/Inferno/dll
 
   doomStopRequested = false;
-  const uint32_t DOOM_STACK_SZ = 12288;
+  const uint32_t DOOM_STACK_SZ = 32768;
   BaseType_t res;
   if(!doomTaskStack){
     doomTaskStack = (StackType_t*)heap_caps_aligned_alloc(16, DOOM_STACK_SZ, MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT);
