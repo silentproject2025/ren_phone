@@ -198,6 +198,70 @@ static void doomTaskFunc(void* arg){
   vTaskDelete(nullptr);
 }
 
+// DOOM_MELT_V1: efek melt ala Doom asli. Dipanggil dari doomEnter() SEBELUM task dibuat
+// (core 0 masih boleh menyentuh display). Gagal alokasi -> lewati animasi, tampil "Memuat..." biasa.
+static void doomMeltIntro(){
+  const int W = SCR_W, H = SCR_H, CW = 4;
+  const int N = (W + CW - 1) / CW;
+  LGFX_Sprite src(&display);
+  src.setPsram(true);
+  src.setColorDepth(16);
+  int16_t* ys = (int16_t*)heap_caps_malloc(N * sizeof(int16_t), MALLOC_CAP_8BIT);
+  if(!ys || !src.createSprite(W, H)){
+    if(ys) heap_caps_free(ys);
+    drawDoom(canvas); push();
+    return;
+  }
+  // splash yang akan meleleh: gradasi merah -> gelap + tulisan DOOM
+  for(int y = 0; y < H; y++){
+    int r = 40 + (170 * (H - y)) / H;
+    src.drawFastHLine(0, y, W, (uint16_t)((r >> 3) << 11));
+  }
+  src.setFont(&lgfx::fonts::Font0);
+  src.setTextWrap(false);
+  const int ts = (W >= 400) ? 10 : 7;
+  src.setTextSize(ts);
+  const int tx = (W - 4 * 6 * ts) / 2, ty = (H - 8 * ts) / 2 - 10;
+  src.setTextColor(0x2000); src.setCursor(tx + ts / 2 + 2, ty + ts / 2 + 2); src.print("DOOM");
+  src.setTextColor(0xFD20); src.setCursor(tx, ty);                          src.print("DOOM");
+
+  // offset awal tiap kolom acak seperti wipe Doom (naik-turun max 1 per kolom)
+  ys[0] = -(int)(esp_random() % 8);
+  for(int i = 1; i < N; i++){
+    int v = ys[i - 1] + (int)(esp_random() % 3) - 1;
+    if(v > 0) v = 0;
+    if(v < -8) v = -8;
+    ys[i] = (int16_t)v;
+  }
+  const int step = max(8, H / 14);
+
+  drawDoom(canvas);                       // latar yang terungkap = layar "Memuat..."
+  src.pushSprite(&canvas, 0, 0); push();
+  delay(220);                             // tahan splash sebentar sebelum meleleh
+
+  for(int f = 0; f < 80; f++){
+    bool alive = false;
+    for(int i = 0; i < N; i++){
+      if(ys[i] < 0){ ys[i]++; alive = true; }
+      else if(ys[i] < H){ ys[i] += step; if(ys[i] > H) ys[i] = H; alive = true; }
+    }
+    drawDoom(canvas);
+    for(int i = 0; i < N; i++){
+      int y = ys[i];
+      if(y >= H) continue;
+      if(y < 0) y = 0;
+      canvas.setClipRect(i * CW, 0, CW, H);
+      src.pushSprite(&canvas, 0, y);
+    }
+    canvas.clearClipRect();
+    push();
+    if(!alive) break;
+  }
+  heap_caps_free(ys);
+  src.deleteSprite();
+  drawDoom(canvas); push();
+}
+
 void doomEnter(){
   doomErrorMsg = "";
 
@@ -242,7 +306,9 @@ void doomEnter(){
   // adanya, cuma "dipinjam turun sementara" khusus selagi di app Doom.
   if(spiOcIdx != 0) display.setSpiFreqMHz(SPI_OC_OPTIONS[0]);
 
-  enterGameMode(); // boost CPU_MHZ_GAME, sama spt Snake/Inferno/dll
+  // DOOM_MELT_V1: boost CPU sama spt enterGameMode(), tapi TANPA ring booster -> diganti efek melt.
+  if(!gameModeActive){ gameModeActive = true; setCpuFrequencyMhz(CPU_MHZ_GAME); }
+  doomMeltIntro();
 
   doomStopRequested = false;
   // DOOM_RACE_FIX_V1: gambar "Memuat..." SEKALI dari core 0 (task belum ada -> aman), lalu
