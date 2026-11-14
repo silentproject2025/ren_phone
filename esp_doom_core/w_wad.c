@@ -236,7 +236,14 @@ wad_file_t *W_AddFile (char *filename)
     else 
     {
     	// WAD file
-        W_Read(wad_file, 0, &header, sizeof(header));
+        memset(&header, 0, sizeof(header));
+        {
+            size_t rd_ = W_Read(wad_file, 0, &header, sizeof(header));
+            printf("[wad] baca header: diminta=%u terbaca=%u id=%02X %02X %02X %02X\n",
+                   (unsigned)sizeof(header), (unsigned)rd_,
+                   (unsigned char)header.identification[0], (unsigned char)header.identification[1],
+                   (unsigned char)header.identification[2], (unsigned char)header.identification[3]);
+        }
 
 		if (strncmp(header.identification,"IWAD",4))
 		{

@@ -231,16 +231,18 @@ static int bkApply(const uint8_t* b, size_t n, int* outFail) {
 // ---------------------------------------------------------------------
 static void bkScan(bool prune) {
   bkListN = 0;
-  if (!sdReady) return;
+  if (!sdReady) { Serial.println("[bk] scan: sdReady=false"); return; }
   File d = SD_MMC.open(BK_DIR);
-  if (!d) return;
-  if (!d.isDirectory()) { d.close(); return; }
+  if (!d) { Serial.println("[bk] scan: open(/backup) GAGAL"); return; }
+  if (!d.isDirectory()) { Serial.println("[bk] scan: /backup bukan folder"); d.close(); return; }
   int nums[100]; int n = 0;
   for (File e = d.openNextFile(); e; e = d.openNextFile()) {
-    if (!e.isDirectory()) { int k = bkParseName(e.name()); if (k >= 0 && n < 100) nums[n++] = k; }
+    if (!e.isDirectory()) { int k = bkParseName(e.name()); Serial.printf("[bk] scan: '%s' -> %d\n", e.name(), k); if (k >= 0 && n < 100) nums[n++] = k; }
+    else Serial.printf("[bk] scan: '%s' (folder)\n", e.name());
     e.close();
   }
   d.close();
+  Serial.printf("[bk] scan: file backup dikenali = %d\n", n);
   for (int i = 1; i < n; i++) { int v = nums[i], j = i - 1; while (j >= 0 && nums[j] < v) { nums[j + 1] = nums[j]; j--; } nums[j + 1] = v; }   // terbaru dulu
   if (prune) {
     for (int i = BK_KEEP; i < n; i++) { char p[40]; bkMakeName(p, sizeof(p), nums[i]); SD_MMC.remove(p); }
