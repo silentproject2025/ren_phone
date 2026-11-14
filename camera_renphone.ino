@@ -35,8 +35,8 @@ portMUX_TYPE camRxMux = portMUX_INITIALIZER_UNLOCKED;
 static const char*    const CAM_RES_NAME[11] = {"160x120", "320x240", "400x296", "480x320", "640x480", "800x600", "1024x768", "1280x720", "1280x1024", "1600x1200", "2048x1536"};
 static const uint16_t       CAM_RES_W[11]    = {160, 320, 400, 480, 640, 800, 1024, 1280, 1280, 1600, 2048};
 static const uint16_t       CAM_RES_H[11]    = {120, 240, 296, 320, 480, 600, 768, 720, 1024, 1200, 1536};
-static const uint8_t        CAM_PRV_CODE[3]  = {RPR_QQVGA, RPR_QVGA, RPR_VGA};
-static const char*    const CAM_PRV_NAME[3]  = {"160x120 (2x)", "320x240", "640x480 (1/2)"};
+static const uint8_t        CAM_PRV_CODE[4]  = {RPR_QQVGA, RPR_QVGA, RPR_VGA, RPR_HVGA};   // CAM_ST7796_V1: +HVGA (ditaruh di akhir supaya config tersimpan tetap valid)
+static const char*    const CAM_PRV_NAME[4]  = {"160x120 (2x)", "320x240", "640x480 (1/2)", "480x320"};
 static const uint8_t        CAM_TIMER_S[3]   = {0, 3, 10};
 static const uint8_t        CAM_BURST_N[3]   = {1, 3, 5};
 static const uint8_t        CAM_XCLK_MHZ[3]  = {10, 16, 20};
@@ -154,7 +154,7 @@ static int       camMotW = 0, camMotH = 0, camMotWarm = 0, camMotHits = 0, camMo
 static uint32_t  camMotCool = 0;
 
 // ---------------- util ----------------
-static inline uint8_t camPrvCode() { return CAM_PRV_CODE[camCfg.prv < 0 ? 0 : (camCfg.prv > 2 ? 2 : camCfg.prv)]; }
+static inline uint8_t camPrvCode() { return CAM_PRV_CODE[camCfg.prv < 0 ? 0 : (camCfg.prv > 3 ? 3 : camCfg.prv)]; }
 
 // ---- deteksi sensor (dilaporkan CAM lewat RP_CAM_STAT) ----
 static const char* camSensorName(unsigned pid) {
@@ -619,7 +619,8 @@ static void camBtn(LGFX_Sprite& s, int x, int y, int w, int h, const char* label
   camTextC(s, label, x + w / 2, y + (h - 8) / 2);
 }
 
-#define CAM_RAIL_X 266
+#define CAM_RAIL_X (SCR_W - 54)                 // CAM_ST7796_V1: 266 di layar 320 (tidak berubah), 426 di ST7796
+#define CAM_VOFF   ((SCR_H - 240) / 2)          // CAM_ST7796_V1: 0 di 320x240, 40 di 480x320 -> tombol rana dst. ke tengah
 static bool camIn(int x, int y, int rx, int ry, int rw, int rh) { return x >= rx && x < rx + rw && y >= ry && y < ry + rh; }
 
 static void camStatusMsg(char* o, size_t cap) {
@@ -655,7 +656,7 @@ static void camDrawMain(LGFX_Sprite& s) {
   s.fillRectAlpha(CAM_RAIL_X, 0, SCR_W - CAM_RAIL_X, SCR_H, 150, TFT_BLACK);
   s.setTextSize(1);
   camBtn(s, CAM_RAIL_X + 4, 6, 46, 28, CAM_MODE_NAME[camMode], false);
-  int cx = CAM_RAIL_X + 27, cy = 112;
+  int cx = CAM_RAIL_X + 27, cy = 112 + CAM_VOFF;
   bool busy = camRec || camMotionOn || camShotPending || camCdUntil;
   uint16_t sc = (camRec || camMotionOn) ? (uint16_t)T().danger : (uint16_t)TFT_WHITE;
   nyxAaCircle(s, cx, cy, 26, 0x2104);
@@ -664,8 +665,8 @@ static void camDrawMain(LGFX_Sprite& s) {
   else if (camMotionOn) { nyxAaCircle(s, cx, cy, 10, sc); }
   else if (busy) { nyxAaCircleRing(s, cx, cy, 14, sc); }
   else nyxAaCircle(s, cx, cy, 17, camMode == 0 ? (uint16_t)TFT_WHITE : (uint16_t)T().danger);
-  camBtn(s, CAM_RAIL_X + 4, 154, 46, 26, camCfg.flash == 0 ? "Flash" : (camCfg.flash == 3 ? "Kilat" : "Senter"), camCfg.flash != 0);
-  camBtn(s, CAM_RAIL_X + 4, 186, 46, 26, "Atur", false);
+  camBtn(s, CAM_RAIL_X + 4, 154 + CAM_VOFF, 46, 26, camCfg.flash == 0 ? "Flash" : (camCfg.flash == 3 ? "Kilat" : "Senter"), camCfg.flash != 0);
+  camBtn(s, CAM_RAIL_X + 4, 186 + CAM_VOFF, 46, 26, "Atur", false);
   // kiri atas: back + HUD
   nyxAaRR(s, 4, 4, 30, 22, 6, 0x2104); s.setTextColor(TFT_WHITE); camTextC(s, "<", 19, 11);
   if (camCfg.hud && camOpened) {
@@ -769,7 +770,7 @@ static void camAdj(int r, int dir) {
     case 14: camCfg.flip ^= 1; camSendSet(RPC_VFLIP, camCfg.flip); break;
     case 15: camCfg.grid ^= 1; break;
     case 16: camCfg.hud ^= 1; break;
-    case 17: camCfg.prv = camStepv(camCfg.prv, dir, 0, 2, 1, true); camSendSet(RPC_PRVRES, camPrvCode()); camMotionReset(); break;
+    case 17: camCfg.prv = camStepv(camCfg.prv, dir, 0, SCR_W >= 480 ? 3 : 2, 1, true); camSendSet(RPC_PRVRES, camPrvCode()); camMotionReset(); break;
     case 18: camCfg.prvQ = camStepv(camCfg.prvQ, dir, 8, 30, 2, false); camSendSet(RPC_PRVQ, camCfg.prvQ); break;
     case 19: camCfg.lenc ^= 1; camSendSet(RPC_LENC, camCfg.lenc); break;
     case 20: camCfg.link = camStepv(camCfg.link, dir, 0, CAM_LINK_N - 1, 1, true);
@@ -864,9 +865,9 @@ void camTouch(int x, int y, bool held, bool isNew) {
   }
   if (camIn(x, y, 0, 0, 40, 30)) { navBack(); return; }
   if (camIn(x, y, CAM_RAIL_X, 4, SCR_W - CAM_RAIL_X, 32)) { if (!camRec && !camMotionOn) { camMode = (camMode + 1) & 3; vibTap(); needRedraw = true; } else showToast("Hentikan dulu", 900); return; }
-  if (camIn(x, y, CAM_RAIL_X, 82, SCR_W - CAM_RAIL_X, 62)) { camShutterTap(); needRedraw = true; return; }
-  if (camIn(x, y, CAM_RAIL_X, 152, SCR_W - CAM_RAIL_X, 30)) { camAdj(4, 1); vibTap(); needRedraw = true; return; }
-  if (camIn(x, y, CAM_RAIL_X, 184, SCR_W - CAM_RAIL_X, 30)) { camSettings = true; vibTap(); needRedraw = true; return; }
+  if (camIn(x, y, CAM_RAIL_X, 82 + CAM_VOFF, SCR_W - CAM_RAIL_X, 62)) { camShutterTap(); needRedraw = true; return; }
+  if (camIn(x, y, CAM_RAIL_X, 152 + CAM_VOFF, SCR_W - CAM_RAIL_X, 30)) { camAdj(4, 1); vibTap(); needRedraw = true; return; }
+  if (camIn(x, y, CAM_RAIL_X, 184 + CAM_VOFF, SCR_W - CAM_RAIL_X, 30)) { camSettings = true; vibTap(); needRedraw = true; return; }
   if (camIn(x, y, 0, SCR_H - 34, 58, 34)) { camRecStop(true); navPush(SCR_GALLERY); return; }
   if (camLastVideo[0] && camIn(x, y, 58, SCR_H - 34, 46, 34)) { camPlayLast(); needRedraw = true; return; }
 }
