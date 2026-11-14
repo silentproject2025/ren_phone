@@ -63,6 +63,7 @@ struct CamRx {
   uint32_t  frames = 0;           // frame preview utuh yang diterima
   uint32_t  dropped = 0;          // frame dibuang (tak ada slot kosong / terlambat diambil)
   uint32_t  bad = 0;              // frame rusak (potongan hilang / checksum JPEG gagal)
+  uint32_t  badFirst = 0, badGap = 0, badEoi = 0, badStill = 0;   // CAM_LINK_WINDOW_V1: rincian penyebab bad (a/g/e/foto)
   uint32_t  oversize = 0;         // frame lebih besar dari buffer
 
   static bool jpegOk(const uint8_t* b, uint32_t n) {
@@ -108,14 +109,14 @@ struct CamRx {
     if (isStill) {
       if (stillState != CAMRX_STILL_RECV || !still) return false;     // tidak diminta -> abaikan
       if (first) { sOn = true; sSeq = seq; stillLen = 0; }
-      else if (!sOn || seq != sSeq || off != stillLen) { sOn = false; stillState = CAMRX_STILL_FAIL; bad++; return false; }
+      else if (!sOn || seq != sSeq || off != stillLen) { sOn = false; stillState = CAMRX_STILL_FAIL; bad++; badStill++; return false; }
       if (off != stillLen || stillLen + dn > stillCap) { sOn = false; stillState = CAMRX_STILL_FAIL; oversize++; return false; }
       memcpy(still + stillLen, d, dn);
       stillLen += dn; bytes += dn;
       if (last) {
         sOn = false;
         if (jpegOk(still, stillLen)) stillState = CAMRX_STILL_DONE;
-        else { stillState = CAMRX_STILL_FAIL; bad++; }
+        else { stillState = CAMRX_STILL_FAIL; bad++; badStill++; }
       }
       return false;
     }
@@ -123,7 +124,7 @@ struct CamRx {
     // ---- preview ----
     const uint8_t* src = d; uint32_t sn = dn;      // data JPEG yang benar2 disalin (tanpa id header)
     if (first) {
-      if (rxOn && rxSlot >= 0) { CAMRX_ENTER(); slotSt[rxSlot] = CAMRX_FREE; CAMRX_EXIT(); bad++; }   // NYX-CAMFREEZE-V1: frame sebelumnya tak pernah selesai (potongan AKHIR hilang) -> bebaskan slotnya, kalau tidak bocor & preview freeze
+      if (rxOn && rxSlot >= 0) { CAMRX_ENTER(); slotSt[rxSlot] = CAMRX_FREE; CAMRX_EXIT(); bad++; badFirst++; }   // NYX-CAMFREEZE-V1: frame sebelumnya tak pernah selesai (potongan AKHIR hilang) -> bebaskan slotnya, kalau tidak bocor & preview freeze
       rxOn = false; rxSlot = -1;
       bool skip = (fl & RPF_HDRSKIP) != 0;
       if (skip) {                                   // header dihilangkan: pakai cache, tapi hanya kalau id-nya cocok
@@ -143,7 +144,7 @@ struct CamRx {
         memcpy(slot[rxSlot], hdr, hdrLen); rxLen = hdrLen;
       }
     } else if (!rxOn || seq != rxSeq || off != rxLen) {
-      if (rxOn && rxSlot >= 0) { CAMRX_ENTER(); slotSt[rxSlot] = CAMRX_FREE; CAMRX_EXIT(); bad++; }
+      if (rxOn && rxSlot >= 0) { CAMRX_ENTER(); slotSt[rxSlot] = CAMRX_FREE; CAMRX_EXIT(); bad++; badGap++; }
       rxOn = false; rxSlot = -1;
       return false;
     }
@@ -161,7 +162,7 @@ struct CamRx {
     int s = rxSlot; rxSlot = -1;
     if (!jpegOk(slot[s], rxLen)) {
       CAMRX_ENTER(); slotSt[s] = CAMRX_FREE; CAMRX_EXIT();
-      bad++;
+      bad++; badEoi++;
       return false;
     }
     CAMRX_ENTER();

@@ -488,13 +488,13 @@ static void camLinkTick(uint32_t now) {
   }
   // sudah jalan di baud tinggi: frame rusak >= 3 dalam 5 dtk (bit hilang di kabel) -> turun satu anak tangga
   if (camBaudCur != RP_BAUD && !camBaudSwitchedAt && !camBaudReq) {
-    if (now - camBadAt >= 5000) { camBadAt = now; camBadBase = camRx.bad; camFrBase = camRx.frames; }
-    else {
+    if (now - camBadAt >= 5000) {   // CAM_LINK_WINDOW_V1: nilai di AKHIR jendela 5 dtk, bukan begitu rusak mencapai 3 (burst sesaat jangan dihitung 3/19)
       uint32_t bd = camRx.bad - camBadBase, fd = camRx.frames - camFrBase;
-      if (bd >= 3 && bd * 10 >= bd + fd) {   // CAM_LINK_RATE_V1: >=3 rusak DAN >=10% dari semua frame
-        char w[24]; snprintf(w, sizeof(w), "rusak %lu/%lu", (unsigned long)bd, (unsigned long)(bd + fd));
-        camLinkStepDown(now, camRungOf(camBaudCur), true, w); camBadAt = now; camBadBase = camRx.bad; camFrBase = camRx.frames;
-      }
+      bool step = bd >= 3 && bd * 10 >= bd + fd;   // >=3 rusak DAN >=10% dari semua frame
+      char w[40]; snprintf(w, sizeof(w), "rusak %lu/%lu a%lu g%lu e%lu", (unsigned long)bd, (unsigned long)(bd + fd),
+                           (unsigned long)camRx.badFirst, (unsigned long)camRx.badGap, (unsigned long)camRx.badEoi);
+      if (step) camLinkStepDown(now, camRungOf(camBaudCur), true, w);
+      camBadAt = now; camBadBase = camRx.bad; camFrBase = camRx.frames;
     }
   }
 }
