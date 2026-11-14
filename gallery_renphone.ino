@@ -309,18 +309,21 @@ static int galCacheRead(const char* cpath, uint16_t* dst) {
   size_t sz = (size_t)f.size();
   uint8_t mg[4];
   int rc = 0;
+  bool stale = false;   // GAL_NOSTICKY_V1: penanda gagal lama -> hapus & buat ulang
   if (sz >= 4 && f.read(mg, 4) == 4 && mg[0] == 'N' && mg[1] == 'T') {
     if (mg[2] == 'H' && sz == (size_t)(4 + GAL_THUMB_BYTES)) {
       if (f.read((uint8_t*)dst, GAL_THUMB_BYTES) == (size_t)GAL_THUMB_BYTES) rc = 1;
     } else if (mg[2] == 'X') {
-      rc = 2;
+      stale = true;   // GAL_NOSTICKY_V1: dulu rc = 2 ("?" permanen)
     }
   }
   f.close();
+  if (stale) SD_MMC.remove(cpath);
   return rc;
 }
 
 static void galCacheWrite(const char* cpath, uint64_t key, const uint16_t* px, bool ok) {
+  if (!ok) return;   // GAL_NOSTICKY_V1: jangan simpan kegagalan ke SD (gangguan sesaat jadi "?" permanen)
   galCacheEnsureDir(key);
   File w = SD_MMC.open(cpath, FILE_WRITE);
   if (!w) return;
