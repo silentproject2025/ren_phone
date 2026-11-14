@@ -139,6 +139,15 @@ static volatile bool doomBusy = false;
 bool doomIsPlaying(){ return doomPlaying; }
 bool doomIsBusy(){ return doomBusy; }
 
+// DOOM_BACK_GUARD_V1 (decl): konfirmasi keluar ketuk-2x. 0 = tidak armed; selain itu = batas waktu (millis)
+// sampai ketukan Back kedua dianggap konfirmasi. Dibaca juga oleh doomBandHook() (core 1) utk toast.
+#define DOOM_BACK_CONFIRM_MS 2000
+static volatile uint32_t doomBackArmUntil = 0;
+static inline bool doomBackArmed(){
+  uint32_t u = doomBackArmUntil;
+  return u != 0 && (int32_t)(u - millis()) > 0;
+}
+
 extern volatile uint32_t padFrames; // gamepad_renphone.ino
 static void doomTaskFunc(void* arg){
   DG_FS = &SD_MMC;
@@ -379,15 +388,6 @@ static int doomPauseY(){ return 24; }
 // DOOM). Per frame cuma menyalin piksel non-transparan -> jauh lebih murah drpd gambar lingkaran+teks.
 struct DoomOvl { int x, y, w, h; uint16_t* pix; uint16_t key; bool toast; };   // DOOM_BACK_GUARD_V1: +toast
 static DoomOvl doomOvl[5];
-
-// DOOM_BACK_GUARD_V1: konfirmasi keluar ketuk-2x. 0 = tidak armed; selain itu = batas waktu (millis)
-// sampai ketukan Back kedua dianggap konfirmasi. Dibaca juga oleh doomBandHook() (core 1) utk toast.
-#define DOOM_BACK_CONFIRM_MS 2000
-static volatile uint32_t doomBackArmUntil = 0;
-static inline bool doomBackArmed(){
-  uint32_t u = doomBackArmUntil;
-  return u != 0 && (int32_t)(u - millis()) > 0;
-}
 static int doomOvlN = 0;
 
 static uint16_t doomWireFixRB(uint16_t wire){

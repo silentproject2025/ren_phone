@@ -39,15 +39,46 @@ def save(p, t, crlf):
 doom, doom_crlf = load("doom_renphone.ino")
 phone, phone_crlf = load("phone.ino")
 
-if "DOOM_BACK_GUARD_V1" in doom and "DOOM_BACK_GUARD_V1" in phone:
-    print("[skip] sudah dipatch"); sys.exit(0)
-if ("DOOM_BACK_GUARD_V1" in doom) != ("DOOM_BACK_GUARD_V1" in phone):
-    sys.exit("ERROR: patch separuh terpasang (hanya salah satu file). Periksa manual.")
-
 def rep(text, old, new, label):
     if text.count(old) != 1:
         sys.exit("ERROR [%s]: blok tidak ketemu / tidak unik:\n%s\nDibatalkan, tidak ada yg diubah." % (label, old[:90]))
     return text.replace(old, new)
+
+# Deklarasi state guard HARUS ada sebelum doomEnter() (dipakai di sana) -> ditaruh dekat doomBusy.
+DECL = (
+"\n// DOOM_BACK_GUARD_V1 (decl): konfirmasi keluar ketuk-2x. 0 = tidak armed; selain itu = batas waktu (millis)\n"
+"// sampai ketukan Back kedua dianggap konfirmasi. Dibaca juga oleh doomBandHook() (core 1) utk toast.\n"
+"#define DOOM_BACK_CONFIRM_MS 2000\n"
+"static volatile uint32_t doomBackArmUntil = 0;\n"
+"static inline bool doomBackArmed(){\n"
+"  uint32_t u = doomBackArmUntil;\n"
+"  return u != 0 && (int32_t)(u - millis()) > 0;\n"
+"}\n")
+# blok lama (versi pertama patch ini) yg salah tempat -- dipakai utk mode perbaikan
+OLD_DECL = (
+"\n// DOOM_BACK_GUARD_V1: konfirmasi keluar ketuk-2x. 0 = tidak armed; selain itu = batas waktu (millis)\n"
+"// sampai ketukan Back kedua dianggap konfirmasi. Dibaca juga oleh doomBandHook() (core 1) utk toast.\n"
+"#define DOOM_BACK_CONFIRM_MS 2000\n"
+"static volatile uint32_t doomBackArmUntil = 0;\n"
+"static inline bool doomBackArmed(){\n"
+"  uint32_t u = doomBackArmUntil;\n"
+"  return u != 0 && (int32_t)(u - millis()) > 0;\n"
+"}\n")
+ANCHOR = "bool doomIsBusy(){ return doomBusy; }\n"
+
+has_d = "DOOM_BACK_GUARD_V1" in doom
+has_p = "DOOM_BACK_GUARD_V1" in phone
+if has_d and has_p:
+    if "DOOM_BACK_GUARD_V1 (decl)" in doom:
+        print("[skip] sudah dipatch"); sys.exit(0)
+    # MODE PERBAIKAN: patch versi lama terpasang, deklarasi salah tempat (error build: 'doomBackArmUntil' was not declared)
+    doom = rep(doom, OLD_DECL, "", "repair/hapus-lama")
+    doom = rep(doom, ANCHOR, ANCHOR + DECL, "repair/pasang-baru")
+    save("doom_renphone.ino", doom, doom_crlf)
+    print("[ok] diperbaiki: deklarasi DOOM_BACK_GUARD_V1 dipindah ke atas doomEnter()")
+    sys.exit(0)
+if has_d != has_p:
+    sys.exit("ERROR: patch separuh terpasang (hanya salah satu file). Periksa manual.")
 
 # =====================================================================
 # doom_renphone.ino
@@ -58,17 +89,9 @@ doom = rep(doom,
 "struct DoomOvl { int x, y, w, h; uint16_t* pix; uint16_t key; };\n"
 "static DoomOvl doomOvl[4];\n",
 "struct DoomOvl { int x, y, w, h; uint16_t* pix; uint16_t key; bool toast; };   // DOOM_BACK_GUARD_V1: +toast\n"
-"static DoomOvl doomOvl[5];\n"
-"\n"
-"// DOOM_BACK_GUARD_V1: konfirmasi keluar ketuk-2x. 0 = tidak armed; selain itu = batas waktu (millis)\n"
-"// sampai ketukan Back kedua dianggap konfirmasi. Dibaca juga oleh doomBandHook() (core 1) utk toast.\n"
-"#define DOOM_BACK_CONFIRM_MS 2000\n"
-"static volatile uint32_t doomBackArmUntil = 0;\n"
-"static inline bool doomBackArmed(){\n"
-"  uint32_t u = doomBackArmUntil;\n"
-"  return u != 0 && (int32_t)(u - millis()) > 0;\n"
-"}\n",
+"static DoomOvl doomOvl[5];\n",
 "doom/struct")
+doom = rep(doom, ANCHOR, ANCHOR + DECL, "doom/decl")
 
 # 2) painter: kind 2 = toast
 doom = rep(doom,
