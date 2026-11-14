@@ -6766,6 +6766,8 @@ bool  homeScrollSpringing=false; // v105: true selagi fisika inersia/pegas masih
 bool  homeSpringMode=false;   // v105: true selagi posisi lagi ditarik balik ke tepi oleh pegas
 float homeSpringTarget=0;     // v105: tepi tujuan pegas (0 atau homeMaxScroll())
 float homeDragRaw=0;          // v105: posisi "mentah" ikut jari 1:1 (belum kena rubber-band)
+float homeTyF=0;              // HOME_SMOOTH_V3: Y jari setelah filter anti-jitter
+float homeTyLastF=0;          // HOME_SMOOTH_V3: Y jari terfilter pada iterasi sebelumnya
 float homeDragAccum=0;        // v105: jarak jari sejak sampel kecepatan terakhir
 unsigned long homeDragSampleMs=0;
 // v106 BAND RENDER: selagi Home cuma di-scroll (header/status bar/dock gak
@@ -6782,13 +6784,14 @@ int   homePressAnimIdx=-1;    // v105: ikon mana yg lagi dianimasikan (tetap ada
 const int   HOME_DRAG_SLOP     = 10;      // px gerak jari sblm dianggap scroll (bukan tap)
 const float HOME_FLING_TAU     = 240.0f;  // ms, konstanta gesekan glide (makin besar = makin licin/jauh)
 const float HOME_FLING_MIN     = 0.008f;  // px/ms, di bawah ini glide dianggap berhenti
-const float HOME_FLING_MAX     = 3.0f;    // px/ms, batas kecepatan lempar
+const float HOME_FLING_MAX     = 2.4f;    // px/ms, batas kecepatan lempar (HOME_SMOOTH_V3: dulu 3.0 -> lompatan per frame terlalu besar)
 const float HOME_RUBBER_R      = 80.0f;   // px, maks. tarikan overscroll saat jari nahan (asimtot kurva)
 const float HOME_OVER_MAX      = 90.0f;   // px, batas keras overscroll pas fling nabrak ujung
 const float HOME_SPRING_K      = 0.00055f;// kekakuan pegas tepi (1/ms^2)
 const float HOME_SPRING_C      = 0.036f;  // redaman pegas (1/ms) -- zeta ~0.77 = melenting tipis
 const float HOME_PRESS_IN_MS   = 90.0f;   // durasi ikon mengecil pas ditekan
 const float HOME_PRESS_OUT_MS  = 160.0f;  // durasi ikon balik pas dilepas
+// HOME_SMOOTH_V3 (apply_home_smooth_v3.py): filter jari + lewati frame sia-sia + batas lempar 2.4 px/ms.
 // ---- HOME-LAYOUT: urutan & sembunyikan ikon grid Home (diatur di layar "Atur Home") ----
 // homeOrder[] = urutan SEMUA app (isi: indeks apps[]), homeHide[] per indeks apps[].
 // homeVis[]/homeVisN = yang tampil di grid Home. Disimpan di NVS "homelay" per ID Screen
@@ -20723,8 +20726,13 @@ void loop(){
         homeScrollSpringing=false; homeSpringMode=false;
         homeDragRaw = homeRubberInv(homeScrollY,(float)homeMaxScroll());
         homeDragAccum=0; homeDragSampleMs=millis();
+        homeTyF=(float)ty; homeTyLastF=(float)ty; // HOME_SMOOTH_V3
         homePressedIdx = homeJiggle ? -1 : homeIndexAt(tx,ty,homeScrollY); // v-baru: highlight instan pas jari nempel ikon
       } else {
+        { // HOME_SMOOTH_V3: filter adaptif -- gerak kecil (jitter) diredam, gerak cepat langsung ikut
+          float dF=(float)ty-homeTyF; float aF=0.45f+fabsf(dF)*0.08f; if(aF>1.0f) aF=1.0f;
+          homeTyF+=dF*aF;
+        }
         if(!homeJiggle && !isSwiping && homePressedIdx>=0 && !searching && millis()-swipeStartTime>=550UL){
           homeJiggle=true; homePressedIdx=-1; vibTap(); needRedraw=true; // HOME-JIGGLE: tahan ikon = mode atur
         }
@@ -20734,9 +20742,10 @@ void loop(){
           // konten langsung "nempel" ke jari begitu lewat ambang slop (dulu
           // gerak 12px pertama dibuang & konten baru mulai gerak setelahnya).
           touchLastY=touchStartY;
+          homeTyLastF=(float)touchStartY; // HOME_SMOOTH_V3
         }
         if(isSwiping && !searching){ // v-baru: selagi hasil pencarian tampil, grid dirender statis -- gak ada drag-scroll
-          float rawDelta=(float)(touchLastY-ty);
+          float rawDelta=homeTyLastF-homeTyF; // HOME_SMOOTH_V3: dulu (float)(touchLastY-ty)
           homeDragRaw += rawDelta;
           homeDragAccum += rawDelta;
           // v105: kecepatan jari dihitung per JENDELA WAKTU (>=12ms), bukan
@@ -20752,9 +20761,14 @@ void loop(){
           // (menggantikan `homeScrollY*=0.62f` per-frame yg bikin konten
           // ketarik balik sendiri walau jari diam di ujung).
           float newY = homeRubber(homeDragRaw,(float)homeMaxScroll());
-          if(newY!=homeScrollY){ homeScrollY=newY; needRedraw=true; bandCand=true; }
+          if(newY!=homeScrollY){ // HOME_SMOOTH_V3: posisi float tetap diakumulasi, frame cuma kalau piksel bulat berubah
+            bool pxCh=(homeScrollPx(newY)!=homeScrollPx(homeScrollY));
+            homeScrollY=newY;
+            if(pxCh){ needRedraw=true; bandCand=true; }
+          }
         }
         touchLastY=ty;
+        homeTyLastF=homeTyF; // HOME_SMOOTH_V3
       }
     } else if(wasTouched){
       if(!isSwiping&&millis()-swipeStartTime<400){
@@ -20802,8 +20816,9 @@ void loop(){
     } else if(!searching && homeScrollSpringing){
       // v105: glide/pegas berbasis waktu nyata (dt = selang antar iterasi
       // loop) -- kecepatan & jarak tempuh sama di FPS berapapun.
+      int pxBeforeG=homeScrollPx(homeScrollY); // HOME_SMOOTH_V3
       homeScrollPhysicsStep(dt);
-      needRedraw=true; bandCand=true;
+      if(homeScrollPx(homeScrollY)!=pxBeforeG || !homeScrollSpringing){ needRedraw=true; bandCand=true; } // frame penutup tetap digambar
     }
     // v105: animasi tekan ikon -- ikon mengecil pelan (IN) pas jari nempel &
     // balik pelan (OUT) pas lepas/batal, berbasis waktu nyata juga. Indeks
