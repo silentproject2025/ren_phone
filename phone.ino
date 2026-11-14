@@ -5983,6 +5983,7 @@ bool nesIsPlaying(); // FIX race SPI: true selagi task nofrendo pegang display l
 void doomEnter(); void doomExit();
 void drawDoom(LGFX_Sprite&); void doomTouch(int,int,bool,bool);
 bool doomIsPlaying(); // true selagi task DoomGlue pegang SPI display langsung
+bool doomExitGuard(); // DOOM_BACK_GUARD_V1: true = boleh keluar (ketuk/gestur ke-2); false = baru toast konfirmasi
 bool doomIsBusy();    // DOOM_RACE_FIX_V1: true sejak sebelum task dibuat s/d task selesai (termasuk fase "Memuat...")
 // ---- v97: PPU DEMO -- forward declarations (engine NyxPPU, lihat file
 // ppu_engine_renphone.ino terpisah, pola sama persis dgn app2 lain) ----
@@ -20176,6 +20177,16 @@ int   dragOX=0,dragOY=0,dragOW=0,dragOH=0,dragOR=0, dragMaxDy=0, dragLastTy=0, d
 uint16_t dragCol=0;
 unsigned long dragLastMoveMs=0;
 
+// DOOM_BACK_GUARD_V1: gestur swipe-atas dari tepi bawah (keluar cepat / App Switcher) selagi DOOM jalan.
+// true = gestur sudah ditangani di sini (pemanggil cukup menyelesaikan gestur & return).
+// Ketukan/gestur pertama -> toast; yg kedua dlm 2 dtk -> pulang ke Home. App Switcher sengaja TIDAK
+// dibuka selagi Doom jalan (core 0 dilarang menggambar -- lihat DOOM_RACE_FIX_V1).
+static bool doomGestureExit(){
+  if(curScreen()!=SCR_DOOM || !doomIsBusy()) return false;
+  if(doomExitGuard()) navGoHome();
+  return true;
+}
+
 bool dragCloseAllowed(){
   Screen sc=curScreen();
   if(sc==SCR_HOME||sc==SCR_NES||sc==SCR_DOOM||sc==SCR_CAMERA||sc==SCR_MJPEG||sc==SCR_CALL||sc==SCR_PPU) return false;
@@ -20622,6 +20633,7 @@ void loop(){
       //   elapsed-nya di titik itu (jaga2 kalau jari msh ditahan lama
       //   SESUDAH titik ini sebelum akhirnya dilepas).
       if(millis()-gTouchStartMs>=APPSWITCH_HOLD_MS){
+        if(doomGestureExit()){ gGestureDone=true; exitArmed=false; wasTouched=touched; delay(1); return; }   // DOOM_BACK_GUARD_V1
         vibExit();
         openAppSwitcher(); gGestureDone=true; exitArmed=false;
         wasTouched=touched; delay(1); return;
@@ -20636,6 +20648,7 @@ void loop(){
     // NEMPEL (gTouchStartMs). Ini jg otomatis nutup race condition yg
     // difix di v98 (elapsed dicek ULANG di sini, bukan cuma pas touched==true).
     exitArmed=false;
+    if(doomGestureExit()){ gGestureDone=true; wasTouched=touched; delay(1); return; }   // DOOM_BACK_GUARD_V1
     vibExit(); // v82: getar keluar app -- 1 denyut pendek, bunyi pas gesturnya kekonfirmasi
     if(millis()-gTouchStartMs>=APPSWITCH_HOLD_MS){
       openAppSwitcher(); gGestureDone=true;

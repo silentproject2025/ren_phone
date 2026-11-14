@@ -311,6 +311,7 @@ void doomEnter(){
   doomMeltIntro();
 
   doomStopRequested = false;
+  doomBackArmUntil = 0;   // DOOM_BACK_GUARD_V1
   // DOOM_RACE_FIX_V1: gambar "Memuat..." SEKALI dari core 0 (task belum ada -> aman), lalu
   // serahkan display ke core 1. Mulai titik ini core 0 DILARANG menyentuh display
   // (loop() + push() di phone.ino cek doomIsBusy()).
@@ -376,8 +377,17 @@ static int doomPauseY(){ return 24; }
 // ---- overlay yg ditempel ke tiap pita (jalur cepat) ----
 // Tiap tombol di-render SEKALI ke sprite kecil, lalu dikonversi ke format kabel (R/B ditukar spt palet
 // DOOM). Per frame cuma menyalin piksel non-transparan -> jauh lebih murah drpd gambar lingkaran+teks.
-struct DoomOvl { int x, y, w, h; uint16_t* pix; uint16_t key; };
-static DoomOvl doomOvl[4];
+struct DoomOvl { int x, y, w, h; uint16_t* pix; uint16_t key; bool toast; };   // DOOM_BACK_GUARD_V1: +toast
+static DoomOvl doomOvl[5];
+
+// DOOM_BACK_GUARD_V1: konfirmasi keluar ketuk-2x. 0 = tidak armed; selain itu = batas waktu (millis)
+// sampai ketukan Back kedua dianggap konfirmasi. Dibaca juga oleh doomBandHook() (core 1) utk toast.
+#define DOOM_BACK_CONFIRM_MS 2000
+static volatile uint32_t doomBackArmUntil = 0;
+static inline bool doomBackArmed(){
+  uint32_t u = doomBackArmUntil;
+  return u != 0 && (int32_t)(u - millis()) > 0;
+}
 static int doomOvlN = 0;
 
 static uint16_t doomWireFixRB(uint16_t wire){
@@ -395,6 +405,11 @@ static void doomOvlPaint(LGFX_Sprite& sp, int kind, int r, const char* label, ui
     sp.fillCircle(r,r,r,col); sp.drawCircle(r,r,r,TFT_BLACK);
     sp.setTextColor(TFT_WHITE); sp.setTextSize(1);
     int tw = sp.textWidth(label); sp.setCursor(r-tw/2, r-3); sp.print(label);
+  } else if(kind == 2){                // DOOM_BACK_GUARD_V1: toast konfirmasi keluar
+    int w = sp.width(), h = sp.height();
+    sp.fillRoundRect(0,0,w,h,6,0x2104); sp.drawRoundRect(0,0,w,h,6,TFT_WHITE);
+    sp.setTextColor(TFT_WHITE); sp.setTextSize(1);
+    int tw = sp.textWidth(label); sp.setCursor((w-tw)/2, (h-8)/2); sp.print(label);
   } else {                             // tombol pause
     sp.fillRoundRect(0,0,32,28,4,0x4208); sp.drawRoundRect(0,0,32,28,4,TFT_BLACK);
     sp.fillRect(10,6,4,16,TFT_WHITE); sp.fillRect(18,6,4,16,TFT_WHITE);
@@ -402,7 +417,7 @@ static void doomOvlPaint(LGFX_Sprite& sp, int kind, int r, const char* label, ui
 }
 
 static void doomOvlAdd(int x, int y, int w, int h, int kind, int r, const char* label, uint16_t col){
-  if(doomOvlN >= 4) return;
+  if(doomOvlN >= 5) return;
   LGFX_Sprite spr(&display);
   spr.setColorDepth(16);
   spr.setPsram(false);
@@ -415,7 +430,7 @@ static void doomOvlAdd(int x, int y, int w, int h, int kind, int r, const char* 
   if(!pix){ spr.deleteSprite(); return; }
   for(int i=0;i<w*h;i++) pix[i] = (sb[i]==key) ? key : doomWireFixRB(sb[i]);
   DoomOvl& o = doomOvl[doomOvlN++];
-  o.x=x; o.y=y; o.w=w; o.h=h; o.pix=pix; o.key=key;
+  o.x=x; o.y=y; o.w=w; o.h=h; o.pix=pix; o.key=key; o.toast=false;
   spr.deleteSprite();
 }
 
@@ -425,6 +440,10 @@ void doomOvlBuild(){
   doomOvlAdd(doomUseCx()-16,  doomUseCy()-16,  33, 33, 0, 16, "U",  0x07E0);
   doomOvlAdd(doomOkCx()-14,   doomOkCy()-14,   29, 29, 0, 14, "OK", 0x001F);
   doomOvlAdd(doomPauseX()-16, doomPauseY()-14, 33, 29, 1, 0,  "",   0);
+  // DOOM_BACK_GUARD_V1: toast -- tinggi 22, lebar ~ teks 28 huruf @6px + padding; hanya DITEMPEL saat armed.
+  { int tw = 196, th = 22;
+    doomOvlAdd((SCR_W-tw)/2, 8, tw, th, 2, 0, "Ketuk Back lagi untuk keluar", 0);
+    if(doomOvlN > 0) doomOvl[doomOvlN-1].toast = true; }
 }
 
 void doomOvlFree(){
@@ -436,6 +455,7 @@ void doomOvlFree(){
 void doomBandHook(uint16_t* buf, int px, int py, int w, int h){
   for(int k=0;k<doomOvlN;k++){
     const DoomOvl& o = doomOvl[k];
+    if(o.toast && !doomBackArmed()) continue;   // DOOM_BACK_GUARD_V1
     int y0 = max(o.y, py), y1 = min(o.y+o.h, py+h);
     int x0 = max(o.x, px), x1 = min(o.x+o.w, px+w);
     if(y0>=y1 || x0>=x1) continue;
@@ -492,10 +512,25 @@ static void doomReleaseAll(){
   doomApplyMasks();
 }
 
+// DOOM_BACK_GUARD_V1: gerbang keluar. true = BOLEH keluar sekarang.
+//  - task Doom belum jalan ("Memuat..." / layar error) -> true langsung (tdk ada progres yg bisa hilang)
+//  - sedang main & belum armed -> arm, munculkan toast, return false
+//  - sedang main & sudah armed (ketukan ke-2 dlm DOOM_BACK_CONFIRM_MS) -> true
+// Dipanggil dari doomTouchSlot() (tombol Back) & dari gestur swipe-atas di phone.ino.
+bool doomExitGuard(){
+  if(!doomPlaying){ doomBackArmUntil = 0; return true; }
+  if(doomBackArmed()){ doomBackArmUntil = 0; return true; }
+  doomBackArmUntil = millis() + DOOM_BACK_CONFIRM_MS;
+  if(doomBackArmUntil == 0) doomBackArmUntil = 1;   // jaga2 millis() pas == 0 (wrap)
+  doomReleaseAll();                                 // lepas semua tombol: tangan yg nyasar jgn bikin karakter lari terus
+  vibWarn();
+  return false;
+}
+
 static void doomTouchSlot(int s,int x,int y,bool held,bool isNew){
   if(!held && !isNew){ doomSlotMask[s]=0; doomApplyMasks(); return; }
 
-  if(isNew && isBack(x,y)){ navBack(); return; } // keluar app -> doomExit() lewat appOnExit()
+  if(isNew && isBack(x,y)){ if(doomExitGuard()) navBack(); return; } // DOOM_BACK_GUARD_V1: ketuk 2x utk keluar -> doomExit() lewat appOnExit()
 
   uint8_t &m = doomSlotMask[s];
   // Tombol bulat tetap diperiksa DULU supaya ketukan di areanya TIDAK ikut jadi basis d-pad/turn.
