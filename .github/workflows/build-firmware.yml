@@ -121,6 +121,26 @@ jobs:
           cp -a /tmp/customlibs/esp32s3/. "$DEST"/
           echo "::notice::Library kustom (mbedTLS di PSRAM) terpasang utk core $CORE_NOW"
 
+      # NYX-DIAG-LD: bandingkan kompiler pembuat arsip kustom vs arsip asli + linker yg dipakai.
+      # Hanya mencetak info; tidak menggagalkan build.
+      - name: Diagnostik toolchain library kustom (ld crash elf32-xtensa.c:952)
+        if: ${{ inputs.use_custom_libs != false }}
+        continue-on-error: true
+        run: |
+          RE=$(find "$HOME/.arduino15/packages/esp32/tools" -type f -name 'xtensa-esp-elf-readelf' | head -n1)
+          LD=$(find "$HOME/.arduino15/packages/esp32/tools" -type f -name 'xtensa-esp-elf-ld' | head -n1)
+          echo "readelf: $RE"; "$LD" --version | head -n1
+          CUR=$(find "$HOME/.arduino15/packages/esp32/tools/esp32s3-libs" -mindepth 1 -maxdepth 1 -type d | head -n1)
+          for D in /tmp/esp32s3-libs.orig "$CUR"; do
+            [ -d "$D/lib" ] || continue
+            echo "=== $D (kompiler pembuat objek, hitungan per versi) ==="
+            for A in libfreertos.a libesp_system.a liblwip.a; do
+              "$RE" -p .comment "$D/lib/$A" 2>/dev/null | grep -i 'GCC' | sort | uniq -c
+            done
+            echo "--- sisa section .debug di libfreertos.a (0 = sudah bersih) ---"
+            "$RE" -S "$D/lib/libfreertos.a" 2>/dev/null | grep -c '\.debug' || true
+          done
+
       # Cache 2: cache build arduino-cli (core.a dan objek library yg sudah dikompilasi).
       # Key memuat versi core, identitas paket library kustom, dan flag use_custom_libs,
       # sehingga core.a lama tidak pernah dipakai dgn sdkconfig.h yg berbeda.
