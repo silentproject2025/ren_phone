@@ -47,6 +47,7 @@
 #define CHAT_TZ_SEC    (7*3600)      // WIB (UTC+7); ubah kalau beda zona waktu
 #define CHAT_TOP       (STATUS_H+22)
 #define CHAT_PORT      8883
+#define CHAT_MIN_BLOCK 22000          // CHAT_RAM_FIX_V1: blok kontigu RAM internal minimum utk TLS (dulu 30000)
 #define CHAT_TOPIC_BASE "renphone/chat/m/"
 #define CHAT_TOPIC_TYPING "renphone/chat/t"
 #define CHAT_TYPE_SHOW_MS  4500UL     // indikator mengetik bertahan segini sejak paket terakhir
@@ -287,9 +288,21 @@ static void chatTaskFunc(void*) {
       chatConn = 2; chatSetErr("WiFi belum terhubung"); chatDirty = true;
       vTaskDelay(pdMS_TO_TICKS(1500)); continue;
     }
-    if (heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL) < 30000) {
-      chatConn = 2; chatSetErr("RAM padat, tutup app lain"); chatDirty = true;
-      vTaskDelay(pdMS_TO_TICKS(2000)); continue;
+    {   // CHAT_RAM_FIX_V1: tunggu RAM dilepas dulu (lwIP butuh waktu), baru menyerah
+      size_t lb = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
+      for (int w = 0; lb < CHAT_MIN_BLOCK && w < 40 && chatActive; w++) {
+        vTaskDelay(pdMS_TO_TICKS(100));
+        lb = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
+      }
+      if (!chatActive) continue;
+      if (lb < CHAT_MIN_BLOCK) {
+        char eb[44];
+        snprintf(eb, sizeof(eb), "RAM padat: blok %uK, perlu %uK", (unsigned)(lb / 1024), (unsigned)(CHAT_MIN_BLOCK / 1024));
+        chatConn = 2; chatSetErr(eb); chatDirty = true;
+        Serial.printf("[chat] RAM padat: largestBlock=%u freeInternal=%u perlu=%u\n",
+                      (unsigned)lb, (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL), (unsigned)CHAT_MIN_BLOCK);
+        vTaskDelay(pdMS_TO_TICKS(2000)); continue;
+      }
     }
     String host = chatCleanHost(), user = chatUser, pass = chatPass;
     chatConn = 0; chatDirty = true;
