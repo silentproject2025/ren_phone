@@ -229,7 +229,8 @@ jobs:
           # masih jalan di Release tidak tertimpa.
           RE=$(find "$HOME/.arduino15/packages/esp32/tools/esp-x32" -type f -name 'xtensa-esp-elf-readelf' 2>/dev/null | head -n1)
           LDB=$(find "$HOME/.arduino15/packages/esp32/tools/esp-x32" -type f -name 'xtensa-esp-elf-ld' 2>/dev/null | head -n1)
-          LIBGCC=$("$RE" -p .comment "$OUT/lib/libfreertos.a" 2>/dev/null | grep -i 'GCC' | head -n1 | grep -o '[0-9]*\.[0-9]*\.[0-9]*$' || true)
+          LIBGCC=$("$RE" -p .comment "$OUT/lib/libfreertos.a" 2>/dev/null | grep -o 'GCC: ([^)]*) [0-9.]*' | head -n1 | awk '{print $NF}' || true)
+          echo "toolchain yg dipakai lib-builder:"; find "$HOME" -maxdepth 7 -type d -path '*xtensa-esp-elf/esp-*' 2>/dev/null | head -n3
           LDGCC=$("$LDB" --version 2>/dev/null | head -n1 | grep -o 'esp-[0-9.]*' | sed 's/^esp-//' || true)
           echo "GCC pembuat arsip kustom: ${LIBGCC:-?} | GCC milik ld core: ${LDGCC:-?}"
           ORIG=$(find "$HOME/.arduino15/packages/esp32/tools/esp32s3-libs" -maxdepth 2 -name sdkconfig 2>/dev/null | head -n1)
@@ -248,7 +249,13 @@ jobs:
           STRIP_BIN=$(find "$HOME/.arduino15" "$HOME/lib-builder" -type f \( -name 'xtensa-esp32s3-elf-strip' -o -name 'xtensa-esp-elf-strip' \) 2>/dev/null | head -n1)
           echo "strip: ${STRIP_BIN:-TIDAK KETEMU}"
           if [ -n "$STRIP_BIN" ]; then
-            find "$OUT/lib" -name '*.a' -print0 | xargs -0 -n 20 "$STRIP_BIN" --strip-debug || echo "::warning::strip --strip-debug gagal"
+            find "$OUT/lib" -name '*.a' -print0 | xargs -0 -n 20 "$STRIP_BIN" --strip-debug 2> "$RUNNER_TEMP/strip.err" || echo "::warning::strip --strip-debug gagal"
+            head -n 3 "$RUNNER_TEMP/strip.err" || true
+            # NYX-TC-GUARD2: "unsupported relocation type" = objek dibuat toolchain lebih baru dari binutils core -> ld juga akan crash.
+            if grep -q 'unsupported relocation' "$RUNNER_TEMP/strip.err"; then
+              echo "::error::Binutils core tidak mengenali relokasi arsip kustom (toolchain lib-builder lebih baru dari core). Jangan dipakai. Jalankan ulang dgn idf_branch = v5.5.5 (versi IDF library asli core)."
+              exit 1
+            fi
             echo "=== ukuran lib SESUDAH strip ==="; du -sh "$OUT/lib" || true
           else
             echo "::warning::binary strip tidak ketemu, arsip dipaketkan apa adanya"
