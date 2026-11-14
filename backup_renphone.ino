@@ -242,6 +242,13 @@ static void bkScan(bool prune) {
     e.close();
   }
   d.close();
+  if (n == 0) {   // BK_PROBE_V1: openNextFile() kosong di build ini (file ada tapi tidak terdaftar) -> cari lewat exists()
+    int hint = 0; { Preferences pr; if (pr.begin(BK_NVS_NS, true)) { hint = pr.getInt("last", 0); pr.end(); } }
+    int hi = hint > 0 ? hint : 64; if (hi > 999) hi = 999;
+    int lo = hi - 63; if (lo < 1) lo = 1;
+    for (int k = hi; k >= lo && n < 100; k--) { char q[40]; bkMakeName(q, sizeof(q), k); if (SD_MMC.exists(q)) nums[n++] = k; }
+    Serial.printf("[bk] scan: readdir kosong -> probe exists() %d..%d, ketemu %d\n", lo, hi, n);
+  }
   Serial.printf("[bk] scan: file backup dikenali = %d\n", n);
   for (int i = 1; i < n; i++) { int v = nums[i], j = i - 1; while (j >= 0 && nums[j] < v) { nums[j + 1] = nums[j]; j--; } nums[j + 1] = v; }   // terbaru dulu
   if (prune) {
@@ -325,6 +332,7 @@ static void bkDoCreate(const char* pass) {
   }
   bkZero(buf, len); free(buf); if (eb) free(eb);
   if (!ok) { SD_MMC.remove(path); bkSay("Gagal menulis ke SD", 2400); return; }
+  { Preferences pr; if (pr.begin(BK_NVS_NS, false)) { pr.putInt("last", next); pr.end(); } }   // BK_PROBE_V1: petunjuk nomor terakhir
   bkScan(true);
   bkSel = 0; bkScroll = 0; bkArmKind = 0;
   char m[44]; snprintf(m, sizeof(m), pass ? "Backup #%03d dibuat (%d nilai) +kunci" : "Backup #%03d dibuat (%d nilai)", next, cnt);
