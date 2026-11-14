@@ -134,6 +134,7 @@ static uint32_t  camCdUntil = 0, camNextShotAt = 0, camShotDeadline = 0, camFree
 static int       camBurstLeft = 0;
 static bool      camShotPending = false;
 static uint8_t   camStillTried = 0;   // CAM_STILL_BIG_V1: 0 = belum, 1 = sudah coba utk sensor 2MP, 2 = utk 3MP
+static uint32_t  camRetryAt = 0;      // CAM_STILL_GROW_V1: != 0 = menunggu sisa foto lama habis, lalu minta foto lagi
 static uint32_t  camOverBase = 0;     // CAM_STILL_BIG_V1: camRx.oversize saat foto diminta (beda = gagal krn ukuran)
 static uint8_t   camShotRetry = 0;   // CAM_LINK_RATE_V1: ulang foto rusak maks 2x
 static int       camSavedCount = 0, camPhotoCounter = 0;
@@ -241,7 +242,7 @@ void camRxFrame(uint8_t type, const uint8_t* p, uint16_t n) {
 
 // ---------------- buffer ----------------
 static void camFreeBuffers() {
-  camBuffersOk = false; camStillTried = 0;
+  camBuffersOk = false; camStillTried = 0; camRetryAt = 0;   // CAM_STILL_GROW_V1
   delay(25);                                   // beri musTask waktu keluar dari camRx.feed()
   camRx.attach(nullptr, nullptr, nullptr, CAM_SLOT_SZ);
   camRx.attachStill(nullptr, 0);
@@ -281,6 +282,27 @@ static void camEnsureStill() {   // CAM_STILL_BIG_V1: buffer foto lebih besar + 
     if (old) heap_caps_free(old);
     break;
   }
+}
+
+// CAM_STILL_GROW_V1: gandakan buffer foto (maks 4 MB). Dipanggil HANYA saat foto idle (di antara foto).
+// Buffer lama dibebaskan dulu (dua buffer besar sekaligus belum tentu muat); kalau tak ada yg lebih besar
+// muat, ukuran lama diambil lagi. true = kapasitas benar2 bertambah.
+static bool camGrowStill() {
+  if (!camBuffersOk || camRx.stillState == CAMRX_STILL_RECV) return false;
+  uint32_t cap = camRx.stillCap, top = 4096u * 1024;
+  if (cap >= top) return false;
+  uint32_t want = (cap * 2 < top) ? cap * 2 : top;
+  camRx.attachStill(nullptr, 0);
+  uint8_t* old = camStillBuf; camStillBuf = nullptr;
+  if (old) heap_caps_free(old);
+  uint8_t* nb = nullptr; uint32_t got = 0;
+  for (uint32_t sz = want; sz >= cap + 128u * 1024; sz -= 128u * 1024) {
+    nb = (uint8_t*)heap_caps_malloc(sz, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (nb) { got = sz; break; }
+  }
+  if (!nb && cap) { nb = (uint8_t*)heap_caps_malloc(cap, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT); got = nb ? cap : 0; }
+  camStillBuf = nb; camRx.attachStill(nb, got);
+  return got > cap;
 }
 
 // ---------------- SD ----------------
@@ -437,6 +459,11 @@ static void camStillTick(uint32_t now) {
   if (camCdUntil && (int32_t)(now - camCdUntil) >= 0) { camCdUntil = 0; camShootNow(); }
   if (camBurstLeft > 0 && !camShotPending && !camCdUntil && camNextShotAt && (int32_t)(now - camNextShotAt) >= 0) { camNextShotAt = 0; camShootNow(); }
   if (!camShotPending) return;
+  if (camRetryAt) {   // CAM_STILL_GROW_V1: tunggu sisa potongan foto lama habis (CAM terus kirim sampai selesai), baru minta ulang
+    if ((int32_t)(now - camRetryAt) >= 0 && (int32_t)(now - camLastRxMs) >= 400) { camRetryAt = 0; camShotPending = false; camShootNow(); }
+    else if ((int32_t)(now - camShotDeadline) >= 0) { camRetryAt = 0; camShotPending = false; camBurstLeft = 0; camShotRetry = 0; showToast("Foto gagal (timeout)", 2200); vibError(); camNeedDraw = true; }
+    return;
+  }
   uint8_t st = camRx.stillState;
   if (st == CAMRX_STILL_DONE) {
     char path[64];
@@ -451,10 +478,17 @@ static void camStillTick(uint32_t now) {
     camRx.disarmStill();
   } else if (st == CAMRX_STILL_FAIL || (int32_t)(now - camShotDeadline) >= 0) {
     bool over = (st == CAMRX_STILL_FAIL) && camRx.oversize != camOverBase;   // CAM_STILL_BIG_V1: gagal krn ukuran -> jangan diulang
-    if (!over && camShotRetry < 2) {   // CAM_LINK_RATE_V1: coba lagi otomatis
-      camShotRetry++; camShotPending = false; camRx.disarmStill();
-      showToast("Foto rusak, mengulang...", 900);
-      camShootNow(); return;
+    if (over) {   // CAM_STILL_GROW_V1: kebesaran -> besarkan buffer lalu ulang (tidak memakai jatah ulang foto rusak)
+      camRx.disarmStill();
+      if (camGrowStill()) {
+        camRetryAt = now + 500; camShotDeadline = now + 15000;
+        showToast("Buffer foto diperbesar, mengulang...", 1500); return;
+      }
+    }
+    if (!over && camShotRetry < 2) {   // CAM_LINK_RATE_V1: foto rusak di jalur -> ulang, tapi tunggu sisa foto lama habis dulu
+      camShotRetry++; camRx.disarmStill();
+      camRetryAt = now + 500; camShotDeadline = now + 15000;
+      showToast("Foto rusak, mengulang...", 1200); return;
     }
     camShotRetry = 0;
     camShotPending = false; camBurstLeft = 0; camRx.disarmStill();
