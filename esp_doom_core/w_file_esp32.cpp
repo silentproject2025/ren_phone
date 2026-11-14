@@ -3,6 +3,8 @@
 #include <Arduino.h>
 #include <FS.h>
 #include <SD_MMC.h>
+#include <string.h>
+#include "esp_heap_caps.h"
 
 extern "C"
 {
@@ -97,6 +99,12 @@ static wad_file_t* W_ESP32_OpenFile(char* path)
     return &result->wad;
 }
 
+// Buffer perantara di RAM internal (DMA-capable). Baca SD -> sini dulu, baru
+// disalin ke tujuan. Menghindari baca SD langsung ke PSRAM (stack task Doom &
+// zone memory ada di PSRAM) yang bikin data hasil baca kosong (nol).
+#define WAD_BOUNCE_SZ 4096
+static uint8_t *wadBounce = nullptr;
+
 static void W_ESP32_CloseFile(wad_file_t* wad)
 {
     esp32_wad_file_t *f = (esp32_wad_file_t *)wad;
@@ -104,6 +112,8 @@ static void W_ESP32_CloseFile(wad_file_t* wad)
     f->file.close();
 
     delete f;
+
+    if (wadBounce) { heap_caps_free(wadBounce); wadBounce = nullptr; }
 }
 
 static size_t W_ESP32_Read(
@@ -114,9 +124,43 @@ static size_t W_ESP32_Read(
 {
     esp32_wad_file_t* f = (esp32_wad_file_t*)wad;
 
-    f->file.seek(offset);
+    if (!f->file.seek(offset))
+    {
+        Serial.printf("[wad] seek GAGAL offset=%u\n", offset);
+        return 0;
+    }
 
-    return f->file.read((uint8_t*)buffer, len);
+    if (!wadBounce)
+        wadBounce = (uint8_t *)heap_caps_malloc(WAD_BOUNCE_SZ,
+                        MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA | MALLOC_CAP_8BIT);
+
+    if (!wadBounce)
+    {
+        Serial.println("[wad] bounce buffer gagal, baca langsung");
+        return f->file.read((uint8_t*)buffer, len);
+    }
+
+    uint8_t *dst = (uint8_t *)buffer;
+    size_t total = 0;
+
+    while (total < len)
+    {
+        size_t want = len - total;
+        if (want > WAD_BOUNCE_SZ) want = WAD_BOUNCE_SZ;
+
+        size_t got = f->file.read(wadBounce, want);
+        if (got == 0) break;
+
+        if (offset == 0 && total == 0)
+            Serial.printf("[wad] byte awal dari SD: %02X %02X %02X %02X (got=%u)\n",
+                          wadBounce[0], wadBounce[1], wadBounce[2], wadBounce[3], (unsigned)got);
+
+        memcpy(dst + total, wadBounce, got);
+        total += got;
+        if (got < want) break;
+    }
+
+    return total;
 }
 
 extern "C"
