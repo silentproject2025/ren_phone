@@ -447,14 +447,14 @@ static int camRungOf(uint32_t b) { int r = 0; for (int i = 0; i < CAM_LINK_N; i+
 static int camLinkTarget() { int t = camCfg.link < camLinkCeil ? camCfg.link : camLinkCeil; return t < 0 ? 0 : (t >= CAM_LINK_N ? CAM_LINK_N - 1 : t); }
 // Link tidak bersih -> turun SATU anak tangga (bukan langsung 921k). alive=true: link masih hidup, minta CAM pindah langsung;
 // alive=false: link mati total (S3 sudah mundur ke 921k), tunggu CAM mundur sendiri baru coba anak tangga di bawahnya.
-static void camLinkStepDown(uint32_t now, int fromRung, bool alive) {
+static void camLinkStepDown(uint32_t now, int fromRung, bool alive, const char* why) {   // CAM_LINK_DIAG_V1: +why
   int nxt = fromRung - 1;
   camLinkCeil = (int8_t)(nxt < 0 ? 0 : nxt);
   camBaudReq = false;
   if (nxt <= 0) { camLinkCeil = 0; camLinkFailed = true; }
   if (alive) { camSendBaud(nxt <= 0 ? (uint32_t)RP_BAUD : CAM_LINK_BAUD[nxt]); camBaudReq = true; camBaudSentAt = now; }
   else camRetryAt = now + 3500;
-  char m[40]; snprintf(m, sizeof(m), "Link turun: %s", nxt <= 0 ? "921 kbaud" : CAM_LINK_NAME[nxt]);
+  char m[64]; snprintf(m, sizeof(m), "Link turun: %s (%s)", nxt <= 0 ? "921 kbaud" : CAM_LINK_NAME[nxt], why);
   showToast(m, 2200);
 }
 static void camLinkTick(uint32_t now) {
@@ -463,7 +463,7 @@ static void camLinkTick(uint32_t now) {
     else if (now - camBaudSwitchedAt > 1500) {                                              // sunyi -> mundur ke baud aman
       int from = camRungOf(camBaudCur);
       Serial1.updateBaudRate(RP_BAUD); camBaudCur = RP_BAUD; camBaudSwitchedAt = 0;
-      camLinkStepDown(now, from, false);
+      camLinkStepDown(now, from, false, "sunyi");
     }
   }
   if (camBaudOkFlag) { camBaudOkFlag = false; camBaudReq = false; }
@@ -471,17 +471,17 @@ static void camLinkTick(uint32_t now) {
   if (camOpened && !camLinkFailed && !camBaudReq && tgt > 0 && camBaudCur == RP_BAUD && (int32_t)(now - camRetryAt) >= 0) {
     camSendBaud(CAM_LINK_BAUD[tgt]); camBaudReq = true; camBaudSentAt = now;
   }
-  if (camBaudReq && now - camBaudSentAt > 1500 && camBaudCur == RP_BAUD) { camBaudReq = false; camLinkFailed = true; }   // CAM tak menjawab (firmware lama?)
+  if (camBaudReq && now - camBaudSentAt > 1500 && camBaudCur == RP_BAUD) { camBaudReq = false; camLinkFailed = true; showToast("CAM tak jawab ganti baud", 2500); }   // CAM tak menjawab (firmware lama?)
   // jalan di baud tinggi lalu CAM hilang >2 dtk (CAM sudah mundur sendiri ke 921k / restart): ikut mundur, jangan menggantung di baud tinggi
-  if (camOpened && camBaudCur != RP_BAUD && !camBaudSwitchedAt && now - camLastRxMs > 2000) {
+  if (camOpened && camBaudCur != RP_BAUD && !camBaudSwitchedAt && !camShotPending && now - camLastRxMs > 2000) {   // CAM_LINK_DIAG_V1: !camShotPending
     int from = camRungOf(camBaudCur);
     Serial1.updateBaudRate(RP_BAUD); camBaudCur = RP_BAUD;
-    camLinkStepDown(now, from, false);
+    camLinkStepDown(now, from, false, "CAM hilang");
   }
   // sudah jalan di baud tinggi: frame rusak >= 3 dalam 5 dtk (bit hilang di kabel) -> turun satu anak tangga
   if (camBaudCur != RP_BAUD && !camBaudSwitchedAt && !camBaudReq) {
     if (now - camBadAt >= 5000) { camBadAt = now; camBadBase = camRx.bad; }
-    else if ((uint32_t)(camRx.bad - camBadBase) >= 3) { camLinkStepDown(now, camRungOf(camBaudCur), true); camBadAt = now; camBadBase = camRx.bad; }
+    else if ((uint32_t)(camRx.bad - camBadBase) >= 3) { camLinkStepDown(now, camRungOf(camBaudCur), true, "rusak"); camBadAt = now; camBadBase = camRx.bad; }
   }
 }
 static void camOpenTick(uint32_t now) {
