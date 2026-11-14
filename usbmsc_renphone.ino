@@ -87,10 +87,32 @@ void mscStop(){
   Serial.printf("[msc] berhenti, SD remount: %s\n", sdReady ? "OK" : "GAGAL");
 }
 
+// Aksi tile "USB" di Control Center (toggle). Ditambahkan ke daftar aksi lewat apply_msc_cc.ps1.
+void ccActUsbMsc(){
+  Screen cur = curScreen();
+  if(cur == SCR_NES || cur == SCR_DOOM){ showToast("Keluar dari game dulu"); return; }
+  if(mscActive()){ mscStop(); showToast("USB Drive dimatikan"); }
+  else if(mscStart()) showToast("USB Drive aktif - colok kabel USB native");
+  else showToast("USB Drive gagal (cek SD / log serial)");
+}
+
+// Pemicu sementara lewat Serial Monitor (port UART, 115200): ketik  m + Enter = mulai,
+// x + Enter = berhenti. Dipanggil dari awal loop() di phone.ino.
+void mscSerialPoll(){
+  while(Serial.available()){
+    int c = Serial.read();
+    if(c == 'm' || c == 'M') mscStart();
+    else if(c == 'x' || c == 'X') mscStop();
+  }
+}
+
 #else  // build tanpa TinyUSB: stub
 
 bool mscActive(){ return false; }
 bool mscStart(){ Serial.println("[msc] tidak didukung: build perlu USB Mode = USB-OTG (TinyUSB)"); return false; }
 void mscStop(){}
+
+void mscSerialPoll(){}
+void ccActUsbMsc(){ showToast("USB Drive butuh build USB-OTG (TinyUSB)"); }
 
 #endif

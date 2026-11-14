@@ -4960,7 +4960,8 @@ bool  ccAnimating=false;
 float ccAnimFromH=0, ccAnimToH=0;
 unsigned long ccAnimStartMs=0;
 const float CC_ANIM_MS = 200.0f;
-#define CC_ITEMS 11 // +Bluetooth (index 9), +Tangkap layar (index 10)
+#define CC_ITEMS 12 // +Bluetooth (index 9), +Tangkap layar (index 10), +USB Drive (index 11)
+bool mscActive(); void ccActUsbMsc(); // usbmsc_renphone.ino
 int ccCols(){ return currentOrient==ORIENT_LANDSCAPE ? 6 : 3; } // landscape 6x2, portrait 3x4 -> 11 tombol muat
 void ccActScreenshot(); // definisi di features_renphone.ino
 extern bool powerMenuOpen; void powerMenuShow(); void drawPowerMenu(LGFX_Sprite&); void powerMenuTouch(bool,int,int); // power_renphone.ino
@@ -5094,6 +5095,7 @@ bool ccActiveState(int i){
     case 7: return npxOn;
     case 8: return !vibEnabled;
     case 9: return btCcEnabled(); // Bluetooth nyala = tombol terisi
+    case 11: return mscActive(); // USB Drive aktif = tombol terisi
     default: return false; // 3 Tema, 4 Orientasi, 6 Kunci = aksi sekali tekan, bukan toggle
   }
 }
@@ -5224,6 +5226,15 @@ void drawCCIcon(LGFX_Sprite& s, int idx, int cx, int cy, int r, bool active, uin
       nyxAaCircle(s, cx,cy,3,ic);
       break;
     }
+    case 11: { // USB Drive: ikon kartu SD (sudut kanan-atas terpotong) + 3 pin
+      for(int t=0;t<2;t++){
+        s.drawLine(cx-6+t,cy-9,cx+2,cy-9,ic);   s.drawLine(cx+2,cy-9,cx+6,cy-5,ic);
+        s.drawFastVLine(cx+6-t,cy-5,15,ic);     s.drawFastHLine(cx-6,cy+9-t,13,ic);
+        s.drawFastVLine(cx-6+t,cy-9,19,ic);
+      }
+      s.drawFastVLine(cx-3,cy-7,4,ic); s.drawFastVLine(cx-1,cy-7,4,ic); s.drawFastVLine(cx+1,cy-7,4,ic);
+      break;
+    }
     case 8: { // Mode Senyap: lonceng, dicoret kalau getar lg dimatikan (active=true -> getar OFF)
       s.fillTriangle(cx,cy-8,cx-7,cy+3,cx+7,cy+3,ic);
       nyxAaRR(s, cx-3,cy+4,6,3,1,ic);
@@ -5283,7 +5294,7 @@ void drawControlCenter(LGFX_Sprite& s){
     nyxAaRR(s, tx,ty,tw2,th2,trad,fillC);
     nyxAaRRRing(s, tx,ty,tw2,th2,trad,blend565(fillC,0xFFFF,50));
     if(li>=0.85f){ // ikon + label baru muncul setelah tile hampir penuh
-      static const char* ccLbl[CC_ITEMS]={"Wi-Fi","Pesawat","DND","Tema","Rotasi","Goyang","Kunci","LED","Senyap","BT","Tangkap"};
+      static const char* ccLbl[CC_ITEMS]={"Wi-Fi","Pesawat","DND","Tema","Rotasi","Goyang","Kunci","LED","Senyap","BT","Tangkap","USB"};
       uint16_t icC = lerpColor565(T().text, T().bg, a);
       int ir = iconR>14 ? 14 : iconR;
       drawCCIcon(s, i, ccx, ty+th2/2-7, ir, a>0.5f, icC, fillC);
@@ -5327,7 +5338,7 @@ void drawControlCenter(LGFX_Sprite& s){
 
 // CC-LONGPRESS ---------------------------------------------------------------
 void ccRunTap(int i){
-  void(*actions[CC_ITEMS])() = { ccActWifi, ccActAirplane, ccActDnd, ccActTheme, ccActOrient, ccActShake, nullptr, ccActNeopixel, ccActSilent, ccActBluetooth, ccActScreenshot };
+  void(*actions[CC_ITEMS])() = { ccActWifi, ccActAirplane, ccActDnd, ccActTheme, ccActOrient, ccActShake, nullptr, ccActNeopixel, ccActSilent, ccActBluetooth, ccActScreenshot, ccActUsbMsc };
   if(i==6){ locked=true; lockScreenReset(); closeControlCenter(); return; }
   if(actions[i]) actions[i]();
   needRedraw=true;
@@ -20242,7 +20253,7 @@ bool dragCloseHandle(bool touched,int tx,int ty){
 unsigned long lastClk=0,lastSen=0,lastMpu=0,lastBatt=0;
 unsigned long hwmonLastPoll=0; // v31: timer polling app HWmonitor (pola sama dgn lastSen dkk)
 unsigned long lastLoopMs=0; // v14: dipakai normalisasi decay momentum scroll thdp waktu nyata (dt)
-void loop(){
+void loop(){ mscSerialPoll();
   rpHLLoopPoll();
   { static Screen s_hePrev=SCR_HOME; Screen s_heC=curScreen();   // v130: home anim -- catat saat masuk Home
     if(s_heC!=s_hePrev){ if(s_heC==SCR_HOME) homeEnterMs=millis(); s_hePrev=s_heC; } }
