@@ -22,7 +22,7 @@
   // ST7796_DIFFPUSH_V1: push() hanya kirim pita baris yg berubah (lihat apply_st7796_diffpush.py).
   // 0 = push penuh seperti dulu. Layar korup/ada sisa gambar -> coba -DRP_PUSH_DIFF=0 dulu.
   #ifndef RP_PUSH_DIFF
-  #define RP_PUSH_DIFF        1
+  #define RP_PUSH_DIFF        0
   #endif
 
   // ---- panel ----
