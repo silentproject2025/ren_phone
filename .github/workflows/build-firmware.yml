@@ -344,7 +344,7 @@ jobs:
           [ "$VARIANT" = "st7796" ] && DISP_FLAG="-DRP_DISPLAY_ST7796"
           echo "Varian layar: $VARIANT ${DISP_FLAG}"
           arduino-cli compile --fqbn esp32:esp32:esp32s3 \
-            --board-options "FlashSize=16M,PSRAM=opi,PartitionScheme=app3M_fat9M_16MB${LOOP_OPT}" \
+            --board-options "FlashSize=16M,PSRAM=opi,USBMode=default,PartitionScheme=app3M_fat9M_16MB${LOOP_OPT}" \
             --build-property "compiler.cpp.extra_flags=-DRP_BUILD_NUM=${{ github.run_number }} -DRP_BRANCH=${RP_BRANCH} -DRP_VERSION=${RP_VERSION} ${DISP_FLAG}${CHS_FLAGS} -I${NOF_INCLUDE}" \
             --build-property "compiler.c.extra_flags=-I${NOF_INCLUDE}" \
             build_sketch --output-dir build 2>&1 | tee compile.log
@@ -393,7 +393,7 @@ jobs:
           DISP_FLAG=""
           [ "$VARIANT" = "st7796" ] && DISP_FLAG="-DRP_DISPLAY_ST7796"
           arduino-cli compile --fqbn esp32:esp32:esp32s3 \
-            --board-options "FlashSize=16M,PSRAM=opi,PartitionScheme=app3M_fat9M_16MB" \
+            --board-options "FlashSize=16M,PSRAM=opi,USBMode=default,PartitionScheme=app3M_fat9M_16MB" \
             --build-property "compiler.cpp.extra_flags=${DISP_FLAG} -I${NOF_INCLUDE}" \
             --build-property "compiler.c.extra_flags=-I${NOF_INCLUDE}" \
             --preprocess build_sketch > diag/preprocessed.cpp 2> diag/preprocess.err || true
