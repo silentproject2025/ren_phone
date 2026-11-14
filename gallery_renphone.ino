@@ -745,6 +745,9 @@ static void galAlbumStat(int ai) {
   galAlbums[ai].cSt = 1;
 }
 
+// GAL_DELDIR_V1: dideklarasikan di sini karena dipakai galOpenAlbum() sebelum blok hapus-folder
+static uint32_t galDirDelArmUntil = 0;   // tombol "Hapus" sedang "Yakin?" sampai waktu ini
+
 static void galOpenAlbum(int ai) {
   if (ai < 0 || ai >= galAlbumCount) return;
   galAlbumScrollSave = galScrollY;
@@ -760,7 +763,6 @@ static void galOpenAlbum(int ai) {
 // =====================================================================
 // GAL_DELDIR_V1: HAPUS FOLDER (album) -- bertahap, 4 file per putaran loop
 // =====================================================================
-static uint32_t galDirDelArmUntil = 0;   // tombol "Hapus" sedang "Yakin?" sampai waktu ini
 static bool     galDelBusy = false;      // sedang menghapus -> sentuhan diabaikan
 static int      galDelTotal = 0, galDelDone = 0, galDelFail = 0;
 static char     galDelDir[64];
