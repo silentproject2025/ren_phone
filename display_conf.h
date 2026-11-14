@@ -19,6 +19,12 @@
   #define RP_TOUCH_CAPACITIVE 1            // FT6236: tidak perlu wizard kalibrasi
   #define RP_CH_SUFFIX        "-st7796"    // channel OTA terpisah: channel-<branch>-st7796
 
+  // ST7796_DIFFPUSH_V1: push() hanya kirim pita baris yg berubah (lihat apply_st7796_diffpush.py).
+  // 0 = push penuh seperti dulu. Layar korup/ada sisa gambar -> coba -DRP_PUSH_DIFF=0 dulu.
+  #ifndef RP_PUSH_DIFF
+  #define RP_PUSH_DIFF        1
+  #endif
+
   // ---- panel ----
   #ifndef RP_ST7796_INVERT
   #define RP_ST7796_INVERT    1            // default 1 (kebanyakan modul 3,5" ST7796 butuh INVON). Warna negatif/pucat -> ganti 0
@@ -109,6 +115,9 @@
   #endif
   #define RP_SENS_WIRE        Wire
   #define RP_CH_SUFFIX        ""
+  #ifndef RP_PUSH_DIFF
+  #define RP_PUSH_DIFF        0            // ST7796_DIFFPUSH_V1: ILI9341 = perilaku lama
+  #endif
   #define RP_DISP_SPI_FREQ    60000000
   #define RP_DOOM_PANEL_W     320
   #define RP_DOOM_PANEL_H     240

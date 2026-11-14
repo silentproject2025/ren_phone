@@ -1291,13 +1291,35 @@ enum KbMode { KB_LOWER, KB_UPPER, KB_NUM, KB_EMO1, KB_EMO2 };
 // =============================================
 // LGFX CONFIG
 // =============================================
+// =====================================================================
+// ST7796_DIFFPUSH_V1 (apply_st7796_diffpush.py) -- bagian 1: penghitung transaksi bus "asing"
+// Setiap kali bus SPI display membuka transaksi di luar push() (transisi, DOOM, NES, kamera,
+// galeri, init, ganti rotasi, ...) -> rpForeignTx naik -> salinan "isi panel" dianggap basi.
+// =====================================================================
+#ifndef RP_PUSH_FULL_EVERY_MS
+#define RP_PUSH_FULL_EVERY_MS 2000   // kirim penuh paksa tiap N ms (jaring pengaman)
+#endif
+#if RP_PUSH_DIFF
+volatile bool     rpOwnPush   = false;   // true selama push() sendiri menulis ke panel
+volatile uint32_t rpForeignTx = 0;       // jumlah transaksi bus display yg BUKAN dari push()
+class RpBusSPI : public lgfx::Bus_SPI {
+public:
+  void beginTransaction(void) override {
+    if(!rpOwnPush) rpForeignTx = rpForeignTx + 1;
+    lgfx::Bus_SPI::beginTransaction();
+  }
+};
+#else
+typedef lgfx::Bus_SPI RpBusSPI;
+#endif
+
 class LGFX : public lgfx::LGFX_Device {
 #if defined(RP_DISPLAY_ST7796)
   lgfx::Panel_ST7796  _panel_instance;
 #else
   lgfx::Panel_ILI9341 _panel_instance;
 #endif
-  lgfx::Bus_SPI       _bus_instance;
+  RpBusSPI            _bus_instance;   // ST7796_DIFFPUSH_V1: = lgfx::Bus_SPI kalau RP_PUSH_DIFF=0
   lgfx::Light_PWM     _light_instance;
 #if !RP_TOUCH_CAPACITIVE
   lgfx::Touch_XPT2046 _touch_instance;
@@ -11901,6 +11923,78 @@ void updTouch(int x,int y,bool held,bool isNew){
 // NyxPPU (lihat drawPpuApp di ppu_engine_renphone.ino). Cuma nambah 2 baris
 // di fungsi push() sendiri, TIDAK menyentuh puluhan tempat yg manggil push()
 // di file ini -- resiko minim krn isolated ke 1 fungsi.
+// ---------------------------------------------------------------------
+// ST7796_DIFFPUSH_V1 -- bagian 2: push canvas hanya pita baris yg berubah.
+// Lihat penjelasan lengkap & daftar lapis pengaman di apply_st7796_diffpush.py.
+// ---------------------------------------------------------------------
+// Fungsi murni (diuji di PC): cari baris pertama & terakhir yg beda. false = identik.
+static bool rpFindDirtyRows(const uint8_t* a, const uint8_t* b, size_t rowBytes, int rows, int& y0, int& y1){
+  int t=0;
+  while(t<rows && memcmp(a+(size_t)t*rowBytes, b+(size_t)t*rowBytes, rowBytes)==0) t++;
+  if(t==rows) return false;
+  int u=rows-1;
+  while(u>t && memcmp(a+(size_t)u*rowBytes, b+(size_t)u*rowBytes, rowBytes)==0) u--;
+  y0=t; y1=u;
+  return true;
+}
+#if RP_PUSH_DIFF
+static uint8_t* rpSh = nullptr;            // salinan isi panel (PSRAM), = apa yg terakhir kita kirim
+static size_t   rpShBytes = 0;
+static int      rpShW=0, rpShH=0, rpShRot=-1;
+static bool     rpShValid=false, rpShOff=false;
+static uint32_t rpShTx=0, rpShFullMs=0, rpBypassUntil=0, rpStLogMs=0;
+static uint8_t  rpBusy=0;                  // frame berturut2 yg >=75% layar berubah
+static uint32_t rpStSkip=0, rpStBand=0, rpStFull=0, rpStByp=0, rpStRows=0;
+static void rpPlainPush(){ rpOwnPush=true; canvas.pushSprite(0,0); rpOwnPush=false; }
+static void rpPushCanvas(){
+  uint32_t now=millis();
+  const int W=canvas.width(), H=canvas.height();
+  const uint8_t* src=(const uint8_t*)canvas.getBuffer();
+  if(rpShOff || !src || canvas.getColorDepth()!=16){ rpPlainPush(); return; }
+  if(rpStSkip|rpStBand|rpStFull|rpStByp){
+    if((uint32_t)(now-rpStLogMs)>=5000){
+      Serial.printf("[push-diff] 5dtk: skip=%lu pita=%lu (rata2 %lu/%d baris) penuh=%lu bypass=%lu\n",
+        (unsigned long)rpStSkip,(unsigned long)rpStBand,(unsigned long)(rpStBand?rpStRows/rpStBand:0),H,
+        (unsigned long)rpStFull,(unsigned long)rpStByp);
+      rpStSkip=rpStBand=rpStFull=rpStByp=rpStRows=0; rpStLogMs=now;
+    }
+  } else rpStLogMs=now;
+  const size_t rowB=(size_t)W*2, need=rowB*(size_t)H;
+  if(rpSh==nullptr || rpShBytes!=need){
+    if(rpSh){ heap_caps_free(rpSh); rpSh=nullptr; }
+    rpSh=(uint8_t*)heap_caps_malloc(need, MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT);
+    rpShBytes=rpSh?need:0; rpShValid=false;
+    if(!rpSh){ rpShOff=true; Serial.println("[push-diff] alokasi PSRAM gagal -> fitur dimatikan, push biasa"); rpPlainPush(); return; }
+  }
+  if((int32_t)(rpBypassUntil-now)>0){ rpShValid=false; rpStByp++; rpPlainPush(); return; }   // game/animasi penuh: tanpa overhead
+  const bool clean = (display.getStartCount()==0);
+  const bool trusted = rpShValid && clean && rpShW==W && rpShH==H && W==display.width() && H==display.height()
+                    && rpShRot==(int)display.getRotation() && rpShTx==rpForeignTx
+                    && (uint32_t)(now-rpShFullMs) < (uint32_t)RP_PUSH_FULL_EVERY_MS;
+  if(!trusted){
+    rpPlainPush(); rpStFull++;
+    if(clean){
+      memcpy(rpSh, src, need);
+      rpShValid=true; rpShW=W; rpShH=H; rpShRot=(int)display.getRotation(); rpShTx=rpForeignTx; rpShFullMs=now; rpBusy=0;
+    } else rpShValid=false;
+    return;
+  }
+  int y0=0, y1=0;
+  if(!rpFindDirtyRows(src, rpSh, rowB, H, y0, y1)){ rpStSkip++; return; }   // identik: panel sudah benar
+  const int h=y1-y0+1;
+  rpStBand++; rpStRows+=(uint32_t)h;
+  if(h*100 >= H*75){ if(rpBusy<255) rpBusy++; } else rpBusy=0;
+  rpOwnPush=true;
+  if(h>=H){ canvas.pushSprite(0,0); }
+  else { display.setClipRect(0,y0,W,h); canvas.pushSprite(0,0); display.clearClipRect(); }
+  rpOwnPush=false;
+  memcpy(rpSh+(size_t)y0*rowB, src+(size_t)y0*rowB, rowB*(size_t)h);
+  if(rpBusy>=6){ rpBypassUntil=now+400; rpBusy=0; rpShValid=false; }       // terlalu sering penuh -> bypass 400 ms
+}
+#else
+static inline void rpPushCanvas(){ canvas.pushSprite(0,0); }
+#endif
+
 static unsigned long nyxPushLastUs = 0;
 unsigned long getPushLastUs(){ return nyxPushLastUs; }
 // v110 DICABUT: sempat dicoba versi async (DMA) + double buffer, tapi
@@ -11914,7 +12008,7 @@ void push(){ if(nyxThFreezeFrame()) return;
 #if RP_TOUCH_CAPACITIVE
   display.touchPoll();   // TOUCH_RESP_V1: sampling lebih rapat di tengah putaran render
 #endif
-  unsigned long t0=micros(); canvas.pushSprite(0,0); nyxPushLastUs=micros()-t0;
+  unsigned long t0=micros(); rpPushCanvas(); nyxPushLastUs=micros()-t0;   // ST7796_DIFFPUSH_V1
 #if RP_TOUCH_CAPACITIVE
   display.touchPoll();
 #endif
