@@ -88,11 +88,18 @@ jobs:
         run: |
           CORE_VER=$(cat "$RUNNER_TEMP/core-version.txt")
           BRANCH="${{ inputs.lib_builder_branch }}"
-          [ "$BRANCH" = "auto" ] && BRANCH="master"
+          # auto = ikuti branch ESP-IDF (mis. release/v5.5); master bisa beda struktur (tanpa configs/)
+          if [ "$BRANCH" = "auto" ]; then
+            BRANCH="${{ inputs.idf_branch }}"
+            [ -z "$BRANCH" ] && BRANCH="master"
+          fi
           echo "Branch: $BRANCH"
           git ls-remote --exit-code --heads https://github.com/espressif/esp32-arduino-lib-builder "$BRANCH" \
             || (echo "::error::branch $BRANCH tidak ada" && git ls-remote --heads https://github.com/espressif/esp32-arduino-lib-builder | grep release; exit 1)
           git clone --depth 1 --branch "$BRANCH" https://github.com/espressif/esp32-arduino-lib-builder "$HOME/lib-builder"
+          git -C "$HOME/lib-builder" log -1 --oneline
+          echo "=== isi configs/ ==="
+          ls "$HOME/lib-builder/configs" || echo "(tidak ada folder configs)"
 
       - name: Pra-clone arduino-esp32 + debug skrip
         env:
@@ -112,7 +119,7 @@ jobs:
         run: |
           cd "$HOME/lib-builder"  # NYX-V33-ORDER
           ls
-          F=$(find . -maxdepth 6 -name 'defconfig.esp32s3' -not -path './esp-idf/*' | head -n1)
+          F=$(find . -maxdepth 6 -name 'defconfig.esp32s3' -not -path './esp-idf/*' -not -path './components/arduino/*' | head -n1)
           if [ -z "$F" ]; then
             echo "::error::defconfig.esp32s3 tidak ketemu"
             find . -maxdepth 6 -iname '*defconfig*' -not -path './esp-idf/*'
@@ -219,6 +226,23 @@ jobs:
           grep -E '^CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=' "$OUT/sdkconfig" || echo "::warning::ALWAYSINTERNAL tidak ditemukan di sdkconfig hasil (pakai bawaan 16384)"
           echo "=== window TCP lwIP di sdkconfig hasil ==="
           grep -E '^CONFIG_LWIP_TCP_(WND_DEFAULT|SND_BUF_DEFAULT|RECVMBOX_SIZE)=' "$OUT/sdkconfig" || echo "::warning::opsi window TCP tidak ditemukan di sdkconfig hasil"
+          # NYX-TC-GUARD: arsip yg dikompilasi GCC LEBIH BARU dari ld milik core bikin ld crash saat link
+          # (assertion elf32-xtensa.c:952). Jangan paketkan/unggah kalau begitu, supaya library lama yg
+          # masih jalan di Release tidak tertimpa.
+          RE=$(find "$HOME/.arduino15/packages/esp32/tools/esp-x32" -type f -name 'xtensa-esp-elf-readelf' 2>/dev/null | head -n1)
+          LDB=$(find "$HOME/.arduino15/packages/esp32/tools/esp-x32" -type f -name 'xtensa-esp-elf-ld' 2>/dev/null | head -n1)
+          LIBGCC=$("$RE" -p .comment "$OUT/lib/libfreertos.a" 2>/dev/null | grep -i 'GCC' | head -n1 | grep -o '[0-9]*\.[0-9]*\.[0-9]*$' || true)
+          LDGCC=$("$LDB" --version 2>/dev/null | head -n1 | grep -o 'esp-[0-9.]*' | sed 's/^esp-//' || true)
+          echo "GCC pembuat arsip kustom: ${LIBGCC:-?} | GCC milik ld core: ${LDGCC:-?}"
+          ORIG=$(find "$HOME/.arduino15/packages/esp32/tools/esp32s3-libs" -maxdepth 2 -name sdkconfig 2>/dev/null | head -n1)
+          [ -n "$ORIG" ] && { echo "=== header sdkconfig library asli core (versi IDF-nya) ==="; sed -n 1,3p "$ORIG"; }
+          if [ -n "$LIBGCC" ] && [ -n "$LDGCC" ]; then
+            NEWEST=$(printf '%s\n%s\n' "$LIBGCC" "$LDGCC" | sort -V | tail -n1)
+            if [ "$NEWEST" != "$LDGCC" ]; then
+              echo "::error::Arsip kustom dikompilasi GCC $LIBGCC, lebih baru dari ld core ($LDGCC). Link firmware akan crash. Pasang idf_branch ke versi IDF yg sama dgn core (lihat header sdkconfig di atas)."
+              exit 1
+            fi
+          fi
           # NYX-STRIP-DBG-V1: buang info debug (DWARF) dari semua .a sebelum dipaketkan. Dugaan: arsip kustom yg masih
           # membawa DWARF bikin ld toolchain esp-x32/2601 crash (assertion elf32-xtensa.c:952, jutaan kali) saat link.
           # Simbol tetap ada (hanya --strip-debug), jadi link biasa tidak terpengaruh.
