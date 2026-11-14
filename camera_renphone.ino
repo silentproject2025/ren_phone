@@ -120,7 +120,7 @@ static uint32_t  camBaudSentAt = 0;
 static bool      camBaudReq = false, camLinkFailed = false;
 static int8_t    camLinkCeil = CAM_LINK_N - 1;      // anak tangga tertinggi yang masih dicoba sesi ini (turun otomatis kalau link tidak bersih)
 static uint32_t  camRetryAt = 0;                    // jangan minta baud baru sebelum ini (CAM butuh <=3 dtk mundur sendiri bila link mati total)
-static uint32_t  camBadBase = 0, camBadAt = 0;      // jendela hitung frame rusak
+static uint32_t  camBadBase = 0, camBadAt = 0, camFrBase = 0;   /* CAM_LINK_RATE_V1: frames utuh di awal jendela */      // jendela hitung frame rusak
 static volatile bool camWantAck = false;            // UI sedang mau menerima frame -> musTask boleh kirim ACK begitu frame selesai
 static bool      camPrevWant = false;
 static uint32_t  camKBps = 0, camBytesPrev = 0;     // throughput terukur (KB/dtk)
@@ -133,6 +133,7 @@ static bool      camNeedDraw = false;
 static uint32_t  camCdUntil = 0, camNextShotAt = 0, camShotDeadline = 0, camFreezeUntil = 0;
 static int       camBurstLeft = 0;
 static bool      camShotPending = false;
+static uint8_t   camShotRetry = 0;   // CAM_LINK_RATE_V1: ulang foto rusak maks 2x
 static int       camSavedCount = 0, camPhotoCounter = 0;
 static char      camLastPhoto[64] = "";
 static char      camLastVideo[64] = "";
@@ -414,6 +415,7 @@ static void camShootNow() {
   camShotDeadline = millis() + 15000;
 }
 static void camStartShoot() {
+  camShotRetry = 0;
   camBurstLeft = CAM_BURST_N[camCfg.burst < 0 ? 0 : (camCfg.burst > 2 ? 2 : camCfg.burst)];
   uint8_t ts = CAM_TIMER_S[camCfg.timer < 0 ? 0 : (camCfg.timer > 2 ? 2 : camCfg.timer)];
   if (ts) { camCdUntil = millis() + ts * 1000UL; vibTap(); }
@@ -427,7 +429,7 @@ static void camStillTick(uint32_t now) {
   if (st == CAMRX_STILL_DONE) {
     char path[64];
     bool ok = camSaveJpeg(camStillBuf, camRx.stillLen, "IMG", path, sizeof(path));
-    camShotPending = false;
+    camShotPending = false; camShotRetry = 0;
     if (ok) {
       strncpy(camLastPhoto, path, sizeof(camLastPhoto) - 1); camSavedCount++;
       camFreezeUntil = now + 1100; camNeedDraw = true;
@@ -436,6 +438,12 @@ static void camStillTick(uint32_t now) {
     } else { showToast("Gagal menulis ke SD", 2000); vibError(); camBurstLeft = 0; }
     camRx.disarmStill();
   } else if (st == CAMRX_STILL_FAIL || (int32_t)(now - camShotDeadline) >= 0) {
+    if (camShotRetry < 2) {   // CAM_LINK_RATE_V1: coba lagi otomatis
+      camShotRetry++; camShotPending = false; camRx.disarmStill();
+      showToast("Foto rusak, mengulang...", 900);
+      camShootNow(); return;
+    }
+    camShotRetry = 0;
     camShotPending = false; camBurstLeft = 0; camRx.disarmStill();
     showToast(st == CAMRX_STILL_FAIL ? "Foto rusak/terlalu besar" : "Foto gagal (timeout)", 2200);
     vibError(); camNeedDraw = true;
@@ -459,7 +467,7 @@ static void camLinkStepDown(uint32_t now, int fromRung, bool alive, const char* 
 }
 static void camLinkTick(uint32_t now) {
   if (camBaudSwitchedAt) {
-    if (camLastRxMs > camBaudSwitchedAt + 200) { camBaudSwitchedAt = 0; camBadAt = now; camBadBase = camRx.bad; }   // terbukti ada frame valid -> baud baru OK
+    if (camLastRxMs > camBaudSwitchedAt + 200) { camBaudSwitchedAt = 0; camBadAt = now; camBadBase = camRx.bad; camFrBase = camRx.frames; }   // terbukti ada frame valid -> baud baru OK
     else if (now - camBaudSwitchedAt > 1500) {                                              // sunyi -> mundur ke baud aman
       int from = camRungOf(camBaudCur);
       Serial1.updateBaudRate(RP_BAUD); camBaudCur = RP_BAUD; camBaudSwitchedAt = 0;
@@ -480,8 +488,14 @@ static void camLinkTick(uint32_t now) {
   }
   // sudah jalan di baud tinggi: frame rusak >= 3 dalam 5 dtk (bit hilang di kabel) -> turun satu anak tangga
   if (camBaudCur != RP_BAUD && !camBaudSwitchedAt && !camBaudReq) {
-    if (now - camBadAt >= 5000) { camBadAt = now; camBadBase = camRx.bad; }
-    else if ((uint32_t)(camRx.bad - camBadBase) >= 3) { camLinkStepDown(now, camRungOf(camBaudCur), true, "rusak"); camBadAt = now; camBadBase = camRx.bad; }
+    if (now - camBadAt >= 5000) { camBadAt = now; camBadBase = camRx.bad; camFrBase = camRx.frames; }
+    else {
+      uint32_t bd = camRx.bad - camBadBase, fd = camRx.frames - camFrBase;
+      if (bd >= 3 && bd * 10 >= bd + fd) {   // CAM_LINK_RATE_V1: >=3 rusak DAN >=10% dari semua frame
+        char w[24]; snprintf(w, sizeof(w), "rusak %lu/%lu", (unsigned long)bd, (unsigned long)(bd + fd));
+        camLinkStepDown(now, camRungOf(camBaudCur), true, w); camBadAt = now; camBadBase = camRx.bad; camFrBase = camRx.frames;
+      }
+    }
   }
 }
 static void camOpenTick(uint32_t now) {
@@ -508,7 +522,7 @@ void camEnter() {
   camShotPending = false; camCdUntil = 0; camBurstLeft = 0; camFreezeUntil = 0; camNextShotAt = 0;
   camStatSeen = false; camOpened = false; camNoFw = false; camOpenTries = 0;
   camBaudReq = false; camLinkFailed = false; camBaudSwitchedAt = 0;
-  camLinkCeil = CAM_LINK_N - 1; camRetryAt = 0; camBadAt = 0; camBadBase = camRx.bad; camWantAck = false; camPrevWant = false; camBytesPrev = camRx.bytes; camKBps = 0;
+  camLinkCeil = CAM_LINK_N - 1; camRetryAt = 0; camBadAt = 0; camBadBase = camRx.bad; camFrBase = camRx.frames; camWantAck = false; camPrevWant = false; camBytesPrev = camRx.bytes; camKBps = 0;
   camSavedCount = 0; camMotionOn = false;
   camPrevOrient = currentOrient;
   if (currentOrient != ORIENT_LANDSCAPE) applyOrientation(ORIENT_LANDSCAPE, false);
