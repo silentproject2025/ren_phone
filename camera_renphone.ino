@@ -133,6 +133,8 @@ static bool      camNeedDraw = false;
 static uint32_t  camCdUntil = 0, camNextShotAt = 0, camShotDeadline = 0, camFreezeUntil = 0;
 static int       camBurstLeft = 0;
 static bool      camShotPending = false;
+static uint8_t   camStillTried = 0;   // CAM_STILL_BIG_V1: 0 = belum, 1 = sudah coba utk sensor 2MP, 2 = utk 3MP
+static uint32_t  camOverBase = 0;     // CAM_STILL_BIG_V1: camRx.oversize saat foto diminta (beda = gagal krn ukuran)
 static uint8_t   camShotRetry = 0;   // CAM_LINK_RATE_V1: ulang foto rusak maks 2x
 static int       camSavedCount = 0, camPhotoCounter = 0;
 static char      camLastPhoto[64] = "";
@@ -239,7 +241,7 @@ void camRxFrame(uint8_t type, const uint8_t* p, uint16_t n) {
 
 // ---------------- buffer ----------------
 static void camFreeBuffers() {
-  camBuffersOk = false;
+  camBuffersOk = false; camStillTried = 0;
   delay(25);                                   // beri musTask waktu keluar dari camRx.feed()
   camRx.attach(nullptr, nullptr, nullptr, CAM_SLOT_SZ);
   camRx.attachStill(nullptr, 0);
@@ -260,16 +262,25 @@ static bool camAllocBuffers() {
 }
 
 // sensor 3MP butuh buffer foto lebih besar: tukar buffer saat idle (tidak sedang menerima foto)
-static void camEnsureStill() {
-  uint32_t want = (camMaxRes() >= RPR_QXGA) ? CAM_STILL_SZ_BIG : CAM_STILL_SZ;
-  if (!camBuffersOk || camShotPending || camRx.stillState == CAMRX_STILL_RECV || camRx.stillCap >= want) return;
-  uint8_t* nb = (uint8_t*)heap_caps_malloc(want, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-  if (!nb) return;
-  camRx.attachStill(nullptr, 0);
-  uint8_t* old = camStillBuf;
-  camStillBuf = nb;
-  camRx.attachStill(nb, want);
-  if (old) heap_caps_free(old);
+static void camEnsureStill() {   // CAM_STILL_BIG_V1: buffer foto lebih besar + cadangan, sekali per sesi
+  bool big = camMaxRes() >= RPR_QXGA;
+  uint8_t tag = big ? 2 : 1;
+  if (!camBuffersOk || camShotPending || camRx.stillState == CAMRX_STILL_RECV || camStillTried == tag) return;
+  camStillTried = tag;
+  static const uint32_t S2[4] = {1280u * 1024, 1024u * 1024, 768u * 1024, 448u * 1024};
+  static const uint32_t S3[4] = {2048u * 1024, 1536u * 1024, 1024u * 1024, 768u * 1024};
+  const uint32_t* L = big ? S3 : S2;
+  for (int i = 0; i < 4; i++) {
+    if (L[i] <= camRx.stillCap) break;                       // buffer yang ada sudah segini atau lebih besar
+    uint8_t* nb = (uint8_t*)heap_caps_malloc(L[i], MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!nb) continue;                                       // PSRAM tidak cukup -> coba ukuran di bawahnya
+    camRx.attachStill(nullptr, 0);
+    uint8_t* old = camStillBuf;
+    camStillBuf = nb;
+    camRx.attachStill(nb, L[i]);
+    if (old) heap_caps_free(old);
+    break;
+  }
 }
 
 // ---------------- SD ----------------
@@ -408,6 +419,7 @@ static void camShootNow() {
   if (!camStillBuf) { showToast("RAM foto tidak cukup", 1800); camBurstLeft = 0; return; }
   if (camShotPending) return;
   camFreezeUntil = 0;
+  camOverBase = camRx.oversize;   // CAM_STILL_BIG_V1
   camRx.armStill();
   uint8_t pl[4] = {(uint8_t)camEffRes(), (uint8_t)camCfg.shotQ, (uint8_t)(camCfg.flash == 3 ? 255 : 0), 0};
   rpSend(Serial1, RP_CAM_SHOT, pl, 4);
@@ -438,14 +450,15 @@ static void camStillTick(uint32_t now) {
     } else { showToast("Gagal menulis ke SD", 2000); vibError(); camBurstLeft = 0; }
     camRx.disarmStill();
   } else if (st == CAMRX_STILL_FAIL || (int32_t)(now - camShotDeadline) >= 0) {
-    if (camShotRetry < 2) {   // CAM_LINK_RATE_V1: coba lagi otomatis
+    bool over = (st == CAMRX_STILL_FAIL) && camRx.oversize != camOverBase;   // CAM_STILL_BIG_V1: gagal krn ukuran -> jangan diulang
+    if (!over && camShotRetry < 2) {   // CAM_LINK_RATE_V1: coba lagi otomatis
       camShotRetry++; camShotPending = false; camRx.disarmStill();
       showToast("Foto rusak, mengulang...", 900);
       camShootNow(); return;
     }
     camShotRetry = 0;
     camShotPending = false; camBurstLeft = 0; camRx.disarmStill();
-    showToast(st == CAMRX_STILL_FAIL ? "Foto rusak/terlalu besar" : "Foto gagal (timeout)", 2200);
+    showToast(over ? "Foto kebesaran: naikkan Q/kecilkan res" : (st == CAMRX_STILL_FAIL ? "Foto rusak di jalur, coba lagi" : "Foto gagal (timeout)"), 2400);
     vibError(); camNeedDraw = true;
   }
 }
