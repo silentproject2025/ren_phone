@@ -287,6 +287,7 @@ static void doomMeltIntro(){
 
 void doomEnter(){
   doomErrorMsg = "";
+  homeCacheFree();   // DOOM_FREECACHE_V1: lepas cache scroll Home (PSRAM) sebelum cek blok kontigu
 
   if(doomBusy || doomTaskHandle != nullptr){ // DOOM_RACE_FIX_V1: jangan bikin task ke-2
     doomErrorMsg = "DOOM sebelumnya masih menutup.\nTunggu sebentar lalu buka lagi.";
