@@ -97,8 +97,9 @@ void doomBandHook(uint16_t* buf, int px, int py, int w, int h);
 class RenPhoneDoomInput : public IDoomInput {
 public:
   volatile bool raw[DBTN_COUNT] = {false};
-  void begin() override { for(int i=0;i<DBTN_COUNT;i++){ raw[i]=false; cur[i]=false; prev[i]=false; } }
-  void update() override { uint8_t pad=rcPadMask; for(int i=0;i<DBTN_COUNT;i++){ prev[i]=cur[i]; cur[i]=raw[i] || ((pad>>i)&1); } }
+  volatile uint32_t latchUntil[DBTN_COUNT] = {0};   // DOOM_FIRE_LATCH_V1: tombol aksi tetap "ditekan" sampai waktu ini (millis)
+  void begin() override { for(int i=0;i<DBTN_COUNT;i++){ raw[i]=false; cur[i]=false; prev[i]=false; latchUntil[i]=0; } }
+  void update() override { uint8_t pad=rcPadMask; uint32_t now=millis(); for(int i=0;i<DBTN_COUNT;i++){ prev[i]=cur[i]; cur[i]=raw[i] || ((pad>>i)&1) || ((int32_t)(latchUntil[i]-now)>0); } }
   bool down(DoomButton b)     override { return cur[idx(b)]; }
   bool pressed(DoomButton b)  override { int i=idx(b); return cur[i] && !prev[i]; }
   bool released(DoomButton b) override { int i=idx(b); return !cur[i] && prev[i]; }
@@ -538,9 +539,18 @@ static uint8_t doomSlotMask[2]={0,0};
 #define DOOM_JOY_RADIUS 46
 #define DOOM_DIR_MASK ((1u<<DBTN_UP)|(1u<<DBTN_DOWN)|(1u<<DBTN_LEFT)|(1u<<DBTN_RIGHT))
 
+#define DOOM_LATCH_MS 90   // DOOM_FIRE_LATCH_V1
 static void doomApplyMasks(){
   uint8_t m = doomSlotMask[0] | doomSlotMask[1];
-  for(int i=0;i<DBTN_COUNT;i++) doomInput.raw[i] = (m>>i)&1;
+  for(int i=0;i<DBTN_COUNT;i++){
+    bool nv = (m>>i)&1;
+    // tombol AKSI (bukan arah) baru ditekan -> tahan minimal DOOM_LATCH_MS agar tak hilang antar tick
+    if(nv && !doomInput.raw[i] && ((1u<<i) & ~DOOM_DIR_MASK)){
+      uint32_t u = millis() + DOOM_LATCH_MS; if(u==0) u=1;
+      doomInput.latchUntil[i] = u;
+    }
+    doomInput.raw[i] = nv;
+  }
 }
 static void doomReleaseAll(){
   doomSlotMask[0]=doomSlotMask[1]=0;
@@ -571,9 +581,9 @@ static void doomTouchSlot(int s,int x,int y,bool held,bool isNew){
   // Tombol bulat tetap diperiksa DULU supaya ketukan di areanya TIDAK ikut jadi basis d-pad/turn.
   int dx,dy;
   dx=x-doomFireCx(); dy=y-doomFireCy();
-  if(dx*dx+dy*dy <= 22*22){ m |= (1u<<DBTN_FIRE); doomApplyMasks(); return; }
+  if(dx*dx+dy*dy <= 30*30){ m |= (1u<<DBTN_FIRE); doomApplyMasks(); return; }   // DOOM_FIRE_LATCH_V1: hit area diperbesar (gambar tetap 22)
   dx=x-doomUseCx(); dy=y-doomUseCy();
-  if(dx*dx+dy*dy <= 16*16){ if(isNew) m |= (1u<<DBTN_USE); doomApplyMasks(); return; }
+  if(dx*dx+dy*dy <= 20*20){ if(isNew) m |= (1u<<DBTN_USE); doomApplyMasks(); return; }   // hit area diperbesar (gambar tetap 16)
   dx=x-doomOkCx(); dy=y-doomOkCy();
   if(dx*dx+dy*dy <= 14*14){ if(isNew) m |= (1u<<DBTN_START); doomApplyMasks(); return; }
   if(x>=doomPauseX()-16 && x<=doomPauseX()+16 && y>=doomPauseY()-14 && y<=doomPauseY()+14){
