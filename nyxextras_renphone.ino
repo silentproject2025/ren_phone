@@ -134,9 +134,12 @@ static void nyxCrashBoot() {
   nyxLogPending = nyxRstAbnormal;
 }
 
+// CRASHLOG_FFAT_V1: log crash diutamakan di FFat (flash internal), fallback SD.
+static fs::FS& nyxFs() { if (ffatReady) return FFat; return SD_MMC; }
+
 static void nyxCountLogLines() {
   nyxLogCount = 0;
-  File f = SD_MMC.open("/crashlog.txt", FILE_READ);
+  File f = nyxFs().open("/crashlog.txt", FILE_READ);
   if (!f) return;
   uint8_t buf[256];
   int n;
@@ -146,13 +149,13 @@ static void nyxCountLogLines() {
 
 static void nyxCrashFlush() {
   if (nyxFlushDone) return;
-  if (!sdReady) { if (millis() > 120000UL) nyxFlushDone = true; return; }
+  if (!sdReady && !ffatReady) { if (millis() > 120000UL) nyxFlushDone = true; return; }
   if (nyxLogPending) {
     if (!ntpSynced && millis() < 45000UL) return;      // tunggu jam kalau bisa, maks ±45 dtk
-    File r = SD_MMC.open("/crashlog.txt", FILE_READ);
+    File r = nyxFs().open("/crashlog.txt", FILE_READ);
     size_t sz = r ? (size_t)r.size() : 0;
     if (r) r.close();
-    if (sz > 32768) { SD_MMC.remove("/crashlog.old"); SD_MMC.rename("/crashlog.txt", "/crashlog.old"); }
+    if (sz > 32768) { nyxFs().remove("/crashlog.old"); nyxFs().rename("/crashlog.txt", "/crashlog.old"); }
 
     char ts[24] = "(jam belum sinkron)";
     struct tm t;
@@ -168,7 +171,7 @@ static void nyxCrashFlush() {
     if (nyxRstBt[0]) o += snprintf(line + o, sizeof(line) - o, " | bt=%s", nyxRstBt);
     snprintf(line + o, sizeof(line) - o, "\n");
 
-    File f = SD_MMC.open("/crashlog.txt", FILE_APPEND);
+    File f = nyxFs().open("/crashlog.txt", FILE_APPEND);
     if (f) { f.print(line); f.close(); }
     nyxLogPending = false;
   }
