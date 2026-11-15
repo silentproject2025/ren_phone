@@ -33,6 +33,7 @@ typedef struct
 {
     wad_file_t wad;
     File file;
+    const uint8_t* mem;   // DOOM_NOMAP_DEBUG_V1: non-NULL = WAD ada di PSRAM (preload)
 } esp32_wad_file_t;
 
 extern "C"
@@ -97,7 +98,11 @@ static wad_file_t* W_ESP32_OpenFile(char* path)
         esp32_wad_file_t *m = new esp32_wad_file_t();
         if (!m) return nullptr;
         m->wad.file_class = &esp32_wad_file;
-        m->wad.mapped = dgWadMem;          // zero-copy: lump langsung menunjuk ke PSRAM
+        m->mem = dgWadMem;
+        // DOOM_NOMAP_DEBUG_V1: zero-copy dimatikan (pointer lump tak dijamin rata 4 byte).
+        // 1 = lump langsung menunjuk ke PSRAM, 0 = disalin ke zone.
+        #define DG_WAD_ZEROCOPY 0
+        m->wad.mapped = DG_WAD_ZEROCOPY ? dgWadMem : NULL;
         m->wad.length = (unsigned int)dgWadLen;
         Serial.printf("OK (%u bytes, dari PSRAM)\n", m->wad.length);
         return &m->wad;
@@ -153,12 +158,12 @@ static size_t W_ESP32_Read(
 {
     esp32_wad_file_t* f = (esp32_wad_file_t*)wad;
 
-    if (f->wad.mapped)   // WAD ada di PSRAM: salin langsung, tanpa flash
+    if (f->mem)   // WAD ada di PSRAM: salin langsung, tanpa flash
     {
         if (offset >= f->wad.length) return 0;
         size_t avail = f->wad.length - offset;
         if (len > avail) len = avail;
-        memcpy(buffer, (const uint8_t*)f->wad.mapped + offset, len);
+        memcpy(buffer, f->mem + offset, len);
         return len;
     }
 

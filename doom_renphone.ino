@@ -176,13 +176,17 @@ static void doomTaskFunc(void* arg){
   doomInput.begin();
 
   DoomGlue_Begin(doomWadSel ? doomWadSel : DOOM_WAD_PATH);   // DOOM_MULTIWAD_V1
+  Serial.printf("[doom] Begin selesai | PSRAM bebas=%u internal=%u\n", (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM), (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL)); // DOOM_NOMAP_DEBUG_V1
   doomPlaying = true;
   uint32_t stT0 = millis(), stFrames0 = 0, stDraw0 = 0, stTickUs = 0, stTicks = 0;
   int ovlStatic = 3;   // tombol di strip hitam atas/bawah digambar sekali (frame tidak menyentuh strip itu)
 
   while(!doomStopRequested){
     uint32_t tk0 = micros();
+    static uint8_t dbgTk = 0;   // DOOM_NOMAP_DEBUG_V1: 3 tick pertama dicatat (kelihatan macet di mana)
+    if(dbgTk < 3) Serial.printf("[doom] tick %u mulai\n", (unsigned)dbgTk);
     DoomGlue_Tick();
+    if(dbgTk < 3){ Serial.printf("[doom] tick %u selesai (%lu us)\n", (unsigned)dbgTk, (unsigned long)(micros() - tk0)); dbgTk++; }
     stTickUs += micros() - tk0; stTicks++;
 #if DOOM_STATS
     if(millis() - stT0 >= 1000){
