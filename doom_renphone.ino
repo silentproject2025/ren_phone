@@ -148,6 +148,18 @@ static inline bool doomBackArmed(){
   return u != 0 && (int32_t)(u - millis()) > 0;
 }
 
+// DOOM_MULTIWAD_V1: cari WAD otomatis di root SD (urutan = prioritas). Nama harus dikenal engine (d_iwad.c)
+// atau isinya punya lump MAP01/E1M1.
+static const char* const DOOM_WAD_CANDIDATES[] = {
+  "/doom2.wad", "/doom1.wad", "/doom.wad", "/freedoom2.wad", "/freedoom1.wad", "/plutonia.wad", "/tnt.wad"
+};
+static const char* doomWadSel = nullptr;
+static const char* doomFindWad(){
+  for(size_t i=0;i<sizeof(DOOM_WAD_CANDIDATES)/sizeof(DOOM_WAD_CANDIDATES[0]);i++)
+    if(SD_MMC.exists(DOOM_WAD_CANDIDATES[i])) return DOOM_WAD_CANDIDATES[i];
+  return nullptr;
+}
+
 extern volatile uint32_t padFrames; // gamepad_renphone.ino
 static void doomTaskFunc(void* arg){
   DG_FS = &SD_MMC;
@@ -158,7 +170,7 @@ static void doomTaskFunc(void* arg){
   doomOvlBuild();
   doomInput.begin();
 
-  DoomGlue_Begin(DOOM_WAD_PATH);
+  DoomGlue_Begin(doomWadSel ? doomWadSel : DOOM_WAD_PATH);   // DOOM_MULTIWAD_V1
   doomPlaying = true;
   uint32_t stT0 = millis(), stFrames0 = 0, stDraw0 = 0, stTickUs = 0, stTicks = 0;
   int ovlStatic = 3;   // tombol di strip hitam atas/bawah digambar sekali (frame tidak menyentuh strip itu)
@@ -282,9 +294,9 @@ void doomEnter(){
     doomErrorMsg = "Kartu SD tidak terpasang.\nDOOM butuh WAD di SD.";
     return;
   }
-  if(!SD_MMC.exists(DOOM_WAD_PATH)){
-    doomErrorMsg = String("WAD tidak ditemukan:\n") + DOOM_WAD_PATH +
-                   "\nTaruh file WAD (mis. doom1.wad)\npersis di path itu di SD.";
+  doomWadSel = doomFindWad();   // DOOM_MULTIWAD_V1
+  if(!doomWadSel){
+    doomErrorMsg = String("WAD tidak ditemukan di SD.\nTaruh di root SD: doom2.wad,\ndoom1.wad, freedoom2.wad, plutonia.wad\natau tnt.wad (nama persis).");
     return;
   }
   // Lib ESP-DOOM butuh blok PSRAM kontigu besar (zona internal DOOM,
