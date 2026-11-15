@@ -134,7 +134,7 @@ Konsekuensi desain yang penting:
 | Blok | Sinyal → GPIO |
 |---|---|
 | Layar | SCLK 12 · MOSI 11 · MISO 13 · DC 2 · CS 10 · RST 14 · BL 21 |
-| Sentuh | SCLK 6 · MOSI 5 · MISO 4 · CS 9 |
+| Sentuh | ILI9341 (XPT2046, SPI): SCLK 6 · MOSI 5 · MISO 4 · CS 9 · ST7796 (FT6236, I2C): SDA 6 · SCL 7 (`Wire`) |
 | SD (SDIO 1-bit) | CLK 39 · CMD 38 · D0 40 |
 | Mikrofon | SCK 47 · WS 46 · SD 45 |
 | Link ke CAM | S3 TX 41 → CAM RX 13 · S3 RX 42 ← CAM TX 14 · GND bersama |
@@ -795,6 +795,14 @@ Screenshot (BMP ke `/screenshot`), Stopwatch dan Timer (tetap berjalan di latar)
 | **Klasik** | Snake, Flappy, 2048, TicTacToe, Breakout. |
 | **PPU Demo** | Peragaan mesin NyxPPU `EXP`. |
 
+<!-- README-DOOM-WAD-V1 -->
+**WAD DOOM.** WAD disediakan sendiri oleh pengguna dan dicari otomatis di root dengan urutan nama `doom2.wad`, `doom1.wad`, `doom.wad`, `freedoom2.wad`, `freedoom1.wad`, `plutonia.wad`, `tnt.wad`. **Kartu SD diperiksa lebih dulu**; baru jika SD tidak terbaca atau tidak berisi WAD, firmware memakai **FFat** (diunggah lewat web). WAD di SD dibaca langsung dari kartu.
+
+WAD dari FFat dimuat utuh ke PSRAM saat DOOM dibuka. Alasannya: task DOOM memakai stack di PSRAM, dan akses flash internal (FFat) mematikan cache sesaat, sehingga ESP-IDF meng-assert `esp_task_stack_is_sane_cache_disabled()` lalu perangkat restart. Konsekuensinya:
+
+- WAD di FFat harus muat di PSRAM (`doom1.wad` ±4 MB muat; WAD yang jauh lebih besar seperti `doom2.wad` sebaiknya di SD). Jika gagal, layar menampilkan pesan *WAD di FFat gagal dimuat ke PSRAM*, bukan restart.
+- Selama WAD berasal dari FFat, penyimpanan save game dan konfigurasi DOOM dinonaktifkan (agar tidak menulis flash dari task ber-stack PSRAM).
+
 ---
 
 ## 6. Fitur eksperimental dan catatan perangkat keras
@@ -1012,6 +1020,7 @@ Proyek ini ditujukan sebagai perangkat pribadi dan eksperimental. Pertimbangkan 
 - **PNG:** maksimal 4 MB dan 8 juta piksel; di atas 2 MB tidak memiliki thumbnail.
 - **AVI OpenDML (> 1 GB)** tidak didukung untuk seek dan resume. MP3 VBR dapat bergeser sedikit setelah lompatan jauh.
 - **NyxPPU** belum dipasang pada Inferno maupun Home/Lock Screen.
+- **DOOM dari FFat:** WAD harus muat di PSRAM dan save game tidak tersimpan; gunakan kartu SD untuk WAD besar atau bila ingin menyimpan permainan.
 
 **Build dan rilis**
 
@@ -1050,6 +1059,9 @@ Proyek ini ditujukan sebagai perangkat pribadi dan eksperimental. Pertimbangkan 
 | Muncul pesan *Channel belum dipublikasikan* | Branch belum pernah di-build | Jalankan workflow build untuk branch tersebut satu kali. |
 | Pembaruan OTA ditolak | Basis kode firmware berbeda | Perilaku yang disengaja; gunakan firmware dari basis kode yang sama. |
 | Persen baterai dan tegangan tidak berubah | INA219 tidak terdeteksi | Periksa pengkabelan SDA 15 dan SCL 7 serta alamat I2C. |
+| DOOM membuat perangkat restart dengan `assert failed: spi_flash_disable_interrupts_caches_and_other_cpu ... esp_task_stack_is_sane_cache_disabled()` | Firmware lama: task DOOM (stack di PSRAM) membaca WAD dari FFat | Perbarui firmware (WAD FFat kini dimuat ke PSRAM lebih dulu), atau taruh WAD di kartu SD. |
+| Layar sentuh tidak merespons (build ST7796) | Kabel SDA FT6236 belum sesuai pin: bawaan kini **SDA 6, SCL 7** | Pindahkan kabel SDA ke GPIO 6 (atau ubah `RP_TOUCH_SDA` di `display_conf.h`). Serial harus menampilkan `[touch] FT6236 @0x38 TERDETEKSI (SDA=6 SCL=7 ...)`. |
+| Halaman `/remote` lewat WiFi rumah menjawab `403` | Opsi *Izinkan lewat WiFi rumah* mati | Nyalakan AP di aplikasi *Remote* (atau reboot bila *Mulai otomatis* aktif), sambung ke WiFi Accretion-Phone, buka `http://192.168.4.1/remote`, lalu nyalakan opsinya. |
 | Wake Word sulit mengenali | Ruangan bising atau sampel kurang representatif | Rekam ulang 4 sampel di lingkungan tenang; sesuaikan slider *Sensitivitas*. |
 | Build CI gagal dengan `undefined reference to ...` | Berkas `.ino` baru belum didaftarkan pada langkah `cp` di `build-firmware.yml` | Tambahkan baris `cp <berkas>.ino build_sketch/`, lalu push ulang. |
 | Animasi mengisi daya tidak muncul | HP tidak sedang terkunci, charger sudah terpasang sejak boot, atau INA219 tidak mendeteksi arus charge | Kunci HP, tunggu 10 detik, cabut charger 3 detik, lalu colok lagi; cek status "Mengisi" di tab Baterai dan opsi Arah arus. |
@@ -1223,7 +1235,7 @@ Kegunaannya: ganti panel. Pasang firmware layar baru selagi panel lama masih ter
 Kalau dipasang tanpa menukar panel, layar akan gelap/kacau dan sentuh XPT2046 vs FT6236 tidak cocok; pulihkan lewat SD `/update` atau USB.
 
 **Wiring bawaan:** pin SPI layar sama dengan ILI9341 (SCLK 12, MOSI 11, MISO 13, DC 2, CS 10, RST 14, BL 21).
-FT6236 memakai bus I2C **sendiri** (`Wire`: SDA 15, SCL 7, alamat 0x38); RST/INT tidak dipakai. Ganti lewat
+FT6236 memakai bus I2C **sendiri** (`Wire`: SDA 6, SCL 7, alamat 0x38; SDA sebelumnya GPIO 15); RST/INT tidak dipakai. Ganti lewat
 `RP_TOUCH_SDA / RP_TOUCH_SCL / RP_TOUCH_RST` di `display_conf.h`.
 
 **Bus sensor terpisah.** Di build ST7796, MPU6050 dan INA219 pindah ke bus I2C kedua (`Wire1`): **SDA 5, SCL 4**
