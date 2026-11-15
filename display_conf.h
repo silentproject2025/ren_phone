@@ -37,10 +37,10 @@
   #endif
 
   // ---- sentuh FT6236 (I2C 0x38) ----
-  // Bus ini (Wire, SDA 15 / SCL 7) KHUSUS FT6236. MPU6050/INA219 ada di bus kedua (RP_SENS_*, Wire1) di bawah.
+  // Bus ini (Wire, SDA 6 / SCL 7) KHUSUS FT6236. MPU6050/INA219 ada di bus kedua (RP_SENS_*, Wire1) di bawah.
   // RST/INT = -1 artinya tidak dipakai (INT tidak perlu, sentuh di-polling).
   #ifndef RP_TOUCH_SDA
-  #define RP_TOUCH_SDA        15
+  #define RP_TOUCH_SDA        6            // TOUCH_SDA_GPIO6_V1 (sebelumnya 15)
   #endif
   #ifndef RP_TOUCH_SCL
   #define RP_TOUCH_SCL        7
