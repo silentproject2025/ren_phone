@@ -98,6 +98,9 @@ extern int R_AllocPlanes(void);
 // Sisa PSRAM yang disisakan untuk alokasi setelah zone: screenbuffer 64K,
 // wad 36K, drawsegs 13K, vissprites 2K + cadangan fragmentasi.
 #define ZONE_PSRAM_RESERVE (256 * 1024)
+// DOOM_ZONE_SMALL_V1: WAD di PSRAM (mapped) -> sisakan lebih banyak PSRAM utk screens/tabel
+extern int DG_WadIsPreloaded(void);
+#define ZONE_RESERVE_NOW() (DG_WadIsPreloaded() ? (size_t)(640 * 1024) : (size_t)ZONE_PSRAM_RESERVE)
 #endif
 
 static byte *AutoAllocMemory(int *size, int default_ram, int min_ram)
@@ -122,9 +125,9 @@ static byte *AutoAllocMemory(int *size, int default_ram, int min_ram)
 
 #ifdef ARDUINO
         // Jangan habiskan PSRAM: turunkan zone kalau sisa tidak cukup.
-        if ((size_t)*size + ZONE_PSRAM_RESERVE >
+        if ((size_t)*size + ZONE_RESERVE_NOW() >
                 heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM)
-            || (size_t)*size + ZONE_PSRAM_RESERVE >
+            || (size_t)*size + ZONE_RESERVE_NOW() >
                 heap_caps_get_free_size(MALLOC_CAP_SPIRAM))
         {
             default_ram -= 1;
@@ -166,6 +169,10 @@ byte *I_ZoneBase (int *size)
     {
         default_ram = DEFAULT_RAM;
         min_ram = MIN_RAM;
+#ifdef ARDUINO
+        // DOOM_ZONE_SMALL_V1: lump WAD dibaca langsung dari PSRAM, tidak lewat zone
+        if (DG_WadIsPreloaded()) { default_ram = 3; min_ram = 1; }
+#endif
     }
 
     zonemem = AutoAllocMemory(size, default_ram, min_ram);

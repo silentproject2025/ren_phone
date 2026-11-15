@@ -287,3 +287,9 @@ extern "C" FILE* DG_Fopen(const char* path, const char* mode)
     if (dgFlashProtect) return NULL;
     return fopen(path, mode);
 }
+
+// DOOM_ZONE_SMALL_V1: engine tanya apakah WAD sudah ada di PSRAM (mapped) -> zone boleh kecil.
+extern "C" int DG_WadIsPreloaded(void)
+{
+    return dgWadMem != nullptr;
+}
