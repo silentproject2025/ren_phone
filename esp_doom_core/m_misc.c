@@ -19,6 +19,8 @@
 
 
 #include <stdio.h>
+FILE *DG_Fopen(const char *path, const char *mode); // DOOM_FFAT_PRELOAD_V1
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
@@ -101,7 +103,7 @@ doom_boolean M_WriteFile(char *name, void *source, int length)
     FILE *handle;
     int	count;
 	
-    handle = fopen(name, "wb");
+    handle = DG_Fopen(name, "wb");
 
     if (handle == NULL)
 	return false;
@@ -126,7 +128,7 @@ int M_ReadFile(char *name, byte **buffer)
     int	count, length;
     byte *buf;
 	
-    handle = fopen(name, "rb");
+    handle = DG_Fopen(name, "rb");
     if (handle == NULL)
 	I_Error ("Couldn't read file %s", name);
 

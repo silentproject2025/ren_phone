@@ -13,6 +13,22 @@ extern "C"
 
 extern fs::FS* DG_FS;
 
+// DOOM_FFAT_PRELOAD_V1: WAD dari FFat dimuat penuh ke PSRAM (lihat DG_WadPreload di bawah).
+static uint8_t* dgWadMem = nullptr;
+static size_t   dgWadLen = 0;
+static char     dgWadName[64] = {0};   // basename WAD yg dipreload
+static volatile bool dgFlashProtect = false;   // true -> engine DILARANG menyentuh filesystem flash
+
+static const char* dgBaseName(const char* p)
+{
+    const char* s = strrchr(p, '/');
+    return s ? s + 1 : p;
+}
+static bool dgIsPreloaded(const char* path)
+{
+    return dgWadMem && path && strcasecmp(dgBaseName(path), dgWadName) == 0;
+}
+
 typedef struct
 {
     wad_file_t wad;
@@ -24,6 +40,8 @@ extern "C"
 
 int DG_FileExists(const char *path)
 {
+    // Mode proteksi flash: jangan stat() FFat dari task ber-stack PSRAM (assert cache).
+    if (dgFlashProtect) return dgIsPreloaded(path) ? 1 : 0;
     return DG_FS->exists(path);
 }
 
@@ -72,6 +90,17 @@ static wad_file_t* W_ESP32_OpenFile(char* path)
     {
         Serial.println("DG_FS == NULL");
         return nullptr;
+    }
+
+    if (dgIsPreloaded(path))
+    {
+        esp32_wad_file_t *m = new esp32_wad_file_t();
+        if (!m) return nullptr;
+        m->wad.file_class = &esp32_wad_file;
+        m->wad.mapped = dgWadMem;          // zero-copy: lump langsung menunjuk ke PSRAM
+        m->wad.length = (unsigned int)dgWadLen;
+        Serial.printf("OK (%u bytes, dari PSRAM)\n", m->wad.length);
+        return &m->wad;
     }
 
     File file = DG_FS->open(path);
@@ -124,6 +153,15 @@ static size_t W_ESP32_Read(
 {
     esp32_wad_file_t* f = (esp32_wad_file_t*)wad;
 
+    if (f->wad.mapped)   // WAD ada di PSRAM: salin langsung, tanpa flash
+    {
+        if (offset >= f->wad.length) return 0;
+        size_t avail = f->wad.length - offset;
+        if (len > avail) len = avail;
+        memcpy(buffer, (const uint8_t*)f->wad.mapped + offset, len);
+        return len;
+    }
+
     if (!f->file.seek(offset))
     {
         Serial.printf("[wad] seek GAGAL offset=%u\n", offset);
@@ -173,4 +211,79 @@ wad_file_class_t esp32_wad_file =
     W_ESP32_Read
 };
 
+}
+
+// ---------------------------------------------------------------------------
+// DOOM_FFAT_PRELOAD_V1
+// Dipanggil dari doomEnter() (task ber-stack RAM internal -> AMAN akses flash).
+// Return 1 = sukses (mode proteksi flash aktif), 0 = gagal (PSRAM kurang / file hilang).
+// ---------------------------------------------------------------------------
+extern "C" void DG_WadPreloadFree(void)
+{
+    if (dgWadMem) { heap_caps_free(dgWadMem); dgWadMem = nullptr; }
+    dgWadLen = 0;
+    dgWadName[0] = 0;
+    dgFlashProtect = false;
+}
+
+extern "C" int DG_WadPreload(fs::FS* fs, const char* path)
+{
+    DG_WadPreloadFree();
+    if (!fs || !path) return 0;
+
+    File f = fs->open(path, "r");
+    if (!f) { Serial.println("[wad] preload: open gagal"); return 0; }
+
+    size_t sz = f.size();
+    if (sz < 12) { f.close(); return 0; }
+
+    uint8_t* buf = (uint8_t*)heap_caps_malloc(sz, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!buf)
+    {
+        Serial.printf("[wad] preload: PSRAM kurang utk %u byte (maks blok %u)\n",
+                      (unsigned)sz, (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM));
+        f.close();
+        return 0;
+    }
+
+    const size_t CH = 4096;
+    uint8_t* bounce = (uint8_t*)heap_caps_malloc(CH, MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA | MALLOC_CAP_8BIT);
+    if (!bounce) { heap_caps_free(buf); f.close(); return 0; }
+
+    size_t total = 0;
+    while (total < sz)
+    {
+        size_t want = sz - total; if (want > CH) want = CH;
+        size_t got = f.read(bounce, want);
+        if (got == 0) break;
+        memcpy(buf + total, bounce, got);
+        total += got;
+        if ((total & 0xFFFF) == 0) yield();
+    }
+    heap_caps_free(bounce);
+    f.close();
+
+    if (total != sz)
+    {
+        Serial.printf("[wad] preload: baca tidak lengkap %u/%u\n", (unsigned)total, (unsigned)sz);
+        heap_caps_free(buf);
+        return 0;
+    }
+
+    dgWadMem = buf;
+    dgWadLen = sz;
+    strncpy(dgWadName, dgBaseName(path), sizeof(dgWadName) - 1);
+    dgWadName[sizeof(dgWadName) - 1] = 0;
+    dgFlashProtect = true;
+    Serial.printf("[wad] preload %s -> PSRAM %u byte, sisa PSRAM %u\n", dgWadName, (unsigned)sz,
+                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+    return 1;
+}
+
+// Pembungkus fopen() utk engine: saat proteksi aktif return NULL (savegame/config tidak
+// ditulis/dibaca dari FFat). Engine sudah menangani NULL (hanya "tidak bisa simpan").
+extern "C" FILE* DG_Fopen(const char* path, const char* mode)
+{
+    if (dgFlashProtect) return NULL;
+    return fopen(path, mode);
 }

@@ -17,6 +17,8 @@
 
 
 
+#include <stdio.h>
+FILE *DG_Fopen(const char *path, const char *mode); // DOOM_FFAT_PRELOAD_V1
 #include <string.h>
 #include <stdlib.h>
 #include <math.h>
@@ -1549,7 +1551,7 @@ void G_DoLoadGame (void)
 	 
     gameaction = ga_nothing; 
 	 
-    save_stream = fopen(savename, "rb");
+    save_stream = DG_Fopen(savename, "rb");
 
     if (save_stream == NULL)
     {
@@ -1619,14 +1621,14 @@ void G_DoSaveGame (void)
     // and then rename it at the end if it was successfully written.
     // This prevents an existing savegame from being overwritten by 
     // a corrupted one, or if a savegame buffer overrun occurs.
-    save_stream = fopen(temp_savegame_file, "wb");
+    save_stream = DG_Fopen(temp_savegame_file, "wb");
 
     if (save_stream == NULL)
     {
         // Failed to save the game, so we're going to have to abort. But
         // to be nice, save to somewhere else before we call I_Error().
         recovery_savegame_file = M_TempFile("recovery.dsg");
-        save_stream = fopen(recovery_savegame_file, "wb");
+        save_stream = DG_Fopen(recovery_savegame_file, "wb");
         if (save_stream == NULL)
         {
             I_Error("Failed to open either '%s' or '%s' to write savegame.",

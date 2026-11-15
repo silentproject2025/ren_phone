@@ -18,6 +18,8 @@
 //
 
 
+#include <stdio.h>
+FILE *DG_Fopen(const char *path, const char *mode); // DOOM_FFAT_PRELOAD_V1
 #include <stdlib.h>
 #include <ctype.h>
 
@@ -510,7 +512,7 @@ void M_ReadSaveStrings(void)
     {
         M_StringCopy(name, P_SaveGameFile(i), sizeof(name));
 
-	handle = fopen(name, "rb");
+	handle = DG_Fopen(name, "rb");
         if (handle == NULL)
         {
             M_StringCopy(savegamestrings[i], EMPTYSTRING, SAVESTRINGSIZE);

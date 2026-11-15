@@ -163,6 +163,9 @@ static const char* doomFindWad(){
 }
 
 extern volatile uint32_t padFrames; // gamepad_renphone.ino
+// DOOM_FFAT_PRELOAD_V1: lihat esp_doom_core/w_file_esp32.cpp
+extern "C" int  DG_WadPreload(fs::FS* fs, const char* path);
+extern "C" void DG_WadPreloadFree(void);
 static void doomTaskFunc(void* arg){
   DG_FS = doomWadFs ? doomWadFs : &SD_MMC;   // FFAT_UPLOAD_V1
   DG_Display = &doomDisplay;
@@ -213,6 +216,7 @@ static void doomTaskFunc(void* arg){
   }
 
   DoomGlue_Shutdown();
+  DG_WadPreloadFree();   // DOOM_FFAT_PRELOAD_V1
   doomDisplay.close();
   doomOvlFree();
   doomPlaying = false;
@@ -312,6 +316,17 @@ void doomEnter(){
     return;
   }
 
+  // DOOM_FFAT_PRELOAD_V1: task DOOM ber-stack PSRAM -> akses FFat (flash internal) dari situ
+  // memicu assert esp_task_stack_is_sane_cache_disabled() & reboot. WAD dari FFat dimuat UTUH ke
+  // PSRAM di sini (task pemanggil ber-stack internal = aman), lalu engine baca dari memori.
+  // WAD dari SD tidak perlu (SDMMC tidak mematikan cache).
+  if(doomWadFs != (fs::FS*)&SD_MMC){
+    if(!DG_WadPreload(doomWadFs, doomWadSel)){
+      doomErrorMsg = "WAD di FFat gagal dimuat ke PSRAM\n(PSRAM kurang / WAD terlalu besar).\nPakai kartu SD utk WAD besar.";
+      return;
+    }
+  }
+
   // DOOM dipaksa LANDSCAPE (lihat catatan di hw_conf.h) -- orientasi lama
   // disimpan & dikembalikan pas doomExit().
   doomPrevOrient = currentOrient;
@@ -355,6 +370,7 @@ void doomEnter(){
   }
   if(res != pdPASS){
     doomBusy = false;   // DOOM_RACE_FIX_V1
+    DG_WadPreloadFree();   // DOOM_FFAT_PRELOAD_V1
     doomErrorMsg = "Gagal membuat task DOOM (RAM internal habis).";
     if(spiOcIdx != 0) display.setSpiFreqMHz(SPI_OC_OPTIONS[spiOcIdx]); // v104: gagal start -> balikin SPI, jangan nyangkut di 60MHz
     exitGameMode();

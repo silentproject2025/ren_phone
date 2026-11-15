@@ -19,6 +19,8 @@
 
 
 #include <stdio.h>
+FILE *DG_Fopen(const char *path, const char *mode); // DOOM_FFAT_PRELOAD_V1
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
@@ -1613,7 +1615,7 @@ static void SaveDefaultCollection(default_collection_t *collection)
     int i, v;
     FILE *f;
 	
-    f = fopen (collection->filename, "w");
+    f = DG_Fopen(collection->filename, "w");
     if (!f)
 	return; // can't write the file, but don't complain
 
@@ -1777,7 +1779,7 @@ static void LoadDefaultCollection(default_collection_t *collection)
     char strparm[100];
 
     // read the file in, overriding any set defaults
-    f = fopen(collection->filename, "r");
+    f = DG_Fopen(collection->filename, "r");
 
     if (f == NULL)
     {
