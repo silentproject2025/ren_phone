@@ -295,6 +295,17 @@ static void doomMeltIntro(){
   drawDoom(canvas); push();
 }
 
+// DOOM_PSRAM_CLEAN_V1: lepas cache PSRAM yg aman dibuang supaya blok kontigu terbesar membesar lagi.
+//   level 1 = cache Home + preview App Switcher (kecil2 tapi tersebar -> memecah blok besar)
+//   level 2 = level 1 + buffer gambar NASA di RAM (app NASA memuat ulang kalau dibuka lagi)
+static void doomPsramClean(int level){
+  homeCacheFree();
+#ifdef SW_THUMB_SLOTS
+  for(int i=0;i<SW_THUMB_SLOTS;i++) swThumbFree(i);
+#endif
+  if(level >= 2) nasaFreeRamImgBuf();
+}
+
 void doomEnter(){
   doomErrorMsg = "";
   homeCacheFree();   // DOOM_FREECACHE_V1: lepas cache scroll Home (PSRAM) sebelum cek blok kontigu
@@ -316,9 +327,20 @@ void doomEnter(){
   // dokumentasi library: ~6MB). Dicek DULU drpd biarin alokasi di
   // dalam doomgeneric gagal diam-diam / crash ambigu di tengah task.
   size_t freeBlock = heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM);
-  if(freeBlock < (size_t)6*1024*1024){
-    doomErrorMsg = "PSRAM kontigu tidak cukup utk DOOM\n(butuh ~6MB, tersedia " +
-                   String(freeBlock/1024) + "KB).\nTutup app lain / restart device.";
+  // DOOM_PSRAM_CLEAN_V1: bersihkan bertahap, cek ulang tiap langkah (langkah 2 hanya kalau langkah 1 belum cukup)
+  const size_t doomNeedBlk = (size_t)6*1024*1024;
+  const size_t doomBlk0 = freeBlock;
+  const size_t doomNasaKB = nasaRamImgLen/1024;
+  int doomCleanLv = 0;
+  if(freeBlock < doomNeedBlk){ doomPsramClean(1); doomCleanLv = 1; freeBlock = heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM); }
+  if(freeBlock < doomNeedBlk){ doomPsramClean(2); doomCleanLv = 2; freeBlock = heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM); }
+  Serial.printf("[doom] PSRAM kontigu: %uKB -> %uKB (bersih lv%d) | total bebas %uKB | butuh %uKB | gambar NASA %uKB\n",
+                (unsigned)(doomBlk0/1024), (unsigned)(freeBlock/1024), doomCleanLv,
+                (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM)/1024), (unsigned)(doomNeedBlk/1024), (unsigned)doomNasaKB);
+  if(freeBlock < doomNeedBlk){
+    doomErrorMsg = "PSRAM kontigu tidak cukup utk DOOM\n(butuh ~6MB, tersedia " + String(freeBlock/1024) +
+                   "KB;\nsebelum dibersihkan " + String(doomBlk0/1024) + "KB, total bebas " +
+                   String(heap_caps_get_free_size(MALLOC_CAP_SPIRAM)/1024) + "KB).\nTutup app lain / restart device.";
     return;
   }
 
