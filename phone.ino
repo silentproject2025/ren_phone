@@ -2098,8 +2098,12 @@ void handleWebRoot() {
   html += "table{width:100%;border-collapse:collapse;margin-top:10px;} td,th{padding:10px;text-align:left;border-bottom:1px solid #333;}</style>";
   html += "</head><body><h2>ESP32 Web File Manager</h2>";
   
-  html += "<div class='card'><h3>Upload File ke ESP32 SD Card</h3>";
-  html += "<form method='POST' action='/upload' enctype='multipart/form-data'>";
+  html += "<div class='card'><h3>Upload File ke ESP32</h3>";   // FFAT_UPLOAD_V1
+  html += "<form method='POST' action='/upload' enctype='multipart/form-data' onsubmit=\"var t=document.getElementById('fsT');this.action='/upload?fs='+(t?t.value:'sd');\">";
+  html += "<select id='fsT' style='margin-bottom:10px;padding:8px;background:#2a2a2a;color:#fff;border:1px solid #444;border-radius:6px;'>";
+  if (sdReady) html += String("<option value='sd'") + (sdReady ? " selected" : "") + ">SD Card</option>";
+  if (ffatReady) html += String("<option value='ffat'") + (!sdReady ? " selected" : "") + ">Flash internal (FFat) &mdash; sisa " + String((unsigned long)(FFat.totalBytes()-FFat.usedBytes())/1024) + " KB</option>";
+  html += "</select><br>";
   html += "<input type='file' name='upload' required style='margin-bottom:10px;'><br>";
   html += "<input type='submit' class='btn' value='Upload File'>";
   html += "</form></div>";
@@ -2160,7 +2164,32 @@ void handleWebRoot() {
   } else {
     html += "<tr><td colspan='3'>SD Card Tidak Terdeteksi</td></tr>";
   }
-  html += "</table></div></body></html>";
+  html += "</table></div>";
+
+  // FFAT_UPLOAD_V1: daftar file di flash internal (FFat)
+  if (ffatReady) {
+    html += "<div class='card'><h3>Daftar File Flash (FFat)</h3>";
+    html += "<p style='color:#aaa;font-size:13px;'>Terpakai " + String((unsigned long)FFat.usedBytes()/1024) + " KB dari " + String((unsigned long)FFat.totalBytes()/1024) + " KB</p>";
+    html += "<table><tr><th>Nama File</th><th>Ukuran</th><th>Aksi</th></tr>";
+    File rootF = FFat.open("/");
+    File ff = rootF.openNextFile();
+    int cntF = 0;
+    while (ff) {
+      if (!ff.isDirectory()) {
+        cntF++;
+        String fn = String(ff.name());
+        if (!fn.startsWith("/")) fn = "/" + fn;
+        String fnS = escapeHtml(fn);
+        html += "<tr><td>" + fnS + "</td><td>" + String((unsigned long)ff.size()) + " B</td><td>";
+        html += "<a href='/download?fs=ffat&file=" + fnS + "'>Download</a> | ";
+        html += "<a href='/delete?fs=ffat&file=" + fnS + "' style='color:#ff5252' onclick=\"return confirm('Hapus file " + fnS + "?')\">Hapus</a></td></tr>";
+      }
+      ff = rootF.openNextFile();
+    }
+    if (cntF == 0) html += "<tr><td colspan='3'>FFat kosong</td></tr>";
+    html += "</table></div>";
+  }
+  html += "</body></html>";
 
   webServer.send(200, "text/html", html);
 }
@@ -2243,6 +2272,9 @@ void handleWebEditPost() {
   webServer.send(303);
 }
 
+static bool   ffatUpToFfat = false;   // FFAT_UPLOAD_V1
+static bool   ffatUpFail   = false;
+static String ffatUpName;
 void handleUploadStream() {
   HTTPUpload& upload = webServer.upload();
   if (upload.status == UPLOAD_FILE_START) {
@@ -2251,17 +2283,22 @@ void handleUploadStream() {
     // v47: kalau yg diupload PERSIS wallpaper.jpg DAN SD Card gak kedetek,
     // tulis ke FFat (flash internal) sbg fallback -- selain itu (semua
     // file lain, atau wallpaper.jpg pas SD ADA) tetap ke SD_MMC spt biasa.
-    if (!sdReady && filename == WALLPAPER_FILE && ffatReady) {
+    ffatUpFail = false;
+    ffatUpName = filename;
+    ffatUpToFfat = ffatReady && (webServer.arg("fs") == "ffat" || (!sdReady && filename == WALLPAPER_FILE));   // FFAT_UPLOAD_V1
+    if (ffatUpToFfat) {
       uploadFile = FFat.open(filename, FILE_WRITE);
     } else {
       uploadFile = SD_MMC.open(filename, FILE_WRITE);
     }
   } else if (upload.status == UPLOAD_FILE_WRITE) {
-    if (uploadFile) {
-      uploadFile.write(upload.buf, upload.currentSize);
+    if (uploadFile && !ffatUpFail) {
+      size_t w = uploadFile.write(upload.buf, upload.currentSize);
+      if (ffatUpToFfat && w != upload.currentSize) ffatUpFail = true;   // FFat penuh -> file dibuang di akhir
     }
   } else if (upload.status == UPLOAD_FILE_END) {
     if (uploadFile) uploadFile.close();
+    if (ffatUpToFfat && ffatUpFail) { FFat.remove(ffatUpName); ffatUpFail = false; needRedrawNow(); return; }
     // v47: kalau yg baru selesai diupload PERSIS wallpaper.jpg, langsung
     // reload wallpaper skrg jg (live, gak perlu restart ESP32)
     String fn = upload.filename; if (!fn.startsWith("/")) fn = "/" + fn;
@@ -2273,6 +2310,14 @@ void handleUploadStream() {
 void handleWebDelete() {
   if (webServer.hasArg("file")) {
     String path = webServer.arg("file");
+    if (webServer.arg("fs") == "ffat" && ffatReady && FFat.exists(path)) {   // FFAT_UPLOAD_V1
+      FFat.remove(path);
+      if (path == WALLPAPER_FILE) loadWallpaper();
+      needRedrawNow();
+      webServer.sendHeader("Location", "/");
+      webServer.send(303);
+      return;
+    }
     if (SD_MMC.exists(path)) {
       SD_MMC.remove(path);
       if (path == WALLPAPER_FILE) loadWallpaper(); // v47: wallpaper dihapus -> balik ke warna solid tema, live
@@ -2291,6 +2336,12 @@ void handleWebDelete() {
 void handleWebDownload() {
   if (webServer.hasArg("file")) {
     String path = webServer.arg("file");
+    if (webServer.arg("fs") == "ffat" && ffatReady && FFat.exists(path)) {   // FFAT_UPLOAD_V1
+      File ffd = FFat.open(path, FILE_READ);
+      webServer.streamFile(ffd, "application/octet-stream");
+      ffd.close();
+      return;
+    }
     if (SD_MMC.exists(path)) {
       File f = SD_MMC.open(path, FILE_READ);
       webServer.streamFile(f, "application/octet-stream");

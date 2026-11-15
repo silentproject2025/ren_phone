@@ -154,15 +154,17 @@ static const char* const DOOM_WAD_CANDIDATES[] = {
   "/doom2.wad", "/doom1.wad", "/doom.wad", "/freedoom2.wad", "/freedoom1.wad", "/plutonia.wad", "/tnt.wad"
 };
 static const char* doomWadSel = nullptr;
+static fs::FS* doomWadFs = nullptr;   // FFAT_UPLOAD_V1: filesystem tempat WAD ditemukan
 static const char* doomFindWad(){
-  for(size_t i=0;i<sizeof(DOOM_WAD_CANDIDATES)/sizeof(DOOM_WAD_CANDIDATES[0]);i++)
-    if(SD_MMC.exists(DOOM_WAD_CANDIDATES[i])) return DOOM_WAD_CANDIDATES[i];
+  const size_t n = sizeof(DOOM_WAD_CANDIDATES)/sizeof(DOOM_WAD_CANDIDATES[0]);
+  if(sdReady)   for(size_t i=0;i<n;i++) if(SD_MMC.exists(DOOM_WAD_CANDIDATES[i])){ doomWadFs=&SD_MMC; return DOOM_WAD_CANDIDATES[i]; }
+  if(ffatReady) for(size_t i=0;i<n;i++) if(FFat.exists(DOOM_WAD_CANDIDATES[i])){  doomWadFs=&FFat;   return DOOM_WAD_CANDIDATES[i]; }
   return nullptr;
 }
 
 extern volatile uint32_t padFrames; // gamepad_renphone.ino
 static void doomTaskFunc(void* arg){
-  DG_FS = &SD_MMC;
+  DG_FS = doomWadFs ? doomWadFs : &SD_MMC;   // FFAT_UPLOAD_V1
   DG_Display = &doomDisplay;
   DG_Input   = &doomInput;
   DoomGlue_SetHooks(padExtKeys, padTakeMouseDX, padTakeTyped);
@@ -290,13 +292,13 @@ void doomEnter(){
     doomErrorMsg = "DOOM sebelumnya masih menutup.\nTunggu sebentar lalu buka lagi.";
     return;
   }
-  if(!sdReady){
-    doomErrorMsg = "Kartu SD tidak terpasang.\nDOOM butuh WAD di SD.";
+  if(!sdReady && !ffatReady){   // FFAT_UPLOAD_V1
+    doomErrorMsg = "Kartu SD tidak terpasang\ndan FFat tidak tersedia.\nDOOM butuh WAD.";
     return;
   }
   doomWadSel = doomFindWad();   // DOOM_MULTIWAD_V1
   if(!doomWadSel){
-    doomErrorMsg = String("WAD tidak ditemukan di SD.\nTaruh di root SD: doom2.wad,\ndoom1.wad, freedoom2.wad, plutonia.wad\natau tnt.wad (nama persis).");
+    doomErrorMsg = String("WAD tidak ditemukan di SD/FFat.\nTaruh di root: doom2.wad, doom1.wad,\nfreedoom2.wad, plutonia.wad atau tnt.wad\n(nama persis; FFat via web upload).");
     return;
   }
   // Lib ESP-DOOM butuh blok PSRAM kontigu besar (zona internal DOOM,
