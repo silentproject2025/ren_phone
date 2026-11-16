@@ -20205,6 +20205,14 @@ static void rpTouchTaskStart(){
 }
 #endif
 
+// SPI_DRIVE_V1 (apply_spi_drive.py): drive GPIO maksimum utk jalur SPI layar saat mode 80 MHz.
+#include "driver/gpio.h"
+static void rpSpiDriveBoost(){
+  if(SPI_OC_OPTIONS[spiOcIdx] < 80) return;   // 40 MHz (default) tdk disentuh
+  const int pins[4] = {12, 11, 10, 2};        // SCLK, MOSI, CS, DC (lihat LGFX::LGFX)
+  for(int i=0;i<4;i++) gpio_set_drive_capability((gpio_num_t)pins[i], GPIO_DRIVE_CAP_3);
+  Serial.println("[spi] drive GPIO SCLK/MOSI/CS/DC = CAP_3 (80 MHz)");
+}
 void setup(){
   Serial.begin(115200);
   setCpuFrequencyMhz(CPU_MHZ_NORMAL);   // CPU240_V1: pastikan 240 MHz sejak awal (apa pun default board)
@@ -20293,6 +20301,7 @@ void setup(){
   spiOcIdx = loadSpiOcPref();
   display.setSpiFreqMHz(SPI_OC_OPTIONS[spiOcIdx]);
   display.init();
+  rpSpiDriveBoost();   // SPI_DRIVE_V1
   rpHL("setelah_display_init");
   vibInit(); // v23: motor getar di GPIO 18
 
