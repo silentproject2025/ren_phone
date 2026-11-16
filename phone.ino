@@ -5035,6 +5035,14 @@ float ccOffset = 0;
 // transisi antar-layar (navEase), jadi kecepatan animasinya SELALU mulus
 // & konsisten independen dari framerate.
 bool  ccAnimating=false;
+// CC_CACHE_V1 (apply_cc_cache.py): panel CC digambar sekali ke ccCache, tarik/animasi = salin.
+#ifndef CC_CACHE_V1
+#define CC_CACHE_V1 1
+#endif
+LGFX_Sprite ccCache(&display);
+bool ccCacheValid=false;
+int  ccCacheW=0, ccCacheH=0;
+void ccCacheFree(){ if(ccCache.getBuffer()) ccCache.deleteSprite(); ccCacheValid=false; ccCacheW=ccCacheH=0; }
 float ccAnimFromH=0, ccAnimToH=0;
 unsigned long ccAnimStartMs=0;
 const float CC_ANIM_MS = 200.0f;
@@ -5311,8 +5319,7 @@ void drawCCIcon(LGFX_Sprite& s, int idx, int cx, int cy, int r, bool active, uin
   }
 }
 
-void drawControlCenter(LGFX_Sprite& s){
-  int ph = (int)ccOffset;
+static void ccDrawLiveH(LGFX_Sprite& s, int ph, bool withToast){
   if(ph<=0) return;
   int mx = ccMarginX(), pw = ccPanelW();
   int rad = min(22, ph/2); if(rad<0) rad=0;
@@ -5400,7 +5407,75 @@ void drawControlCenter(LGFX_Sprite& s){
   }
   s.clearClipRect();
 
-  drawToast(s);
+  if(withToast) drawToast(s);
+}
+
+// CC_CACHE_V1: warna kunci utk piksel di luar bentuk panel (sudut/margin) saat blit transparan.
+#define CC_CACHE_KEY 0xF81F
+static bool ccCacheEnsure(LGFX_Sprite& s){
+#if CC_CACHE_V1
+  if(ccCacheValid) return true;
+  if(s.getColorDepth()!=16 || !s.getBuffer()) return false;
+  const int W=s.width(), PH=ccPanelH(), CH=PH+8;   // +8 baris: sampel kaca di tepi bawah sama persis dgn jalur live
+  if(CH>s.height()) return false;
+  if(ccCache.getBuffer() && (ccCacheW!=W || ccCacheH!=CH)) ccCacheFree();
+  if(!ccCache.getBuffer()){
+    const size_t bytes=(size_t)W*(size_t)CH*2;
+    if(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) < bytes + 1500000UL) return false;   // sisakan utk Doom/NES/dll
+    ccCache.setColorDepth(16); ccCache.setPsram(true);
+    if(!ccCache.createSprite(W,CH)){ ccCacheFree(); return false; }
+    ccCacheW=W; ccCacheH=CH;
+  }
+  // latar (Home/app tanpa panel) disalin dulu -> kaca mengambil sampel dari latar yg sama spt jalur live
+  memcpy(ccCache.getBuffer(), s.getBuffer(), (size_t)W*(size_t)CH*2);
+  ccCache.clearClipRect(); ccCache.setTextWrap(false); ccCache.setTextSize(1);
+  int sp=ccPressIdx, sh=ccHoldIdx; ccPressIdx=-1; ccHoldIdx=-1;   // tanpa efek tekan di dalam cache
+  ccDrawLiveH(ccCache, PH, false);                                 // tinggi penuh -> semua tile/slider tampil
+  ccPressIdx=sp; ccHoldIdx=sh;
+  // kunci: margin kiri/kanan, 8 baris bawah (di luar panel), dan 4 sudut membulat
+  const int mx=ccMarginX(), pw=ccPanelW(), R=min(22, PH/2);
+  ccCache.fillRect(0,0,mx,CH,(uint16_t)CC_CACHE_KEY);
+  ccCache.fillRect(mx+pw,0,W-mx-pw,CH,(uint16_t)CC_CACHE_KEY);
+  ccCache.fillRect(0,PH,W,CH-PH,(uint16_t)CC_CACHE_KEY);
+  for(int dy=0; dy<R; dy++) for(int dx=0; dx<R; dx++){
+    int ex=2*(R-dx)-1, ey=2*(R-dy)-1;           // 2x jarak pusat piksel ke pusat sudut (integer)
+    if(ex*ex+ey*ey > (2*R+1)*(2*R+1)){          // lebih dari R+0,5 px dari pusat -> di luar bentuk (tepi AA dibiarkan)
+      ccCache.drawPixel(mx+dx,       dy,        (uint16_t)CC_CACHE_KEY);
+      ccCache.drawPixel(mx+pw-1-dx,  dy,        (uint16_t)CC_CACHE_KEY);
+      ccCache.drawPixel(mx+dx,       PH-1-dy,   (uint16_t)CC_CACHE_KEY);
+      ccCache.drawPixel(mx+pw-1-dx,  PH-1-dy,   (uint16_t)CC_CACHE_KEY);
+    }
+  }
+  ccCacheValid=true;
+  return true;
+#else
+  (void)s; return false;
+#endif
+}
+
+// Panel digeser turun: dasar panel = ph (mengikuti jari). Bagian tengah disalin lurus (cepat),
+// pita sudut atas/bawah disalin transparan supaya sudut membulat rapi di atas latar.
+static void ccCacheBlit(LGFX_Sprite& s, int ph){
+  const int mx=ccMarginX(), pw=ccPanelW(), PH=ccPanelH(), R=min(22, PH/2);
+  int y=ph-PH; if(y>0) y=0;                      // overshoot karet: panel tetap menempel di atas
+  const int H=s.height();
+  auto clipRows=[&](int y0,int y1)->bool{ if(y0<0) y0=0; if(y1>H) y1=H; if(y1<=y0) return false; s.setClipRect(mx,y0,pw,y1-y0); return true; };
+  if(clipRows(y+R, y+PH-R)) ccCache.pushSprite(&s, 0, y);
+  if(clipRows(y,   y+R))    ccCache.pushSprite(&s, 0, y, (uint16_t)CC_CACHE_KEY);
+  if(clipRows(y+PH-R, y+PH)) ccCache.pushSprite(&s, 0, y, (uint16_t)CC_CACHE_KEY);
+  s.clearClipRect();
+}
+
+void drawControlCenter(LGFX_Sprite& s){
+  int ph = (int)ccOffset;
+  const bool motion = controlCenterOpen && (panelPullActive || ccAnimating);
+  if(!motion) ccCacheValid=false;                // panel diam: isi bisa berubah (tema, toggle) -> cache basi
+  else if(ccCacheEnsure(s)){                     // dibangun di frame pertama sesi (ph masih 0) -> tdk ada patah di tengah gerakan
+    if(ph>0){ ccCacheBlit(s,ph); drawToast(s); }
+    return;
+  }
+  if(ph<=0) return;
+  ccDrawLiveH(s, ph, true);                      // jalur live (diam / PSRAM tipis)
 }
 
 // CC-LONGPRESS ---------------------------------------------------------------
@@ -12123,6 +12198,42 @@ void push(){ if(nyxThFreezeFrame()) return;
   display.touchPoll();
 #endif
   rcFrameMark(); }
+// CC_CACHE_V1: snapshot latar. Selama CC bergerak latar (Home/app) diam -> disalin, bukan digambar ulang.
+static LGFX_Sprite ccBg(&display);
+static bool ccBgValid=false;
+static void ccBgFree(){ if(ccBg.getBuffer()) ccBg.deleteSprite(); ccBgValid=false; }
+static bool ccMotionNow(){
+  return controlCenterOpen && (panelPullActive || ccAnimating) && !locked && !appSwitcherOpen
+      && !homeAodActive && !powerMenuOpen && !callOverlayActive();
+}
+static bool ccBgRestore(){
+#if CC_CACHE_V1
+  if(!ccBgValid) return false;
+  if(!ccMotionNow() || canvas.getColorDepth()!=16 || !canvas.getBuffer()
+     || ccBg.width()!=canvas.width() || ccBg.height()!=canvas.height()){ ccBgValid=false; return false; }
+  memcpy(canvas.getBuffer(), ccBg.getBuffer(), (size_t)canvas.width()*(size_t)canvas.height()*2);
+  return true;
+#else
+  return false;
+#endif
+}
+static void ccBgCapture(){
+#if CC_CACHE_V1
+  if(!ccMotionNow()){ ccBgValid=false; return; }
+  if(ccBgValid) return;
+  if(canvas.getColorDepth()!=16 || !canvas.getBuffer()) return;
+  const int W=canvas.width(), H=canvas.height();
+  if(ccBg.getBuffer() && (ccBg.width()!=W || ccBg.height()!=H)) ccBgFree();
+  if(!ccBg.getBuffer()){
+    const size_t bytes=(size_t)W*(size_t)H*2;
+    if(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) < bytes + 1500000UL) return;
+    ccBg.setColorDepth(16); ccBg.setPsram(true);
+    if(!ccBg.createSprite(W,H)){ ccBgFree(); return; }
+  }
+  memcpy(ccBg.getBuffer(), canvas.getBuffer(), (size_t)W*(size_t)H*2);
+  ccBgValid=true;
+#endif
+}
 void renderCurrentFrame(){
   if(nyxThFreezeFrame()) return;   // NYX_TH_V4
   // v68 FIX: font custom (Mono/Sans/Tebal/Serif) ternyata KETINGGIAN buat
@@ -12138,7 +12249,9 @@ void renderCurrentFrame(){
   bool screenAllowsCustomFont = (curScreen()==SCR_NOTEPAD || curScreen()==SCR_AICHAT);
   canvas.setFont(emjF(screenAllowsCustomFont ? uiFontList[uiFontIdx] : &lgfx::fonts::Font0));
   canvas.setTextWrap(false); // reset state teks tiap frame: app yg lupa/bocorin wrap gak bikin layar lain numpuk
-  if(callOverlayActive()){
+  if(ccBgRestore()){
+    // CC_CACHE_V1: latar dari snapshot
+  } else if(callOverlayActive()){
     drawCallOverlay(canvas); // panggilan masuk / panggilan saat terkunci menimpa semua layar
   } else if(appSwitcherOpen){
     drawAppSwitcher(canvas); // v96: App Switcher -- modal penuh, gantiin base+overlay lain sepenuhnya selagi kebuka
@@ -12151,6 +12264,7 @@ void renderCurrentFrame(){
     if(idx>=0) apps[idx].draw(canvas);
     ptrDraw(canvas); // pull-to-refresh + swipe-back tepi kiri (ptr_renphone.ino)
   }
+  ccBgCapture();   // CC_CACHE_V1: latar bersih (tanpa panel) diambil di frame pertama sesi
   // v90: 2 overlay baru (Notification Shade + context menu DI) disisipkan
   // di sini, mutually-exclusive dgn Control Center persis pola yg sama.
   // v99: ditambah "&& !homeAodActive" -- overlay2 ini ikut disembunyikan
@@ -20556,6 +20670,10 @@ void loop(){
   // "belum ada frame penuh" -> frame Home berikutnya DIPAKSA penuh dulu.
   if(curScreen()!=SCR_HOME || locked || appSwitcherOpen || controlCenterOpen || notifShadeOpen || homeAodActive || diMenuOpen) homeBandReady=false;
   if(curScreen()!=SCR_HOME || locked){ if(homeCache.getBuffer()) homeCacheFree(); }   // HOME_CACHE_V1: PSRAM kembali utk app lain (Doom/NES)
+  if(!controlCenterOpen && !panelPullActive){   // CC_CACHE_V1: sesi selesai -> cache/snapshot basi; PSRAM dibebaskan kalau bukan di Home
+    ccCacheValid=false; ccBgValid=false;
+    if(curScreen()!=SCR_HOME || locked){ if(ccCache.getBuffer()) ccCacheFree(); if(ccBg.getBuffer()) ccBgFree(); }
+  }
 
   vibStep(); // v23: majuin pola getar non-blocking (jalan tiap frame, gak peduli layar apa yg aktif)
   npxStep(); // v24: majuin siklus warna Neopixel mode rainbow (non-blocking, sama pola dgn vibStep)
