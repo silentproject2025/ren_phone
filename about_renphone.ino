@@ -172,10 +172,156 @@ static void aboutClampScroll() {
   if (aboutScroll > aboutMaxScroll) aboutScroll = (float)aboutMaxScroll;
 }
 
+// =====================================================================
+// EASTER EGG (EGG_ABOUT_V1): ketuk kartu identitas "Accretion Phone" 7x
+// berturut-turut (jeda < 1,5 dtk antar ketukan) -> halaman cerita tersembunyi.
+//   * teks muncul pelan-pelan (efek mesin tik), ketuk layar untuk melewati
+//   * bisa di-scroll; tombol Kembali menutup cerita (bukan keluar dari About)
+//   * TIDAK ada alokasi heap, semua teks ASCII (font bawaan tidak punya tanda
+//     pisah panjang / emoji). Ubah isi cerita di EGG_P[] di bawah ini.
+// =====================================================================
+#define EGG_TITLE      "Error di baris terakhir"
+#define EGG_MAX_LINES  140
+#define EGG_LINE_H     12
+#define EGG_CPS        110          // kecepatan ketik (karakter per detik)
+
+static const char* const EGG_P[] = {
+  "Awalnya, aku adalah definisi orang paling cuek di kelas. Satu ruangan, tapi aku bahkan nggak tahu nama dia siapa dan duduk di sebelah mana. Setiap kali dia manggil atau nanya sesuatu, respons aku selalu minimalis - paling mentok cuma nengok dikit, angkat alis, atau angkat bahu tanpa suara. Bahkan pas dia minta tolong pertama kali, refleks logika aku langsung nolak, meskipun akhirnya aku putar balik juga buat bantuin dia.",
+  "Aku selalu mikir logika aku jauh lebih kuat dari perasaan. Tapi ternyata, alam bawah sadar nggak bisa dibohongi. Entah sejak kapan, radar aku mulai nangkap hal-hal kecil tentang dia. Aku mulai sadar kalau berada di dekat dia selalu ngasih efek tenang yang aneh. Dari yang tadinya nggak peduli, aku malah hafal cara dia senyum, nada bicaranya yang lembut, cara dia main piano, sampai kebiasaan-kebiasaan kecilnya yang ternyata mirip banget sama aku - termasuk gaya tidur aku dan dia yang sama persis di jam pelajaran Sejarah.",
+  "Posisi duduk aku dan dia terpisah di dua ujung baris paling depan; aku di pojok kanan, dia di pojok kiri. Aku dan dia juga punya dunia masing-masing di kelas. Aku dengan segala urusan IT dan logika praktis, sementara dia dengan ketelitiannya di Matematika dan statusnya sebagai anak peringkat atas. Tapi di titik tertentu, benteng cuek yang aku bangun mati-matian akhirnya runtuh juga. Cukup lewat satu momen tatapan mata dan senyuman manis dari jarak beberapa meja, semua sistem pertahanan logika aku langsung berantakan.",
+  "Lucunya, di saat aku masih sibuk menyembunyikan perasaan ini rapat-rapat di balik sikap dingin, kenyataan justru ngasih plot twist terakhir: dia ternyata sudah punya orang lain.",
+  "Rasanya memang nyesek, kayak nemu error fatal tepat di baris kode terakhir saat semuanya terasa pas. Tapi di sisi lain, aku bersyukur karena selama ini aku masih menahan diri untuk nggak melangkah terlalu jauh. Nggak ada yang perlu disesali dari rasa kagum ini. Sekarang saatnya aku narik diri pelan-pelan, menghormati batas yang ada, dan nyimpan cerita ini rapi-rapi sebagai salah satu fase paling berkesan yang pernah aku lewatin."
+};
+#define EGG_PN ((int)(sizeof(EGG_P) / sizeof(EGG_P[0])))
+
+static bool           aboutEggOpen  = false;
+static uint8_t        eggTaps       = 0;
+static unsigned long  eggLastTap    = 0;
+static const char*    eggLnPtr[EGG_MAX_LINES];
+static uint8_t        eggLnLen[EGG_MAX_LINES];
+static uint16_t       eggLnCum[EGG_MAX_LINES];   // total karakter sampai akhir baris i
+static int            eggLnN        = 0;
+static int            eggTotal      = 0;
+static int            eggChars      = 0;         // karakter yang sudah "diketik"
+static unsigned long  eggT0         = 0;
+static float          eggScroll     = 0;
+static int            eggMaxScroll  = 0;
+static int            eggLastY      = 0;
+static bool           eggDragging   = false;
+static bool           eggAuto       = true;
+
+static int eggViewTop()    { return 26 + 24; }
+static int eggViewBottom() { return SCR_H - BACK_H - 3 - 6; }
+
+// pecah paragraf jadi baris sesuai lebar layar (sekali saat dibuka)
+static void eggBuildLines() {
+  int maxCh = (SCR_W - 24) / 6; if (maxCh < 16) maxCh = 16; if (maxCh > 120) maxCh = 120;
+  eggLnN = 0; eggTotal = 0;
+  for (int p = 0; p < EGG_PN && eggLnN < EGG_MAX_LINES - 1; p++) {
+    const char* t = EGG_P[p];
+    int tl = (int)strlen(t), pos = 0;
+    while (pos < tl && eggLnN < EGG_MAX_LINES - 1) {
+      int len = tl - pos;
+      if (len > maxCh) {
+        len = maxCh;
+        int b = len;
+        while (b > 0 && t[pos + b] != ' ') b--;      // mundur ke spasi terakhir
+        if (b > 0) len = b;
+      }
+      eggLnPtr[eggLnN] = t + pos; eggLnLen[eggLnN] = (uint8_t)len;
+      eggTotal += len; eggLnCum[eggLnN] = (uint16_t)eggTotal; eggLnN++;
+      pos += len;
+      while (pos < tl && t[pos] == ' ') pos++;
+    }
+    if (eggLnN < EGG_MAX_LINES) {                      // baris kosong antar paragraf
+      eggLnPtr[eggLnN] = ""; eggLnLen[eggLnN] = 0; eggLnCum[eggLnN] = (uint16_t)eggTotal; eggLnN++;
+    }
+  }
+  int contentH = eggLnN * EGG_LINE_H, viewH = eggViewBottom() - eggViewTop();
+  eggMaxScroll = contentH - viewH; if (eggMaxScroll < 0) eggMaxScroll = 0;
+}
+
+static void eggOpen() {
+  eggBuildLines();
+  eggChars = 0; eggT0 = millis(); eggScroll = 0; eggAuto = true; eggDragging = false;
+  aboutEggOpen = true; eggTaps = 0;
+  needRedraw = true;
+}
+
+// dipanggil tiap iterasi loop saat About terbuka (lewat aboutLoopPoll)
+static void eggTick() {
+  if (eggChars >= eggTotal) return;
+  int n = (int)((millis() - eggT0) * EGG_CPS / 1000UL);
+  if (n > eggTotal) n = eggTotal;
+  if (n != eggChars) {
+    eggChars = n;
+    if (eggAuto) {                                     // ikuti baris yang sedang diketik
+      int li = 0; while (li < eggLnN - 1 && eggLnCum[li] < eggChars) li++;
+      int bottomY = (li + 1) * EGG_LINE_H, viewH = eggViewBottom() - eggViewTop();
+      float want = (float)(bottomY - viewH); if (want < 0) want = 0; if (want > eggMaxScroll) want = (float)eggMaxScroll;
+      eggScroll = want;
+    }
+    needRedraw = true;
+  }
+}
+
+static void eggDraw(LGFX_Sprite& s) {
+  iosBackdrop(s);
+  drawStatusBar(s);
+  iosTitle(s, 8, 26, EGG_TITLE);
+  int top = eggViewTop(), bot = eggViewBottom();
+  s.setClipRect(0, top, SCR_W, bot - top);
+  s.setTextSize(1);
+  int y0 = top - (int)eggScroll;
+  char buf[130];
+  for (int i = 0; i < eggLnN; i++) {
+    int ry = y0 + i * EGG_LINE_H;
+    if (ry + EGG_LINE_H < top || ry > bot) continue;
+    int len = eggLnLen[i]; if (len == 0) continue;
+    int startCum = (int)eggLnCum[i] - len;             // karakter yang sudah lewat sebelum baris ini
+    int show = eggChars - startCum;
+    if (show <= 0) continue;
+    if (show > len) show = len;
+    if (show > (int)sizeof(buf) - 1) show = (int)sizeof(buf) - 1;
+    memcpy(buf, eggLnPtr[i], show); buf[show] = 0;
+    s.setTextColor(i >= eggLnN - 3 ? T().accent : T().text);   // paragraf penutup beraksen
+    s.setCursor(12, ry + 2); s.print(buf);
+  }
+  s.clearClipRect();
+  if (eggMaxScroll > 0) {
+    int trackH = bot - top;
+    int thumbH = trackH * trackH / (trackH + eggMaxScroll); if (thumbH < 12) thumbH = 12;
+    int thumbY = top + (int)((trackH - thumbH) * (eggScroll / (float)eggMaxScroll));
+    nyxAaRR(s, SCR_W - 4, thumbY, 2, thumbH, 1, blend565(T().bg, T().text, 90));
+  }
+  drawBack(s);
+  drawToast(s);
+}
+
+static void eggTouch(int x, int y, bool held, bool isNew) {
+  if (isNew) {
+    if (isBack(x, y)) { aboutEggOpen = false; eggDragging = false; needRedraw = true; return; }
+    if (eggChars < eggTotal) { eggChars = eggTotal; needRedraw = true; }   // ketuk = lewati animasi ketik
+    eggAuto = false;
+    eggDragging = (y >= eggViewTop() && y <= eggViewBottom());
+    eggLastY = y;
+    return;
+  }
+  if (!held) { eggDragging = false; return; }
+  if (!eggDragging) return;
+  int dy = eggLastY - y; eggLastY = y;
+  if (dy == 0) return;
+  eggScroll += (float)dy;
+  if (eggScroll < 0) eggScroll = 0;
+  if (eggScroll > eggMaxScroll) eggScroll = (float)eggMaxScroll;
+  needRedraw = true;
+}
+
 // ---------------------------------------------------------------------
 // siklus app
 // ---------------------------------------------------------------------
 void aboutEnter() {
+  aboutEggOpen = false; eggTaps = 0; eggDragging = false;   // EGG_ABOUT_V1
   aboutScroll = 0;
   aboutDragging = false;
   aboutRefresh();
@@ -189,6 +335,7 @@ void aboutExit() {
 
 // dipanggil dari loop() phone.ino -- refresh angka live tiap 1 detik
 void aboutLoopPoll() {
+  if (aboutEggOpen) { eggTick(); return; }                 // EGG_ABOUT_V1
   if (millis() - aboutLastPoll < 1000UL) return;
   aboutLastPoll = millis();
   if (aboutDragging) return;           // jangan ganggu scroll yang sedang berjalan
@@ -201,6 +348,7 @@ void aboutLoopPoll() {
 // gambar
 // ---------------------------------------------------------------------
 void drawAbout(LGFX_Sprite& s) {
+  if (aboutEggOpen) { eggDraw(s); return; }                // EGG_ABOUT_V1
   iosBackdrop(s);
   drawStatusBar(s);
   iosTitle(s, 8, 26, "About Phone");
@@ -265,8 +413,16 @@ void drawAbout(LGFX_Sprite& s) {
 // sentuh: Kembali + drag-scroll
 // ---------------------------------------------------------------------
 void aboutTouch(int x, int y, bool held, bool isNew) {
+  if (aboutEggOpen) { eggTouch(x, y, held, isNew); return; }   // EGG_ABOUT_V1
   if (isNew) {
     if (isBack(x, y)) { navBack(); return; }
+    // EGG_ABOUT_V1: 7x ketuk kartu identitas -> cerita tersembunyi
+    if (y >= 26 + 18 && y <= 26 + 18 + ABOUT_CARD_H) {
+      unsigned long now = millis();
+      if (now - eggLastTap > 1500UL) eggTaps = 0;
+      eggLastTap = now;
+      if (++eggTaps >= 7) { eggOpen(); return; }
+    }
     aboutDragging = (y >= aboutListTop() && y <= aboutListBottom());
     aboutLastY = y;
     return;
