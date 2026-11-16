@@ -20564,7 +20564,7 @@ void loop(){
   wifiConnectStep(); // v48: majuin konek WiFi & sync NTP dikit2 tanpa nge-block (lihat komentar di definisinya)
   if(!gameModeActive){
     if(millis()-lastMpu>50){ lastMpu=millis(); mpuUpdate(); }
-    if(millis()-lastBatt>250){ lastBatt=millis(); battUpdate(); if(inaWantRedraw()) needRedraw=true; }
+    if(millis()-lastBatt>250){ lastBatt=millis(); battUpdate(); if(inaWantRedraw() && !(curScreen()==SCR_HOME && (wasTouched || homeScrollSpringing))) needRedraw=true; }   // SCROLL_NOHITCH_V1: jangan paksa frame penuh (+buang cache Home) di tengah scroll/glide
   }
 
   if((wifiConnected || rcApIsUp()) && webServerRunning){
@@ -20913,7 +20913,7 @@ void loop(){
           homeJiggle=true; homePressedIdx=-1; vibTap(); needRedraw=true; // HOME-JIGGLE: tahan ikon = mode atur
         }
         if(!isSwiping && abs(ty-touchStartY)>HOME_DRAG_SLOP){
-          isSwiping=true; homePressedIdx=-1; // v-baru: batal highlight begitu jelas ini scroll, bukan tap
+          isSwiping=true; homePressedIdx=-1; homePressAnimIdx=-1; homePressAnim=0.0f; // v-baru: batal highlight begitu jelas ini scroll, bukan tap. SCROLL_NOHITCH_V1: reset animasi tekan SEKARANG -- kalau tidak, cache Home mati ~160 ms di awal tiap scroll yg dimulai dari ikon
           // v105: TANPA dead-zone -- drag mulai dari titik sentuh awal, jadi
           // konten langsung "nempel" ke jari begitu lewat ambang slop (dulu
           // gerak 12px pertama dibuang & konten baru mulai gerak setelahnya).
