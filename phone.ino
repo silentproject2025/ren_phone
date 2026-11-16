@@ -20672,7 +20672,8 @@ void loop(){
   if(curScreen()!=SCR_HOME || locked){ if(homeCache.getBuffer()) homeCacheFree(); }   // HOME_CACHE_V1: PSRAM kembali utk app lain (Doom/NES)
   if(!controlCenterOpen && !panelPullActive){   // CC_CACHE_V1: sesi selesai -> cache/snapshot basi; PSRAM dibebaskan kalau bukan di Home
     ccCacheValid=false; ccBgValid=false;
-    if(curScreen()!=SCR_HOME || locked){ if(ccCache.getBuffer()) ccCacheFree(); if(ccBg.getBuffer()) ccBgFree(); }
+    if(ccCache.getBuffer()) ccCacheFree();
+    if(ccBg.getBuffer()) ccBgFree();
   }
 
   vibStep(); // v23: majuin pola getar non-blocking (jalan tiap frame, gak peduli layar apa yg aktif)
