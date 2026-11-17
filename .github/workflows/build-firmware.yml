@@ -75,7 +75,12 @@ jobs:
           arduino-cli config set board_manager.additional_urls https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
           arduino-cli config set library.enable_unsafe_install true
           arduino-cli core update-index
-          arduino-cli core install esp32:esp32
+          # CI_RETRY_V1: unduhan toolchain kadang putus -> ulangi
+          for try in 1 2 3 4; do
+            arduino-cli core install esp32:esp32 && break
+            [ "$try" = 4 ] && exit 1
+            echo "Unduhan core gagal (percobaan $try), ulangi 20 dtk lagi..."; sleep 20
+          done
 
           arduino-cli lib install "LovyanGFX"
           arduino-cli lib install "JPEGDEC"
