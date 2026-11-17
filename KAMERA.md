@@ -56,3 +56,15 @@ Batas yang tidak diubah: CPU CAM sudah 240 MHz; XCLK 20 MHz sudah mendekati bata
 
 ## Pengaturan pin (AI-Thinker)
 Kamera memakai pin standar AI-Thinker; link UART (GPIO13/14) tidak bentrok. SD card di ESP32-CAM harus tetap kosong (GPIO4 = LED flash).
+
+## RHYX M21-45 (sensor GC2145, tanpa JPEG) -- GC2145_SOFTJPEG_V1
+Modul kamera berlabel **RHYX M21-45** di sebagian ESP32-CAM adalah sensor **GC2145**: hanya keluaran mentah RGB565, **tanpa JPEG hardware**.
+`apply_cam_gc2145.py` membuat CAM mencoba JPEG dulu; kalau driver menjawab "sensor tanpa JPEG", kamera dinyalakan ulang dalam mode
+RGB565 (SVGA, 2 buffer PSRAM ~1,9 MB) dan tiap frame di-encode JPEG di CAM (`frame2jpg`). Link UART, dedup header, S3, Galeri, AVI tidak berubah.
+- Terdeteksi otomatis: toast "GC2145 - foto maks 800x600"; di log serial CAM: `[CAM] kamera nyala PID=0x2145 ... [RGB565+JPEG software]`.
+- **Foto maks 800x600** (batas buffer RGB565 di PSRAM). Preview 320x240 paling realistis; 640x480 lebih lambat (encode software).
+- fps lebih rendah dari OV2640 (kira-kira 5-12 fps di 320x240): sensor mengirim data mentah 2x lebih banyak + encode di CPU CAM.
+- Beberapa kontrol sensor (mode malam, koreksi lensa, pola uji, dst.) bisa tidak berefek: fungsi yang tidak diisi driver GC2145 dilewati (bukan crash).
+- Warna aneh (ungu/hijau)? Tambah `-DCAM_SOFT_SWAP565` (atau hapus komentar `//#define CAM_SOFT_SWAP565` di `cam_module.h`).
+- Pin tetap AI-Thinker. Kalau kamera tidak terdeteksi (error 0x105) cek kabel flat dulu.
+- **Belum dikompilasi dengan toolchain ESP32 dan belum dijalankan di perangkat** (logika diuji dengan mock di komputer).

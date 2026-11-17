@@ -12,12 +12,15 @@
 //  Satu task (camTask, core 1) memegang SEMUA akses ke driver kamera. Task link (linkRxTask)
 //  hanya memasukkan perintah ke antrean, jadi tidak pernah memblokir UART.
 //
+//  GC2145_SOFTJPEG_V1: sensor tanpa JPEG (RHYX M21-45 = GC2145) -> mode RGB565 + encode JPEG software (frame2jpg), lihat camSoft.
+//
 //  Pin kamera = AI-Thinker ESP32-CAM. Pin 13/14 (link UART ke S3) tidak bentrok dengan kamera.
 //  LED flash GPIO4 diredupkan lewat LEDC timer 2 / channel 2 (kamera memakai timer 0 / channel 0).
 // ============================================================
 #include <Arduino.h>
 #include <atomic>
 #include "esp_camera.h"
+#include "img_converters.h"   // frame2jpg() -- GC2145_SOFTJPEG_V1
 #include "driver/ledc.h"
 #include "rplink.h"
 #include "cam_tx.h"
@@ -29,6 +32,16 @@ static const framesize_t CAM_FS_MAP[11] = {
   FRAMESIZE_SVGA,  FRAMESIZE_XGA,  FRAMESIZE_HD,  FRAMESIZE_SXGA, FRAMESIZE_UXGA, FRAMESIZE_QXGA
 };
 static inline framesize_t camFs(uint8_t code) { return CAM_FS_MAP[code > 10 ? 1 : code]; }
+
+// GC2145_SOFTJPEG_V1 ------------------------------------------------------------------------------
+// Fungsi sensor yang tidak diisi driver bernilai NULL (struct di-memset 0) -> selalu lewat makro ini.
+#define CAM_SET(s, fn, ...) do { if ((s)->fn) (s)->fn((s), __VA_ARGS__); } while (0)
+// Mode RGB565: buffer kamera dialokasikan sebesar CAM_SOFT_FS x 2 byte x fb_count (SVGA: 960 KB x 2 = 1,9 MB PSRAM).
+// Mau foto lebih besar? Naikkan ke FRAMESIZE_XGA + RPR_XGA (3,1 MB, PSRAM CAM sisa ~0,9 MB) -- belum diuji.
+#define CAM_SOFT_FS      FRAMESIZE_SVGA
+#define CAM_SOFT_MAXRES  RPR_SVGA
+// Warna ungu/hijau aneh (byte RGB565 tertukar)? Aktifkan: tambahkan -DCAM_SOFT_SWAP565 ke build_flags / #define di sini.
+//#define CAM_SOFT_SWAP565
 
 #define CAM_PIN_PWDN   32
 #define CAM_PIN_RESET  -1
@@ -75,6 +88,7 @@ static bool                camCfgSet[RPC_COUNT];
 static uint8_t             camPrvRes = RPR_QVGA, camPrvQ = 14, camXclk = 20;
 static volatile uint8_t    camErr = 0, camErrCode = 0;   // camErr: 1 tanpa PSRAM, 2 RAM kurang, 3 init gagal, 5 kamera belum nyala, 6 foto gagal
 static uint16_t            camPid = 0;
+static bool                camSoft = false;                      // GC2145_SOFTJPEG_V1: sensor RGB565, JPEG di-encode software
 static uint8_t             camMaxRes = RPR_UXGA;                 // resolusi maks sensor yang terdeteksi (RPR_*)
 static int8_t              camVflipQuirk = 0, camSatQuirk = 0, camBrightQuirk = 0;   // koreksi bawaan per sensor
 static uint8_t             camFlashLvl = 0;
@@ -110,7 +124,7 @@ static void camFlashSet(uint8_t lvl) {
 static int8_t camCfgOr(uint8_t id, int8_t def) { return (id < RPC_COUNT && camCfgSet[id]) ? camCfg[id] : def; }
 
 // ---------------- STATUS ke S3 (12 byte) ----------------
-//  [0] flags: b0 kamera nyala, b1 streaming, b2 baud tinggi, b3 flash nyala, b4 sedang foto
+//  [0] flags: b0 kamera nyala, b1 streaming, b2 baud tinggi, b3 flash nyala, b4 sedang foto, b5 mode JPEG-software (GC2145)
 //  [1] kode error  [2] kode esp_err (byte rendah)  [3..4] PID sensor (u16 LE; 0x26 = OV2640)
 //  [5] heap bebas KB  [6] blok terbesar KB  [7..8] fps x10 (u16 LE)  [9] res preview  [10] kualitas preview  [11] resolusi maks sensor (RPR_*)
 //  kode error [1]: 1 tanpa PSRAM, 2 RAM kurang, 3 init gagal, 4 sensor tak mendukung JPEG, 5 kamera belum nyala, 6 foto gagal, 7 sensor tidak terdeteksi
@@ -118,7 +132,7 @@ static void camSendStat() {
   uint32_t now = millis();
   if (now - camHeapAt >= 1000) { camHeapAt = now; camHeapKb = ESP.getFreeHeap() / 1024; camBlkKb = ESP.getMaxAllocHeap() / 1024; }
   uint8_t b[12];
-  b[0] = (camOpen ? 1 : 0) | (camStream ? 2 : 0) | (camBaudNow != RP_BAUD ? 4 : 0) | (camFlashLvl ? 8 : 0) | (camShotBusy ? 16 : 0);
+  b[0] = (camOpen ? 1 : 0) | (camStream ? 2 : 0) | (camBaudNow != RP_BAUD ? 4 : 0) | (camFlashLvl ? 8 : 0) | (camShotBusy ? 16 : 0) | (camSoft ? 32 : 0);
   b[1] = camErr; b[2] = camErrCode;
   b[3] = camPid & 0xFF; b[4] = camPid >> 8;
   b[5] = camHeapKb > 255 ? 255 : (uint8_t)camHeapKb;
@@ -127,6 +141,32 @@ static void camSendStat() {
   b[9] = camPrvRes; b[10] = camPrvQ; b[11] = camMaxRes;
   rpSend(Serial2, RP_CAM_STAT, b, sizeof(b));
   camStatAt = now;
+}
+
+// ---------------- GC2145_SOFTJPEG_V1: helper ----------------
+// kualitas sensor (4..63, kecil = bagus) -> kualitas encoder software (10..95, besar = bagus)
+static inline uint8_t camJq(uint8_t q) { int j = 100 - (int)q * 3 / 2; return (uint8_t)(j < 10 ? 10 : (j > 95 ? 95 : j)); }
+
+// set resolusi; di mode soft: jangan lewati ukuran buffer init, dan kalau sensor menolak -> QVGA
+static void camSetFs(sensor_t* s, framesize_t fs) {
+  if (!s || !s->set_framesize) return;
+  if (camSoft && fs > CAM_SOFT_FS) fs = CAM_SOFT_FS;
+  if (s->set_framesize(s, fs) != 0 && camSoft && fs != FRAMESIZE_QVGA) s->set_framesize(s, FRAMESIZE_QVGA);
+}
+
+// Ambil data JPEG dari fb. Sensor JPEG: pointer langsung ke fb. Sensor RGB565 (camSoft): encode software ->
+// *own != nullptr dan WAJIB di-free() pemanggil (fb boleh dikembalikan lebih dulu). Return false = tak ada JPEG.
+static bool camFbJpeg(camera_fb_t* fb, uint8_t q, const uint8_t** d, uint32_t* n, uint8_t** own) {
+  *own = nullptr;
+  if (fb->format == PIXFORMAT_JPEG) { *d = fb->buf; *n = (uint32_t)fb->len; return fb->len > 0; }
+  if (!camSoft || fb->format != PIXFORMAT_RGB565) return false;
+#ifdef CAM_SOFT_SWAP565
+  { uint16_t* p = (uint16_t*)fb->buf; size_t cnt = fb->len / 2; for (size_t i = 0; i < cnt; i++) p[i] = __builtin_bswap16(p[i]); }
+#endif
+  uint8_t* o = nullptr; size_t ol = 0;
+  if (!frame2jpg(fb, camJq(q), &o, &ol) || !o || ol == 0) { if (o) free(o); return false; }
+  *own = o; *d = o; *n = (uint32_t)ol;
+  return true;
 }
 
 // ---------------- buka / tutup kamera ----------------
@@ -151,6 +191,14 @@ static bool camDoOpen() {
   c.grab_mode = CAMERA_GRAB_LATEST;        // selalu frame terbaru, bukan antrean basi
   uint32_t h0 = ESP.getFreeHeap();
   esp_err_t e = esp_camera_init(&c);
+  camSoft = false;
+  if (e == ESP_ERR_NOT_SUPPORTED) {            // GC2145_SOFTJPEG_V1: sensor tanpa JPEG (RHYX M21-45) -> RGB565 + encode software
+    c.pixel_format = PIXFORMAT_RGB565;
+    c.frame_size = CAM_SOFT_FS;
+    c.fb_count = 2;
+    e = esp_camera_init(&c);
+    if (e == ESP_OK) camSoft = true;
+  }
   if (e != ESP_OK) {
     camErr = (e == ESP_ERR_NOT_FOUND) ? 7 : (e == ESP_ERR_NOT_SUPPORTED ? 4 : 3);   // 7: sensor tak terdeteksi (kabel flat/modul), 4: sensor tanpa JPEG
     camErrCode = (uint8_t)(e & 0xFF);
@@ -161,16 +209,16 @@ static bool camDoOpen() {
   camPid = s->id.PID;
   // deteksi sensor: resolusi maks + koreksi bawaan (OV3660 pada modul umum tampil terbalik & terlalu jenuh)
   bool is3m = (camPid == OV3660_PID || camPid == OV5640_PID);
-  camMaxRes = is3m ? RPR_QXGA : RPR_UXGA;
+  camMaxRes = camSoft ? CAM_SOFT_MAXRES : (is3m ? RPR_QXGA : RPR_UXGA);
   camVflipQuirk = (camPid == OV3660_PID) ? 1 : 0;
   camSatQuirk = (camPid == OV3660_PID) ? -2 : 0;
   camBrightQuirk = (camPid == OV3660_PID) ? 1 : 0;
-  s->set_vflip(s, camVflipQuirk);
-  s->set_framesize(s, camFs(camPrvRes));
-  s->set_quality(s, camPrvQ);
+  CAM_SET(s, set_vflip, camVflipQuirk);
+  camSetFs(s, camFs(camPrvRes));
+  CAM_SET(s, set_quality, camPrvQ);
   camOpen = true;
-  Serial.printf("[CAM] kamera nyala PID=0x%x xclk=%uMHz heap %u->%u blokMax=%u\n", (unsigned)camPid, (unsigned)camXclk,
-                (unsigned)h0, (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap());
+  Serial.printf("[CAM] kamera nyala PID=0x%x xclk=%uMHz heap %u->%u blokMax=%u%s\n", (unsigned)camPid, (unsigned)camXclk,
+                (unsigned)h0, (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap(), camSoft ? " [RGB565+JPEG software]" : "");
   return true;
 }
 
@@ -192,25 +240,25 @@ static void camApplySet(uint8_t id, int8_t v) {
   if (!camOpen) return;
   sensor_t* s = esp_camera_sensor_get();
   if (!s) return;
-  switch (id) {
-    case RPC_BRIGHT:   s->set_brightness(s, camClampI(v + camBrightQuirk, -2, 2)); break;
-    case RPC_CONTRAST: s->set_contrast(s, v); break;
-    case RPC_SATUR:    s->set_saturation(s, camClampI(v + camSatQuirk, -2, 2)); break;
-    case RPC_SHARP:    s->set_sharpness(s, v); break;
-    case RPC_WBMODE:   s->set_whitebal(s, 1); s->set_awb_gain(s, 1); s->set_wb_mode(s, v); break;
-    case RPC_EFFECT:   s->set_special_effect(s, v); break;
-    case RPC_HMIRROR:  s->set_hmirror(s, v ? 1 : 0); break;
-    case RPC_VFLIP:    s->set_vflip(s, (v ? 1 : 0) ^ camVflipQuirk); break;
+  switch (id) {   // GC2145_SOFTJPEG_V1: semua lewat CAM_SET (cek NULL)
+    case RPC_BRIGHT:   CAM_SET(s, set_brightness, camClampI(v + camBrightQuirk, -2, 2)); break;
+    case RPC_CONTRAST: CAM_SET(s, set_contrast, v); break;
+    case RPC_SATUR:    CAM_SET(s, set_saturation, camClampI(v + camSatQuirk, -2, 2)); break;
+    case RPC_SHARP:    CAM_SET(s, set_sharpness, v); break;
+    case RPC_WBMODE:   CAM_SET(s, set_whitebal, 1); CAM_SET(s, set_awb_gain, 1); CAM_SET(s, set_wb_mode, v); break;
+    case RPC_EFFECT:   CAM_SET(s, set_special_effect, v); break;
+    case RPC_HMIRROR:  CAM_SET(s, set_hmirror, v ? 1 : 0); break;
+    case RPC_VFLIP:    CAM_SET(s, set_vflip, (v ? 1 : 0) ^ camVflipQuirk); break;
     case RPC_NIGHT:
-      s->set_aec2(s, v ? 1 : 0);
-      s->set_gainceiling(s, v ? GAINCEILING_128X : GAINCEILING_8X);
-      s->set_ae_level(s, v ? 1 : camCfgOr(RPC_AELEVEL, 0));
+      CAM_SET(s, set_aec2, v ? 1 : 0);
+      CAM_SET(s, set_gainceiling, v ? GAINCEILING_128X : GAINCEILING_8X);
+      CAM_SET(s, set_ae_level, v ? 1 : camCfgOr(RPC_AELEVEL, 0));
       break;
-    case RPC_LENC:     s->set_lenc(s, v ? 1 : 0); break;
-    case RPC_AELEVEL:  s->set_ae_level(s, v); break;
-    case RPC_PRVRES:   if (!camShotBusy) s->set_framesize(s, camFs((uint8_t)v)); break;
-    case RPC_PRVQ:     if (!camShotBusy) s->set_quality(s, camPrvQ); break;
-    case RPC_COLORBAR: s->set_colorbar(s, v ? 1 : 0); break;
+    case RPC_LENC:     CAM_SET(s, set_lenc, v ? 1 : 0); break;
+    case RPC_AELEVEL:  CAM_SET(s, set_ae_level, v); break;
+    case RPC_PRVRES:   if (!camShotBusy) camSetFs(s, camFs((uint8_t)v)); break;
+    case RPC_PRVQ:     if (!camShotBusy) CAM_SET(s, set_quality, camPrvQ); break;
+    case RPC_COLORBAR: CAM_SET(s, set_colorbar, v ? 1 : 0); break;
     default: break;   // RPC_FPSCAP dibaca langsung dari camCfg
   }
 }
@@ -227,8 +275,8 @@ static void camDoShot(uint8_t res, uint8_t q, uint8_t flash, uint8_t flags) {
   uint8_t prevFlash = camFlashLvl;
   camStream = false; camShotBusy = true; camErr = 0;
   camSendStat();
-  s->set_framesize(s, camFs(res));
-  s->set_quality(s, q);
+  camSetFs(s, camFs(res));
+  CAM_SET(s, set_quality, q);
   if (flash) camFlashSet(flash);
   uint32_t settle = flash ? 400 : 260;          // AE/AGC butuh beberapa frame setelah ganti resolusi / lampu
   uint32_t t0 = millis(); int dropped = 0;
@@ -239,12 +287,16 @@ static void camDoShot(uint8_t res, uint8_t q, uint8_t flash, uint8_t flags) {
   bool ok = false;
   camera_fb_t* fb = esp_camera_fb_get();
   if (fb) {
-    if (fb->format == PIXFORMAT_JPEG && fb->len > 0) ok = camTxFrame(Serial2, ++camSeq, fb->buf, (uint32_t)fb->len, true, camAbortFn);
-    esp_camera_fb_return(fb);
+    const uint8_t* jd = nullptr; uint32_t jn = 0; uint8_t* own = nullptr;
+    bool got = camFbJpeg(fb, q, &jd, &jn, &own);
+    if (own) { esp_camera_fb_return(fb); fb = nullptr; }     // soft: buffer kamera dibebaskan selama JPEG dikirim
+    if (got) ok = camTxFrame(Serial2, ++camSeq, jd, jn, true, camAbortFn);
+    if (own) free(own);
+    if (fb) esp_camera_fb_return(fb);
   }
   camFlashSet(flash ? prevFlash : camFlashLvl);   // kembalikan senter ke keadaan semula
-  s->set_framesize(s, camFs(camPrvRes));
-  s->set_quality(s, camPrvQ);
+  camSetFs(s, camFs(camPrvRes));
+  CAM_SET(s, set_quality, camPrvQ);
   camShotBusy = false;
   if (!ok) camErr = 6;
   if (wasStream) { camFlow.sync(camSeq); camLastAckMs = millis(); camStream = true; }
@@ -306,12 +358,16 @@ static void camTask(void*) {
         if (cap > 0 && (int32_t)(nextFrameAt - nowMs) > 0) { vTaskDelay(pdMS_TO_TICKS(2)); continue; }
         camera_fb_t* fb = esp_camera_fb_get();
         if (!fb) { vTaskDelay(pdMS_TO_TICKS(5)); continue; }
-        if (fb->format == PIXFORMAT_JPEG && fb->len > 0 && fb->len <= CAM_MAX_PREVIEW) {
-          camTxFrame(Serial2, ++camSeq, fb->buf, (uint32_t)fb->len, false, camAbortFn, &camHdr);
-          camBytesTx += (uint32_t)fb->len; fpsN++;
+        const uint8_t* jd = nullptr; uint32_t jn = 0; uint8_t* own = nullptr;
+        bool got = camFbJpeg(fb, camPrvQ, &jd, &jn, &own);
+        if (own) { esp_camera_fb_return(fb); fb = nullptr; }   // soft: DMA kamera lanjut menangkap frame berikut selama JPEG dikirim
+        if (got && jn <= CAM_MAX_PREVIEW) {
+          camTxFrame(Serial2, ++camSeq, jd, jn, false, camAbortFn, &camHdr);
+          camBytesTx += jn; fpsN++;
           if (cap > 0) nextFrameAt = millis() + 1000 / cap;
         }
-        esp_camera_fb_return(fb);
+        if (own) free(own);
+        if (fb) esp_camera_fb_return(fb);
       } else {
         if (millis() - camLastAckMs > CAM_STALL_MS) { camFlow.rescue(camSeq, CAM_WINDOW); camLastAckMs = millis(); }   // ACK hilang lama -> jangan macet
         ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(3));   // dibangunkan langsung oleh ACK (camModHandle), bukan polling

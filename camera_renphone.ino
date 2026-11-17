@@ -164,12 +164,13 @@ static const char* camSensorName(unsigned pid) {
   switch (pid) {
     case 0x26: return "OV2640";   case 0x3660: return "OV3660"; case 0x5640: return "OV5640";
     case 0x96: return "OV9650";   case 0x77: return "OV7725";   case 0x76: return "OV7670";
+    case 0x2145: return "GC2145";   // GC2145_SOFTJPEG_V1 (RHYX M21-45)
     default: return "sensor ?";
   }
 }
 static int camMaxRes() {      // resolusi foto maksimum sensor yang terpasang (RPR_*)
   uint8_t m = camStat[11];
-  return (camStatSeen && (camStat[0] & 1) && m >= RPR_UXGA && m <= RPR_QXGA) ? m : RPR_UXGA;
+  return (camStatSeen && (camStat[0] & 1) && m >= RPR_QVGA && m <= RPR_QXGA) ? m : RPR_UXGA;   // GC2145_SOFTJPEG_V1: sensor RGB565 melapor SVGA
 }
 static int camEffRes() { int m = camMaxRes(); return camCfg.shotRes > m ? m : camCfg.shotRes; }
 static unsigned camPidNow() { return (unsigned)camStat[3] | ((unsigned)camStat[4] << 8); }
@@ -677,7 +678,7 @@ static void camStatusMsg(char* o, size_t cap) {
   else if (e == 1) snprintf(o, cap, "ESP32-CAM tanpa PSRAM.");
   else if (e == 2) snprintf(o, cap, "RAM CAM kurang.\nMatikan Bluetooth/musik lalu coba lagi.");
   else if (e == 7) snprintf(o, cap, "Sensor kamera tidak terdeteksi.\nCek kabel flat & pemasangan modul.");
-  else if (e == 4) snprintf(o, cap, "Sensor ini tidak mendukung JPEG.\n(Dukungan: OV2640/OV3660/OV5640)");
+  else if (e == 4) snprintf(o, cap, "Sensor ini tidak didukung.\n(OV2640/OV3660/OV5640/GC2145)");
   else if (e == 3) snprintf(o, cap, "Kamera gagal init (0x%02X).\nCek modul kamera & daya 5V.", camStat[2]);
   else snprintf(o, cap, "Menyalakan kamera...");
 }
