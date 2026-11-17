@@ -927,15 +927,15 @@ static void gutTaskFunc(void*) {
 }
 
 static bool gutStartJob(uint8_t job) {
-  if (gutBusy) { showToast("Tunggu sebentar..."); return false; }
-  if (WiFi.status() != WL_CONNECTED) { showToast("WiFi belum terhubung"); return false; }
-  if (!nasaHeapReadyForTask()) { showToast("RAM internal padat, coba lagi"); return false; }
+  if (gutBusy) { showToast(RPTR("Tunggu sebentar...")); return false; }
+  if (WiFi.status() != WL_CONNECTED) { showToast(RPTR("WiFi belum terhubung")); return false; }
+  if (!nasaHeapReadyForTask()) { showToast(RPTR("RAM internal padat, coba lagi")); return false; }
   while ((uint32_t)(millis() - gutEndMs) < 80) delay(10);     // beri idle task waktu membereskan task sebelumnya (TCB statis dipakai ulang)
   gutBusy = true; gutJob = job; gutCancel = false; gutPhase = GUT_PH_CONNECT; gutMsg[0] = 0;
   if (job == GUT_JOB_DL) gutAutoRetry = 0;
   if (createTaskPsramStack(gutTaskFunc, "gutTask", 16384, nullptr, &gutStack, &gutTCB, &gutTaskH, 1) != pdPASS) {
     gutBusy = false; gutJob = GUT_JOB_NONE; gutPhase = GUT_PH_IDLE;
-    showToast("Gagal memulai proses");
+    showToast(RPTR("Gagal memulai proses"));
     return false;
   }
   return true;
@@ -950,18 +950,18 @@ static void gutBeginDownload(int idx) {
   uint32_t id = gutItems[idx].id;
   int b = gutRegBegin(gutReg, id);
   if (b == GUT_BEGIN_SAME) {
-    showToast(gutCancel ? "Menghentikan unduhan..." : "Buku ini sedang diunduh");
+    showToast(gutCancel ? RPTR("Menghentikan unduhan...") : RPTR("Buku ini sedang diunduh"));
     if (!gutCancel) { gutDlIdx = idx; gutView = GUT_V_PROG; }
     needRedraw = true; return;
   }
-  if (b == GUT_BEGIN_OTHER) { showToast("Tunggu unduhan lain selesai"); return; }
+  if (b == GUT_BEGIN_OTHER) { showToast(RPTR("Tunggu unduhan lain selesai")); return; }
   gutRegId = id; gutDlIdx = idx; gutView = GUT_V_PROG; gutGot = 0; gutTot = 0;
   if (!gutStartJob(GUT_JOB_DL)) { gutRegEnd(gutReg, id, GUT_S_NONE); gutView = GUT_V_DETAIL; }
   needRedraw = true;
 }
 
 static void gutStartSearch(bool append) {
-  if (gutBusy) { showToast("Tunggu sebentar..."); return; }
+  if (gutBusy) { showToast(RPTR("Tunggu sebentar...")); return; }
   if (!gutItems) return;
   if (!append) { gutN = 0; gutPage = 1; gutHasNext = false; gutScroll = 0; gutTotal = 0; memset(gutHave, 0, sizeof(gutHave)); }
   else gutPage++;
@@ -977,9 +977,9 @@ static void gutSubmit() {
 }
 
 static void gutChipTap(int c) {
-  if (gutBusy) { showToast("Tunggu sebentar..."); return; }
-  if (c == 0) { if (gutSrc) { showToast("Bahasa hanya utk Gutendex"); return; } gutLangIdx = (uint8_t)((gutLangIdx + 1) % 9); }
-  else if (c == 1) { gutLight = !gutLight; showToast(gutLight ? "EPUB tanpa gambar (ringan)" : "EPUB dengan gambar (besar)"); needRedraw = true; return; }
+  if (gutBusy) { showToast(RPTR("Tunggu sebentar...")); return; }
+  if (c == 0) { if (gutSrc) { showToast(RPTR("Bahasa hanya utk Gutendex")); return; } gutLangIdx = (uint8_t)((gutLangIdx + 1) % 9); }
+  else if (c == 1) { gutLight = !gutLight; showToast(gutLight ? RPTR("EPUB tanpa gambar (ringan)") : RPTR("EPUB dengan gambar (besar)")); needRedraw = true; return; }
   else if (c == 2) gutSortIdx = (uint8_t)((gutSortIdx + 1) % 2);
   else { gutSrc = gutSrc ? 0 : 1; showToast(gutSrc ? "Sumber: OPDS Gutenberg" : "Sumber: Gutendex"); }
   gutStartSearch(false);
@@ -1002,7 +1002,7 @@ static void gutOpenBook(const char* name) {
   gutView = GUT_V_LIST;
   ebkMode = EBK_LIB; ebkScroll = 0; ebkScan();
   for (int i = 0; i < ebkLibN; i++) if (!strcmp(ebkLib[i].name, name)) { ebkStartOpen(i); return; }
-  showToast("Buku tidak ditemukan di /books");
+  showToast(RPTR("Buku tidak ditemukan di /books"));
   needRedraw = true;
 }
 
@@ -1026,7 +1026,7 @@ static void gutBack() {
 void gutEnter() {
   if (!gutEvtReg) { WiFi.onEvent(gutWifiEvt); gutEvtReg = true; }     // catat alasan putus WiFi utk diagnosis
   if (!gutItems) gutItems = (GutItem*)ebPsAlloc(sizeof(GutItem) * GUT_CAP);
-  if (!gutItems) { showToast("RAM tidak cukup"); return; }
+  if (!gutItems) { showToast(RPTR("RAM tidak cukup")); return; }
   gutView = GUT_V_LIST; gutScroll = 0; gutDown = false; gutMsg[0] = 0;
   ebkMode = EBK_GUT; needRedraw = true;
   if (gutN == 0 && !gutBusy) gutAutoLoad = true;
@@ -1127,9 +1127,9 @@ static void gutDrawList(LGFX_Sprite& s) {
   char q[44]; strncpy(q, gutQuery.c_str(), sizeof(q) - 1); q[sizeof(q) - 1] = 0;
   ebkFitText(s, q, bw - 20);
   s.setTextColor(q[0] ? T().text : T().subtext);
-  s.setCursor(bx + 10, 35); s.print(q[0] ? q : "cari judul / penulis");
+  s.setCursor(bx + 10, 35); s.print(q[0] ? q : RPTR("cari judul / penulis"));
   nyxAaRR(s, SCR_W - 10 - GUT_GO_W, 29, GUT_GO_W, 20, 10, T().accent);
-  s.setTextColor(0xFFFF); s.setCursor(SCR_W - 10 - GUT_GO_W + (GUT_GO_W - s.textWidth("Cari")) / 2, 35); s.print("Cari");
+  s.setTextColor(0xFFFF); s.setCursor(SCR_W - 10 - GUT_GO_W + (GUT_GO_W - s.textWidth(RPTR("Cari"))) / 2, 35); s.print(RPTR("Cari"));
   // chip: bahasa / format / urutan
   char lb[4][20];
   if (gutLangIdx) snprintf(lb[0], sizeof(lb[0]), "Bhs: %s", gutLangUp[gutLangIdx]); else strcpy(lb[0], "Semua bhs");
@@ -1149,15 +1149,15 @@ static void gutDrawList(LGFX_Sprite& s) {
     int dots = (int)((millis() / 300) % 4);
     if (busy) { char m[24]; snprintf(m, sizeof(m), "Memuat%.*s", dots, "..."); s.setTextColor(T().text); s.setCursor(12, top + 10); s.print(m); }
     else if (WiFi.status() != WL_CONNECTED) {
-      s.setTextColor(T().text);    s.setCursor(12, top + 10); s.print("WiFi belum terhubung.");
-      s.setTextColor(T().subtext); s.setCursor(12, top + 26); s.print("Sambungkan lewat Setting, lalu");
-      s.setCursor(12, top + 38); s.print("ketuk Cari.");
+      s.setTextColor(T().text);    s.setCursor(12, top + 10); s.print(RPTR("WiFi belum terhubung."));
+      s.setTextColor(T().subtext); s.setCursor(12, top + 26); s.print(RPTR("Sambungkan lewat Setting, lalu"));
+      s.setCursor(12, top + 38); s.print(RPTR("ketuk Cari."));
     } else if (gutPhase == GUT_PH_ERROR) {
       s.setTextColor(T().danger);  s.setCursor(12, top + 10); s.print(gutMsg);
-      s.setTextColor(T().subtext); s.setCursor(12, top + 26); s.print("Ketuk Cari untuk mencoba lagi.");
+      s.setTextColor(T().subtext); s.setCursor(12, top + 26); s.print(RPTR("Ketuk Cari untuk mencoba lagi."));
       if (gutDiag[0]) { s.setCursor(12, top + 42); s.print(gutDiag); }
     } else {
-      s.setTextColor(T().subtext); s.setCursor(12, top + 10); s.print(gutQApplied[0] ? "Tidak ada hasil." : "Ketuk Cari untuk memuat daftar.");
+      s.setTextColor(T().subtext); s.setCursor(12, top + 10); s.print(gutQApplied[0] ? RPTR("Tidak ada hasil.") : RPTR("Ketuk Cari untuk memuat daftar."));
     }
     return;
   }
@@ -1197,7 +1197,7 @@ static void gutDrawList(LGFX_Sprite& s) {
 }
 
 static void gutDrawDetail(LGFX_Sprite& s) {
-  iosTitle(s, 8, 26, "Detail buku");
+  iosTitle(s, 8, 26, RPTR("Detail buku"));
   if (gutSel < 0 || gutSel >= gutN) return;
   const GutItem& it = gutItems[gutSel];
   char tt[GUT_TITLE_LEN], au[GUT_AUTH_LEN], cnt[12];
@@ -1215,11 +1215,11 @@ static void gutDrawDetail(LGFX_Sprite& s) {
   s.setTextColor(T().text);
   s.setCursor(12, y); s.print(l1); s.setCursor(12, y + 14); s.print(l2); s.setCursor(12, y + 28); s.print(l3);
   s.setTextColor(T().subtext);
-  s.setCursor(12, y + 48); s.print("Sumber: gutenberg.org (domain publik)");
-  if (!sdReady) { s.setTextColor(T().danger); s.setCursor(12, y + 62); s.print("SD card tidak terdeteksi."); }
-  else if (gutSelExists) { s.setTextColor(T().good); s.setCursor(12, y + 62); s.print("Sudah ada di perpustakaan."); }
-  else if (gutSelState == GUT_SS_BUSY) { s.setTextColor(T().accent); s.setCursor(12, y + 62); s.print("Sedang diunduh..."); }
-  else if (gutSelState == GUT_SS_PART) { s.setTextColor(T().subtext); s.setCursor(12, y + 62); s.print("Unduhan sebagian tersimpan."); }
+  s.setCursor(12, y + 48); s.print(RPTR("Sumber: gutenberg.org (domain publik)"));
+  if (!sdReady) { s.setTextColor(T().danger); s.setCursor(12, y + 62); s.print(RPTR("SD card tidak terdeteksi.")); }
+  else if (gutSelExists) { s.setTextColor(T().good); s.setCursor(12, y + 62); s.print(RPTR("Sudah ada di perpustakaan.")); }
+  else if (gutSelState == GUT_SS_BUSY) { s.setTextColor(T().accent); s.setCursor(12, y + 62); s.print(RPTR("Sedang diunduh...")); }
+  else if (gutSelState == GUT_SS_PART) { s.setTextColor(T().subtext); s.setCursor(12, y + 62); s.print(RPTR("Unduhan sebagian tersimpan.")); }
   gutDrawBtns(s, gutSelExists ? "Buka di Buku" : (gutSelState == GUT_SS_BUSY ? "Lihat progres" : (gutSelState == GUT_SS_PART ? "Lanjutkan" : "Unduh")), nullptr);
 }
 
@@ -1314,7 +1314,7 @@ static void gutRelease() {                              // ketukan (jari lepas t
     if (gutHitBtn1(gutSx, gutSy)) {
       vibTap();
       if (gutSelExists) gutOpenBook(gutSelName);
-      else if (!sdReady) showToast("SD card tidak terdeteksi");
+      else if (!sdReady) showToast(RPTR("SD card tidak terdeteksi"));
       else gutBeginDownload(gutSel);
     }
   } else {                                              // progres
@@ -1324,7 +1324,7 @@ static void gutRelease() {                              // ketukan (jari lepas t
     } else if (gutPhase == GUT_PH_ERROR) {
       if (gutHitBtn(gutSx, gutSy, 0)) {
         vibTap();
-        if (gutBusy) showToast("Tunggu sebentar...");
+        if (gutBusy) showToast(RPTR("Tunggu sebentar..."));
         else gutBeginDownload(gutDlIdx);
       } else if (gutHitBtn(gutSx, gutSy, 1)) { vibTap(); gutOpenDetail(gutSel); }
     } else if (gutHitBtn(gutSx, gutSy, 0)) {            // Batal

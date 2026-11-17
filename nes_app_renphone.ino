@@ -201,7 +201,7 @@ void drawNes(LGFX_Sprite& s) {
 
   if (nesRomError) {
     s.setTextColor(TFT_RED); s.setTextSize(1);
-    s.setCursor(8, STATUS_H + 20); s.print("Gagal membuka NES:");
+    s.setCursor(8, STATUS_H + 20); s.print(RPTR("Gagal membuka NES:"));
     int maxChars = (SCR_W - 16) / 6;
     int n = aiWrapAppend(aiLinesBuf, AI_MAX_LINES, 0, nesRomErrorMsg, TFT_WHITE, maxChars);
     for (int i = 0; i < n && i < 8; i++) {
@@ -214,7 +214,7 @@ void drawNes(LGFX_Sprite& s) {
 
   if (nesShowingPicker) {
     s.setTextColor(T().accent); s.setTextSize(1);
-    s.setCursor(8, 26); s.print("Pilih ROM NES");
+    s.setCursor(8, 26); s.print(RPTR("Pilih ROM NES"));
 
     int listY = 44, itemH = 26;
     int startIdx = nesListPage * NES_ITEMS_PER_PAGE;
@@ -232,11 +232,11 @@ void drawNes(LGFX_Sprite& s) {
     int pageY = backY() - 2;
     if (nesListPage > 0) {
       s.fillRoundRect(SCR_W - 120, pageY, 54, 22, 4, T().surface2);
-      s.setTextColor(T().text); s.setCursor(SCR_W - 110, pageY + 6); s.print("< Prev");
+      s.setTextColor(T().text); s.setCursor(SCR_W - 110, pageY + 6); s.print(RPTR("< Prev"));
     }
     if ((nesListPage + 1) * NES_ITEMS_PER_PAGE < nesRomCount) {
       s.fillRoundRect(SCR_W - 60, pageY, 54, 22, 4, T().surface2);
-      s.setTextColor(T().text); s.setCursor(SCR_W - 52, pageY + 6); s.print("Next >");
+      s.setTextColor(T().text); s.setCursor(SCR_W - 52, pageY + 6); s.print(RPTR("Next >"));
     }
 
     drawBack(s);
@@ -247,7 +247,7 @@ void drawNes(LGFX_Sprite& s) {
   // ambil alih layar langsung lewat SPI.
   s.setTextColor(TFT_WHITE); s.setTextSize(2);
   s.setCursor(SCR_W/2-60, SCR_H/2-10);
-  s.print("Memuat NES...");
+  s.print(RPTR("Memuat NES..."));
 }
 
 void nesTouch(int tx, int ty, bool held, bool newT) {

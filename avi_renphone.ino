@@ -657,9 +657,9 @@ static void aviSplash(const char* status, bool hints) {
   aviSplashY = cy + 78;
   aviSplashStatus(status);
   if (hints) {
-    aviTextC("Ketuk: kontrol | Tahan: stop", cx, H - 44, 1, AVI_DARK);
-    aviTextC("Usap kiri/kanan: -/+10 dtk", cx, H - 32, 1, AVI_DARK);
-    aviTextC("Usap atas/bawah: cerah | volume", cx, H - 20, 1, AVI_DARK);
+    aviTextC(RPTR("Ketuk: kontrol | Tahan: stop"), cx, H - 44, 1, AVI_DARK);
+    aviTextC(RPTR("Usap kiri/kanan: -/+10 dtk"), cx, H - 32, 1, AVI_DARK);
+    aviTextC(RPTR("Usap atas/bawah: cerah | volume"), cx, H - 20, 1, AVI_DARK);
   }
 }
 
@@ -1091,7 +1091,7 @@ static void aviDoSeek(uint32_t ms, bool osd) {
   if (hadAudio) {
     int rc = musExtBegin();
     aviAudioOn = (rc == 0);
-    if (rc != 0) showToast("Audio gagal lanjut: tanpa suara");
+    if (rc != 0) showToast(RPTR("Audio gagal lanjut: tanpa suara"));
   }
   const char* m = aviPrefillSync();
   if (m) showToast(m);
@@ -1166,7 +1166,7 @@ static bool aviAskResume(uint32_t ms) {
   aviFmtTime(b, sizeof(b), dur);
   snprintf(tt, sizeof(tt), "%s / %s", a, b);
   display.fillScreen(TFT_BLACK);
-  aviTextC("Lanjutkan menonton?", W / 2, H / 2 - 70, 2, TFT_WHITE);
+  aviTextC(RPTR("Lanjutkan menonton?"), W / 2, H / 2 - 70, 2, TFT_WHITE);
   aviTextC(tt, W / 2, H / 2 - 44, 2, AVI_GRAY);
   display.fillRoundRect(20, H / 2 - 18, W - 40, 5, 2, AVI_DARK);
   int fw = dur ? (int)(((uint64_t)ms * (uint32_t)(W - 40)) / dur) : 0;
@@ -1174,8 +1174,8 @@ static bool aviAskResume(uint32_t ms) {
   int bw = (W - 50) / 2, bh = 50, by = H / 2 + 6;
   display.drawRoundRect(20, by, bw, bh, 12, TFT_WHITE);
   display.fillRoundRect(30 + bw, by, bw, bh, 12, TFT_WHITE);
-  aviTextC("Dari awal", 20 + bw / 2, by + 18, 2, TFT_WHITE);
-  aviTextC("Lanjutkan", 30 + bw + bw / 2, by + 18, 2, TFT_BLACK);
+  aviTextC(RPTR("Dari awal"), 20 + bw / 2, by + 18, 2, TFT_WHITE);
+  aviTextC(RPTR("Lanjutkan"), 30 + bw + bw / 2, by + 18, 2, TFT_BLACK);
 
   lgfx::touch_point_t tp;
   while (getInputPoint(tp)) delay(10);              // tunggu jari dari menu terangkat
@@ -1402,12 +1402,12 @@ int aviThumbGet(const String& filename, uint32_t size, uint16_t* out, uint32_t* 
 //   Tahan            = berhenti | Usap tepi bawah ke atas = Home
 // =====================================================================
 void aviPlayFile(const String& filename) {
-  if (!sdReady) { showToast("SD Card tdk siap"); return; }
+  if (!sdReady) { showToast(RPTR("SD Card tdk siap")); return; }
   String fullPath = String("/") + filename;      // sama spt mjpeg: nama relatif dari root SD
   aviFile = SD_MMC.open(fullPath, FILE_READ);
   if (!aviFile || aviFile.isDirectory()) {
     if (aviFile) aviFile.close();
-    showToast("Gagal membuka file AVI");
+    showToast(RPTR("Gagal membuka file AVI"));
     return;
   }
   aviFileSize = (uint32_t)aviFile.size();
@@ -1416,7 +1416,7 @@ void aviPlayFile(const String& filename) {
   if (perr) { aviFile.close(); showToast(perr); return; }
   if (!aviAllocAll()) {
     aviFreeAll(); aviFile.close();
-    showToast("RAM tidak cukup utk AVI");
+    showToast(RPTR("RAM tidak cukup utk AVI"));
     return;
   }
   aviKey = aviMakeKey(filename, aviFileSize);
@@ -1491,7 +1491,7 @@ void aviPlayFile(const String& filename) {
   const char* syncMsg = aviPrefillSync();
   if (syncMsg) audMsg = syncMsg;
   if (audMsg) showToast(audMsg);
-  if (aviCkN <= 0) showToast("Tanpa indeks: seek/resume mati");
+  if (aviCkN <= 0) showToast(RPTR("Tanpa indeks: seek/resume mati"));
   display.fillScreen(TFT_BLACK);
   aviT0 = millis() - aviWallOriginMs;
   aviCurMs = aviWallOriginMs;
@@ -1520,7 +1520,7 @@ void aviPlayFile(const String& filename) {
     if (aviAudioClk && !musExtActive()) {
       aviAudioClk = false;
       aviT0 = millis() - aviCurMs; aviPausedAccum = 0;
-      if (!aviFinSig) showToast("Audio putus");
+      if (!aviFinSig) showToast(RPTR("Audio putus"));
     }
     uint32_t vt = aviNowMs();
     aviCurMs = vt;
@@ -1658,5 +1658,5 @@ void aviPlayFile(const String& filename) {
 
   if (goHome) navGoHome();
   else        needRedrawNow();
-  if (aviBigSkipped > 0) showToast("Frame kebesaran: turunkan -q:v");   // setelah redraw supaya toast kelihatan
+  if (aviBigSkipped > 0) showToast(RPTR("Frame kebesaran: turunkan -q:v"));   // setelah redraw supaya toast kelihatan
 }

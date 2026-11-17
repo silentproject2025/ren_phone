@@ -241,7 +241,7 @@ bool kbBarTouch(int x, int y) {
   if (x < L + KMS_CHIP_W + 2) {                                 // ganti mode: 2 -> 1 -> 0 -> 2
     kmsMode = kmsMode > 0 ? kmsMode - 1 : 2;
     kmsSaveMode(); kmsSigLast = 0; kmsAc.valid = false;
-    showToast(kmsMode == 2 ? "Kamus: saran + koreksi" : (kmsMode == 1 ? "Kamus: saran saja" : "Kamus: mati"), 1100);
+    showToast(kmsMode == 2 ? RPTR("Kamus: saran + koreksi") : (kmsMode == 1 ? RPTR("Kamus: saran saja") : RPTR("Kamus: mati")), 1100);
     return true;
   }
   if (kmsEffMode() == 0 || !kbTarget) return true;

@@ -259,8 +259,8 @@ bool ownerSetAvatarFromFile(const char* path) {
 
 // Versi dengan umpan balik (toast + getar) -- dipanggil dari tombol "Profil" di viewer Galeri.
 void ownerSetAvatarUi(const char* path) {
-  if (ownerSetAvatarFromFile(path)) { showToast("Foto profil diperbarui"); vibSuccess(); }
-  else showToast("Gagal memakai gambar ini");
+  if (ownerSetAvatarFromFile(path)) { showToast(RPTR("Foto profil diperbarui")); vibSuccess(); }
+  else showToast(RPTR("Gagal memakai gambar ini"));
   needRedraw = true;
 }
 
@@ -345,11 +345,11 @@ void ownerPickReset()  { ownerPickMode = false; }
 
 void ownerPickChosen(const char* path) {
   if (ownerSetAvatarFromFile(path)) {
-    showToast("Foto profil diperbarui"); vibSuccess();
+    showToast(RPTR("Foto profil diperbarui")); vibSuccess();
     ownerPickMode = false;
     ownerPickDone = true;                    // tutup Galeri di putaran loop berikutnya (bukan di tengah pemrosesan sentuhan Galeri)
   } else {
-    showToast("Gagal memakai gambar ini");
+    showToast(RPTR("Gagal memakai gambar ini"));
   }
   needRedraw = true;
 }
@@ -375,7 +375,7 @@ static void ownerCommitName() {
   ownerEditing = false;
   kbVisible = false; kbTarget = nullptr;
   ownerNameEdit = "";
-  showToast("Nama disimpan");
+  showToast(RPTR("Nama disimpan"));
   needRedraw = true;
 }
 
@@ -435,18 +435,18 @@ static void ownerPickLayout() {
 }
 
 static void ownerDrawPick(LGFX_Sprite& s) {
-  iosTitle(s, 8, 26, "Bingkai & warna");
+  iosTitle(s, 8, 26, RPTR("Bingkai & warna"));
   ownerPickLayout();
   ownerDrawAvatar(s, op_pcx, op_pcy, op_pr);
   s.setTextSize(1); s.setTextColor(T().subtext);
-  s.setCursor(op_rx, op_lblY1); s.print("Gaya");
+  s.setCursor(op_rx, op_lblY1); s.print(RPTR("Gaya"));
   for (int i = 0; i < OWNER_STYLE_N; i++) {
     int x = op_rx + (i % 3) * (op_cw + 6), y = op_cy0 + (i / 3) * op_cstride;
     bool sel = (i == ownerFrameStyle);
     ownerBtn(s, x, y, op_cw, op_ch, ownerStyleName[i], sel ? T().accent : T().surface2, T().text);
   }
   s.setTextSize(1); s.setTextColor(T().subtext);
-  s.setCursor(op_rx, op_lblY2); s.print(ownerFrameStyle == 4 ? "Warna (tidak dipakai di Pelangi)" : "Warna");
+  s.setCursor(op_rx, op_lblY2); s.print(ownerFrameStyle == 4 ? RPTR("Warna (tidak dipakai di Pelangi)") : RPTR("Warna"));
   for (int j = 0; j < OWNER_PAL_N; j++) {
     int x = op_rx + (j % 5) * (op_sw + 6), y = op_sy0 + (j / 5) * op_sstride;
     uint16_t c = (j == 0) ? T().accent : ownerPal[j - 1];
@@ -491,7 +491,7 @@ static void ownerStatResetRect(int& x, int& y, int& w, int& h) { w = 68; h = 20;
 
 static void ownerDrawStats(LGFX_Sprite& s) {
   ownerStatsEnsure();
-  iosTitle(s, 8, 26, "Statistik");
+  iosTitle(s, 8, 26, RPTR("Statistik"));
   int rx, ry, rw, rh; ownerStatResetRect(rx, ry, rw, rh);
   bool armed = millis() < ownerStatArmUntil;
   ownerBtn(s, rx, ry, rw, rh, armed ? "Yakin?" : "Reset", armed ? T().danger : T().surface2, armed ? 0xFFFF : T().danger);
@@ -508,7 +508,7 @@ static void ownerDrawStats(LGFX_Sprite& s) {
   s.drawFastHLine(14, top + 54, SCR_W - 28, T().divider);
 
   s.setTextSize(1); s.setTextColor(T().accent);
-  s.setCursor(14, top + 60); s.print("Paling sering dibuka");
+  s.setCursor(14, top + 60); s.print(RPTR("Paling sering dibuka"));
 
   int stride = (SCR_H > SCR_W) ? 24 : 18;
   int y0 = top + 74, nameW = 84, bx0 = 14 + nameW + 4, maxW = SCR_W - 14 - 40 - bx0;
@@ -528,7 +528,7 @@ static void ownerDrawStats(LGFX_Sprite& s) {
     if (rk == 0) best0 = bc;
     int y = y0 + rk * stride;
     if (y + 12 > bot) break;
-    char nm[24]; strncpy(nm, apps[bi].name, sizeof(nm) - 1); nm[sizeof(nm) - 1] = 0;
+    char nm[24]; strncpy(nm, RPTR(apps[bi].name), sizeof(nm) - 1); nm[sizeof(nm) - 1] = 0;
     int n = (int)strlen(nm);
     s.setTextSize(1);
     while (n > 1 && s.textWidth(nm) > nameW) nm[--n] = 0;
@@ -553,10 +553,10 @@ static void ownerTouchStats(int x, int y) {
       ownerStatArmUntil = 0;
       memset(ownerCnt, 0, sizeof(ownerCnt));
       ownerStatsSave();
-      showToast("Hitungan app direset");
+      showToast(RPTR("Hitungan app direset"));
     } else {
       ownerStatArmUntil = millis() + 2500;
-      showToast("Ketuk lagi untuk reset");
+      showToast(RPTR("Ketuk lagi untuk reset"));
     }
     needRedraw = true;
   }
@@ -583,7 +583,7 @@ void drawOwner(LGFX_Sprite& s) {
   iosBackdrop(s); drawStatusBar(s);
 
   if (ownerEditing) {
-    iosTitle(s, 8, 26, "Ubah nama");
+    iosTitle(s, 8, 26, RPTR("Ubah nama"));
     int fx = 8, fy = 50, fw = SCR_W - 16, fh = 36;
     drawGlassPanel(s, fx, fy, fw, fh, 10, T().surface2, 190);
     String t = ownerNameEdit + "|";
@@ -606,7 +606,7 @@ void drawOwner(LGFX_Sprite& s) {
   if (ownerView == 1) { ownerDrawPick(s);  drawBack(s); drawToast(s); return; }
   if (ownerView == 2) { ownerDrawStats(s); drawBack(s); drawToast(s); return; }
 
-  iosTitle(s, 8, 26, "Profil");
+  iosTitle(s, 8, 26, RPTR("Profil"));
   ownerLayout();
   ownerDrawAvatar(s, og_acx, og_acy, og_ar);
 
@@ -669,10 +669,10 @@ void ownerTouch(int x, int y, bool held, bool isNew) {
   if (idx < 0) return;
 
   if (idx == 0) {                                // Pilih foto dari SD (via Galeri mode pilih)
-    if (!sdReady) { showToast("SD Card tidak terdeteksi"); needRedraw = true; return; }
+    if (!sdReady) { showToast(RPTR("SD Card tidak terdeteksi")); needRedraw = true; return; }
     ownerPickMode = true;
     navPush(SCR_GALLERY);
-    showToast("Pilih satu foto untuk profil");
+    showToast(RPTR("Pilih satu foto untuk profil"));
   } else if (idx == 1) {                         // Ubah nama
     ownerNameEdit = String(ownerNameBuf);
     ownerEditing = true;
@@ -683,14 +683,14 @@ void ownerTouch(int x, int y, bool held, bool isNew) {
   } else if (idx == 3) {                         // Statistik
     ownerView = 2; ownerStatArmUntil = 0; needRedraw = true;
   } else {                                       // Hapus foto (ketuk 2x)
-    if (!ownerHasAv) { showToast("Belum ada foto profil"); needRedraw = true; return; }
+    if (!ownerHasAv) { showToast(RPTR("Belum ada foto profil")); needRedraw = true; return; }
     if (millis() < ownerDelArmUntil) {
       ownerDelArmUntil = 0;
       ownerClearAvatar();
-      showToast("Foto profil dihapus");
+      showToast(RPTR("Foto profil dihapus"));
     } else {
       ownerDelArmUntil = millis() + 2500;
-      showToast("Ketuk lagi untuk hapus foto");
+      showToast(RPTR("Ketuk lagi untuk hapus foto"));
     }
     needRedraw = true;
   }

@@ -70,7 +70,7 @@ static bool screenshotSaveNow() {
     snprintf(path, sizeof(path), "/screenshot/ss_%lu.bmp", (unsigned long)millis());
   }
   File f = SD_MMC.open(path, FILE_WRITE);
-  if (!f) { showToast("Gagal simpan screenshot"); vibError(); return false; }
+  if (!f) { showToast(RPTR("Gagal simpan screenshot")); vibError(); return false; }
 
   const int w = canvas.width(), h = canvas.height();
   const uint32_t rowSize = (uint32_t)(((w * 3) + 3) / 4) * 4;
@@ -109,7 +109,7 @@ static bool screenshotSaveNow() {
   if (!ok) { SD_MMC.remove(path); showToast("Screenshot gagal (SD penuh?)"); vibError(); return false; }
 
   nyxShotThumbCapture(path);   // NYX-EXTRAS-V1: thumbnail di pojok (ketuk = Galeri)
-  if (!nyxShotThumbActive()) { showToast("Screenshot tersimpan di /screenshot", 1800); vibSuccess(); }
+  if (!nyxShotThumbActive()) { showToast(RPTR("Screenshot tersimpan di /screenshot"), 1800); vibSuccess(); }
   return true;
 }
 
@@ -163,8 +163,8 @@ static void swStopRing() {
 
 static void swTimerFinished() {
   tmRinging = true; tmRingCnt = 0; tmRingLast = 0;
-  showToast("Timer selesai!", 2500);
-  diNotify('t', String("Timer selesai"), T().accent, 4500, false, "", SCR_STOPWATCH, true);
+  showToast(RPTR("Timer selesai!"), 2500);
+  diNotify('t', String(RPTR("Timer selesai")), T().accent, 4500, false, "", SCR_STOPWATCH, true);
   if (curScreen() != SCR_STOPWATCH) notifAdd(SCR_STOPWATCH, 1);
   needRedraw = true;
 }
@@ -585,7 +585,7 @@ static void memoRecTask(void* arg) {
 
 static void memoRecStart() {
   if (memoRec) return;
-  if (micRecording || micTranscribing || micTaskHandle != NULL) { showToast("Mic sedang dipakai fitur lain"); vibWarn(); return; }
+  if (micRecording || micTranscribing || micTaskHandle != NULL) { showToast(RPTR("Mic sedang dipakai fitur lain")); vibWarn(); return; }
   if (memoPlayActive()) memoStopPlay();
   SD_MMC.mkdir(MEMO_DIR);
   struct tm t;
@@ -601,7 +601,7 @@ static void memoRecStart() {
   BaseType_t res = createTaskPsramStackPrio(memoRecTask, "memoRec", 12288, NULL, &memoTaskStack, &memoTaskTCB, &micTaskHandle, 1, 2);
   if (res != pdPASS) {
     memoRec = false; micTaskHandle = NULL;
-    showToast("Gagal mulai merekam"); vibError(); return;
+    showToast(RPTR("Gagal mulai merekam")); vibError(); return;
   }
   vibTap(); needRedraw = true;
 }
@@ -759,8 +759,8 @@ void memoTouch(int x, int y, bool held, bool isNew) {
   if (fxHit(x, y, mlBtn1X, mlBtnY, mlBtnW, mlBtnH)) {
     if (memoPlayActive()) { memoStopPlay(); vibTap(); needRedraw = true; return; }
     char p[48];
-    if (memoRec || !memoSelPath(p, sizeof(p))) { vibWarn(); showToast(memoRec ? "Selesaikan rekaman dulu" : "Pilih rekaman dulu"); return; }
-    if (!memoBtReady()) { showToast("TWS belum terhubung (sambungkan di app Musik)", 2000); vibWarn(); return; }
+    if (memoRec || !memoSelPath(p, sizeof(p))) { vibWarn(); showToast(memoRec ? RPTR("Selesaikan rekaman dulu") : RPTR("Pilih rekaman dulu")); return; }
+    if (!memoBtReady()) { showToast(RPTR("TWS belum terhubung (sambungkan di app Musik)"), 2000); vibWarn(); return; }
     strncpy(memoPlayPath, p, sizeof(memoPlayPath) - 1); memoPlayPath[sizeof(memoPlayPath) - 1] = 0;
     memoPlayFile(memoPlayPath);
     vibTap(); needRedraw = true; return;
@@ -774,9 +774,9 @@ void memoTouch(int x, int y, bool held, bool isNew) {
       if (memoPlayActive()) memoStopPlay();
       SD_MMC.remove(p);
       memoDelArmUntil = 0; memoSel = -1; memoScan();
-      showToast("Rekaman dihapus"); vibSuccess(); needRedraw = true;
+      showToast(RPTR("Rekaman dihapus")); vibSuccess(); needRedraw = true;
     } else {
-      memoDelArmUntil = millis() + 2500; showToast("Ketuk lagi untuk menghapus"); vibTap(); needRedraw = true;
+      memoDelArmUntil = millis() + 2500; showToast(RPTR("Ketuk lagi untuk menghapus")); vibTap(); needRedraw = true;
     }
     return;
   }
@@ -881,10 +881,10 @@ static void wxStartFetch() {
 }
 
 void weatherRefreshNow() {
-  if (!wifiConnected) { showToast("WiFi belum terhubung"); vibWarn(); return; }
-  if (wxFetching) { showToast("Memuat cuaca..."); return; }
+  if (!wifiConnected) { showToast(RPTR("WiFi belum terhubung")); vibWarn(); return; }
+  if (wxFetching) { showToast(RPTR("Memuat cuaca...")); return; }
   wxStartFetch();
-  showToast("Memperbarui cuaca...");
+  showToast(RPTR("Memperbarui cuaca..."));
   vibTap();
 }
 

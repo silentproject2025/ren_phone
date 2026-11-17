@@ -113,7 +113,7 @@ static void rpHLShow(){
   snprintf(buf, sizeof(buf), "HEAPLOG KB  %s", rphlSdStr);
   display.print(buf);
   display.setCursor(2, 2 + lh);
-  display.print("B=bebas M=blokMax T=total L=min P=psram K=task");
+  display.print(RPTR("B=bebas M=blokMax T=total L=min P=psram K=task"));
   for(int i = 0; i < rphlN; i++){
     snprintf(buf, sizeof(buf), "%-17.17s B%3u M%3u T%3u L%3u P%4u K%u %us",
              rphlLabel[i],

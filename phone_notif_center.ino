@@ -373,11 +373,11 @@ void drawNotifShade(LGFX_Sprite& s){
   nyxAaRR(s, SCR_W/2-14,ph-9,28,4,2,T().divider);
 
   s.setTextColor(T().text); s.setTextSize(1);
-  s.setCursor(10,8); s.print("Notifikasi");
+  s.setCursor(10,8); s.print(RPTR("Notifikasi"));
 
   if(nsRowN==0){
     s.setTextColor(T().subtext); s.setTextSize(1);
-    s.setCursor(10,32); s.print("Tidak ada notifikasi");
+    s.setCursor(10,32); s.print(RPTR("Tidak ada notifikasi"));
   } else {
     int rowTop=NS_HEAD_H;
     int btnY=ph-32;
@@ -406,7 +406,7 @@ void drawNotifShade(LGFX_Sprite& s){
         s.fillRectAlpha(rx,y+2,rw2,NS_ROW_H-4,(uint8_t)(40+110.0f*f),T().danger);
         if(abs(dx)>46){
           s.setTextColor(0xFFFF); s.setTextSize(1);
-          s.setCursor(dx>0? 16 : SCR_W-16-s.textWidth("Hapus"), y+NS_ROW_H/2-4); s.print("Hapus");
+          s.setCursor(dx>0? 16 : SCR_W-16-s.textWidth(RPTR("Hapus")), y+NS_ROW_H/2-4); s.print(RPTR("Hapus"));
         }
       }
 

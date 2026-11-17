@@ -1138,8 +1138,8 @@ void btCcToggle() {
   musBtOn = !musBtOn;
   { Preferences p; p.begin("music", false); p.putBool("bton", musBtOn); p.end(); }
   musPost('B', musBtOn ? 1 : 0, nullptr);
-  if (wasStarted && !musCamAlive) showToast("Modul BT tidak terdeteksi");
-  else showToast(musBtOn ? "Bluetooth aktif" : "Bluetooth mati");
+  if (wasStarted && !musCamAlive) showToast(RPTR("Modul BT tidak terdeteksi"));
+  else showToast(musBtOn ? RPTR("Bluetooth aktif") : RPTR("Bluetooth mati"));
 }
 
 // dipanggil TERUS dari loop() utama (murah kalau app belum pernah dibuka)
@@ -1167,7 +1167,7 @@ void musicLoopPoll() {
       if (!saved) { Preferences bw; bw.begin("music", false); bw.putBool("bton", true); bw.end(); }
       musBtOn = true; musBtOnLoaded = true;
     }
-    if (onScr || musLoaded) showToast(musBtConn ? "TWS terhubung" : "TWS terputus");
+    if (onScr || musLoaded) showToast(musBtConn ? RPTR("TWS terhubung") : RPTR("TWS terputus"));
     needRedraw = true;
   }
   // volume: kirim ke CAM maks tiap 60 ms (slider di-drag banyak event)
@@ -1396,7 +1396,7 @@ static void musDrawChips(LGFX_Sprite& s) {
   musPanel(s, mDafX, mHdrY, mDafW, mChipH, 9, T().surface2, 210);
   for (int i = 0; i < 3; i++) s.fillRect(mDafX + 10, mHdrY + 5 + i * 4, 10, 2, T().text);
   s.setTextSize(1); s.setTextColor(T().text);
-  s.setCursor(mDafX + 26, mHdrY + 5); s.print("Daftar");
+  s.setCursor(mDafX + 26, mHdrY + 5); s.print(RPTR("Daftar"));
   { int cx, cw; if (ryvChipRect(&cx, &cw)) { musPanel(s, cx, mHdrY, cw, mChipH, 9, T().surface2, 210); s.setTextColor(T().accent); s.setCursor(cx + (cw - 24) / 2, mHdrY + 5); s.print("RYNE"); s.setTextColor(T().text); } }
 
   const char* st; uint16_t col;
@@ -1542,7 +1542,7 @@ static void musDrawList(LGFX_Sprite& s) {
   int n = musListCount();
   int rows = musListRows();
   if (musListTop >= n) musListTop = 0;
-  s.setTextSize(2); s.setTextColor(T().accent); s.setCursor(12, mHdrY + 1); s.print("Daftar Lagu");
+  s.setTextSize(2); s.setTextColor(T().accent); s.setCursor(12, mHdrY + 1); s.print(RPTR("Daftar Lagu"));
   char cnt[16]; snprintf(cnt, sizeof(cnt), "%d lagu", n);
   s.setTextSize(1); s.setTextColor(T().subtext);
   s.setCursor(SCR_W - 12 - s.textWidth(cnt), mHdrY + 5); s.print(cnt);
@@ -1550,9 +1550,9 @@ static void musDrawList(LGFX_Sprite& s) {
   int maxc = (SCR_W - 80) / 6;
   if (n == 0) {
     s.setTextColor(T().subtext);
-    s.setCursor(12, 56); s.print("Tidak ada MP3 di folder /music");
-    s.setCursor(12, 70); s.print("(atau di root SD). Taruh file lalu");
-    s.setCursor(12, 84); s.print("buka ulang app ini.");
+    s.setCursor(12, 56); s.print(RPTR("Tidak ada MP3 di folder /music"));
+    s.setCursor(12, 70); s.print(RPTR("(atau di root SD). Taruh file lalu"));
+    s.setCursor(12, 84); s.print(RPTR("buka ulang app ini."));
   }
   for (int r = 0; r < rows; r++) {
     int idx = musListTop + r;
@@ -1583,11 +1583,11 @@ static void musDrawList(LGFX_Sprite& s) {
   musPanel(s, bx1, mBotY, bw3, mBotH, 10, T().surface2, 210);
   s.fillTriangle(bx1 + bw3 / 2, mBotY + 19, bx1 + bw3 / 2 - 7, mBotY + 9, bx1 + bw3 / 2 + 7, mBotY + 9, T().text);
   iosRR(s,bx2, mBotY, bw3, mBotH, 10, T().accent);
-  musDrawLabel(s, "Pemutar", bx2, mBotY, bw3, mBotH, T().bg);
+  musDrawLabel(s, RPTR("Pemutar"), bx2, mBotY, bw3, mBotH, T().bg);
 }
 
 static void musDrawScan(LGFX_Sprite& s) {
-  s.setTextSize(2); s.setTextColor(T().accent); s.setCursor(12, mHdrY + 1); s.print("Cari TWS");
+  s.setTextSize(2); s.setTextColor(T().accent); s.setCursor(12, mHdrY + 1); s.print(RPTR("Cari TWS"));
   if (musScanning) {                                // radar
     int rcx = SCR_W - 24, rcy = mHdrY + 9;
     int ph = (int)((millis() / 90) % 12);
@@ -1597,11 +1597,11 @@ static void musDrawScan(LGFX_Sprite& s) {
   }
   s.setTextSize(1);
   s.setCursor(12, 46);
-  if (!musCamAlive) { s.setTextColor(T().danger); s.print("Modul BT tidak terdeteksi (cek kabel)"); }
+  if (!musCamAlive) { s.setTextColor(T().danger); s.print(RPTR("Modul BT tidak terdeteksi (cek kabel)")); }
   else if (musScanning) {
     s.setTextColor(T().subtext);
     int d = (millis() / 300) % 4;
-    s.print("Memindai"); for (int i = 0; i < d; i++) s.print(".");
+    s.print(RPTR("Memindai")); for (int i = 0; i < d; i++) s.print(".");
   } else {
     s.setTextColor(T().subtext);
     s.print(musScanCount); s.print(" perangkat. Ketuk untuk menyambung.");
@@ -1621,9 +1621,9 @@ static void musDrawScan(LGFX_Sprite& s) {
   }
   int bw2 = (SCR_W - 24 - 6) / 2;
   musPanel(s, 12, mBotY, bw2, mBotH, 10, T().surface2, 210);
-  musDrawLabel(s, "Pindai ulang", 12, mBotY, bw2, mBotH, T().text);
+  musDrawLabel(s, RPTR("Pindai ulang"), 12, mBotY, bw2, mBotH, T().text);
   iosRR(s,12 + bw2 + 6, mBotY, bw2, mBotH, 10, T().accent);
-  musDrawLabel(s, "Pemutar", 12 + bw2 + 6, mBotY, bw2, mBotH, T().bg);
+  musDrawLabel(s, RPTR("Pemutar"), 12 + bw2 + 6, mBotY, bw2, mBotH, T().bg);
 }
 
 // =====================================================================
@@ -1690,14 +1690,14 @@ static void ryvDrawVibe(LGFX_Sprite& s) {
   s.setTextSize(1); s.setTextColor(T().accent);
   if (g.bw >= g.bh) {
     int hw = (g.bw - 12) / 2, x2 = g.bx + hw + 12;
-    s.setCursor(g.bx, g.by); s.print("Peluang vibe"); s.setCursor(x2, g.by); s.print("Sinyal (fitur)");
+    s.setCursor(g.bx, g.by); s.print(RPTR("Peluang vibe")); s.setCursor(x2, g.by); s.print(RPTR("Sinyal (fitur)"));
     ryvBars(s, g.bx, g.by + 11, hw, g.bh - 11, RY_NV, RY_VIBE_NAME, pv, false, top);
     ryvBars(s, x2, g.by + 11, hw, g.bh - 11, RY_NF, RYV_FEAT, ft, true, -1);
   } else {
     int h1 = (g.bh - 22) * RY_NV / (RY_NV + RY_NF);
-    s.setCursor(g.bx, g.by); s.print("Peluang vibe");
+    s.setCursor(g.bx, g.by); s.print(RPTR("Peluang vibe"));
     ryvBars(s, g.bx, g.by + 11, g.bw, h1, RY_NV, RY_VIBE_NAME, pv, false, top);
-    s.setTextColor(T().accent); s.setCursor(g.bx, g.by + 13 + h1); s.print("Sinyal (fitur)");
+    s.setTextColor(T().accent); s.setCursor(g.bx, g.by + 13 + h1); s.print(RPTR("Sinyal (fitur)"));
     ryvBars(s, g.bx, g.by + 24 + h1, g.bw, g.bh - 24 - h1, RY_NF, RYV_FEAT, ft, true, -1);
   }
 }
@@ -1719,7 +1719,7 @@ static void ryvDrawTaste(LGFX_Sprite& s) {
   float mA = 1e-3f, sMax = 1e-3f, sd[RY_D];
   for (int i = 0; i < RY_D; i++) { float v = fabsf(mu[i]); if (v > mA && i > 0) mA = v; float d = R->Ainv[i * RY_D + i]; sd[i] = d > 0 ? sqrtf(d) : 0.f; if (i > 0 && sd[i] > sMax) sMax = sd[i]; }
   int x0, yA, yB, cw, rh; ryvGridGeom(&x0, &yA, &yB, &cw, &rh);
-  s.setTextSize(1); s.setTextColor(T().accent); s.setCursor(g.bx, g.by); s.print("Selera: biru = suka, merah = tidak");
+  s.setTextSize(1); s.setTextColor(T().accent); s.setCursor(g.bx, g.by); s.print(RPTR("Selera: biru = suka, merah = tidak"));
   s.setTextColor(T().subtext);
   for (int c = 0; c < 9; c++) { char h[4] = "Um"; if (c < RY_NV) { memcpy(h, RY_VIBE_NAME[c], 3); h[3] = 0; } s.setCursor(x0 + c * cw + (cw - (int)strlen(h) * 6) / 2, g.by + 11); s.print(h); }
   for (int r = 0; r < 3; r++) {
@@ -1732,7 +1732,7 @@ static void ryvDrawTaste(LGFX_Sprite& s) {
       s.fillRect(x0 + c * cw, yB + r * rh, cw - 1, rh - 1, blend565((uint16_t)T().surface, (uint16_t)T().accent2, (uint8_t)(a * 255.f)));
     }
   }
-  s.setTextColor(T().accent); s.setCursor(g.bx, yB - 11); s.print("Keraguan: terang = belum yakin");
+  s.setTextColor(T().accent); s.setCursor(g.bx, yB - 11); s.print(RPTR("Keraguan: terang = belum yakin"));
   if (ryvCell >= 0) {
     int part = ryvCell / 100, r = (ryvCell % 100) / 10, c = ryvCell % 10, yy = part ? yB : yA;
     s.drawRect(x0 + c * cw - 1, yy + r * rh - 1, cw + 1, rh + 1, T().text);
@@ -1749,7 +1749,7 @@ static void ryvDrawSongs(LGFX_Sprite& s) {
   const RyvG& g = ryg; RyneEngine* R = ryne;
   int px, py, ps, lx, ly, lw, lh; ryvScatterGeom(&px, &py, &ps, &lx, &ly, &lw, &lh);
   int n = R->nPl; if (n > RY_MAXPL) n = RY_MAXPL; if (n < 0) n = 0;
-  s.setTextSize(1); s.setTextColor(T().accent); s.setCursor(g.bx, g.by); s.print("Lagu: x = energi, y = kecerahan");
+  s.setTextSize(1); s.setTextColor(T().accent); s.setCursor(g.bx, g.by); s.print(RPTR("Lagu: x = energi, y = kecerahan"));
   s.drawRect(px, py, ps, ps, T().divider);
   s.drawLine(px + ps / 2, py, px + ps / 2, py + ps - 1, T().surface2); s.drawLine(px, py + ps / 2, px + ps - 1, py + ps / 2, T().surface2);
   for (int i = 0; i < n; i++) {
@@ -1762,7 +1762,7 @@ static void ryvDrawSongs(LGFX_Sprite& s) {
     if (E.flags & 1) s.drawCircle(x, y, rr + 2, T().good);
     if (ryvCell == i) s.drawCircle(x, y, rr + 4, T().text);
   }
-  s.setTextColor(T().accent); s.setCursor(lx, ly); s.print("Paling disukai");
+  s.setTextColor(T().accent); s.setCursor(lx, ly); s.print(RPTR("Paling disukai"));
   bool used[RY_MAXPL]; memset(used, 0, sizeof(used));
   int rows = (lh - 12) / 10; if (rows > 8) rows = 8;
   for (int r = 0; r < rows; r++) {
@@ -1792,8 +1792,8 @@ static void ryvDraw(LGFX_Sprite& s) {
   }
   RyneEngine* R = ryne;
   if (!R) {
-    s.setTextColor(T().subtext); s.setCursor(g.bx, g.by + 8); s.print("RYNE belum aktif.");
-    s.setCursor(g.bx, g.by + 22); s.print("Buka Daftar & putar lagu dulu.");
+    s.setTextColor(T().subtext); s.setCursor(g.bx, g.by + 8); s.print(RPTR("RYNE belum aktif."));
+    s.setCursor(g.bx, g.by + 22); s.print(RPTR("Buka Daftar & putar lagu dulu."));
     return;
   }
   if (ryvTab == 0) ryvDrawVibe(s); else if (ryvTab == 1) ryvDrawTaste(s); else ryvDrawSongs(s);
@@ -1894,7 +1894,7 @@ void musicTouch(int x, int y, bool held, bool isNew) {
     for (int r = 0; r < rows && r < musScanCount; r++) {
       if (musHit(x, y, 12, 58 + r * 30, SCR_W - 24, 28)) {
         musPost('c', 0, musScanName[r]);
-        showToast("Menghubungkan..."); musPage = 0; vibTap(); needRedraw = true; return;
+        showToast(RPTR("Menghubungkan...")); musPage = 0; vibTap(); needRedraw = true; return;
       }
     }
     int bw2 = (SCR_W - 24 - 6) / 2;
@@ -1914,7 +1914,7 @@ void musicTouch(int x, int y, bool held, bool isNew) {
   if (musHitC(x, y, mNextX, mCtlCY, 22)) { musPost('n', 0, nullptr); vibTap(); needRedraw = true; return; }
   if (musHitC(x, y, mShufX, mCtlCY, 20)) {
     musShufMode = (musShufMode + 1) % 3; musPrefsDirty = true; musPrefsMs = millis(); vibTap();
-    showToast(musShufMode == 0 ? "Acak: mati" : (musShufMode == 1 ? "Acak: biasa" : "Acak: AI (RYNE)"));
+    showToast(musShufMode == 0 ? RPTR("Acak: mati") : (musShufMode == 1 ? RPTR("Acak: biasa") : RPTR("Acak: AI (RYNE)")));
     needRedraw = true; return;
   }
   if (musHitC(x, y, mTitX + mTitW - 8, mSubY + 4, 14)) {          // hati = suka

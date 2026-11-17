@@ -288,7 +288,7 @@ static void inaLearnFinish() {
   if (span < INA_LRN_MIN_SPAN) return;
   float est = inaLrnMah * INA_CHG_EFF / (span / 100.0f);
   float rated = (float)inaCapMah;
-  if (est < 0.40f * rated || est > 1.30f * rated) { showToast("Ukur kapasitas batal (hasil tak wajar)"); return; }
+  if (est < 0.40f * rated || est > 1.30f * rated) { showToast(RPTR("Ukur kapasitas batal (hasil tak wajar)")); return; }
   inaCapLearn = (inaCapLearn > 0) ? (inaCapLearn * 0.6f + est * 0.4f) : est;
   inaCountersDirty = true;
   inaSaveCounters(true);
@@ -479,13 +479,13 @@ void battUpdate() {
 
   if (battPercent <= 5 && !battWarnedCritical) {
     battWarnedCritical = true;
-    showToast("Baterai kritis! Segera cas.");
-    diNotify('B', "Baterai kritis!", T().danger, 2200, false, "", SCR_BATTERY, true);
+    showToast(RPTR("Baterai kritis! Segera cas."));
+    diNotify('B', RPTR("Baterai kritis!"), T().danger, 2200, false, "", SCR_BATTERY, true);
     if (curScreen() != SCR_BATTERY) notifAdd(SCR_BATTERY);
   } else if (battPercent <= 15 && !battWarnedLow) {
     battWarnedLow = true;
-    showToast("Baterai lemah, segera cas.");
-    diNotify('B', "Baterai lemah", T().accent, 1900, false, "", SCR_BATTERY, true);
+    showToast(RPTR("Baterai lemah, segera cas."));
+    diNotify('B', RPTR("Baterai lemah"), T().accent, 1900, false, "", SCR_BATTERY, true);
     if (curScreen() != SCR_BATTERY) notifAdd(SCR_BATTERY);
   } else if (battPercent > 25) {
     battWarnedLow = false; battWarnedCritical = false;
@@ -538,16 +538,16 @@ static void inaAdjust(uint8_t tab, uint8_t row, int dir) {
 static void inaAction(uint8_t tab, uint8_t idx) {
   if (tab == 2) {
     if (idx == 0) {   // reset sensor
-      if (inaOk) { inaWrite16(INA_REG_CONFIG, 0x8000); delay(2); inaApplyConfig(); inaLastInt = 0; showToast("INA219 di-reset"); }
+      if (inaOk) { inaWrite16(INA_REG_CONFIG, 0x8000); delay(2); inaApplyConfig(); inaLastInt = 0; showToast(RPTR("INA219 di-reset")); }
       else showToast("Sensor offline");
     } else {          // scan ulang
-      showToast(inaReinit() ? "INA219 ditemukan" : "INA219 tidak ditemukan");
+      showToast(inaReinit() ? RPTR("INA219 ditemukan") : RPTR("INA219 tidak ditemukan"));
     }
   } else if (tab == 3) {
-    if (idx == 0) { inaSocInit = false; inaLrnActive = false; showToast("Persen dihitung ulang"); }
-    else if (idx == 1) { inaResetSession(); showToast("Counter sesi di-reset"); }
-    else if (idx == 2) { inaMahOutTot = 0; inaMahInTot = 0; inaCycles = 0; inaCapLearn = 0; inaLrnActive = false; inaSaveCounters(true); showToast("Total, siklus & kapasitas di-reset"); }
-    else { inaResetPeaks(); showToast("Puncak di-reset"); }
+    if (idx == 0) { inaSocInit = false; inaLrnActive = false; showToast(RPTR("Persen dihitung ulang")); }
+    else if (idx == 1) { inaResetSession(); showToast(RPTR("Counter sesi di-reset")); }
+    else if (idx == 2) { inaMahOutTot = 0; inaMahInTot = 0; inaCycles = 0; inaCapLearn = 0; inaLrnActive = false; inaSaveCounters(true); showToast(RPTR("Total, siklus & kapasitas di-reset")); }
+    else { inaResetPeaks(); showToast(RPTR("Puncak di-reset")); }
   }
 }
 
@@ -584,7 +584,7 @@ static void inaDrawSummary(LGFX_Sprite& s, int top, int bottom) {
   (void)bottom;
   s.setTextSize(1);
   if (!inaOk) {
-    s.setTextColor(T().danger); s.setCursor(12, top + 6); s.print("INA219 tidak terdeteksi");
+    s.setTextColor(T().danger); s.setCursor(12, top + 6); s.print(RPTR("INA219 tidak terdeteksi"));
     s.setTextColor(T().subtext); s.setTextWrap(true);
     s.setCursor(12, top + 24);
     s.print("Cek wiring: VCC 3.3V, GND, SDA = GPIO" RP_STR(RP_SENS_SDA) ", SCL = GPIO" RP_STR(RP_SENS_SCL) ". Shunt dipasang seri di kabel (+) baterai (baterai -> VIN+, beban -> VIN-). Alamat 0x40-0x4F (A0/A1). Buka tab Sensor > Scan ulang setelah memperbaiki.");
@@ -664,7 +664,7 @@ static void inaDrawGraph(LGFX_Sprite& s, int top, int bottom) {
   int n = (int)inaHistCount;
   if (n < 2) {
     s.setTextColor(T().subtext);
-    s.setCursor(gx + 10, gy + gh / 2 - 4); s.print("Mengumpulkan data...");
+    s.setCursor(gx + 10, gy + gh / 2 - 4); s.print(RPTR("Mengumpulkan data..."));
     return;
   }
   uint8_t m = inaGraphMetric;
@@ -778,7 +778,7 @@ void drawBatteryApp(LGFX_Sprite& s) {
   s.fillSprite(T().bg);
   drawStatusBar(s);
   s.setTextSize(1);
-  s.setTextColor(0x07E0); s.setCursor(8, 26); s.print("Daya (INA219)");
+  s.setTextColor(0x07E0); s.setCursor(8, 26); s.print(RPTR("Daya (INA219)"));
 
   char chip[16]; uint16_t cc = T().good;
   if (!inaOk) { snprintf(chip, sizeof(chip), "OFFLINE"); cc = T().danger; }

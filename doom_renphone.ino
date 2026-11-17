@@ -765,9 +765,9 @@ void drawDoom(LGFX_Sprite& s){
         ly+=14; start=i+1;
       }
     }
-    s.setCursor(SCR_W/2-60, ly+10); s.setTextColor(T().accent); s.print("< Back utk kembali");
+    s.setCursor(SCR_W/2-60, ly+10); s.setTextColor(T().accent); s.print(RPTR("< Back utk kembali"));
   } else {
-    s.setCursor(SCR_W/2-40, SCR_H/2-10); s.print("Memuat...");
+    s.setCursor(SCR_W/2-40, SCR_H/2-10); s.print(RPTR("Memuat..."));
   }
   drawBack(s);
 }

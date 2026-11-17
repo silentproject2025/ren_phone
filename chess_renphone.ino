@@ -3833,10 +3833,10 @@ static void chsRandomRoom() {
 }
 
 static void chsStartGame() {
-  if (!chsMoves) { showToast("RAM tidak cukup utk Catur", 2200); return; }
-  if (!chsBrokerOk()) { showToast("Atur broker Catur dulu", 2400); return; }
+  if (!chsMoves) { showToast(RPTR("RAM tidak cukup utk Catur"), 2200); return; }
+  if (!chsBrokerOk()) { showToast(RPTR("Atur broker Catur dulu"), 2400); return; }
   chsSanitizeRoom();
-  if (chsRoomStr.length() < 3) { showToast("Kode room minimal 3 karakter", 2200); return; }
+  if (chsRoomStr.length() < 3) { showToast(RPTR("Kode room minimal 3 karakter"), 2200); return; }
   strncpy(chsRoom, chsRoomStr.c_str(), 9); chsRoom[9] = 0;
   { Preferences p; if (p.begin("chess", false)) { p.putString("room", chsRoomStr); p.end(); } }
   chsVsAI = false; chsGem = false; chsAfkAI = false; chsAiQueued = false; chsPrevMyTurn = false; chsLastTouchMs = millis(); chsTurnStartMs = millis();
@@ -3854,8 +3854,8 @@ static void chsStartGame() {
 
 // Mulai partai lawan AI (tanpa broker / jaringan)
 static void chsStartAi() {
-  if (!chsMoves) { showToast("RAM tidak cukup utk Catur", 2200); return; }
-  if (!chsAiEnsure()) { showToast("PSRAM tidak cukup utk AI", 2200); return; }
+  if (!chsMoves) { showToast(RPTR("RAM tidak cukup utk Catur"), 2200); return; }
+  if (!chsAiEnsure()) { showToast(RPTR("PSRAM tidak cukup utk AI"), 2200); return; }
   chsActive = false;
   chsVsAI = true; chsGem = false; chsAfkAI = false; chsAiQueued = false;
   chsAiSeats();
@@ -4109,12 +4109,12 @@ static void chsGemNewGame() {
 }
 
 static void chsStartGem() {
-  if (!chsMoves) { showToast("RAM tidak cukup utk Catur", 2200); return; }
+  if (!chsMoves) { showToast(RPTR("RAM tidak cukup utk Catur"), 2200); return; }
   geminiApiKey.trim();
   if (geminiApiKey.length() == 0 || geminiApiKey == "YOUR_GEMINI_API_KEY_HERE") { showToast("Isi API key Gemini dulu (AI Chat / SD)", 2600); return; }
-  if (WiFi.status() != WL_CONNECTED) { showToast("WiFi belum terhubung", 2200); return; }
-  if (chsGemTask) { showToast("Tunggu permintaan Gemini sebelumnya selesai", 2400); return; }
-  if (!chsAiEnsure()) { showToast("PSRAM tidak cukup utk AI", 2200); return; }
+  if (WiFi.status() != WL_CONNECTED) { showToast(RPTR("WiFi belum terhubung"), 2200); return; }
+  if (chsGemTask) { showToast(RPTR("Tunggu permintaan Gemini sebelumnya selesai"), 2400); return; }
+  if (!chsAiEnsure()) { showToast(RPTR("PSRAM tidak cukup utk AI"), 2200); return; }
   chsActive = false;
   chsVsAI = true; chsGem = true; chsAfkAI = false; chsAiQueued = false;
   chsGemSt = 0;
@@ -4146,9 +4146,9 @@ static void chsGemBtn0() {                        // tombol kiri panel: Jeda/Lan
 // SIKLUS HIDUP APP
 // ---------------------------------------------------------------------
 void chessEnter() {
-  if (!chsEnsureInit()) { showToast("RAM tidak cukup utk Catur", 2500); return; }
+  if (!chsEnsureInit()) { showToast(RPTR("RAM tidak cukup utk Catur"), 2500); return; }
   chsBrokerLoad();
-  if (!chsBrokerOk() && chsBrokerFromSd()) { chsBrokerSave(); showToast("Broker Catur dimuat dari /chess.cfg", 2200); }
+  if (!chsBrokerOk() && chsBrokerFromSd()) { chsBrokerSave(); showToast(RPTR("Broker Catur dimuat dari /chess.cfg"), 2200); }
   chsBEdit = -1;
   chsPrefsLoad();
   chsVsAI = false; chsGem = false; chsAfkAI = false; chsAiQueued = false; chsPrevMyTurn = false;
@@ -4578,8 +4578,8 @@ static int chsMaterialDiff() {
 
 static void chsDrawSetup(LGFX_Sprite& s) {
   bool typing = kbVisible && kbTarget == &chsRoomStr;
-  s.setTextColor(T().accent); s.setTextSize(2); s.setCursor(10, 25); s.print("Catur");
-  s.setTextSize(1); s.setTextColor(T().subtext); s.setCursor(10, 46); s.print("Online: kode room sama. Atau lawan AI");
+  s.setTextColor(T().accent); s.setTextSize(2); s.setCursor(10, 25); s.print(RPTR("Catur"));
+  s.setTextSize(1); s.setTextColor(T().subtext); s.setCursor(10, 46); s.print(RPTR("Online: kode room sama. Atau lawan AI"));
   if (SCR_W >= SCR_H) {                                             // hiasan: raja + kuda di pojok kanan atas
     int bx, by, sq, px, py, pw, ph; chsGeom(&bx, &by, &sq, &px, &py, &pw, &ph);
     chsBlitPiece(s, 6, true,  SCR_W - 2 * sq - 12, 21, sq, 255);
@@ -4587,27 +4587,27 @@ static void chsDrawSetup(LGFX_Sprite& s) {
   }
   iosRR(s, 8, 62, SCR_W - 16, 34, 8, T().surface);
   if (typing) nyxAaRRRing(s, 8, 62, SCR_W - 16, 34, 10, T().accent);
-  s.setTextColor(T().subtext); s.setCursor(16, 67); s.print("Kode room");
+  s.setTextColor(T().subtext); s.setCursor(16, 67); s.print(RPTR("Kode room"));
   String shown = chsRoomStr; if (typing) shown += "_";
   s.setTextSize(2); s.setTextColor(chsRoomStr.length() || typing ? T().text : T().subtext);
   s.setCursor(16, 78); s.print(shown.length() ? shown.c_str() : "ketuk utk isi");
   s.setTextSize(1);
   String nm = chatName.length() ? chatName : String("HP");
-  s.setTextColor(T().subtext); s.setCursor(10, 102); s.print("Pemain: "); s.setTextColor(T().text); s.print(nm.c_str());
+  s.setTextColor(T().subtext); s.setCursor(10, 102); s.print(RPTR("Pemain: ")); s.setTextColor(T().text); s.print(nm.c_str());
   s.setCursor(10, 116);
   if (chsBrokerOk()) { s.setTextColor(T().good); String hh; int pt; chsBrokerHostPort(hh, pt); char hb[40]; chsClip(hh.c_str(), hb, (SCR_W - 130) / 6); s.print("Broker: "); s.print(hb); }
-  else { s.setTextColor(T().danger); s.print("Broker belum diatur"); }
+  else { s.setTextColor(T().danger); s.print(RPTR("Broker belum diatur")); }
   nyxAaRR(s, SCR_W - 8 - 50, 110, 50, 18, 8, chsPressCol(5, blend565(T().surface2, 0xFFFF, 20)));
-  s.setTextColor(T().accent); chsPrintC(s, SCR_W - 8 - 50, 50, 115, "Atur");
+  s.setTextColor(T().accent); chsPrintC(s, SCR_W - 8 - 50, 50, 115, RPTR("Atur"));
   iosRR(s, 8, 134, 70, 26, 7, chsPressCol(3, T().surface2));
-  s.setTextColor(T().accent); chsPrintC(s, 8, 70, 143, "Acak");
+  s.setTextColor(T().accent); chsPrintC(s, 8, 70, 143, RPTR("Acak"));
   bool ok = chsBrokerOk() && chsRoomStr.length() >= 3;
   iosRR(s, 86, 134, SCR_W - 94, 26, 7, chsPressCol(4, ok ? (uint16_t)T().accent : (uint16_t)T().surface2));
-  s.setTextColor(ok ? (uint16_t)T().bg : (uint16_t)T().subtext); chsPrintC(s, 86, SCR_W - 94, 143, "Mulai");
+  s.setTextColor(ok ? (uint16_t)T().bg : (uint16_t)T().subtext); chsPrintC(s, 86, SCR_W - 94, 143, RPTR("Mulai"));
   {                                                               // baris AI: Lawan AI | level | AFK
     int gw = (SCR_W - 16 - 12) / 3, x0 = 8, x1 = 8 + gw + 6, x2 = 8 + 2 * (gw + 6), by2 = 166;
     iosRR(s, x0, by2, gw, 24, 7, chsPressCol(6, (uint16_t)T().accent));
-    s.setTextColor(T().bg); chsPrintC(s, x0, gw, by2 + 8, "Lawan AI");
+    s.setTextColor(T().bg); chsPrintC(s, x0, gw, by2 + 8, RPTR("Lawan AI"));
     iosRR(s, x1, by2, gw, 24, 7, chsPressCol(7, (uint16_t)T().surface2));
     s.setTextColor(T().accent); chsPrintC(s, x1, gw, by2 + 8, chsLvName[chsAiLevel]);
     iosRR(s, x2, by2, gw, 24, 7, chsPressCol(8, (uint16_t)T().surface2));
@@ -4620,7 +4620,7 @@ static void chsDrawSetup(LGFX_Sprite& s) {
     chsClip(cap, cb, (SCR_W - 16 - 66 - 64) / 6);
     s.setTextColor(T().subtext); s.setCursor(10, by2 + 30); s.print(cb);
     nyxAaRR(s, SCR_W - 8 - 58, by2 + 27, 58, 16, 7, chsPressCol(9, blend565(T().surface2, 0xFFFF, 20)));   // buka layar Jaringan
-    s.setTextColor(T().accent); chsPrintC(s, SCR_W - 8 - 58, 58, by2 + 31, "Jaringan");
+    s.setTextColor(T().accent); chsPrintC(s, SCR_W - 8 - 58, 58, by2 + 31, RPTR("Jaringan"));
     nyxAaRR(s, SCR_W - 8 - 58 - 6 - 58, by2 + 27, 58, 16, 7, chsPressCol(10, blend565(T().surface2, 0xFFFF, 20)));   // adu mesin vs Gemini
     s.setTextColor(T().accent); chsPrintC(s, SCR_W - 8 - 58 - 6 - 58, 58, by2 + 31, "Gemini");
   }
@@ -4863,13 +4863,13 @@ static void chsDrawGame(LGFX_Sprite& s) {
   bool canAct = (chsRole == 1 || chsRole == 2) && chsConn == 1;
   if (chsGem) {
     iosRR(s, x, y, w, h, 6, chsPressCol(0, over ? (uint16_t)T().accent : (uint16_t)T().surface2));
-    s.setTextColor(over ? (uint16_t)T().bg : (uint16_t)T().accent); chsPrintC(s, x, w, y + 7, over ? "Main lagi" : (chsGemPaused ? "Lanjut" : "Jeda"));
+    s.setTextColor(over ? (uint16_t)T().bg : (uint16_t)T().accent); chsPrintC(s, x, w, y + 7, over ? RPTR("Main lagi") : (chsGemPaused ? RPTR("Lanjut") : RPTR("Jeda")));
   } else if (over) {
     iosRR(s, x, y, w, h, 6, chsPressCol(0, canAct ? (uint16_t)T().accent : (uint16_t)T().surface2));
-    s.setTextColor(canAct ? (uint16_t)T().bg : (uint16_t)T().subtext); chsPrintC(s, x, w, y + 7, "Main lagi");
+    s.setTextColor(canAct ? (uint16_t)T().bg : (uint16_t)T().subtext); chsPrintC(s, x, w, y + 7, RPTR("Main lagi"));
   } else {
     iosRR(s, x, y, w, h, 6, chsPressCol(0, chsConfirm ? (uint16_t)T().danger : (uint16_t)T().surface2));
-    s.setTextColor(chsConfirm ? (uint16_t)T().bg : (uint16_t)T().danger); chsPrintC(s, x, w, y + 7, chsConfirm ? "Yakin?" : "Menyerah");
+    s.setTextColor(chsConfirm ? (uint16_t)T().bg : (uint16_t)T().danger); chsPrintC(s, x, w, y + 7, chsConfirm ? RPTR("Yakin?") : RPTR("Menyerah"));
   }
   chsBtnRect(1, &x, &y, &w, &h);
   iosRR(s, x, y, w, h, 6, chsPressCol(1, T().surface2));
@@ -5191,11 +5191,11 @@ static void chsVwDrawNps(LGFX_Sprite& s) {
     if (chsLsCores == 2) snprintf(b, sizeof(b), "node %s utama + %s core 2", k1, k2); else snprintf(b, sizeof(b), "node %s (1 core)", k1);
     s.setTextColor(T().subtext); s.setCursor(x, y); chsClip(b, ln, mc); s.print(ln); y += 14;
   } else {
-    s.setTextColor(T().subtext); s.setCursor(x, y); chsClip("Terakhir: belum ada (main lawan AI / uji)", ln, mc); s.print(ln); y += 14;
+    s.setTextColor(T().subtext); s.setCursor(x, y); chsClip(RPTR("Terakhir: belum ada (main lawan AI / uji)"), ln, mc); s.print(ln); y += 14;
   }
   if (chsBenchState) {
     s.setTextColor(T().accent); s.setCursor(x, y);
-    chsClip(chsBenchState == 1 ? "Menguji 1 core... jangan sentuh layar" : "Menguji 2 core... jangan sentuh layar", ln, mc); s.print(ln); y += 10;
+    chsClip(chsBenchState == 1 ? RPTR("Menguji 1 core... jangan sentuh layar") : RPTR("Menguji 2 core... jangan sentuh layar"), ln, mc); s.print(ln); y += 10;
   } else if (chsBnOk) {
     uint32_t a = chsBnTms[0] ? (uint32_t)((uint64_t)chsBnTn[0] * 1000ULL / chsBnTms[0]) : 0, c = chsBnTms[1] ? (uint32_t)((uint64_t)chsBnTn[1] * 1000ULL / chsBnTms[1]) : 0;
     chsFmtK(k1, sizeof(k1), a); chsFmtK(k2, sizeof(k2), c);
@@ -5243,14 +5243,14 @@ static void chsVwTouchNps(int x, int y) {
     if (x < bx || x >= bx + bw || y < by || y >= by + bh + 4) continue;
     if (chsBenchState || chsDepState) return;
     if (i < 2) {
-      if (chsActive || chsVsAI || chsGem) { showToast("Keluar dari partai dulu", 1800); return; }
-      if (!chsAiEnsure()) { showToast("PSRAM tidak cukup utk AI", 2200); return; }
+      if (chsActive || chsVsAI || chsGem) { showToast(RPTR("Keluar dari partai dulu"), 1800); return; }
+      if (!chsAiEnsure()) { showToast(RPTR("PSRAM tidak cukup utk AI"), 2200); return; }
       if (i == 0) { chsBenchState = 1; chsBenchReqMs = millis(); }
       else { chsDpOk = false; chsDepState = 1; chsDepReqMs = millis(); }
       needRedraw = true;
     } else {
 #if CHS_SMP
-      chsSmpOn = !chsSmpOn; chsPrefsSaveCfg(); showToast(chsSmpOn ? "Core ke-2 aktif" : "1 core saja", 1400); needRedraw = true;
+      chsSmpOn = !chsSmpOn; chsPrefsSaveCfg(); showToast(chsSmpOn ? "Core ke-2 aktif" : RPTR("1 core saja"), 1400); needRedraw = true;
 #endif
     }
     return;
@@ -5268,7 +5268,7 @@ static void chsDrawNet(LGFX_Sprite& s) {
   }
   { int x, y, w, h; chsVwTabRect(4, &x, &y, &w, &h);
     iosRR(s, x, y, w, h, 7, chsVwDelta ? (uint16_t)T().accent : (uint16_t)T().surface2);
-    s.setTextColor(chsVwDelta ? (uint16_t)T().bg : (chsVwInit ? (uint16_t)T().text : (uint16_t)T().subtext)); chsPrintC(s, x, w, y + 5, "Selisih"); }
+    s.setTextColor(chsVwDelta ? (uint16_t)T().bg : (chsVwInit ? (uint16_t)T().text : (uint16_t)T().subtext)); chsPrintC(s, x, w, y + 5, RPTR("Selisih")); }
   if (chsVw == 3) { chsVwDrawNps(s); return; }
   if (chsVw == 0) chsVwDrawNet(s); else if (chsVw == 1) chsVwDrawHm(s); else chsVwDrawBd(s);
   char b[96], ln[96];
@@ -5291,7 +5291,7 @@ static void chsTouchNet(int x, int y, bool isNew) {
       if (i < 4) chsVw = (uint8_t)i;
       else if (chsVw == 3) { }                       // chip Selisih tak berlaku di tab NPS
       else if (chsVwInit) chsVwDelta = !chsVwDelta;
-      else showToast("RAM tidak cukup utk selisih", 1800);
+      else showToast(RPTR("RAM tidak cukup utk selisih"), 1800);
       chsVwSel = -1; chsVwCell = -1; chsVwInfo[0] = 0; needRedraw = true; return;
     }
   }
@@ -5326,7 +5326,7 @@ void drawChess(LGFX_Sprite& s) {
   if (chsMoves && chsScr != 1) iosBackdrop(s); else s.fillSprite(T().bg);
   drawStatusBar(s);
   if (!chsMoves) {
-    s.setTextColor(T().danger); s.setTextSize(1); s.setCursor(10, 40); s.print("RAM tidak cukup untuk app Catur");
+    s.setTextColor(T().danger); s.setTextSize(1); s.setCursor(10, 40); s.print(RPTR("RAM tidak cukup untuk app Catur"));
   } else if (chsScr == 0) chsDrawSetup(s);
   else if (chsScr == 2) chsDrawBroker(s);
   else if (chsScr == 3) chsDrawNet(s);
@@ -5345,7 +5345,7 @@ static const char* chsBLabel(int i) {
 static String* chsBField(int i) { return i == 0 ? &chsBHost : (i == 1 ? &chsBUser : &chsBPass); }
 
 static void chsDrawBroker(LGFX_Sprite& s) {
-  s.setTextColor(T().accent); s.setTextSize(2); s.setCursor(10, 25); s.print("Broker Catur");
+  s.setTextColor(T().accent); s.setTextSize(2); s.setCursor(10, 25); s.print(RPTR("Broker Catur"));
   s.setTextSize(1);
   char buf[64];
   int maxC = (SCR_W - 32) / 6;
@@ -5361,7 +5361,7 @@ static void chsDrawBroker(LGFX_Sprite& s) {
     s.setTextColor(T().subtext); s.setCursor(10, 92); s.print("Ketuk area di atas keyboard = selesai");
     return;
   }
-  s.setTextColor(T().subtext); s.setCursor(10, 46); s.print("Terpisah dari Chat - hanya dipakai Catur");
+  s.setTextColor(T().subtext); s.setCursor(10, 46); s.print(RPTR("Terpisah dari Chat - hanya dipakai Catur"));
   for (int i = 0; i < 3; i++) {
     int y = 60 + i * 34;
     iosRR(s, 8, y, SCR_W - 16, 30, 8, T().surface);
@@ -5377,14 +5377,14 @@ static void chsDrawBroker(LGFX_Sprite& s) {
   bool sdOk = sdReady && SD_MMC.exists("/chess.cfg");
   bool chatOk = chatConfigured();
   iosRR(s, 8, by, bw, 26, 7, chsPressCol(6, T().surface2));
-  s.setTextColor(sdOk ? (uint16_t)T().accent : (uint16_t)T().subtext); chsPrintC(s, 8, bw, by + 9, "Dari SD");
+  s.setTextColor(sdOk ? (uint16_t)T().accent : (uint16_t)T().subtext); chsPrintC(s, 8, bw, by + 9, RPTR("Dari SD"));
   iosRR(s, 8 + bw + 6, by, bw, 26, 7, chsPressCol(7, T().surface2));
-  s.setTextColor(chatOk ? (uint16_t)T().accent : (uint16_t)T().subtext); chsPrintC(s, 8 + bw + 6, bw, by + 9, "Salin Chat");
+  s.setTextColor(chatOk ? (uint16_t)T().accent : (uint16_t)T().subtext); chsPrintC(s, 8 + bw + 6, bw, by + 9, RPTR("Salin Chat"));
   iosRR(s, 8 + 2 * (bw + 6), by, bw, 26, 7, chsPressCol(8, chsBrokerOk() ? (uint16_t)T().accent : (uint16_t)T().surface2));
-  s.setTextColor(chsBrokerOk() ? (uint16_t)T().bg : (uint16_t)T().subtext); chsPrintC(s, 8 + 2 * (bw + 6), bw, by + 9, "Simpan");
+  s.setTextColor(chsBrokerOk() ? (uint16_t)T().bg : (uint16_t)T().subtext); chsPrintC(s, 8 + 2 * (bw + 6), bw, by + 9, RPTR("Simpan"));
   s.setCursor(10, by + 34);
-  if (chsBrokerOk()) { s.setTextColor(T().good); s.print("Siap dipakai"); }
-  else { s.setTextColor(T().danger); s.print("Lengkapi host, username & password"); }
+  if (chsBrokerOk()) { s.setTextColor(T().good); s.print(RPTR("Siap dipakai")); }
+  else { s.setTextColor(T().danger); s.print(RPTR("Lengkapi host, username & password")); }
 }
 
 static void chsTouchBroker(int x, int y, bool isNew) {
@@ -5406,16 +5406,16 @@ static void chsTouchBroker(int x, int y, bool isNew) {
     int k = (x - 8) / (bw + 6);
     if (k == 0) {
       chsPress(6);
-      if (chsBrokerFromSd()) { chsBrokerSave(); showToast("Dimuat dari /chess.cfg", 1800); }
-      else showToast("/chess.cfg tidak ada / tidak valid (host= user= pass=)", 2800);
+      if (chsBrokerFromSd()) { chsBrokerSave(); showToast(RPTR("Dimuat dari /chess.cfg"), 1800); }
+      else showToast(RPTR("/chess.cfg tidak ada / tidak valid (host= user= pass=)"), 2800);
     } else if (k == 1) {
       chsPress(7);
-      if (chatConfigured()) { chsBHost = chatHost; chsBUser = chatUser; chsBPass = chatPass; chsBrokerSave(); showToast("Disalin dari Chat (tetap terpisah)", 2200); }
-      else showToast("Broker Chat belum diatur", 2000);
+      if (chatConfigured()) { chsBHost = chatHost; chsBUser = chatUser; chsBPass = chatPass; chsBrokerSave(); showToast(RPTR("Disalin dari Chat (tetap terpisah)"), 2200); }
+      else showToast(RPTR("Broker Chat belum diatur"), 2000);
     } else {
       chsPress(8);
-      if (!chsBrokerOk()) showToast("Isi host, username & password dulu", 2200);
-      else { chsBrokerSave(); chsScr = 0; showToast("Broker Catur disimpan", 1600); }
+      if (!chsBrokerOk()) showToast(RPTR("Isi host, username & password dulu"), 2200);
+      else { chsBrokerSave(); chsScr = 0; showToast(RPTR("Broker Catur disimpan"), 1600); }
     }
     needRedraw = true;
   }

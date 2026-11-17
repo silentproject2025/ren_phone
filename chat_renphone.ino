@@ -402,8 +402,8 @@ static bool chatEnsureInit() {
 // siklus hidup app
 // ---------------------------------------------------------------------
 void chatEnter() {
-  if (!chatEnsureInit()) { showToast("RAM tidak cukup utk Chat", 2500); return; }
-  if (!chatConfigured() && chatCfgFromSd()) { chatCfgSave(); showToast("Konfigurasi dimuat dari SD", 2200); }
+  if (!chatEnsureInit()) { showToast(RPTR("RAM tidak cukup utk Chat"), 2500); return; }
+  if (!chatConfigured() && chatCfgFromSd()) { chatCfgSave(); showToast(RPTR("Konfigurasi dimuat dari SD"), 2200); }
   chatScroll = 0;
   chatCfgEdit = -1;
   chatOutState = 0; chatReplyOn = false;
@@ -558,7 +558,7 @@ static String* chatCfgField(int i) {
 }
 
 static void chatDrawCfg(LGFX_Sprite& s) {
-  s.setTextColor(T().accent); s.setCursor(8, 26); s.print("Chat - Pengaturan");
+  s.setTextColor(T().accent); s.setCursor(8, 26); s.print(RPTR("Chat - Pengaturan"));
   if (chatCfgEdit >= 0) {                       // tampilan mengetik: satu field, di atas keyboard
     s.setTextColor(T().subtext); s.setCursor(10, 50); s.print(chatCfgLabel(chatCfgEdit));
     iosRR(s, 6, 62, SCR_W - 12, 22, 5, T().surface);
@@ -586,11 +586,11 @@ static void chatDrawCfg(LGFX_Sprite& s) {
   bool sdCfg = sdReady && SD_MMC.exists("/chat.cfg");
   int saveW = sdCfg ? (SCR_W - 12) * 6 / 10 : (SCR_W - 12);
   iosRR(s, 6, by, saveW, 22, 7, T().accent);
-  s.setTextColor(T().bg); chatPrintCentered(s, 6, saveW, by + 7, "Simpan & sambung");
+  s.setTextColor(T().bg); chatPrintCentered(s, 6, saveW, by + 7, RPTR("Simpan & sambung"));
   if (sdCfg) {
     int bx = 6 + saveW + 4, bw = SCR_W - 6 - bx;
     iosRR(s, bx, by, bw, 22, 7, T().surface2);
-    s.setTextColor(T().accent); chatPrintCentered(s, bx, bw, by + 7, "Muat SD");
+    s.setTextColor(T().accent); chatPrintCentered(s, bx, bw, by + 7, RPTR("Muat SD"));
   }
 }
 
@@ -600,7 +600,7 @@ void drawChat(LGFX_Sprite& s) {
   if (chatToastFlag) { chatToastFlag = false; showToast(chatToastBuf, 2200); }
 
   if (!chatMsgs) {
-    s.setTextColor(T().danger); s.setCursor(10, 60); s.print("RAM tidak cukup untuk Chat.");
+    s.setTextColor(T().danger); s.setCursor(10, 60); s.print(RPTR("RAM tidak cukup untuk Chat."));
     drawBack(s); drawToast(s);
     return;
   }
@@ -620,7 +620,7 @@ void drawChat(LGFX_Sprite& s) {
   if ((int)stt.length() > maxSt) stt = stt.substring(0, maxSt > 2 ? maxSt - 2 : maxSt) + "..";
   s.setTextColor(T().subtext); s.setCursor(54, 26); s.print(stt.c_str());
   iosRR(s, SCR_W - 52, 24, 48, 18, 5, T().surface2);
-  s.setTextColor(T().accent); chatPrintCentered(s, SCR_W - 52, 48, 29, "Atur");
+  s.setTextColor(T().accent); chatPrintCentered(s, SCR_W - 52, 48, 29, RPTR("Atur"));
 
   // ---- area pesan (bubble) ----
   int inputY = (kbVisible ? kbY() : backY()) - 26;
@@ -774,7 +774,7 @@ void drawChat(LGFX_Sprite& s) {
     }
     if (chatCount == 0) {
       s.setTextColor(T().subtext);
-      s.setCursor(10, top + 6); s.print(chatConn == 1 ? "Belum ada pesan. Tulis yang pertama!" : "Menunggu koneksi...");
+      s.setCursor(10, top + 6); s.print(chatConn == 1 ? RPTR("Belum ada pesan. Tulis yang pertama!") : RPTR("Menunggu koneksi..."));
     }
     s.clearClipRect();
     xSemaphoreGive(chatMx);
@@ -799,11 +799,11 @@ void drawChat(LGFX_Sprite& s) {
   if ((int)shown.length() > maxIn) shown = String("..") + emjTail(shown, maxIn - 2);
   if (typing) shown += "_";
   s.setTextColor(chatInput.length() || typing ? T().text : T().subtext);
-  s.setCursor(10, inputY + 7); s.print(shown.length() ? shown.c_str() : "Ketik pesan...");
+  s.setCursor(10, inputY + 7); s.print(shown.length() ? shown.c_str() : RPTR("Ketik pesan..."));
   bool canSend = chatInput.length() > 0 && !chatSendPending && chatConn == 1;
   iosRR(s, SCR_W - 56, inputY, 52, 22, 5, canSend ? (uint16_t)T().accent : (uint16_t)T().surface2);
   s.setTextColor(canSend ? (uint16_t)T().bg : (uint16_t)T().subtext);
-  chatPrintCentered(s, SCR_W - 56, 52, inputY + 7, chatSendPending ? "..." : "Kirim");
+  chatPrintCentered(s, SCR_W - 56, 52, inputY + 7, chatSendPending ? "..." : RPTR("Kirim"));
 
   if (kbVisible) drawKb(s); else drawBack(s);
   drawToast(s);
@@ -834,8 +834,8 @@ static void chatDoSend() {
   String t = chatInput;
   t.trim();
   if (!t.length()) return;
-  if (chatConn != 1) { showToast("Belum tersambung ke broker", 1800); return; }
-  if (chatSendPending) { showToast("Tunggu pesan sebelumnya...", 1400); return; }
+  if (chatConn != 1) { showToast(RPTR("Belum tersambung ke broker"), 1800); return; }
+  if (chatSendPending) { showToast(RPTR("Tunggu pesan sebelumnya..."), 1400); return; }
   t.replace("|", "/");                       // '|' dipakai sbg pemisah payload
   if (chatReplyOn) {                         // balasan: awali dgn "{r:Nama:kutipan}"
     String pf = String("{r:") + chatReplyName + ":" + chatReplyQuote + "}";
@@ -862,8 +862,8 @@ static void chatDoSend() {
 // ketuk bubble "Gagal" -> kirim ulang
 static void chatResend() {
   if (chatOutState != 2) return;
-  if (chatConn != 1) { showToast("Belum tersambung ke broker", 1800); return; }
-  if (chatSendPending) { showToast("Tunggu pesan sebelumnya...", 1400); return; }
+  if (chatConn != 1) { showToast(RPTR("Belum tersambung ke broker"), 1800); return; }
+  if (chatSendPending) { showToast(RPTR("Tunggu pesan sebelumnya..."), 1400); return; }
   xSemaphoreTake(chatMx, portMAX_DELAY);
   chatSendQ = String(chatOutName) + "\n" + String(chatOutText);
   xSemaphoreGive(chatMx);
@@ -915,11 +915,11 @@ void chatTouch(int x, int y, bool held, bool isNew) {
       bool sdCfg = sdReady && SD_MMC.exists("/chat.cfg");
       int saveW = sdCfg ? (SCR_W - 12) * 6 / 10 : (SCR_W - 12);
       if (x >= 6 && x <= 6 + saveW) {
-        if (!chatConfigured()) { showToast("Isi broker, username & password dulu", 2200); return; }
+        if (!chatConfigured()) { showToast(RPTR("Isi broker, username & password dulu"), 2200); return; }
         chatCfgFinish();
       } else if (sdCfg && x > 6 + saveW) {
-        if (chatCfgFromSd()) { chatCfgSave(); showToast("Dimuat dari /chat.cfg", 1800); }
-        else showToast("/chat.cfg tidak valid (butuh host=, user=, pass=)", 2800);
+        if (chatCfgFromSd()) { chatCfgSave(); showToast(RPTR("Dimuat dari /chat.cfg"), 1800); }
+        else showToast(RPTR("/chat.cfg tidak valid (butuh host=, user=, pass=)"), 2800);
         needRedraw = true;
       }
     }

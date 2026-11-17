@@ -242,6 +242,8 @@ jobs:
           mkdir -p build_sketch
           cp phone.ino build_sketch/
           cp MjpegClass.h build_sketch/
+          cp i18n.h build_sketch/        # I18N_V1: sistem 2 bahasa (English default + Indonesia)
+          cp i18n_dict.h build_sketch/
           cp phone_notif_center.ino build_sketch/
           cp ppu_engine_renphone.ino build_sketch/
           cp wakeword_renphone.ino build_sketch/

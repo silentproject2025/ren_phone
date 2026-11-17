@@ -264,7 +264,7 @@ void nyxDrawAppEnergy(LGFX_Sprite& s, int top, int bottom) {
   for (int i = 0; i < NYX_EN_N; i++) { tot += nyxEn[i]; if (nyxEn[i] > mx) mx = nyxEn[i]; }
 
   char v[40];
-  s.setTextColor(T().subtext); s.setCursor(10, top + 2); s.print("Sejak terakhir penuh");
+  s.setTextColor(T().subtext); s.setCursor(10, top + 2); s.print(RPTR("Sejak terakhir penuh"));
   snprintf(v, sizeof(v), "%.1f mAh", (double)tot);
   s.setTextColor(T().text); s.setCursor(SCR_W - 10 - (int)s.textWidth(v), top + 2); s.print(v);
 
@@ -276,7 +276,7 @@ void nyxDrawAppEnergy(LGFX_Sprite& s, int top, int bottom) {
   if (tot < 0.05f) {
     s.setTextColor(T().subtext); s.setTextWrap(true);
     s.setCursor(10, y + 6);
-    s.print("Belum ada data. Pakai HP dengan baterai (tanpa charger) beberapa menit, lalu buka tab ini lagi.");
+    s.print(RPTR("Belum ada data. Pakai HP dengan baterai (tanpa charger) beberapa menit, lalu buka tab ini lagi."));
     s.setTextWrap(false);
   } else {
     bool used[NYX_EN_N];
@@ -315,7 +315,7 @@ void nyxAppEnergyTouch(int x, int y, int top, int bottom) {
   if (millis() < nyxEnArmUntil) {
     nyxEnReset();
     nyxEnArmUntil = 0;
-    showToast("Statistik direset", 1200);
+    showToast(RPTR("Statistik direset"), 1200);
   } else {
     nyxEnArmUntil = millis() + 3000UL;
   }
@@ -535,26 +535,26 @@ static void nyxTimerStart(long sec) {
 static void nyxMusicOp(const char* op) {
   if (strcmp(op, "pause") == 0) {
     if (musStarted && musLoaded && !musPaused) musPost('u', 0, nullptr);
-    showToast("Musik dijeda", 1200);
+    showToast(RPTR("Musik dijeda"), 1200);
     return;
   }
   musBegin();
   if (musListCount() == 0) musPost('r', 0, nullptr);
   if (strcmp(op, "play") == 0) {
     if (!musLoaded || musPaused) musPost('u', 0, nullptr);
-    showToast("Musik diputar", 1200);
+    showToast(RPTR("Musik diputar"), 1200);
   } else if (strcmp(op, "next") == 0) {
     musPost('n', 0, nullptr);
-    showToast("Lagu berikutnya", 1200);
+    showToast(RPTR("Lagu berikutnya"), 1200);
   } else if (strcmp(op, "prev") == 0) {
     musPost('b', 0, nullptr);
-    showToast("Lagu sebelumnya", 1200);
+    showToast(RPTR("Lagu sebelumnya"), 1200);
   } else if (strcmp(op, "shuffle") == 0) {
     musShufMode = 1; musPrefsDirty = true; musPrefsMs = millis();
     musPost('n', 0, nullptr);
-    showToast("Musik: acak", 1400);
+    showToast(RPTR("Musik: acak"), 1400);
   } else {
-    showToast("Perintah musik tak dikenal", 1400);
+    showToast(RPTR("Perintah musik tak dikenal"), 1400);
   }
 }
 
@@ -564,7 +564,7 @@ static void nyxVolumeOp(const char* js) {
   int target;
   if (nyxJInt(js, "val", v)) target = (int)v;
   else if (nyxJInt(js, "delta", v)) target = cur + (int)v;
-  else { showToast("Nilai volume kosong", 1400); return; }
+  else { showToast(RPTR("Nilai volume kosong"), 1400); return; }
   if (target < 0) target = 0;
   if (target > 100) target = 100;
   musBegin();
@@ -607,16 +607,16 @@ static void nyxLedOp(const char* js) {
   if (hasOp && !strcmp(op, "rainbow")) { npxSetMode(1); npxTurnOn(); showToast("LED: Rainbow", 1200); }
   else if (hasOp && (!strcmp(op, "off") || !strcmp(op, "mati"))) { npxTurnOff(); showToast("LED mati", 1200); }
   else if (setCol || (hasOp && (!strcmp(op, "on") || !strcmp(op, "nyala")))) { npxTurnOn(); showToast("LED menyala", 1200); }
-  else if (!hasOp && !setCol) showToast("Perintah LED kurang jelas", 1400);
+  else if (!hasOp && !setCol) showToast(RPTR("Perintah LED kurang jelas"), 1400);
 }
 
 static void nyxVoiceRun(const char* js) {
   char a[16];
-  if (!nyxJStr(js, "a", a, sizeof(a))) { showToast("Perintah AI tidak terbaca", 1500); return; }
+  if (!nyxJStr(js, "a", a, sizeof(a))) { showToast(RPTR("Perintah AI tidak terbaca"), 1500); return; }
   nyxLower(a);
   if (strcmp(a, "open") == 0) {
     char app[28];
-    if (!nyxJStr(js, "app", app, sizeof(app))) { showToast("Nama app kosong", 1400); return; }
+    if (!nyxJStr(js, "app", app, sizeof(app))) { showToast(RPTR("Nama app kosong"), 1400); return; }
     int i = nyxFindApp(app);
     if (i < 0) { char b[44]; snprintf(b, sizeof(b), "App \"%s\" tidak ada", app); showToast(b, 1800); return; }
     if (curScreen() != apps[i].screen) navPush(apps[i].screen);
@@ -626,31 +626,31 @@ static void nyxVoiceRun(const char* js) {
       nyxLower(op);
       if (!strcmp(op, "cancel") || !strcmp(op, "stop") || !strcmp(op, "off")) {
         tmRunning = false; tmRemain = tmTotal; swStopRing();
-        showToast("Timer dibatalkan", 1300);
+        showToast(RPTR("Timer dibatalkan"), 1300);
         vibSuccess();
         return;
       }
     }
     long sec = 0;
-    if (!nyxJInt(js, "sec", sec) || sec < 1) { showToast("Durasi timer kosong", 1400); return; }
+    if (!nyxJInt(js, "sec", sec) || sec < 1) { showToast(RPTR("Durasi timer kosong"), 1400); return; }
     nyxTimerStart(sec);
   } else if (strcmp(a, "stopwatch") == 0) {
     char op[12];
-    if (!nyxJStr(js, "op", op, sizeof(op))) { showToast("Perintah stopwatch kosong", 1400); return; }
+    if (!nyxJStr(js, "op", op, sizeof(op))) { showToast(RPTR("Perintah stopwatch kosong"), 1400); return; }
     nyxLower(op);
     if (!strcmp(op, "start")) {
       if (!swRunning) { swRunning = true; swLastMs = millis(); }
-      showToast("Stopwatch jalan", 1200);
+      showToast(RPTR("Stopwatch jalan"), 1200);
     } else if (!strcmp(op, "stop")) {
       swRunning = false;
-      showToast("Stopwatch berhenti", 1200);
+      showToast(RPTR("Stopwatch berhenti"), 1200);
     } else if (!strcmp(op, "reset")) {
       swRunning = false; swElapsed = 0; swLapN = 0;
-      showToast("Stopwatch direset", 1200);
-    } else { showToast("Perintah stopwatch tak dikenal", 1400); return; }
+      showToast(RPTR("Stopwatch direset"), 1200);
+    } else { showToast(RPTR("Perintah stopwatch tak dikenal"), 1400); return; }
   } else if (strcmp(a, "music") == 0) {
     char op[12];
-    if (!nyxJStr(js, "op", op, sizeof(op))) { showToast("Perintah musik kosong", 1400); return; }
+    if (!nyxJStr(js, "op", op, sizeof(op))) { showToast(RPTR("Perintah musik kosong"), 1400); return; }
     nyxLower(op);
     nyxMusicOp(op);
   } else if (strcmp(a, "volume") == 0) {
@@ -659,40 +659,40 @@ static void nyxVoiceRun(const char* js) {
     long v = 0;
     if (nyxJInt(js, "val", v)) nyxSetBrightPct(v);
     else if (nyxJInt(js, "delta", v)) nyxSetBrightPct(nyxBrightPct() + v);
-    else { showToast("Nilai kecerahan kosong", 1400); return; }
+    else { showToast(RPTR("Nilai kecerahan kosong"), 1400); return; }
   } else if (strcmp(a, "wifi") == 0) {
     int on = nyxOnOff(js);
-    if (on < 0) { showToast("Perintah WiFi kosong", 1400); return; }
-    if (on && !wifiConnected && !airplaneMode) { connectWifi(); showToast("WiFi menyambung...", 1400); }
-    else if (!on && (wifiConnected || wifiConnecting)) { disconnectWifi(); showToast("WiFi dimatikan", 1300); }
-    else showToast(on ? "WiFi sudah aktif" : "WiFi sudah mati", 1200);
+    if (on < 0) { showToast(RPTR("Perintah WiFi kosong"), 1400); return; }
+    if (on && !wifiConnected && !airplaneMode) { connectWifi(); showToast(RPTR("WiFi menyambung..."), 1400); }
+    else if (!on && (wifiConnected || wifiConnecting)) { disconnectWifi(); showToast(RPTR("WiFi dimatikan"), 1300); }
+    else showToast(on ? RPTR("WiFi sudah aktif") : RPTR("WiFi sudah mati"), 1200);
   } else if (strcmp(a, "bluetooth") == 0) {
     int on = nyxOnOff(js);
-    if (on < 0) { showToast("Perintah Bluetooth kosong", 1400); return; }
+    if (on < 0) { showToast(RPTR("Perintah Bluetooth kosong"), 1400); return; }
     if ((bool)btCcEnabled() != (on == 1)) btCcToggle();
-    showToast(on ? "Bluetooth aktif" : "Bluetooth mati", 1300);
+    showToast(on ? RPTR("Bluetooth aktif") : RPTR("Bluetooth mati"), 1300);
   } else if (strcmp(a, "airplane") == 0) {
     int on = nyxOnOff(js);
-    if (on < 0) { showToast("Perintah mode pesawat kosong", 1400); return; }
+    if (on < 0) { showToast(RPTR("Perintah mode pesawat kosong"), 1400); return; }
     if (airplaneMode != (on == 1)) toggleAirplaneMode();
-    showToast(on ? "Mode pesawat ON" : "Mode pesawat OFF", 1300);
+    showToast(on ? RPTR("Mode pesawat ON") : RPTR("Mode pesawat OFF"), 1300);
   } else if (strcmp(a, "dnd") == 0) {
     int on = nyxOnOff(js);
-    if (on < 0) { showToast("Perintah DND kosong", 1400); return; }
+    if (on < 0) { showToast(RPTR("Perintah DND kosong"), 1400); return; }
     dndMode = (on == 1);
-    showToast(on ? "DND aktif" : "DND mati", 1200);
+    showToast(on ? RPTR("DND aktif") : RPTR("DND mati"), 1200);
   } else if (strcmp(a, "silent") == 0) {
     int on = nyxOnOff(js);
-    if (on < 0) { showToast("Perintah senyap kosong", 1400); return; }
+    if (on < 0) { showToast(RPTR("Perintah senyap kosong"), 1400); return; }
     vibEnabled = (on == 0);
     saveVibPref();
-    showToast(on ? "Mode senyap: getar mati" : "Getar aktif", 1300);
+    showToast(on ? RPTR("Mode senyap: getar mati") : RPTR("Getar aktif"), 1300);
   } else if (strcmp(a, "theme") == 0) {
     char nm[20];
     int idx = -1;
     if (nyxJStr(js, "name", nm, sizeof(nm))) idx = nyxFindTheme(nm);
     else if (nyxJStr(js, "op", nm, sizeof(nm))) { nyxLower(nm); if (!strcmp(nm, "next")) idx = (themeIdx + 1) % THEME_COUNT; }
-    if (idx < 0) { showToast("Tema tidak ditemukan", 1500); return; }
+    if (idx < 0) { showToast(RPTR("Tema tidak ditemukan"), 1500); return; }
     themeIdx = idx;
     saveTheme();
     char b[36]; snprintf(b, sizeof(b), "Tema: %s", themes[idx].name);
@@ -719,7 +719,7 @@ static void nyxVoiceRun(const char* js) {
   } else if (strcmp(a, "back") == 0) {
     navBack();
   } else {
-    showToast("Aksi AI tidak dikenal", 1500);
+    showToast(RPTR("Aksi AI tidak dikenal"), 1500);
   }
   vibSuccess();
 }

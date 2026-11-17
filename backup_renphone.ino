@@ -528,8 +528,8 @@ static void bkDrawPrompt(LGFX_Sprite& s) {
   for (int i = 0; i < n; i++) mask[i] = '*';
   mask[n] = 0;
   s.setTextColor(T().text); s.setCursor(bkR[BKR_PBOX][0] + 8, bkR[BKR_PBOX][1] + 8); s.print(mask);
-  bkButton(s, BKR_PCANCEL, "Batal", T().surface2, T().subtext, 190);
-  bkButton(s, BKR_POK, bkPrompt == 1 ? "Lanjut" : (bkPrompt == 2 ? "Buat Backup" : "Pulihkan"), T().accent, 0xFFFF, 235);
+  bkButton(s, BKR_PCANCEL, RPTR("Batal"), T().surface2, T().subtext, 190);
+  bkButton(s, BKR_POK, bkPrompt == 1 ? RPTR("Lanjut") : (bkPrompt == 2 ? RPTR("Buat Backup") : RPTR("Pulihkan")), T().accent, 0xFFFF, 235);
 }
 
 void drawBackup(LGFX_Sprite& s) {
@@ -545,7 +545,7 @@ void drawBackup(LGFX_Sprite& s) {
   s.setTextSize(1);
 
   // ---- Buat Backup
-  bkButton(s, BKR_CREATE, "Buat Backup Sekarang", T().accent, 0xFFFF, 235);
+  bkButton(s, BKR_CREATE, RPTR("Buat Backup Sekarang"), T().accent, 0xFFFF, 235);
 
   // ---- sakelar: sandi & API key | enkripsi sandi
   bkToggleRow(s, BKR_TOGGLE, "Sertakan sandi & API key", bkEnc ? "File dienkripsi AES-256 dgn sandimu" : "File di SD tidak terenkripsi", bkSecrets);
@@ -555,9 +555,9 @@ void drawBackup(LGFX_Sprite& s) {
   {
     int lx = bkR[BKR_LIST][0], ly = bkR[BKR_LIST][1] - 14;
     nyxAaRR(s, lx + 2, ly + 1, 3, 9, 1, T().accent);
-    s.setTextColor(blend565(T().subtext, T().text, 110)); s.setCursor(lx + 10, ly + 1); s.print("RIWAYAT");
+    s.setTextColor(blend565(T().subtext, T().text, 110)); s.setCursor(lx + 10, ly + 1); s.print(RPTR("RIWAYAT"));
     if (bkMsg[0]) {
-      int mx = lx + 10 + s.textWidth("RIWAYAT") + 10, maxW = bkR[BKR_LIST][0] + bkR[BKR_LIST][2] - mx;
+      int mx = lx + 10 + s.textWidth(RPTR("RIWAYAT")) + 10, maxW = bkR[BKR_LIST][0] + bkR[BKR_LIST][2] - mx;
       char b[44]; strncpy(b, bkMsg, sizeof(b) - 1); b[sizeof(b) - 1] = 0;
       int L = (int)strlen(b);
       while (L > 1 && s.textWidth(b) > maxW) b[--L] = 0;
@@ -607,9 +607,9 @@ void drawBackup(LGFX_Sprite& s) {
     bool canRestore = has && bkValid[bkSel];
     bool armR = (bkArmKind == 1), armD = (bkArmKind == 2);
     uint16_t dim = T().subtext;
-    bkButton(s, BKR_RESTORE, armR ? "Yakin? Ketuk lagi" : "Pulihkan",
+    bkButton(s, BKR_RESTORE, armR ? RPTR("Yakin? Ketuk lagi") : RPTR("Pulihkan"),
              armR ? T().danger : T().surface2, armR ? 0xFFFF : (canRestore ? T().accent : dim), armR ? 235 : 190);
-    bkButton(s, BKR_DELETE, armD ? "Yakin? Ketuk lagi" : "Hapus",
+    bkButton(s, BKR_DELETE, armD ? RPTR("Yakin? Ketuk lagi") : RPTR("Hapus"),
              armD ? T().danger : T().surface2, armD ? 0xFFFF : (has ? T().danger : dim), armD ? 235 : 190);
   }
 

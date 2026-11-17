@@ -497,7 +497,7 @@ static void wakeLoadTemplates(){
 static void wakeEnsureTask(){
   if(wkTaskHandle||!wwB||!wkTplMem||!wkUtt) return;
   BaseType_t res=createTaskPsramStackPrio(wakeTaskFunc,"wakeTask",12288,NULL,&wkTaskStack,&wkTaskTCB,&wkTaskHandle,0,2);
-  if(res!=pdPASS){ wkTaskHandle=NULL; showToast("Gagal mulai wake word"); vibError(); }
+  if(res!=pdPASS){ wkTaskHandle=NULL; showToast(RPTR("Gagal mulai wake word")); vibError(); }
 }
 
 void wakeBegin(){
@@ -545,16 +545,16 @@ void wakeYieldMic(uint32_t holdMs){
 }
 
 void wakeSetEnabled(bool on){
-  if(on && wkTplCount<=0){ showToast("Rekam kata kunci dulu"); vibWarn(); return; }
-  if(on && !wkTplMem){ showToast("RAM tidak cukup"); vibError(); return; }
+  if(on && wkTplCount<=0){ showToast(RPTR("Rekam kata kunci dulu")); vibWarn(); return; }
+  if(on && !wkTplMem){ showToast(RPTR("RAM tidak cukup")); vibError(); return; }
   wkEnabled=on;
   wakePrefsSave();
   if(on) wakeEnsureTask();
-  showToast(on?"Wake word aktif":"Wake word mati");
+  showToast(on?RPTR("Wake word aktif"):RPTR("Wake word mati"));
 }
 
 void wakeStartEnroll(){
-  if(!wwB||!wkTplMem){ showToast("RAM tidak cukup"); vibError(); return; }
+  if(!wwB||!wkTplMem){ showToast(RPTR("RAM tidak cukup")); vibError(); return; }
   wkEnrollGot=0; wkEnrollRef=0.0f; wkEnrollMsg=0;
   wkTplCount=0;
   wkEnrollStep=1;
@@ -572,8 +572,8 @@ void wakeCancelEnroll(){
 static void wakeOnFired(){
   vibSuccess();
   if(curScreen()==SCR_WAKE){ return; } // mode uji: cukup kedip di layar app
-  if(locked){ showToast("Terdeteksi! Buka kunci dulu ya"); return; }
-  if(appSwitcherOpen||controlCenterOpen||notifShadeOpen||diMenuOpen){ showToast("Terdeteksi!"); return; }
+  if(locked){ showToast(RPTR("Terdeteksi! Buka kunci dulu ya")); return; }
+  if(appSwitcherOpen||controlCenterOpen||notifShadeOpen||diMenuOpen){ showToast(RPTR("Terdeteksi!")); return; }
   homeAodWake();
   if(curScreen()!=SCR_AICHAT) navPush(SCR_AICHAT);
   micStartRecording();
@@ -585,7 +585,7 @@ void wakeLoopPoll(){
     wkSavePending=false;
     wakeSaveTemplates(); wakePrefsSave();
     if(!wwFs()) showToast("Tanpa SD/FFat, kata kunci hilang pas restart");
-    else showToast("Kata kunci tersimpan");
+    else showToast(RPTR("Kata kunci tersimpan"));
     vibSuccess();
   }
   if(wkFired){ wkFired=false; wakeOnFired(); }
@@ -620,7 +620,7 @@ void drawWake(LGFX_Sprite& s){
   int barX=cardX+8, barW=cardW-16;
 
   // ---- bar level suara ----
-  s.setTextColor(T().subtext); s.setCursor(barX,cardY+6); s.print("Suara");
+  s.setTextColor(T().subtext); s.setCursor(barX,cardY+6); s.print(RPTR("Suara"));
   s.fillRoundRect(barX,cardY+17,barW,8,4,T().surface2);
   int lw=(int)(barW*wkLevel); if(lw<0) lw=0; if(lw>barW) lw=barW;
   if(lw>3) s.fillRoundRect(barX,cardY+17,lw,8,4,enrolling?T().accent2:T().accent);
@@ -658,26 +658,26 @@ void drawWake(LGFX_Sprite& s){
     }
     const char* msg=""; uint16_t mc=T().subtext;
     if(millis()-wkEnrollMsgMs<2500){
-      if(wkEnrollMsg==1){ msg="Bagus! Ulangi sekali lagi"; mc=T().good; }
-      else if(wkEnrollMsg==2){ msg="Kependekan, ucapkan lebih jelas"; mc=T().danger; }
-      else if(wkEnrollMsg==3){ msg="Kurang mirip, ulangi ya"; mc=T().danger; }
-      else if(wkEnrollMsg==4){ msg="Panjangnya beda jauh, ulangi"; mc=T().danger; }
+      if(wkEnrollMsg==1){ msg=RPTR("Bagus! Ulangi sekali lagi"); mc=T().good; }
+      else if(wkEnrollMsg==2){ msg=RPTR("Kependekan, ucapkan lebih jelas"); mc=T().danger; }
+      else if(wkEnrollMsg==3){ msg=RPTR("Kurang mirip, ulangi ya"); mc=T().danger; }
+      else if(wkEnrollMsg==4){ msg=RPTR("Panjangnya beda jauh, ulangi"); mc=T().danger; }
     }
     if(msg[0]){ s.setTextColor(mc); int mw=s.textWidth(msg); s.setCursor(SCR_W/2-mw/2,178); s.print(msg); }
     iosRR(s,110,190,100,22,8,T().surface2);
-    s.setTextColor(T().subtext); { int bw=s.textWidth("Batal"); s.setCursor(160-bw/2,197); s.print("Batal"); }
+    s.setTextColor(T().subtext); { int bw=s.textWidth(RPTR("Batal")); s.setCursor(160-bw/2,197); s.print(RPTR("Batal")); }
   } else {
     char ib[48]; snprintf(ib,sizeof(ib),"Terdeteksi %dx  |  %d sampel tersimpan",(int)wkFireCount,(int)wkTplCount);
     s.setTextColor(T().subtext); s.setCursor(14,110); s.print(ib);
 
     iosRR(s,14,126,140,30,8, wkEnabled?T().danger:T().accent);
     s.setTextColor(T().bg);
-    { const char* l=wkEnabled?"Matikan":"Aktifkan"; int w=s.textWidth(l); s.setCursor(14+70-w/2,137); s.print(l); }
+    { const char* l=wkEnabled?RPTR("Matikan"):RPTR("Aktifkan"); int w=s.textWidth(l); s.setCursor(14+70-w/2,137); s.print(l); }
     iosRR(s,160,126,146,30,8,T().surface2);
     s.setTextColor(T().accent);
-    { const char* l=(wkTplCount>0)?"Rekam ulang":"Rekam kata kunci"; int w=s.textWidth(l); s.setCursor(160+73-w/2,137); s.print(l); }
+    { const char* l=(wkTplCount>0)?RPTR("Rekam ulang"):RPTR("Rekam kata kunci"); int w=s.textWidth(l); s.setCursor(160+73-w/2,137); s.print(l); }
 
-    s.setTextColor(T().subtext); s.setCursor(14,172); s.print("Sensitivitas");
+    s.setTextColor(T().subtext); s.setCursor(14,172); s.print(RPTR("Sensitivitas"));
     iosRR(s,150,164,26,24,7,T().surface2);
     s.setTextColor(T().accent); { int w=s.textWidth("<"); s.setCursor(163-w/2,172); s.print("<"); }
     iosRR(s,180,164,90,24,7,T().surface);
@@ -687,8 +687,8 @@ void drawWake(LGFX_Sprite& s){
     s.setTextColor(T().accent); { int w=s.textWidth(">"); s.setCursor(287-w/2,172); s.print(">"); }
 
     s.setTextColor(T().subtext);
-    s.setCursor(14,194); s.print("Ucapkan kata kunci-mu, tunggu getar: HP buka");
-    s.setCursor(14,204); s.print("AI Chat & langsung merekam perintahmu.");
+    s.setCursor(14,194); s.print(RPTR("Ucapkan kata kunci-mu, tunggu getar: HP buka"));
+    s.setCursor(14,204); s.print(RPTR("AI Chat & langsung merekam perintahmu."));
   }
 
   drawBack(s); drawToast(s);
@@ -699,7 +699,7 @@ void wakeTouch(int x,int y,bool held,bool isNew){
   if(!isNew) return;
   if(isBack(x,y)){ navBack(); return; }
   if(wkEnrollStep>0){
-    if(x>=110&&x<=210&&y>=190&&y<=212){ wakeCancelEnroll(); showToast("Dibatalkan"); needRedraw=true; }
+    if(x>=110&&x<=210&&y>=190&&y<=212){ wakeCancelEnroll(); showToast(RPTR("Dibatalkan")); needRedraw=true; }
     return;
   }
   if(y>=126&&y<=156){

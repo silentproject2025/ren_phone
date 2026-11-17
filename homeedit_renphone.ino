@@ -36,7 +36,7 @@ void homeEditExit() {
 void drawHomeEdit(LGFX_Sprite& s) {
   homeLayoutEnsure();
   iosBackdrop(s); drawStatusBar(s);
-  iosTitle(s, 8, 26, "Atur Home");
+  iosTitle(s, 8, 26, RPTR("Atur Home"));
 
   int rx, ry, rw, rh; heResetRect(rx, ry, rw, rh);
   bool armed = millis() < heResetArmUntil;
@@ -82,7 +82,7 @@ void drawHomeEdit(LGFX_Sprite& s) {
     uint16_t ic = hid ? blend565(T().bg, apps[i].color, 90) : apps[i].color;
     drawAppIcon(s, apps[i].sym, 28, y + HE_RH / 2, 11, ic);
 
-    char nm[24]; strncpy(nm, apps[i].name, sizeof(nm) - 1); nm[sizeof(nm) - 1] = 0;
+    char nm[24]; strncpy(nm, RPTR(apps[i].name), sizeof(nm) - 1); nm[sizeof(nm) - 1] = 0;
     int n = (int)strlen(nm);
     s.setTextSize(1);
     while (n > 1 && s.textWidth(nm) > nameMax) nm[--n] = 0;
@@ -133,7 +133,7 @@ static void heTap(int x, int y) {
     else return;
   } else if (x >= heVisX() - 2 && x <= heVisX() + heVisW() + 2) { // tampil / sembunyi
     homeHide[i] = !homeHide[i];
-    if (homeHide[i]) showToast("Disembunyikan -- tetap bisa dicari");
+    if (homeHide[i]) showToast(RPTR("Disembunyikan -- tetap bisa dicari"));
   } else return;
   heClamp();
   homeLayoutRebuildVis();
@@ -167,10 +167,10 @@ void homeEditTouch(int x, int y, bool held, bool isNew) {
       heResetArmUntil = 0;
       homeLayoutDefault(); homeLayoutSave();
       heScroll = 0;
-      showToast("Home dikembalikan ke awal");
+      showToast(RPTR("Home dikembalikan ke awal"));
     } else {
       heResetArmUntil = millis() + 2500;
-      showToast("Ketuk lagi untuk reset");
+      showToast(RPTR("Ketuk lagi untuk reset"));
     }
     needRedraw = true;
   }

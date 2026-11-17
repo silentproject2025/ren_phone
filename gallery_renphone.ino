@@ -974,7 +974,7 @@ static void galDecodeCurrent() {
   if (galView.width() != SCR_W || galView.height() != SCR_H) {
     galView.deleteSprite();
     galView.setPsram(true);
-    if (!galView.createSprite(SCR_W, SCR_H)) { galViewFail = true; showToast("PSRAM tidak cukup"); return; }
+    if (!galView.createSprite(SCR_W, SCR_H)) { galViewFail = true; showToast(RPTR("PSRAM tidak cukup")); return; }
   }
   galView.fillSprite(0x0000);
   char p[GAL_PATH_MAX];
@@ -982,7 +982,7 @@ static void galDecodeCurrent() {
   galFailWhy = nullptr;
   bool ok = (galItems[galViewIdx].kind == 1) ? galDecodeBmpView(p) : galDecodeJpegView(p);
   if (ok) { galViewReady = true; galViewW = galDecW; galViewH = galDecH; }
-  else { galViewFail = true; showToast(galFailWhy ? galFailWhy : "Gambar tidak bisa dibuka (JPEG progresif/BMP non-24bit?)", 2200); vibError(); }
+  else { galViewFail = true; showToast(galFailWhy ? galFailWhy : RPTR("Gambar tidak bisa dibuka (JPEG progresif/BMP non-24bit?)"), 2200); vibError(); }
 }
 
 // ---- navigasi viewer ----
@@ -1109,7 +1109,7 @@ static void galViewDelete() {
   if (galViewIdx < 0 || galViewIdx >= galItemCount) return;
   if (millis() >= galDelArmUntil) {
     galDelArmUntil = millis() + 2500;
-    showToast("Ketuk lagi untuk menghapus");
+    showToast(RPTR("Ketuk lagi untuk menghapus"));
     needRedraw = true;
     return;
   }
@@ -1118,12 +1118,12 @@ static void galViewDelete() {
   galForgetFile(p);
   bool ok = SD_MMC.remove(p);
   galDelArmUntil = 0;
-  if (!ok) { showToast("Gagal menghapus"); vibError(); needRedraw = true; return; }
+  if (!ok) { showToast(RPTR("Gagal menghapus")); vibError(); needRedraw = true; return; }
   for (int i = galViewIdx; i < galItemCount - 1; i++) galItems[i] = galItems[i + 1];
   galItemCount--;
   galAdjInvalidate();
   galAlbumsDirty = true;
-  showToast("Dihapus"); vibSuccess();
+  showToast(RPTR("Dihapus")); vibSuccess();
   int ni = galNextPhoto(galViewIdx - 1, +1);      // foto pertama di posisi >= galViewIdx (item sudah bergeser)
   if (ni < 0) ni = galNextPhoto(galViewIdx, -1);  // tidak ada lagi di depan -> mundur
   if (ni < 0 || galItemCount <= 0) {
@@ -1140,7 +1140,7 @@ static void galViewDelete() {
 // Jadikan foto yang sedang dibuka sebagai foto profil (tombol "Profil" di bar bawah viewer)
 static void galViewSetOwner() {
   if (galViewIdx < 0 || galViewIdx >= galItemCount) return;
-  if (galItems[galViewIdx].kind == 2) { showToast("Video tidak bisa jadi foto profil"); return; }
+  if (galItems[galViewIdx].kind == 2) { showToast(RPTR("Video tidak bisa jadi foto profil")); return; }
   char op[GAL_PATH_MAX];
   galItemPath(op, sizeof(op), galViewIdx);
   ownerSetAvatarUi(op);
@@ -1206,7 +1206,7 @@ static void galDrawThumb(LGFX_Sprite& s, int x, int y, int slot, uint8_t kind) {
 }
 
 static void galDrawAlbums(LGFX_Sprite& s) {
-  iosTitle(s, 8, 26, "Galeri");
+  iosTitle(s, 8, 26, RPTR("Galeri"));
   // tombol kecil "Cache" (hapus semua thumbnail, ketuk 2x)
   bool armed = millis() < galClearArmUntil;
   iosRR(s, SCR_W - 60, 23, 52, 16, 6, armed ? T().danger : T().surface2);
@@ -1222,9 +1222,9 @@ static void galDrawAlbums(LGFX_Sprite& s) {
   if (galAlbumCount == 0) {
     s.setTextColor(T().subtext);
     if (galScanActive) {
-      s.setCursor(16, galTop + 30); s.print("Memindai SD Card...");
+      s.setCursor(16, galTop + 30); s.print(RPTR("Memindai SD Card..."));
     } else {
-      s.setCursor(16, galTop + 30); s.print("Belum ada foto/video di SD Card.");
+      s.setCursor(16, galTop + 30); s.print(RPTR("Belum ada foto/video di SD Card."));
       s.setCursor(16, galTop + 44); s.print("Format: JPG, PNG, BMP, MJPEG.");
     }
     return;
@@ -1289,7 +1289,7 @@ static void galDrawGrid(LGFX_Sprite& s) {
 
   if (galItemCount == 0) {
     s.setTextColor(T().subtext);
-    s.setCursor(16, galTop + 30); s.print("Album kosong.");
+    s.setCursor(16, galTop + 30); s.print(RPTR("Album kosong."));
     return;
   }
   int ms = galMaxScroll(galItemCount);
@@ -1389,7 +1389,7 @@ static void galDrawViewer(LGFX_Sprite& s) {
     s.setCursor(SCR_W - 64 + 30 - s.textWidth(l) / 2, backY() + 8); s.print(l);
     iosRR(s, SCR_W - 128, backY(), 60, BACK_H, 8, 0x4208);
     s.setTextColor(T().accent);
-    s.setCursor(SCR_W - 128 + 30 - s.textWidth("Profil") / 2, backY() + 8); s.print("Profil");
+    s.setCursor(SCR_W - 128 + 30 - s.textWidth(RPTR("Profil")) / 2, backY() + 8); s.print(RPTR("Profil"));
     drawBack(s);
   }
   drawToast(s);
@@ -1402,14 +1402,14 @@ static void galDrawContent(LGFX_Sprite& s) {
   galGeom();
   galWantCnt = 0;
   if (!sdReady) {
-    iosTitle(s, 8, 26, "Galeri");
-    s.setTextColor(T().danger); s.setTextSize(2); s.setCursor(20, 80); s.print("SD Card Tdk Siap");
+    iosTitle(s, 8, 26, RPTR("Galeri"));
+    s.setTextColor(T().danger); s.setTextSize(2); s.setCursor(20, 80); s.print(RPTR("SD Card Tdk Siap"));
     drawBack(s); drawToast(s);
     return;
   }
   if (!galMem) {
-    iosTitle(s, 8, 26, "Galeri");
-    s.setTextColor(T().danger); s.setCursor(20, 80); s.print("PSRAM tidak cukup");
+    iosTitle(s, 8, 26, RPTR("Galeri"));
+    s.setTextColor(T().danger); s.setCursor(20, 80); s.print(RPTR("PSRAM tidak cukup"));
     drawBack(s); drawToast(s);
     return;
   }
@@ -1601,10 +1601,10 @@ void galTouch(int x, int y, bool held, bool isNew) {
     if (millis() < galClearArmUntil) {
       galClearArmUntil = 0;
       galClearCache();
-      showToast("Cache thumbnail dihapus"); vibSuccess();
+      showToast(RPTR("Cache thumbnail dihapus")); vibSuccess();
     } else {
       galClearArmUntil = millis() + 2500;
-      showToast("Ketuk lagi untuk hapus cache");
+      showToast(RPTR("Ketuk lagi untuk hapus cache"));
     }
     needRedraw = true;
   }
@@ -1641,7 +1641,7 @@ static void galTapGrid(int x, int y) {
   if (galMode == GM_ALBUMS) {
     galOpenAlbum(idx);
   } else if (ownerPickActive()) {                 // mode pilih foto profil (dari layar Profil)
-    if (galItems[idx].kind == 2) { showToast("Pilih foto, bukan video"); }
+    if (galItems[idx].kind == 2) { showToast(RPTR("Pilih foto, bukan video")); }
     else { char op[GAL_PATH_MAX]; galItemPath(op, sizeof(op), idx); ownerPickChosen(op); return; }
   } else if (galItems[idx].kind == 2) {
     char p[GAL_PATH_MAX];
@@ -1893,7 +1893,7 @@ void galEnter() {
   galAdjInvalidate(); galAdjDisabled = false; galSwipeOn = false; galSwipeDx = 0; galLastTouchMs = millis();
   galLastTickMs = millis();
   if (!sdReady) { galPendingPath[0] = 0; return; }
-  if (!galMemEnsure()) { galPendingPath[0] = 0; showToast("PSRAM tidak cukup"); return; }
+  if (!galMemEnsure()) { galPendingPath[0] = 0; showToast(RPTR("PSRAM tidak cukup")); return; }
   memset(galSlotState, 0, sizeof(galSlotState));
 
   if (galPendingPath[0]) {

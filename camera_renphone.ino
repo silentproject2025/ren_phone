@@ -354,18 +354,18 @@ static void camRecStop(bool quiet) {
 }
 static bool camRecStart(bool lapse) {
   if (camRec) return true;
-  if (!sdReady) { showToast("Butuh SD card", 1800); vibWarn(); return false; }
+  if (!sdReady) { showToast(RPTR("Butuh SD card"), 1800); vibWarn(); return false; }
   camEnsureDir();
   camIdxOff = (uint32_t*)heap_caps_malloc(CAM_AVI_MAXFR * 4, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
   camIdxSz  = (uint32_t*)heap_caps_malloc(CAM_AVI_MAXFR * 4, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
   if (!camIdxOff || !camIdxSz) {
     if (camIdxOff) { heap_caps_free(camIdxOff); camIdxOff = nullptr; }
     if (camIdxSz)  { heap_caps_free(camIdxSz);  camIdxSz = nullptr; }
-    showToast("RAM tidak cukup utk rekam", 2000); return false;
+    showToast(RPTR("RAM tidak cukup utk rekam"), 2000); return false;
   }
   camMakeName(lapse ? "LAPSE" : "VID", ".avi", camRecPath, sizeof(camRecPath));
   camFile = SD_MMC.open(camRecPath, FILE_WRITE);
-  if (!camFile) { showToast("Gagal buka file di SD", 2000); return false; }
+  if (!camFile) { showToast(RPTR("Gagal buka file di SD"), 2000); return false; }
   uint8_t pc = camPrvCode();
   if (!camAvi.begin(&camFile, CAM_RES_W[pc], CAM_RES_H[pc], camIdxOff, camIdxSz, CAM_AVI_MAXFR)) { camFile.close(); showToast("SD error", 2000); return false; }
   camRec = true; camLapse = lapse; camRecStartMs = millis(); camLapseNext = 0; camRecBytes = 0;
@@ -374,7 +374,7 @@ static bool camRecStart(bool lapse) {
 }
 static void camRecWrite(const uint8_t* d, uint32_t n) {
   if (!camRec) return;
-  if (!camAvi.addFrame(d, n) || camAvi.full()) { bool full = camAvi.full() && camAvi.ok; camRecStop(true); showToast(full ? "Rekaman penuh, disimpan" : "SD penuh / error", 2200); return; }
+  if (!camAvi.addFrame(d, n) || camAvi.full()) { bool full = camAvi.full() && camAvi.ok; camRecStop(true); showToast(full ? RPTR("Rekaman penuh, disimpan") : RPTR("SD penuh / error"), 2200); return; }
   camRecBytes += n;
 }
 
@@ -422,7 +422,7 @@ static void camMotionAnalyze(const uint8_t* d, uint32_t n, uint32_t now) {
     camMotCool = now + 6000; camMotHits = 0; camMotCount++;
     char path[64];
     if (camSaveJpeg(d, n, "GERAK", path, sizeof(path))) { strncpy(camLastPhoto, path, sizeof(camLastPhoto) - 1); camSavedCount++; }
-    showToast("Gerak terdeteksi!", 1500); vibWarn();
+    showToast(RPTR("Gerak terdeteksi!"), 1500); vibWarn();
     for (int i = 0; i < N; i++) bg[i] = cur[i];
   }
 }
@@ -430,7 +430,7 @@ static void camMotionSet(bool on) {
   if (on == camMotionOn) return;
   if (on) {
     if (!camMotBuf) camMotBuf = (uint8_t*)heap_caps_malloc(CAM_MOT_MAX * 2, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!camMotBuf) { showToast("RAM tidak cukup", 1500); return; }
+    if (!camMotBuf) { showToast(RPTR("RAM tidak cukup"), 1500); return; }
     camMotionReset(); camMotCool = millis() + 1500; camMotCount = 0;
   }
   camMotionOn = on;
@@ -438,9 +438,9 @@ static void camMotionSet(bool on) {
 
 // ---------------- foto ----------------
 static void camShootNow() {
-  if (!camOpened) { showToast("Kamera belum siap", 1200); return; }
-  if (!sdReady) { showToast("Butuh SD card", 1800); vibWarn(); camBurstLeft = 0; return; }
-  if (!camStillBuf) { showToast("RAM foto tidak cukup", 1800); camBurstLeft = 0; return; }
+  if (!camOpened) { showToast(RPTR("Kamera belum siap"), 1200); return; }
+  if (!sdReady) { showToast(RPTR("Butuh SD card"), 1800); vibWarn(); camBurstLeft = 0; return; }
+  if (!camStillBuf) { showToast(RPTR("RAM foto tidak cukup"), 1800); camBurstLeft = 0; return; }
   if (camShotPending) return;
   camFreezeUntil = 0;
   camOverBase = camRx.oversize;   // CAM_STILL_BIG_V1
@@ -463,7 +463,7 @@ static void camStillTick(uint32_t now) {
   if (!camShotPending) return;
   if (camShotRetryAt) {   // CAM_STILL_GROW_V1: tunggu sisa potongan foto lama habis (CAM terus kirim sampai selesai), baru minta ulang
     if ((int32_t)(now - camShotRetryAt) >= 0 && (int32_t)(now - camLastRxMs) >= 400) { camShotRetryAt = 0; camShotPending = false; camShootNow(); }
-    else if ((int32_t)(now - camShotDeadline) >= 0) { camShotRetryAt = 0; camShotPending = false; camBurstLeft = 0; camShotRetry = 0; showToast("Foto gagal (timeout)", 2200); vibError(); camNeedDraw = true; }
+    else if ((int32_t)(now - camShotDeadline) >= 0) { camShotRetryAt = 0; camShotPending = false; camBurstLeft = 0; camShotRetry = 0; showToast(RPTR("Foto gagal (timeout)"), 2200); vibError(); camNeedDraw = true; }
     return;
   }
   uint8_t st = camRx.stillState;
@@ -476,7 +476,7 @@ static void camStillTick(uint32_t now) {
       camFreezeUntil = now + 1100; camNeedDraw = true;
       vibSuccess();
       if (--camBurstLeft > 0) camNextShotAt = now + 1400; else camBurstLeft = 0;
-    } else { showToast("Gagal menulis ke SD", 2000); vibError(); camBurstLeft = 0; }
+    } else { showToast(RPTR("Gagal menulis ke SD"), 2000); vibError(); camBurstLeft = 0; }
     camRx.disarmStill();
   } else if (st == CAMRX_STILL_FAIL || (int32_t)(now - camShotDeadline) >= 0) {
     bool over = (st == CAMRX_STILL_FAIL) && camRx.oversize != camOverBase;   // CAM_STILL_BIG_V1: gagal krn ukuran -> jangan diulang
@@ -484,17 +484,17 @@ static void camStillTick(uint32_t now) {
       camRx.disarmStill();
       if (camGrowStill()) {
         camShotRetryAt = now + 500; camShotDeadline = now + 15000;
-        showToast("Buffer foto diperbesar, mengulang...", 1500); return;
+        showToast(RPTR("Buffer foto diperbesar, mengulang..."), 1500); return;
       }
     }
     if (!over && camShotRetry < 2) {   // CAM_LINK_RATE_V1: foto rusak di jalur -> ulang, tapi tunggu sisa foto lama habis dulu
       camShotRetry++; camRx.disarmStill();
       camShotRetryAt = now + 500; camShotDeadline = now + 15000;
-      showToast("Foto rusak, mengulang...", 1200); return;
+      showToast(RPTR("Foto rusak, mengulang..."), 1200); return;
     }
     camShotRetry = 0;
     camShotPending = false; camBurstLeft = 0; camRx.disarmStill();
-    showToast(over ? "Foto kebesaran: naikkan Q/kecilkan res" : (st == CAMRX_STILL_FAIL ? "Foto rusak di jalur, coba lagi" : "Foto gagal (timeout)"), 2400);
+    showToast(over ? RPTR("Foto kebesaran: naikkan Q/kecilkan res") : (st == CAMRX_STILL_FAIL ? RPTR("Foto rusak di jalur, coba lagi") : RPTR("Foto gagal (timeout)")), 2400);
     vibError(); camNeedDraw = true;
   }
 }
@@ -537,7 +537,7 @@ static void camLinkTick(uint32_t now) {
   if (camOpened && !camLinkFailed && !camBaudReq && tgt > 0 && camBaudCur == RP_BAUD && (int32_t)(now - camRetryAt) >= 0) {
     camSendBaud(CAM_LINK_BAUD[tgt]); camBaudReq = true; camBaudSentAt = now;
   }
-  if (camBaudReq && now - camBaudSentAt > 1500 && camBaudCur == RP_BAUD) { camBaudReq = false; camLinkFailed = true; showToast("CAM tak jawab ganti baud", 2500); }   // CAM tak menjawab (firmware lama?)
+  if (camBaudReq && now - camBaudSentAt > 1500 && camBaudCur == RP_BAUD) { camBaudReq = false; camLinkFailed = true; showToast(RPTR("CAM tak jawab ganti baud"), 2500); }   // CAM tak menjawab (firmware lama?)
   // jalan di baud tinggi lalu CAM hilang >2 dtk (CAM sudah mundur sendiri ke 921k / restart): ikut mundur, jangan menggantung di baud tinggi
   if (camOpened && camBaudCur != RP_BAUD && !camBaudSwitchedAt && !camShotPending && now - camLastRxMs > 2000) {   // CAM_LINK_DIAG_V1: !camShotPending
     int from = camRungOf(camBaudCur);
@@ -585,7 +585,7 @@ void camEnter() {
   camPrevOrient = currentOrient;
   if (currentOrient != ORIENT_LANDSCAPE) applyOrientation(ORIENT_LANDSCAPE, false);
   if (!gameModeActive) { gameModeActive = true; setCpuFrequencyMhz(CPU_MHZ_GAME); camBoosted = true; }
-  if (!camAllocBuffers()) { camActive = true; showToast("RAM tidak cukup utk Kamera", 2500); return; }
+  if (!camAllocBuffers()) { camActive = true; showToast(RPTR("RAM tidak cukup utk Kamera"), 2500); return; }
   musExtPrepare();                                 // nyalakan link UART ke CAM (idempoten)
   camLastRxMs = millis();
   camActive = true;
@@ -723,8 +723,8 @@ static void camDrawMain(LGFX_Sprite& s) {
   else if (camMotionOn) { nyxAaCircle(s, cx, cy, 10, sc); }
   else if (busy) { nyxAaCircleRing(s, cx, cy, 14, sc); }
   else nyxAaCircle(s, cx, cy, 17, camMode == 0 ? (uint16_t)TFT_WHITE : (uint16_t)T().danger);
-  camBtn(s, CAM_RAIL_X + 4, 154 + CAM_VOFF, 46, 26, camCfg.flash == 0 ? "Flash" : (camCfg.flash == 3 ? "Kilat" : "Senter"), camCfg.flash != 0);
-  camBtn(s, CAM_RAIL_X + 4, 186 + CAM_VOFF, 46, 26, "Atur", false);
+  camBtn(s, CAM_RAIL_X + 4, 154 + CAM_VOFF, 46, 26, camCfg.flash == 0 ? RPTR("Flash") : (camCfg.flash == 3 ? RPTR("Kilat") : RPTR("Senter")), camCfg.flash != 0);
+  camBtn(s, CAM_RAIL_X + 4, 186 + CAM_VOFF, 46, 26, RPTR("Atur"), false);
   // kiri atas: back + HUD
   nyxAaRR(s, 4, 4, 30, 22, 6, 0x2104); s.setTextColor(TFT_WHITE); camTextC(s, "<", 19, 11);
   if (camCfg.hud && camOpened) {
@@ -734,8 +734,8 @@ static void camDrawMain(LGFX_Sprite& s) {
     s.fillRect(38, 6, s.textWidth(h) + 6, 14, 0x0000); s.setTextColor(TFT_WHITE); s.setCursor(41, 9); s.print(h);
   }
   // bawah kiri: galeri / putar video / jumlah
-  camBtn(s, 4, SCR_H - 30, 52, 26, "Galeri", false);
-  if (camLastVideo[0]) camBtn(s, 60, SCR_H - 30, 40, 26, "Putar", false);
+  camBtn(s, 4, SCR_H - 30, 52, 26, RPTR("Galeri"), false);
+  if (camLastVideo[0]) camBtn(s, 60, SCR_H - 30, 40, 26, RPTR("Putar"), false);
   if (camSavedCount) { char c[16]; snprintf(c, sizeof(c), "+%d", camSavedCount); s.setTextColor(TFT_WHITE); s.setCursor(104, SCR_H - 22); s.print(c); }
   // status tengah
   if (camRec) {
@@ -747,7 +747,7 @@ static void camDrawMain(LGFX_Sprite& s) {
     char r[40]; snprintf(r, sizeof(r), "GERAK AKTIF  %d", camMotCount);
     nyxAaRR(s, CAM_RAIL_X / 2 - 60, 4, 120, 18, 6, T().danger); s.setTextColor(TFT_WHITE); camTextC(s, r, CAM_RAIL_X / 2, 9);
   } else if (camShotPending) {
-    nyxAaRR(s, CAM_RAIL_X / 2 - 50, 4, 100, 18, 6, 0x2104); s.setTextColor(TFT_WHITE); camTextC(s, "Mengambil foto...", CAM_RAIL_X / 2, 9);
+    nyxAaRR(s, CAM_RAIL_X / 2 - 50, 4, 100, 18, 6, 0x2104); s.setTextColor(TFT_WHITE); camTextC(s, RPTR("Mengambil foto..."), CAM_RAIL_X / 2, 9);
   }
   if (camCdUntil) {
     int left = (int)((camCdUntil - now + 999) / 1000); char b[8]; snprintf(b, sizeof(b), "%d", left < 0 ? 0 : left);
@@ -838,7 +838,7 @@ static void camAdj(int r, int dir) {
     case 21: camCfg.xclk = camStepv(camCfg.xclk, dir, 0, 2, 1, true); camReopen(); break;
     case 22: camCfg.lapse = camStepv(camCfg.lapse, dir, 0, 4, 1, true); break;
     case 23: camCfg.motion = camStepv(camCfg.motion, dir, 0, 2, 1, true); break;
-    case 24: { int8_t keepLink = camCfg.link; camCfgDefaults(); camCfg.link = keepLink; camPushAll(); camSendSet(RPC_PRVRES, camPrvCode()); camSendSet(RPC_PRVQ, camCfg.prvQ); showToast("Pengaturan direset", 1200); break; }
+    case 24: { int8_t keepLink = camCfg.link; camCfgDefaults(); camCfg.link = keepLink; camPushAll(); camSendSet(RPC_PRVRES, camPrvCode()); camSendSet(RPC_PRVQ, camCfg.prvQ); showToast(RPTR("Pengaturan direset"), 1200); break; }
     default: break;
   }
 }
@@ -848,8 +848,8 @@ static void camAdj(int r, int dir) {
 static void camDrawSettings(LGFX_Sprite& s) {
   iosBackdrop(s);
   s.setTextWrap(false); s.setTextSize(1);
-  s.setTextColor(T().accent); s.setCursor(10, 8); s.print("Pengaturan Kamera");
-  nyxAaRR(s, SCR_W - 54, 4, 48, 22, 6, T().accent); s.setTextColor(TFT_BLACK); camTextC(s, "Selesai", SCR_W - 30, 11);
+  s.setTextColor(T().accent); s.setCursor(10, 8); s.print(RPTR("Pengaturan Kamera"));
+  nyxAaRR(s, SCR_W - 54, 4, 48, 22, 6, T().accent); s.setTextColor(TFT_BLACK); camTextC(s, RPTR("Selesai"), SCR_W - 30, 11);
   for (int t = 0; t < 4; t++) {
     int x = 8 + t * 76; bool on = (t == camTab);
     nyxAaRR(s, x, 28, 72, 17, 6, on ? (uint16_t)T().accent : (uint16_t)T().surface);
@@ -860,7 +860,7 @@ static void camDrawSettings(LGFX_Sprite& s) {
     int r = CAM_TAB_ROWS[camTab][i]; if (r < 0) break;
     nyxAaRR(s, 8, y, SCR_W - 16, CAM_SET_RH - 3, 6, T().surface);
     s.setTextColor(T().text); s.setCursor(16, y + 8); s.print(CAM_ROW_LABEL[r]);
-    if (r == 24) { s.setTextColor(T().danger); s.setCursor(SCR_W - 70, y + 8); s.print("Tekan"); }
+    if (r == 24) { s.setTextColor(T().danger); s.setCursor(SCR_W - 70, y + 8); s.print(RPTR("Tekan")); }
     else {
       char v[28]; camRowValue(r, v, sizeof(v));
       s.setTextColor(T().accent); int w = s.textWidth(v);
@@ -922,7 +922,7 @@ void camTouch(int x, int y, bool held, bool isNew) {
     return;
   }
   if (camIn(x, y, 0, 0, 40, 30)) { navBack(); return; }
-  if (camIn(x, y, CAM_RAIL_X, 4, SCR_W - CAM_RAIL_X, 32)) { if (!camRec && !camMotionOn) { camMode = (camMode + 1) & 3; vibTap(); needRedraw = true; } else showToast("Hentikan dulu", 900); return; }
+  if (camIn(x, y, CAM_RAIL_X, 4, SCR_W - CAM_RAIL_X, 32)) { if (!camRec && !camMotionOn) { camMode = (camMode + 1) & 3; vibTap(); needRedraw = true; } else showToast(RPTR("Hentikan dulu"), 900); return; }
   if (camIn(x, y, CAM_RAIL_X, 82 + CAM_VOFF, SCR_W - CAM_RAIL_X, 62)) { camShutterTap(); needRedraw = true; return; }
   if (camIn(x, y, CAM_RAIL_X, 152 + CAM_VOFF, SCR_W - CAM_RAIL_X, 30)) { camAdj(4, 1); vibTap(); needRedraw = true; return; }
   if (camIn(x, y, CAM_RAIL_X, 184 + CAM_VOFF, SCR_W - CAM_RAIL_X, 30)) { camSettings = true; vibTap(); needRedraw = true; return; }

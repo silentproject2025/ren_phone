@@ -201,7 +201,7 @@ static void rcFreeBuffers() {
 static bool rcApStart() {
   rcLoadCfg();
   if (rcApUp) return true;
-  if (airplaneMode) { showToast("Matikan mode pesawat dulu"); return false; }
+  if (airplaneMode) { showToast(RPTR("Matikan mode pesawat dulu")); return false; }
   Serial.printf("[remote] sebelum AP: freeInternal=%u largestBlock=%u\n",
                 heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
                 heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
@@ -209,7 +209,7 @@ static bool rcApStart() {
   bool ok = WiFi.softAP(rcCfg.ssid, rcCfg.pass, rcCfg.channel, rcCfg.hidden ? 1 : 0, 2);
   if (!ok) {
     Serial.println("[remote] WiFi.softAP GAGAL (sandi harus 8-63 karakter)");
-    showToast("Gagal menyalakan AP");
+    showToast(RPTR("Gagal menyalakan AP"));
     return false;
   }
   rcApUp = true;
@@ -579,7 +579,7 @@ static void rcRunAct() {
       if (locked) {
         locked = false; lockDragY = 0; lockDragging = false;
         navGoHome();
-        diNotify('D', "Terbuka", T().accent, 1100, false);
+        diNotify('D', RPTR("Terbuka"), T().accent, 1100, false);
       }
       break;
     case RCA_CC:
@@ -1057,7 +1057,7 @@ void rcLoopPoll() {
       staOffDone = true;
       if (rcApUp) {
         rcApStop();
-        diNotify('I', "AP remote mati (WiFi tersambung)", T().subtext, 2500, false);
+        diNotify('I', RPTR("AP remote mati (WiFi tersambung)"), T().subtext, 2500, false);
         Serial.println("[remote] STA tersambung -> AP dimatikan (mode STA saja)");
       }
     }
@@ -1102,8 +1102,8 @@ void rcLoopPoll() {
   bool v = rcViewerActive();
   if (v != rcWasViewing) {
     rcWasViewing = v;
-    if (v) diNotify('I', "Remote tersambung", T().good, 1500, false);
-    else   diNotify('I', "Remote terputus",   T().subtext, 1300, false);
+    if (v) diNotify('I', RPTR("Remote tersambung"), T().good, 1500, false);
+    else   diNotify('I', RPTR("Remote terputus"),   T().subtext, 1300, false);
     needRedraw = true;
   }
 
@@ -1217,7 +1217,7 @@ void drawRemote(LGFX_Sprite& s) {
       case 9: iosSwitch(s, xr - 34, y + 3, rcCfg.allowLan); break;
       case 10: {
         s.setTextColor(T().accent);
-        s.setCursor(valX, ty); s.print(rcCfg.quality ? "Hemat (RGB332)" : "Penuh (RGB565)");
+        s.setCursor(valX, ty); s.print(rcCfg.quality ? RPTR("Hemat (RGB332)") : RPTR("Penuh (RGB565)"));
         break;
       }
       case 11: {

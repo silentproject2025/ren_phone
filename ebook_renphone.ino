@@ -870,9 +870,9 @@ static void ebkNext() {
   if (ebkBook.curCh + 1 < nch) {
     int before = ebkBook.curCh;
     ebkGoChapter(ebkBook.curCh + 1, +1, 0, false);
-    if (ebkBook.curCh == before) showToast("Akhir buku");
+    if (ebkBook.curCh == before) showToast(RPTR("Akhir buku"));
     else ebkTurned();
-  } else showToast("Akhir buku");
+  } else showToast(RPTR("Akhir buku"));
 }
 
 static void ebkPrev() {
@@ -881,9 +881,9 @@ static void ebkPrev() {
   if (ebkBook.curCh > 0) {
     int before = ebkBook.curCh;
     ebkGoChapter(ebkBook.curCh - 1, -1, 0, true);
-    if (ebkBook.curCh == before) showToast("Awal buku");
+    if (ebkBook.curCh == before) showToast(RPTR("Awal buku"));
     else ebkTurned();
-  } else showToast("Awal buku");
+  } else showToast(RPTR("Awal buku"));
 }
 
 // ---------------------------------------------------------------------
@@ -904,7 +904,7 @@ static void ebkDoOpen() {
   ebkPath(idx, path, sizeof(path));
   ebkCloseBook();
   ebkFile = SD_MMC.open(path, FILE_READ);
-  if (!ebkFile) { showToast("Gagal membuka file"); ebkMode = EBK_LIB; needRedraw = true; return; }
+  if (!ebkFile) { showToast(RPTR("Gagal membuka file")); ebkMode = EBK_LIB; needRedraw = true; return; }
   EbRd rd; rd.read = ebkSdRead; rd.ctx = &ebkFile; rd.size = (uint32_t)ebkFile.size();
   int r = ebBookOpen(&ebkBook, rd, ebkLib[idx].epub ? EB_KIND_EPUB : ebkLib[idx].md ? EB_KIND_MD : EB_KIND_TXT);
   if (r != EB_OK) {
@@ -915,7 +915,7 @@ static void ebkDoOpen() {
   ebkOpened = true;
   strncpy(ebkName, ebkLib[idx].name, EBK_NAME_LEN - 1); ebkName[EBK_NAME_LEN - 1] = 0;
   if (ebkBook.title[0] == 0) ebkStem(ebkName, ebkBook.title, sizeof(ebkBook.title));
-  if (ebkBook.truncated) showToast(ebkBook.kind == EB_KIND_EPUB ? "Terpotong" : "Teks dipotong di batas ukuran", 2200);
+  if (ebkBook.truncated) showToast(ebkBook.kind == EB_KIND_EPUB ? RPTR("Terpotong") : RPTR("Teks dipotong di batas ukuran"), 2200);
 
   int ch = 0; uint32_t off = 0;
   int pi = ebkFindProg(ebkName);
@@ -925,7 +925,7 @@ static void ebkDoOpen() {
   bool ok = true;
   if (ebkBook.kind == EB_KIND_EPUB) ok = ebkLoadChapter(ch, +1) || ebkLoadChapter(0, +1);
   if (!ok || ebkBook.text == nullptr || ebkBook.textLen == 0) {
-    showToast("Buku tidak punya isi yang bisa dibaca");
+    showToast(RPTR("Buku tidak punya isi yang bisa dibaca"));
     ebkCloseBook(); ebkMode = EBK_LIB; needRedraw = true; return;
   }
   ebkWantOff = off; ebkWantLast = false; ebkDirty = true; ebkPgN = 0; ebkPage = 0;
@@ -1211,7 +1211,7 @@ static void ebkDrawReader(LGFX_Sprite& s) {
     ebkCpwSpr = nullptr;
   }
   ebkRenderPage(s, ebkPage);
-  if (!ebkUniActive && ebkFonts[ebkFontIdx].vlw) { showToast("Font Unicode tidak bisa dimuat, pakai font biasa", 2200); }
+  if (!ebkUniActive && ebkFonts[ebkFontIdx].vlw) { showToast(RPTR("Font Unicode tidak bisa dimuat, pakai font biasa"), 2200); }
   if (ebkMenu) ebkDrawMenu(s, ebkPalIdx);
   s.setFont(&lgfx::fonts::Font0); s.setTextSize(1);   // toast selalu Font0
   drawToast(s);
@@ -1256,7 +1256,7 @@ static void ebkDrawCover(LGFX_Sprite& s, int x, int y, int libIdx) {
 static void ebkDrawLibrary(LGFX_Sprite& s) {
   iosBackdrop(s);
   drawStatusBar(s);
-  iosTitle(s, 8, 26, "Buku");
+  iosTitle(s, 8, 26, RPTR("Buku"));
   s.unloadFont();
   s.setFont(&lgfx::fonts::Font0); s.setTextSize(1);
   if (ebkViewDirty || strcmp(ebkQuery.c_str(), ebkQApplied) != 0) ebkRebuildView();
@@ -1268,7 +1268,7 @@ static void ebkDrawLibrary(LGFX_Sprite& s) {
     char q[44]; strncpy(q, ebkQuery.c_str(), sizeof(q) - 1); q[sizeof(q) - 1] = 0;
     ebkFitText(s, q, SCR_W - 84 - 10 - 40);
     s.setTextColor(q[0] ? T().text : T().subtext);
-    s.setCursor(96, 35); s.print(q[0] ? q : "cari judul / penulis");
+    s.setCursor(96, 35); s.print(q[0] ? q : RPTR("cari judul / penulis"));
     s.setTextColor(T().subtext); s.setCursor(SCR_W - 10 - 16, 35); s.print("x");
   } else {
     int sx = SCR_W - 10 - EBK_SORT_W;
@@ -1291,15 +1291,15 @@ static void ebkDrawLibrary(LGFX_Sprite& s) {
   // ---- daftar ----
   s.setTextSize(1);
   if (!sdReady) {
-    s.setTextColor(T().subtext); s.setCursor(12, top + 10); s.print("SD card tidak terdeteksi.");
+    s.setTextColor(T().subtext); s.setCursor(12, top + 10); s.print(RPTR("SD card tidak terdeteksi."));
   } else if (ebkLibN == 0) {
-    s.setTextColor(T().text);    s.setCursor(12, top + 10); s.print("Belum ada buku.");
-    s.setTextColor(T().subtext); s.setCursor(12, top + 26); s.print("Salin file .txt / .md / .epub ke");
-    s.setCursor(12, top + 38); s.print("folder /books pada SD card.");
-    s.setTextColor(T().accent);  s.setCursor(12, top + 56); s.print("Atau ketuk Gutenberg di atas untuk");
-    s.setCursor(12, top + 68); s.print("mengunduh buku gratis.");
+    s.setTextColor(T().text);    s.setCursor(12, top + 10); s.print(RPTR("Belum ada buku."));
+    s.setTextColor(T().subtext); s.setCursor(12, top + 26); s.print(RPTR("Salin file .txt / .md / .epub ke"));
+    s.setCursor(12, top + 38); s.print(RPTR("folder /books pada SD card."));
+    s.setTextColor(T().accent);  s.setCursor(12, top + 56); s.print(RPTR("Atau ketuk Gutenberg di atas untuk"));
+    s.setCursor(12, top + 68); s.print(RPTR("mengunduh buku gratis."));
   } else if (ebkViewN == 0) {
-    s.setTextColor(T().subtext); s.setCursor(12, top + 10); s.print("Tidak ada hasil.");
+    s.setTextColor(T().subtext); s.setCursor(12, top + 10); s.print(RPTR("Tidak ada hasil."));
   } else {
     ebkClampScroll(ebkViewN * EBK_ROW_H);
     s.setClipRect(0, top, SCR_W, bot - top);
@@ -1323,9 +1323,9 @@ static void ebkDrawLibrary(LGFX_Sprite& s) {
       snprintf(info, sizeof(info), "%s  %s", e.epub ? "EPUB" : (e.md ? "MD" : "TXT"), sz);
       s.setTextColor(T().subtext); s.setCursor(tx, ry + 36); s.print(info);
       if (e.pct == 100) {
-        int pw = s.textWidth("Selesai") + 10;
+        int pw = s.textWidth(RPTR("Selesai")) + 10;
         nyxAaRR(s, SCR_W - 12 - pw, ry + 5, pw, 15, 7, T().accent);
-        s.setTextColor(0xFFFF); s.setCursor(SCR_W - 12 - pw + 5, ry + 9); s.print("Selesai");
+        s.setTextColor(0xFFFF); s.setCursor(SCR_W - 12 - pw + 5, ry + 9); s.print(RPTR("Selesai"));
       } else if (e.pct > 0) {
         char pc[8]; snprintf(pc, sizeof(pc), "%u%%", (unsigned)e.pct);
         s.setTextColor(T().accent); s.setCursor(SCR_W - 12 - s.textWidth(pc), ry + 8); s.print(pc);
@@ -1364,7 +1364,7 @@ static int ebkTocCurrent() {
 static void ebkDrawToc(LGFX_Sprite& s) {
   iosBackdrop(s);
   drawStatusBar(s);
-  iosTitle(s, 8, 26, "Daftar isi");
+  iosTitle(s, 8, 26, RPTR("Daftar isi"));
   s.unloadFont();
   s.setFont(&lgfx::fonts::Font0); s.setTextSize(1);
   int top = ebkListTop(), bot = ebkListBot();
@@ -1390,14 +1390,14 @@ static void ebkDrawToc(LGFX_Sprite& s) {
 static void ebkDrawLoading(LGFX_Sprite& s) {
   iosBackdrop(s);
   drawStatusBar(s);
-  iosTitle(s, 8, 26, "Buku");
+  iosTitle(s, 8, 26, RPTR("Buku"));
   s.setFont(&lgfx::fonts::Font0);
   char nm[EBK_TITLE_LEN] = "";
   if (ebkPendingIdx >= 0 && ebkPendingIdx < ebkLibN) ebkEntryTitle(ebkPendingIdx, nm, sizeof(nm));
   s.setTextSize(1);
   ebkFitText(s, nm, SCR_W - 24);
   s.setTextColor(T().text);    s.setCursor((SCR_W - s.textWidth(nm)) / 2, SCR_H / 2 - 12); s.print(nm);
-  s.setTextColor(T().subtext); s.setCursor((SCR_W - s.textWidth("Membuka...")) / 2, SCR_H / 2 + 4); s.print("Membuka...");
+  s.setTextColor(T().subtext); s.setCursor((SCR_W - s.textWidth(RPTR("Membuka..."))) / 2, SCR_H / 2 + 4); s.print(RPTR("Membuka..."));
   drawToast(s);
 }
 
@@ -1451,7 +1451,7 @@ static void ebkCycleFont() {
   static bool hinted = false;
   if (!hinted && ebkFontIdx == 0) {
     bool any = false; for (int i = 0; i < EBK_NFONT; i++) if (ebkFonts[i].vlw && ebkFontOk[i]) any = true;
-    if (!any) { showToast("Font Unicode: salin .vlw ke /books/fonts", 2600); hinted = true; }
+    if (!any) { showToast(RPTR("Font Unicode: salin .vlw ke /books/fonts"), 2600); hinted = true; }
   }
   ebkSaveProgFile();
   needRedraw = true;
@@ -1482,7 +1482,7 @@ static void ebkReaderRelease() {
           vibTap();
           if (row == 0) {
             if (i == 0) {
-              if (ebkBook.nToc <= 0) { showToast("Buku ini tidak punya daftar isi"); return; }
+              if (ebkBook.nToc <= 0) { showToast(RPTR("Buku ini tidak punya daftar isi")); return; }
               ebkRememberPos(false);
               int cur = ebkTocCurrent();
               ebkScroll = (float)((cur > 3 ? cur - 3 : 0) * EBK_TOC_ROW_H);
@@ -1491,10 +1491,10 @@ static void ebkReaderRelease() {
             else if (i == 2) ebkCycleTheme();
             else ebkBackToLibrary();
           } else if (i == 0) {
-            ebkJustify = !ebkJustify; showToast(ebkJustify ? "Rata kiri-kanan: Ya" : "Rata kiri-kanan: Tidak");
+            ebkJustify = !ebkJustify; showToast(ebkJustify ? RPTR("Rata kiri-kanan: Ya") : RPTR("Rata kiri-kanan: Tidak"));
             ebkSaveProgFile(); needRedraw = true;
           } else {
-            ebkAnimOn = !ebkAnimOn; showToast(ebkAnimOn ? "Animasi halaman: Ya" : "Animasi halaman: Tidak");
+            ebkAnimOn = !ebkAnimOn; showToast(ebkAnimOn ? RPTR("Animasi halaman: Ya") : RPTR("Animasi halaman: Tidak"));
             ebkSaveProgFile(); needRedraw = true;
           }
           return;

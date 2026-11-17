@@ -173,7 +173,7 @@ void otaCrossDispToggle() {
                ". Layar ini bisa gelap setelah pasang!";
     showToast(m.c_str(), 3500);
   } else {
-    showToast("Target: firmware layar ini", 1800);
+    showToast(RPTR("Target: firmware layar ini"), 1800);
   }
   needRedraw = true;
 }
@@ -211,7 +211,7 @@ void otaAddBranchPoll() {
   if (!nb.length()) return;
   int idx = otaChanIndexOf(nb);
   if (idx < 0) {
-    if (otaCustomCount() >= OTA_CUSTOM_MAX) { showToast("Daftar branch penuh (maks 6 tambahan)", 2200); return; }
+    if (otaCustomCount() >= OTA_CUSTOM_MAX) { showToast(RPTR("Daftar branch penuh (maks 6 tambahan)"), 2200); return; }
     otaCustom += (otaCustom.length() ? "," : "") + nb;
   }
   otaSel = nb;
@@ -279,7 +279,7 @@ String otaWifiLabel() {
 // pernah dipublikasikan (rilis "build-N" biasa = non-prerelease terakhir).
 static void otaCheckLegacy() {
   updBusy = true;
-  updDrawBusy("Memeriksa rilis GitHub...");
+  updDrawBusy(RPTR("Memeriksa rilis GitHub..."));
 
   nasaWaitForHeap();
   WiFiClientSecure client;
@@ -317,11 +317,11 @@ static void otaCheckLegacy() {
   needRedraw = true;
 
   if (code != HTTP_CODE_OK) {
-    if (code == 404) showToast("Belum ada rilis (atau repo private)");
-    else showToast((String("Gagal cek rilis, kode ") + String(code)).c_str());
+    if (code == 404) showToast(RPTR("Belum ada rilis (atau repo private)"));
+    else showToast((String(RPTR("Gagal cek rilis, kode ")) + String(code)).c_str());
     return;
   }
-  if (num <= 0) { showToast("Tag rilis tak dikenali"); return; }
+  if (num <= 0) { showToast(RPTR("Tag rilis tak dikenali")); return; }
 
   otaLatestNum = num;
   otaCheckedOk = true;
@@ -329,16 +329,16 @@ static void otaCheckLegacy() {
   if (num > (int)RP_BUILD_NUM) {
     otaStateVal = 2;
     updUrl = String("https://github.com/") + OTA_REPO + "/releases/download/" + tag + "/firmware.bin";
-    showToast("Ada update! Ketuk Unduh & Pasang", 2600);
+    showToast(RPTR("Ada update! Ketuk Unduh & Pasang"), 2600);
   } else {
     otaStateVal = 1;
-    showToast("Sudah versi terbaru", 2000);
+    showToast(RPTR("Sudah versi terbaru"), 2000);
   }
 }
 
 // dipanggil dari updTouch saat tombol "Cek update" diketuk
 void otaCheckAndFill() {
-  if (!wifiConnected) { showToast("Sambungkan WiFi dulu di Setting"); return; }
+  if (!wifiConnected) { showToast(RPTR("Sambungkan WiFi dulu di Setting")); return; }
   otaChanLoad();
   String ch = otaSel;
   // suffix channel mengikuti LAYAR TARGET (bukan layar build ini): st7796 -> channel-<branch>-st7796, ili9341 -> tanpa suffix
@@ -347,7 +347,7 @@ void otaCheckAndFill() {
   if (!ch.endsWith(tgtSuffix)) ch += tgtSuffix;
 
   updBusy = true;
-  updDrawBusy("Memeriksa channel...");
+  updDrawBusy(RPTR("Memeriksa channel..."));
   String base = String("https://github.com/") + OTA_REPO + "/releases/download/channel-" + ch + "/";
   String body = "";
   int code = otaHttpGetSmall(base + "info.txt", body, 1024);
@@ -355,9 +355,9 @@ void otaCheckAndFill() {
   needRedraw = true;
 
   if (code == 404 && ch == OTA_DEFAULT_CHANNEL) { otaCheckLegacy(); return; }
-  if (code == 404) { showToast("Channel belum dipublikasikan (branch belum di-build)", 3000); return; }
+  if (code == 404) { showToast(RPTR("Channel belum dipublikasikan (branch belum di-build)"), 3000); return; }
   if (code != HTTP_CODE_OK) {
-    showToast((String("Gagal cek channel, kode ") + String(code)).c_str(), 2500);
+    showToast((String(RPTR("Gagal cek channel, kode ")) + String(code)).c_str(), 2500);
     return;
   }
 
@@ -368,7 +368,7 @@ void otaCheckAndFill() {
   String md5 = otaKv(body, "md5");
   md5.toLowerCase();
   if (build <= 0 || size < 100000 || md5.length() != 32 || bi != ch) {
-    showToast("Info channel rusak / tidak valid", 2500);
+    showToast(RPTR("Info channel rusak / tidak valid"), 2500);
     return;
   }
   // Firmware beda LAYAR (ILI9341 vs ST7796) tidak boleh saling timpa -> layar bisa gelap total,
@@ -378,7 +378,7 @@ void otaCheckAndFill() {
     String disp = otaKv(body, "display");
     if (disp.length() == 0) disp = "ili9341";
     if (disp != tgtDisp) {
-      showToast("Firmware untuk layar lain. Dibatalkan", 3500);
+      showToast(RPTR("Firmware untuk layar lain. Dibatalkan"), 3500);
       otaResetCheck();
       return;
     }
@@ -402,11 +402,11 @@ void otaCheckAndFill() {
       String m = String(otaCrossDisp ? "LAYAR LAIN: '" : "Pindah ke '") + ch + "' b" + String(build) + ". Ketuk Unduh & Pasang";
       showToast(m.c_str(), 3200);
     } else {
-      showToast("Ada update! Ketuk Unduh & Pasang", 2600);
+      showToast(RPTR("Ada update! Ketuk Unduh & Pasang"), 2600);
     }
   } else {
     otaStateVal = 1;
-    showToast("Sudah versi terbaru", 2000);
+    showToast(RPTR("Sudah versi terbaru"), 2000);
   }
 }
 
@@ -568,7 +568,7 @@ void otaGuardPoll() {
     if (p.begin("otaguard", false)) {
       if (p.getUChar("rbmsg", 0)) {
         p.putUChar("rbmsg", 0);
-        showToast("Update dibatalkan otomatis: firmware baru gagal", 4500);
+        showToast(RPTR("Update dibatalkan otomatis: firmware baru gagal"), 4500);
       }
       p.end();
     }
