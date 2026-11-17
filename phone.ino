@@ -1586,6 +1586,9 @@ void nyxExtrasLoopPoll(); void nyxAboutRows(); void nyxAppEnergyAdd(float);
 void nyxDrawAppEnergy(LGFX_Sprite&,int,int); void nyxAppEnergyTouch(int,int,int,int);
 String nyxVoiceInstruction(); String nyxVoiceStatus(); bool nyxVoiceExtract(String&);
 void nyxShotThumbCapture(const char*); void nyxShotThumbHide(); bool nyxShotThumbActive();
+// HW_SCROLL_V1 (apply_hw_scroll.py, hwscroll_renphone.ino): hardware vertical scroll ST7796, portrait saja
+bool hwsIsActive(); bool hwsFrame(); bool hwsBandPush(); bool hwsPushHook(); void hwsLoopGuard(); void hwsLeave(const char*,int);
+int hwsModeGet(); bool hwsModeSet(int); const char* hwsModeText(int);
 void drawShotThumb(LGFX_Sprite&); bool nyxShotThumbTouch(bool,bool,int,int);
 bool nyxShotThumbAnimating(); void nyxShotThumbFastFrame(); bool nyxThFreezeFrame();   // NYX_TH_V4
 //   // NYX_TH_STRIP_V3
@@ -1624,6 +1627,7 @@ int  canvasAppHeight();
 void needRedrawNow();
 
 void applyOrientation(Orientation o, bool doSave) {
+  hwsLeave("ganti orientasi",0);   // HW_SCROLL_V1
   currentOrient = o;
   display.setRotation(o == ORIENT_LANDSCAPE ? 1 : 0);
   SCR_W = display.width();
@@ -3463,6 +3467,7 @@ void navPlayZoomClose(){
   push();                  // frame akhir = Home penuh (ikon asli muncul lagi)
 }
 void playNavTransition(NavAnim anim){
+  hwsLeave("transisi",1);   // HW_SCROLL_V1
   if((anim==NAV_ANIM_BACK||anim==NAV_ANIM_HOME) && navDepth==0 && navZoomSaved){ // UI-POLISH-V3: tutup -> mengecil ke ikon
     navZoomSaved=false;
     if(navZoomScr==SCR_W*1000+SCR_H){ navPlayZoomClose(); return; }   // orientasi berubah -> asal tidak valid, pakai geser biasa
@@ -3513,6 +3518,7 @@ void playNavTransition(NavAnim anim){
 
 void ownerStatsOpen(int); // Profil v2: hitung berapa kali app dibuka
 void navPush(Screen s){
+  hwsLeave("navPush",1);   // HW_SCROLL_V1: canvas disinkronkan dulu (snapshot App Switcher & transisi menyalin canvas)
   swThumbCaptureCurrent(); // v133: simpan preview layar yg DITINGGALKAN utk App Switcher
   appOnExit(curScreen());
   if(navDepth<NAV_MAX) navStack[navDepth++]=s;
@@ -9160,7 +9166,7 @@ int loadSpiOcPref(){
 // PENGATURAN ala iOS -- state layout & sentuhan (daftar scroll, tap-saat-lepas)
 // =====================================================================
 enum { SR_TITLE=0, SR_SECT, SR_BRIGHT, SR_THEME, SR_FONT, SR_ROT, SR_SPI, SR_SPIAPPLY,
-       SR_SCAN, SR_WIFI, SR_NONET, SR_SSID, SR_PASS, SR_CONNECT, SR_MPU, SR_TCAL, SR_OWNER, SR_ABOUT, SR_POWER, SR_HOMEEDIT, SR_BACKUP, SR_HEAPLOG };
+       SR_SCAN, SR_WIFI, SR_NONET, SR_SSID, SR_PASS, SR_CONNECT, SR_MPU, SR_TCAL, SR_OWNER, SR_ABOUT, SR_POWER, SR_HOMEEDIT, SR_BACKUP, SR_HEAPLOG, SR_HWS };
 #define SETT_MAXROWS 40
 int settRT[SETT_MAXROWS], settRG[SETT_MAXROWS], settRY[SETT_MAXROWS], settRH[SETT_MAXROWS], settRA[SETT_MAXROWS];
 const char* settRL[SETT_MAXROWS];
@@ -9204,6 +9210,7 @@ void settBuildLayout(){
   settAddRow(SR_SECT,0,26,0,"KINERJA",y);
   settAddRow(SR_SPI,g,38,0,nullptr,y);
   if(spiOcPendingIdx!=spiOcIdx) settAddRow(SR_SPIAPPLY,g,34,0,nullptr,y);
+  settAddRow(SR_HWS,g,38,0,nullptr,y);   // HW_SCROLL_V1
   settAddRow(SR_HEAPLOG,g,38,0,nullptr,y);   // HEAPLOG_TOGGLE_V1
   g++;
 
@@ -9252,7 +9259,7 @@ void settChevron(LGFX_Sprite& s,int cx,int cy,uint16_t col){ // ">" tipis
 bool settHasChip(int t){
   switch(t){
     case SR_BRIGHT: case SR_THEME: case SR_FONT: case SR_ROT: case SR_HOMEEDIT: case SR_SPI:
-    case SR_SCAN: case SR_SSID: case SR_PASS: case SR_MPU: case SR_TCAL: case SR_ABOUT: case SR_POWER: case SR_BACKUP: case SR_HEAPLOG:
+    case SR_SCAN: case SR_SSID: case SR_PASS: case SR_MPU: case SR_TCAL: case SR_ABOUT: case SR_POWER: case SR_BACKUP: case SR_HEAPLOG: case SR_HWS:
       return true;
   }
   return false;
@@ -9274,6 +9281,7 @@ void settChip(LGFX_Sprite& s,int type,int x,int y){ // x,y = pojok kiri-atas chi
     case SR_ABOUT:    col=CHIP_GRAY;   break;
     case SR_BACKUP:   col=CHIP_TEAL;   break;
     case SR_HEAPLOG:  col=CHIP_GRAY;   break;
+    case SR_HWS:      col=CHIP_TEAL;   break;   // HW_SCROLL_V1
     case SR_POWER:    col=CHIP_RED;    break;
     default: return;
   }
@@ -9330,6 +9338,9 @@ void settChip(LGFX_Sprite& s,int type,int x,int y){ // x,y = pojok kiri-atas chi
     case SR_BACKUP:    // panah turun ke baki
       s.fillRect(cx-1,cy-8,3,8,W); s.fillTriangle(cx-5,cy-1,cx+5,cy-1,cx,cy+5,W);
       s.fillRect(cx-7,cy+7,15,2,W);
+      break;
+    case SR_HWS:       // HW_SCROLL_V1: panah atas-bawah
+      s.fillTriangle(cx,cy-8,cx-5,cy-2,cx+5,cy-2,W); s.fillTriangle(cx,cy+8,cx-5,cy+2,cx+5,cy+2,W);
       break;
     case SR_HEAPLOG:   // grafik batang
       s.fillRect(cx-6,cy+1,3,6,W); s.fillRect(cx-1,cy-3,3,10,W); s.fillRect(cx+4,cy-7,3,14,W);
@@ -9454,6 +9465,19 @@ void drawSettings(LGFX_Sprite& s){
           char lb[8]; sprintf(lb,"%dMHz",SPI_OC_OPTIONS[k]);
           s.setTextColor(k==spiOcPendingIdx?(uint16_t)0xFFFF:T().subtext);
           s.setCursor(sx+k*(sw/2)+(sw/2)/2-s.textWidth(lb)/2,sy+7); s.print(lb);
+        }
+        } break;
+      case SR_HWS: {   // HW_SCROLL_V1: pil 3 pilihan Mati / Auto / Balik
+        int m=hwsModeGet();
+        s.setTextColor(T().text); s.setCursor(xl,ty-4); s.print("Scroll Hardware");
+        s.setTextColor(T().subtext); s.setCursor(xl,ty+6); s.print(m==0?"Pakai cache":(m==1?"Portrait saja":"Portrait, balik"));
+        int sw=150, sx=xr-sw, sy=ry+(rh-22)/2, segW=sw/3;
+        nyxAaRR(s, sx,sy,sw,22,11,T().surface2);
+        nyxAaRR(s, sx+2+m*segW,sy+2,segW-4,18,9,T().accent);
+        const char* hl[3]={"Mati","Auto","Balik"};
+        for(int k=0;k<3;k++){
+          s.setTextColor(k==m?(uint16_t)0xFFFF:T().subtext);
+          s.setCursor(sx+k*segW+segW/2-s.textWidth(hl[k])/2,sy+7); s.print(hl[k]);
         }
         } break;
       case SR_HEAPLOG:
@@ -9593,6 +9617,17 @@ void settTap(int x,int y){
     case SR_SPI: {
       int sw=108, sx=xr-sw;
       if(x>=sx && x<=sx+sw){ spiOcPendingIdx=(x<sx+sw/2)?0:1; needRedraw=true; }
+      } break;
+    case SR_HWS: {   // HW_SCROLL_V1
+      int sw=150, sx=xr-sw;
+      if(x>=sx && x<=sx+sw){
+        int m=(x-sx)*3/sw; if(m<0) m=0; if(m>2) m=2;
+        if(m!=hwsModeGet()){
+          if(hwsModeSet(m)){ char tb[40]; snprintf(tb,sizeof(tb),"Scroll HW: %s",hwsModeText(m)); showToast(tb); }
+          else showToast("Gagal simpan / tidak didukung");
+          needRedraw=true;
+        }
+      }
       } break;
     case SR_HEAPLOG:
       rpHLToggle();
@@ -12193,7 +12228,7 @@ void push(){ if(nyxThFreezeFrame()) return;
 #if RP_TOUCH_CAPACITIVE
   display.touchPoll();   // TOUCH_RESP_V1: sampling lebih rapat di tengah putaran render
 #endif
-  unsigned long t0=micros(); rpPushCanvas(); nyxPushLastUs=micros()-t0;   // ST7796_DIFFPUSH_V1
+  unsigned long t0=micros(); if(!hwsPushHook()) rpPushCanvas(); nyxPushLastUs=micros()-t0;   // ST7796_DIFFPUSH_V1 + HW_SCROLL_V1
 #if RP_TOUCH_CAPACITIVE
   display.touchPoll();
 #endif
@@ -12379,8 +12414,9 @@ static void homeCacheBlit(float sc){
 
 void renderHomeBandFrame(){
   int bt=homeGridClipTop(), bh=(homeDockY()-4)-bt;
+  if(hwsFrame()) return;   // HW_SCROLL_V1: scroll hardware (portrait); false = jalur cache/lama di bawah
 #if RP_HOME_CACHE
-  if(homeCacheUsable()){   // HOME_CACHE_V1
+  if(homeCacheUsable() && !hwsIsActive()){   // HOME_CACHE_V1 (HW_SCROLL_V1: kalau mode aktif, pita wajib lewat pemetaan scroll)
     if(!homeCacheValid) homeCacheValid=homeCacheBuild();
     if(homeCacheValid){
       canvas.setClipRect(0,bt,SCR_W,bh);
@@ -12399,9 +12435,11 @@ void renderHomeBandFrame(){
   renderCurrentFrame();
   canvas.clearClipRect();
   homeBandMode=false;
+  if(!hwsBandPush()){   // HW_SCROLL_V1: mode aktif -> pita dikirim lewat pemetaan scroll
   display.setClipRect(0,bt,SCR_W,bh);
   canvas.pushSprite(0,0);
   display.clearClipRect();
+  }
   rcFrameMark();
 }
 bool toastVisibleNow(){ return toastMsg.length() && millis()<=toastUntil; }
@@ -20678,6 +20716,7 @@ void loop(){
   // ketutup/ditinggal (app lain, lock, CC, shade, AOD, menu DI), tandai
   // "belum ada frame penuh" -> frame Home berikutnya DIPAKSA penuh dulu.
   if(curScreen()!=SCR_HOME || locked || appSwitcherOpen || controlCenterOpen || notifShadeOpen || homeAodActive || diMenuOpen) homeBandReady=false;
+  hwsLoopGuard();   // HW_SCROLL_V1
   if(curScreen()!=SCR_HOME || locked){ if(homeCache.getBuffer()) homeCacheFree(); }   // HOME_CACHE_V1: PSRAM kembali utk app lain (Doom/NES)
   if(!controlCenterOpen && !panelPullActive){   // CC_CACHE_V1: sesi selesai -> cache/snapshot basi; PSRAM dibebaskan kalau bukan di Home
     ccCacheValid=false; ccBgValid=false;

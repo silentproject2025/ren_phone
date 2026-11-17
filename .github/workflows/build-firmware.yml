@@ -290,6 +290,7 @@ jobs:
           cp gutendex_core.h build_sketch/
           cp gutdl_core.h build_sketch/
           cp heaplog_renphone.ino build_sketch/
+          cp hwscroll_renphone.ino build_sketch/
           cp hw_conf.h         build_sketch/
           cp display_conf.h    build_sketch/
 
