@@ -28,7 +28,7 @@
 #define RP_HW_SCROLL 1
 #endif
 #ifndef RP_HWS_DEFAULT_MODE
-#define RP_HWS_DEFAULT_MODE 0   // 0=Mati bawaan (belum teruji di hardware); ubah ke 1 kalau sudah yakin
+#define RP_HWS_DEFAULT_MODE 1   // 1=Otomatis bawaan (HWS_DEFAULT_ON_V3); 0=Mati; 2=Otomatis+Balik. Pilihan di NVS tetap menang
 #endif
 
 #include <stdint.h>
@@ -451,6 +451,8 @@ static bool hwsGenScreenOk(){
     case SCR_APOD: case SCR_NEOWS: case SCR_EPIC: case SCR_NASAIMG: case SCR_HOMEEDIT: case SCR_REMOTE:
     case SCR_CHAT: case SCR_EBOOK: case SCR_BACKUP: case SCR_ABOUT:
       return true;
+    case SCR_GALLERY:   // HWS_GAL_V1: hanya album + grid; viewer foto menulis display langsung
+      return galHwScrollOk();
     default: return false;
   }
 }

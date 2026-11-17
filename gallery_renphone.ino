@@ -245,6 +245,9 @@ static bool galSprEnsure(LGFX_Sprite& sp) {
 
 static void galRunTransition(int kind);       // definisi di bawah (butuh galDrawContent)
 
+// HWS_GAL_V1: dipakai hwscroll_renphone.ino -- mode scroll hardware generik hanya utk album + grid
+bool galHwScrollOk() { return galMode == GM_ALBUMS || galMode == GM_GRID; }
+
 // Panggil SETELAH state baru diset tapi SEBELUM frame berikutnya digambar:
 // `canvas` masih berisi frame lama = snapshot. deferred=true -> animasi baru
 // jalan setelah decode foto selesai (galPointerTick), selama itu snapshot
@@ -1048,6 +1051,7 @@ static void galSwipePaint(int off, int dir, bool nbOk) {
 }
 
 static void galSwipeAnimate(float from, float to, int dir) {
+  hwsLeave("galeri geser foto", 1);   // HWS_GAL_V1
   bool nbOk = galAdjOk(dir);
   float dist = fabsf(to - from) / (float)SCR_W;
   if (dist < 0.3f) dist = 0.3f;
@@ -1498,6 +1502,7 @@ static void galZoomClose() {
 }
 
 static void galRunTransition(int kind) {
+  hwsLeave("galeri transisi", 1);   // HWS_GAL_V1
   if (!galSnapReady) return;
   if (kind == 4) { if (galViewReady) { galZoomOpen(); return; } kind = 0; }
   if (kind == 5) { galZoomClose(); return; }
@@ -1706,6 +1711,7 @@ static void galZClamp() {
 
 // animasi zoom langsung ke display (tanpa overlay); tujuan pan dijepit supaya foto selalu menutupi layar
 static void galZoomApply(float zTo, float pxTo, float pyTo) {
+  hwsLeave("galeri zoom", 1);   // HWS_GAL_V1
   float mx = (zTo - 1.0f) * (float)SCR_W * 0.5f, my = (zTo - 1.0f) * (float)SCR_H * 0.5f;
   if (pxTo > mx) pxTo = mx; if (pxTo < -mx) pxTo = -mx;
   if (pyTo > my) pyTo = my; if (pyTo < -my) pyTo = -my;
@@ -1773,6 +1779,7 @@ static void galViewPointer(bool touched, bool wasT, int tx, int ty) {
       float from = galVDy; galVDy = 0;
       if (from > (float)SCR_H * 0.25f || galVVel > 0.5f) { galBack(); return; }   // cukup jauh / cepat: tutup (zoom ke thumbnail)
       const unsigned long t0 = millis(), dur = 160;      // balik ke posisi semula
+      hwsLeave("galeri tarik-tutup", 1);   // HWS_GAL_V1
       display.startWrite();
       for (;;) {
         uiBoostKick();
