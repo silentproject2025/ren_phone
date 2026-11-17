@@ -410,10 +410,25 @@ bool hwsPushHook(){
 }
 
 // ---------------- hook: awal tiap loop() ----------------
+// Pemanasan saat Home diam: cache dibangun + mode dimasuki SEBELUM scroll pertama, supaya hitch (bangun cache
+// = gambar semua ikon, + tulis pita awal) terjadi saat layar tidak bergerak, bukan di tengah gerakan jari.
+static unsigned long hwsIdleSince = 0, hwsPrewarmBlock = 0;
+static void hwsPrewarm(){
+  const unsigned long now = millis();
+  if(hwsModeGet() == 0 || needRedraw || !homeBandReady || homeScrollSpringing || homePressedIdx >= 0 || toastVisibleNow() || kbVisible
+     || homeSearchBar.open || homeSearchBar.animating || hwsWhyNot() != nullptr || !homeCacheUsable()){ hwsIdleSince = 0; return; }
+  if((int32_t)(hwsPrewarmBlock - now) > 0) return;
+  if(hwsIdleSince == 0){ hwsIdleSince = now; return; }
+  if(now - hwsIdleSince < 250UL) return;                       // Home sudah diam >= 250 ms
+  hwsIdleSince = 0;
+  if(hwsFrame()) Serial.println("[hws] pemanasan saat diam: cache siap + mode aktif");
+  else hwsPrewarmBlock = now + 2000UL;                          // gagal (mis. PSRAM): jangan coba tiap loop
+}
+
 void hwsLoopGuard(){
   hwsLoopTask = xTaskGetCurrentTaskHandle();
   if(!homeCacheValid) hwsCacheIcon = false;                      // cache dibangun ulang -> ikon cari perlu ditempel lagi
-  if(!hwsEng.active) return;
+  if(!hwsEng.active){ hwsPrewarm(); return; }
   if(hwsForeign){ hwsForeign = false; hwsLeave("push dari core lain", 2); return; }
   const char* why = hwsWhyNot();
   if(why){ hwsLeave(why, 2); return; }
