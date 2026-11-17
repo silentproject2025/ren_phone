@@ -32,15 +32,16 @@
 #endif
 
 // ---- HWS_PURE_BEGIN ----
-struct HwsGeom { int D; int B0; int H; bool flip; };   // D=jumlah baris memori(480), B0=atas pita, H=tinggi pita
+struct HwsGeom {
+  int D; int B0; int H; bool flip;   // D=jumlah baris memori(480), B0=atas pita, H=tinggi pita
+  // Method (bukan fungsi bebas): Arduino builder membuat prototipe otomatis utk fungsi bertipe struct & menaruhnya sebelum struct.
+  int tfaReg() const { return flip ? (D - B0 - H) : B0; }
+  int bfaReg() const { return flip ? B0 : (D - B0 - H); }
+  // VSCSAD utk pergeseran k (0..H-1; konten naik k baris relatif fase). Balik: arah dibalik.
+  int sad(int k) const { return flip ? (tfaReg() + (((H - k) % H) + H) % H) : (B0 + k); }
+};
 
 static inline int hwsMod(int a, int n){ int r = a % n; return r < 0 ? r + n : r; }
-static inline int hwsTfaReg(const HwsGeom& g){ return g.flip ? (g.D - g.B0 - g.H) : g.B0; }
-static inline int hwsBfaReg(const HwsGeom& g){ return g.flip ? g.B0 : (g.D - g.B0 - g.H); }
-// VSCSAD utk pergeseran k (0..H-1; konten naik k baris relatif fase). Balik: arah dibalik.
-static inline int hwsSad(const HwsGeom& g, int k){
-  return g.flip ? (hwsTfaReg(g) + hwsMod(g.H - k, g.H)) : (g.B0 + k);
-}
 
 // Tujuan keluaran engine (di firmware = LovyanGFX, di tes = simulator panel).
 struct HwsSink {
@@ -102,8 +103,8 @@ struct HwsEngine {
   void enter(HwsSink& s, const HwsGeom& geom, int pxNow, int cacheH, bool railOn){
     g = geom; P = pxNow; px = pxNow; active = true; dirty = false; railWas = false;
     s.begin();
-    s.scrollDef(hwsTfaReg(g), g.H, hwsBfaReg(g));
-    s.scrollAddr(hwsSad(g, 0));
+    s.scrollDef(g.tfaReg(), g.H, g.bfaReg());
+    s.scrollAddr(g.sad(0));
     rows(s, px + g.B0, px + g.B0 + g.H, cacheH);
     stripPass(s, railOn);
     s.end();
@@ -122,7 +123,7 @@ struct HwsEngine {
     if(b > a) rows(s, a, b, cacheH);
     px = pxNew;
     stripPass(s, railOn);
-    s.scrollAddr(hwsSad(g, k()));
+    s.scrollAddr(g.sad(k()));
     dirty = false;
     s.end();
     if(full) nFull++; else nFast++;
@@ -133,7 +134,7 @@ struct HwsEngine {
     px = pxNew;
     s.begin();
     lines(s, k(), false);
-    s.scrollAddr(hwsSad(g, k()));
+    s.scrollAddr(g.sad(k()));
     s.end();
     dirty = overlay;      // overlay ada di memori panel -> frame cepat berikutnya wajib tulis ulang penuh dari cache
     railWas = railOn;     // canvas sudah memuat rail (kalau ada) di kolom kanan
@@ -265,12 +266,13 @@ static void hwsStripFree(){ if(hwsStrip.getBuffer()) hwsStrip.deleteSprite(); hw
 
 // ---------------- sink LovyanGFX ----------------
 struct HwsLgfxSink : HwsSink {
-  static void w16(int v){ display.writeData((uint32_t)((v >> 8) & 0xFF), 8); display.writeData((uint32_t)(v & 0xFF), 8); }
+  // LovyanGFX 1.3.0: writeCommand(uint8_t) / writeData(uint8_t) -> satu byte per panggilan (urutan byte tidak ambigu)
+  static void w16(int v){ display.writeData((uint8_t)((v >> 8) & 0xFF)); display.writeData((uint8_t)(v & 0xFF)); }
   void begin() override { display.startWrite(); }
   void end() override { display.endWrite(); }
-  void scrollDef(int tfa, int vsa, int bfa) override { display.writeCommand(0x33, 8); w16(tfa); w16(vsa); w16(bfa); }
-  void scrollAddr(int sad) override { display.writeCommand(0x37, 8); w16(sad); }
-  void scrollOff() override { scrollDef(0, SCR_H, 0); scrollAddr(0); display.writeCommand(0x13, 8); }
+  void scrollDef(int tfa, int vsa, int bfa) override { display.writeCommand(0x33); w16(tfa); w16(vsa); w16(bfa); }
+  void scrollAddr(int sad) override { display.writeCommand(0x37); w16(sad); }
+  void scrollOff() override { scrollDef(0, SCR_H, 0); scrollAddr(0); display.writeCommand(0x13); }
   void writeCache(int yw, int n, int c0) override {
     display.setClipRect(0, yw, SCR_W, n);
     homeCache.pushSprite(&display, 0, yw - c0);
@@ -368,7 +370,7 @@ bool hwsFrame(){
     hwsEng.nFast = hwsEng.nFull = hwsEng.nSlow = hwsEng.nRows = 0;
     hwsEng.enter(hwsSink, hwsGeomCur, px, homeCacheH, rail);
     Serial.printf("[hws] masuk: mode=%d(%s) B0=%d H=%d D=%d TFA=%d BFA=%d px=%d\n", hwsModeGet(), hwsModeText(hwsModeGet()),
-                  hwsGeomCur.B0, hwsGeomCur.H, hwsGeomCur.D, hwsTfaReg(hwsGeomCur), hwsBfaReg(hwsGeomCur), px);
+                  hwsGeomCur.B0, hwsGeomCur.H, hwsGeomCur.D, hwsGeomCur.tfaReg(), hwsGeomCur.bfaReg(), px);
   } else {
     hwsEng.update(hwsSink, px, homeCacheH, rail);
   }
