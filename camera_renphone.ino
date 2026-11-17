@@ -502,6 +502,7 @@ static void camStillTick(uint32_t now) {
 // ---------------- link & buka kamera ----------------
 static int camRungOf(uint32_t b) { int r = 0; for (int i = 0; i < CAM_LINK_N; i++) if (CAM_LINK_BAUD[i] <= b) r = i; return r; }
 static inline bool camForce() { return camCfg.link >= CAM_LINK_N; }   // LINK_FORCE_V1: "5 Mbaud PAKSA"
+bool camToastMuted() { return camActive && camForce(); }   // MODE_PAKSA_NOTOAST_V1: dipakai showToast() di phone.ino
 static int camLinkTarget() { int t = camCfg.link < camLinkCeil ? camCfg.link : camLinkCeil; return t < 0 ? 0 : (t >= CAM_LINK_N ? CAM_LINK_N - 1 : t); }
 // Link tidak bersih -> turun SATU anak tangga (bukan langsung 921k). alive=true: link masih hidup, minta CAM pindah langsung;
 // alive=false: link mati total (S3 sudah mundur ke 921k), tunggu CAM mundur sendiri baru coba anak tangga di bawahnya.
@@ -584,7 +585,7 @@ void camEnter() {
   camPrevOrient = currentOrient;
   if (currentOrient != ORIENT_LANDSCAPE) applyOrientation(ORIENT_LANDSCAPE, false);
   if (!gameModeActive) { gameModeActive = true; setCpuFrequencyMhz(CPU_MHZ_GAME); camBoosted = true; }
-  if (!camAllocBuffers()) { showToast("RAM tidak cukup utk Kamera", 2500); camActive = true; return; }
+  if (!camAllocBuffers()) { camActive = true; showToast("RAM tidak cukup utk Kamera", 2500); return; }
   musExtPrepare();                                 // nyalakan link UART ke CAM (idempoten)
   camLastRxMs = millis();
   camActive = true;

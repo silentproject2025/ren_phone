@@ -1580,6 +1580,7 @@ extern bool  battCharging; // v109: true = lagi di-charge (diisi dari pembacaan 
 // aslinya (dekat drawToast()) udah dibuang default-nya biar gak dobel
 // (C++ error kalau default value dikasih di declaration DAN definition).
 void showToast(const char* msg, int ms=1400);
+bool camToastMuted();   // MODE_PAKSA_NOTOAST_V1: definisi di camera_renphone.ino
 // NYX-EXTRAS-V1: prototipe fungsi nyxextras_renphone.ino & banner telepon (call_renphone.ino)
 bool callBannerActive(); void drawCallBanner(LGFX_Sprite&); bool callBannerTouch(bool,bool,int,int);
 void nyxExtrasLoopPoll(); void nyxAboutRows(); void nyxAppEnergyAdd(float);
@@ -3748,6 +3749,7 @@ unsigned long toastUntil=0;
 unsigned long toastStartMs=0;
 void showToast(const char* msg,int ms){
   if(dndMode) return;
+  if(camToastMuted()) return;   // MODE_PAKSA_NOTOAST_V1: link kamera "5 Mbaud PAKSA" aktif -> TIDAK ADA toast sama sekali
   // UI-POLISH-V3: animasi masuk HANYA diputar kalau toast sedang tidak tampil (atau sedang keluar).
   // Panggilan berulang saat toast masih tampil cuma ganti teks + perpanjang waktu, tanpa mengulang fade-in.
   unsigned long nowMs=millis();
@@ -4250,10 +4252,26 @@ void diShowNow(char icon, const String& title, uint16_t color,
 // masih sibuk nampilin notif lain, notif baru ini DIANTRE drpd nimpa yg
 // lg tampil (perilaku lama: notif kedua ketiban notif pertama, yg
 // pertama hilang tanpa jejak sama sekali).
+// SENYAP_DI_V1: saat mode senyap (vibEnabled=false) pil Dynamic Island DIJARANGKAN.
+// Notif tetap masuk histori (Notification Shade). Yg boleh nyala: telepon 'p' & timer/stopwatch 't'.
+// Sisanya: tanpa Live Activity/progress (keepAliveCompact), tanpa antrean, dan paling cepat
+// 1x per DI_SENYAP_GAP_MS.
+#define DI_SENYAP_GAP_MS 30000UL
+static unsigned long diSenyapLastMs=0;
+static bool diSenyapAllow(char icon, bool keepAliveCompact){
+  if(vibEnabled) return true;
+  if(icon=='p' || icon=='t') return true;
+  if(keepAliveCompact) return false;
+  unsigned long now=millis();
+  if(diSenyapLastMs && (now-diSenyapLastMs)<DI_SENYAP_GAP_MS) return false;
+  diSenyapLastMs=now;
+  return true;
+}
 void diNotify(char icon, const String& title, uint16_t color,
               unsigned long expandMs, bool keepAliveCompact, const String& badge,
               Screen linkScreen, bool hasLink){
   notifHistPush(icon, title, color, badge, linkScreen, hasLink);
+  if(!diSenyapAllow(icon, keepAliveCompact)) return;   // SENYAP_DI_V1
   if(diTargetState==DI_IDLE){
     diShowNow(icon, title, color, expandMs, keepAliveCompact, badge);
   } else {
@@ -4298,6 +4316,7 @@ void diFinishProgress(char icon, const String& title, uint16_t color,
                        unsigned long expandMs, bool keepAliveCompact, const String& badge,
                        Screen linkScreen, bool hasLink){
   notifHistPush(icon, title, color, badge, linkScreen, hasLink);
+  if(!diSenyapAllow(icon, keepAliveCompact)) return;   // SENYAP_DI_V1
   diShowNow(icon, title, color, expandMs, keepAliveCompact, badge);
   if(hasLink) diLink(linkScreen);
 }
