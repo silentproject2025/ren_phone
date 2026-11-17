@@ -5066,6 +5066,7 @@ bool  ccAnimating=false;
 #define CC_CACHE_V1 1
 #endif
 LGFX_Sprite ccCache(&display);
+static bool ccBgValid=false;
 bool ccCacheValid=false;
 int  ccCacheW=0, ccCacheH=0;
 void ccCacheFree(){ if(ccCache.getBuffer()) ccCache.deleteSprite(); ccCacheValid=false; ccCacheW=ccCacheH=0; }
@@ -12271,7 +12272,6 @@ void push(){ if(nyxThFreezeFrame()) return;
   rcFrameMark(); }
 // CC_CACHE_V1: snapshot latar. Selama CC bergerak latar (Home/app) diam -> disalin, bukan digambar ulang.
 static LGFX_Sprite ccBg(&display);
-static bool ccBgValid=false;
 static void ccBgFree(){ if(ccBg.getBuffer()) ccBg.deleteSprite(); ccBgValid=false; }
 static bool ccMotionNow(){
   return controlCenterOpen && (panelPullActive || ccAnimating) && !locked && !appSwitcherOpen
