@@ -41,9 +41,10 @@ static const uint8_t        CAM_TIMER_S[3]   = {0, 3, 10};
 static const uint8_t        CAM_BURST_N[3]   = {1, 3, 5};
 static const uint8_t        CAM_XCLK_MHZ[3]  = {10, 16, 20};
 static const uint8_t        CAM_LAPSE_S[5]   = {2, 5, 10, 30, 60};
-#define CAM_LINK_N 5
-static const uint32_t       CAM_LINK_BAUD[CAM_LINK_N] = {RP_BAUD, 2000000, 3000000, 4000000, 5000000};   // 80 MHz/baud = 86.8 / 40 / 26.7 / 20 / 16 (4M & 5M pas)
-static const char*    const CAM_LINK_NAME[CAM_LINK_N] = {"921 kbaud (aman)", "2 Mbaud", "3 Mbaud", "4 Mbaud", "5 Mbaud (maks)"};
+#define CAM_LINK_N 5      // jumlah anak tangga (urutan turun otomatis)
+#define CAM_LINK_OPT_N 6  // LINK_FORCE_V1: pilihan di menu = anak tangga + "5 Mbaud PAKSA" (indeks CAM_LINK_N, tidak ikut tangga)
+static const uint32_t       CAM_LINK_BAUD[CAM_LINK_OPT_N] = {RP_BAUD, 2000000, 3000000, 4000000, 5000000, 5000000};   // 80 MHz/baud = 86.8 / 40 / 26.7 / 20 / 16 (4M & 5M pas)
+static const char*    const CAM_LINK_NAME[CAM_LINK_OPT_N] = {"921 kbaud (aman)", "2 Mbaud", "3 Mbaud", "4 Mbaud", "5 Mbaud (maks)", "5 Mbaud PAKSA"};
 static const char*    const CAM_WB_NAME[5]   = {"Auto", "Cerah", "Mendung", "Kantor", "Rumah"};
 static const char*    const CAM_FX_NAME[7]   = {"Normal", "Negatif", "Abu-abu", "Merah", "Hijau", "Biru", "Sepia"};
 static const char*    const CAM_FLASH_NAME[4]= {"Mati", "Senter 30%", "Senter 100%", "Kilat saat foto"};
@@ -78,7 +79,7 @@ static void camCfgLoad() {
     if (p.getBytes("cfg", &t, sizeof(t)) == sizeof(t) && t.ver == CAMCFG_VER) camCfg = t;
     p.end();
   }
-  if (camCfg.link < 0 || camCfg.link >= CAM_LINK_N) camCfg.link = CAM_LINK_N - 1;
+  if (camCfg.link < 0 || camCfg.link >= CAM_LINK_OPT_N) camCfg.link = CAM_LINK_N - 1;
   {   // migrasi sekali: link 2/3 Mbaud lama -> naik ke maks (aman, karena link otomatis turun sendiri kalau kabel tidak bersih)
     Preferences q;
     if (q.begin("cam", false)) { if (q.getUChar("linkv", 0) < 2) { if (camCfg.link > 0 && camCfg.link < CAM_LINK_N - 1) camCfg.link = CAM_LINK_N - 1; q.putUChar("linkv", 2); } q.end(); }
@@ -500,10 +501,18 @@ static void camStillTick(uint32_t now) {
 
 // ---------------- link & buka kamera ----------------
 static int camRungOf(uint32_t b) { int r = 0; for (int i = 0; i < CAM_LINK_N; i++) if (CAM_LINK_BAUD[i] <= b) r = i; return r; }
+static inline bool camForce() { return camCfg.link >= CAM_LINK_N; }   // LINK_FORCE_V1: "5 Mbaud PAKSA"
 static int camLinkTarget() { int t = camCfg.link < camLinkCeil ? camCfg.link : camLinkCeil; return t < 0 ? 0 : (t >= CAM_LINK_N ? CAM_LINK_N - 1 : t); }
 // Link tidak bersih -> turun SATU anak tangga (bukan langsung 921k). alive=true: link masih hidup, minta CAM pindah langsung;
 // alive=false: link mati total (S3 sudah mundur ke 921k), tunggu CAM mundur sendiri baru coba anak tangga di bawahnya.
 static void camLinkStepDown(uint32_t now, int fromRung, bool alive, const char* why) {   // CAM_LINK_DIAG_V1: +why
+  if (camForce()) {   // LINK_FORCE_V1: batas atas TIDAK diturunkan, tidak ada tanda "cepat gagal"
+    camBaudReq = false;
+    if (!alive) camRetryAt = now + 3500;   // link sunyi: S3 sudah di 921k (agar bisa pulih); coba 5M lagi setelah CAM mundur sendiri (<=3 dtk)
+    static uint32_t lastToast = 0;
+    if (now - lastToast > 8000UL) { lastToast = now; char m[64]; snprintf(m, sizeof(m), "Link 5M (paksa) tak bersih: %s", why); showToast(m, 1800); }
+    return;
+  }
   int nxt = fromRung - 1;
   camLinkCeil = (int8_t)(nxt < 0 ? 0 : nxt);
   camBaudReq = false;
@@ -821,7 +830,7 @@ static void camAdj(int r, int dir) {
     case 17: camCfg.prv = camStepv(camCfg.prv, dir, 0, SCR_W >= 480 ? 3 : 2, 1, true); camSendSet(RPC_PRVRES, camPrvCode()); camMotionReset(); break;
     case 18: camCfg.prvQ = camStepv(camCfg.prvQ, dir, 8, 30, 2, false); camSendSet(RPC_PRVQ, camCfg.prvQ); break;
     case 19: camCfg.lenc ^= 1; camSendSet(RPC_LENC, camCfg.lenc); break;
-    case 20: camCfg.link = camStepv(camCfg.link, dir, 0, CAM_LINK_N - 1, 1, true);
+    case 20: camCfg.link = camStepv(camCfg.link, dir, 0, CAM_LINK_OPT_N - 1, 1, true);
              camLinkFailed = false; camBaudReq = false; camLinkCeil = CAM_LINK_N - 1; camRetryAt = 0;
              if (camBaudCur != RP_BAUD) camSendBaud(camCfg.link ? CAM_LINK_BAUD[camCfg.link] : RP_BAUD);     // ganti langsung (tanpa tutup kamera)
              break;
@@ -866,7 +875,7 @@ static void camDrawSettings(LGFX_Sprite& s) {
     snprintf(l, sizeof(l), "%s  heap CAM %uK (blok %uK)", camSensorName(camPidNow()), camStat[5], camStat[6]); s.setCursor(12, iy); s.print(l); iy += 11;
     snprintf(l, sizeof(l), "CAM %u.%u fps  rx %lu drop %lu rusak %lu", (camStat[7] | (camStat[8] << 8)) / 10, (camStat[7] | (camStat[8] << 8)) % 10,
              (unsigned long)camRx.frames, (unsigned long)camRx.dropped, (unsigned long)(camRx.bad + camRx.oversize)); s.setCursor(12, iy); s.print(l); iy += 11;
-    snprintf(l, sizeof(l), "Link %lu baud  %lu KB/s%s", (unsigned long)camBaudCur, (unsigned long)camKBps, camLinkFailed ? " (cepat gagal)" : (camLinkCeil < camCfg.link ? " (turun otomatis)" : "")); s.setCursor(12, iy); s.print(l); iy += 11;
+    snprintf(l, sizeof(l), "Link %lu baud  %lu KB/s%s", (unsigned long)camBaudCur, (unsigned long)camKBps, camLinkFailed ? " (cepat gagal)" : (camForce() ? " (PAKSA)" : (camLinkCeil < camCfg.link ? " (turun otomatis)" : ""))); s.setCursor(12, iy); s.print(l); iy += 11;
     snprintf(l, sizeof(l), "header hemat: tolak %lu", (unsigned long)camRx.hdrMiss); s.setCursor(12, iy); s.print(l);
   }
   drawToast(s);

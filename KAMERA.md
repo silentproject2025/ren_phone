@@ -68,3 +68,9 @@ RGB565 (SVGA, 2 buffer PSRAM ~1,9 MB) dan tiap frame di-encode JPEG di CAM (`fra
 - Warna aneh (ungu/hijau)? Tambah `-DCAM_SOFT_SWAP565` (atau hapus komentar `//#define CAM_SOFT_SWAP565` di `cam_module.h`).
 - Pin tetap AI-Thinker. Kalau kamera tidak terdeteksi (error 0x105) cek kabel flat dulu.
 - **Belum dikompilasi dengan toolchain ESP32 dan belum dijalankan di perangkat** (logika diuji dengan mock di komputer).
+
+## Link "5 Mbaud PAKSA" (LINK_FORCE_V1)
+Atur > Sistem > Link: pilihan terakhir **5 Mbaud PAKSA**. Frame rusak tidak lagi menurunkan link satu anak tangga (5M -> 4M -> ...); batas atas
+tetap 5 Mbaud. Kalau link sunyi / CAM hilang, S3 tetap mundur sebentar ke 921k (supaya link bisa pulih, CAM juga mundur sendiri setelah 3 dtk) lalu
+mencoba 5 Mbaud lagi tiap ~3,5 dtk; batas atas tidak pernah diturunkan. HUD menampilkan "(PAKSA)" dan toast peringatan (maks 1x / 8 dtk) kalau link tidak bersih.
+Konsekuensi: kabel yang buruk = preview patah-patah / ada frame rusak, bukan turun diam-diam ke baud lebih rendah. Pilihan lama berperilaku seperti biasa.
