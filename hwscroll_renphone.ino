@@ -31,6 +31,7 @@
 #define RP_HWS_DEFAULT_MODE 0   // 0=Mati bawaan (belum teruji di hardware); ubah ke 1 kalau sudah yakin
 #endif
 
+#include <stdint.h>
 // ---- HWS_PURE_BEGIN ----
 struct HwsGeom {
   int D; int B0; int H; bool flip;   // D=jumlah baris memori(480), B0=atas pita, H=tinggi pita
@@ -57,6 +58,7 @@ struct HwsSink {
   virtual void writeStrip(int yw, int n, int line0) = 0;     // strip baris line0.. -> y=yw (kolom kanan)
   virtual void stripEnd() = 0;
   virtual void writePlain(int y0, int n) = 0;                // canvas baris [y0,y0+n) apa adanya (keluar mode)
+  virtual void writeRect(int yw, int n, int srcY, int x0, int w) = 0;  // canvas baris srcY.., kolom [x0,x0+w) -> y=yw (mode generik)
 };
 
 struct HwsEngine {
@@ -64,7 +66,8 @@ struct HwsEngine {
   int  P, px;               // fase ring & posisi (px) yang sedang tampil
   bool active, dirty, railWas;
   unsigned long nFast, nFull, nSlow, nRows;
-  HwsEngine() : P(0), px(0), active(false), dirty(false), railWas(false), nFast(0), nFull(0), nSlow(0), nRows(0) {
+  int badFrames; bool wantLeave; int lastDirty;   // mode generik
+  HwsEngine() : P(0), px(0), active(false), dirty(false), railWas(false), nFast(0), nFull(0), nSlow(0), nRows(0), badFrames(0), wantLeave(false), lastDirty(0) {
     g.D = 0; g.B0 = 0; g.H = 0; g.flip = false;
   }
   int  k() const { return hwsMod(px - P, g.H); }
@@ -139,6 +142,127 @@ struct HwsEngine {
     dirty = overlay;      // overlay ada di memori panel -> frame cepat berikutnya wajib tulis ulang penuh dari cache
     railWas = railOn;     // canvas sudah memuat rail (kalau ada) di kolom kanan
     nSlow++;
+  }
+
+  // =================== MODE GENERIK (layar apa pun yang menggulir, tanpa cache) ===================
+  // Pemanggil memberi hash per baris layar: Nm/Ns = canvas BARU (kolom utama / strip kanan sw px),
+  // Sm/Ss = apa yang sedang tampil di panel (per baris layar). Engine mencari pergeseran vertikal u
+  // (konten naik u baris) lewat suara hash, menggeser panel dengan VSCSAD, lalu menulis HANYA baris yang
+  // tidak cocok dengan hasil geseran ("perbaikan diff"). Benar walau deteksi salah (cuma jadi lebih mahal).
+  static bool genDetect(const uint64_t* Sm, const uint64_t* Nm, int a, int b, int& u, int& r0, int& r1){
+    const int H = b - a;
+    if(H < 16) return false;
+    int dmax = H - 1; if(dmax > 200) dmax = 200;
+    int info[480]; int ni = 0;
+    for(int j = a; j < b && ni < 480; j++){          // baris "informatif": beda dgn tetangga (bukan area kosong)
+      bool up = (j > a) ? (Nm[j] != Nm[j-1]) : true;
+      bool dn = (j < b - 1) ? (Nm[j] != Nm[j+1]) : true;
+      if(up && dn) info[ni++] = j;
+    }
+    if(ni < 6) return false;
+    int bestv = 0, bestd = 0;
+    for(int d = -dmax; d <= dmax; d++){
+      if(d == 0) continue;
+      int v = 0;
+      for(int t = 0; t < ni; t++){ int j = info[t], idx = j - d; if(idx >= a && idx < b && Sm[idx] == Nm[j]) v++; }
+      if(v > bestv){ bestv = v; bestd = d; }
+    }
+    if(bestv < 6) return false;
+    int lo = b, hi = a - 1;
+    for(int t = 0; t < ni; t++){ int j = info[t], idx = j - bestd; if(idx >= a && idx < b && Sm[idx] == Nm[j]){ if(j < lo) lo = j; if(j > hi) hi = j; } }
+    u = -bestd;                                       // konten pindah turun bestd baris == naik u baris
+    r0 = lo; r1 = hi + 1;
+    if(u > 0) r1 += u; else r0 += u;                  // baris yang baru masuk ikut area scroll
+    if(r0 < a) r0 = a;
+    if(r1 > b) r1 = b;
+    return true;
+  }
+  static int genDirtyCount(int u, const uint64_t* Sm, const uint64_t* Ss, const uint64_t* Nm, const uint64_t* Ns, int R0, int H){
+    int c = 0;
+    for(int i = 0; i < H; i++){ int s = i + u; if(!(s >= 0 && s < H && Nm[R0+i] == Sm[R0+s] && Ns[R0+i] == Ss[R0+s])) c++; }
+    return c;
+  }
+  void genRectLines(HwsSink& s, int i0, int i1, int x0, int w, int kk){   // baris layar pita [i0,i1) -> ring (potong di wrap)
+    int i = i0;
+    while(i < i1){
+      int m = (i + kk) % g.H;
+      int run = i1 - i; if(run > g.H - m) run = g.H - m;
+      s.writeRect(g.B0 + m, run, g.B0 + i, x0, w);
+      nRows += (unsigned long)run;
+      i += run;
+    }
+  }
+  // Return -1: tidak ada yang ditulis -> pemanggil push penuh biasa lalu salin N ke S.
+  //        >=0: frame sudah ditangani engine (jumlah baris pita yang ditulis ulang).
+  int gen(HwsSink& s, uint64_t* Sm, uint64_t* Ss, const uint64_t* Nm, const uint64_t* Ns, int D, int W, int sw, bool flip, bool valid){
+    wantLeave = false;
+    if(!valid){ if(active) leave(s, false); return -1; }
+    int u = 0;
+    if(!active){
+      int cu = 0, r0 = 0, r1 = 0;
+      if(!genDetect(Sm, Nm, 0, D, cu, r0, r1)) return -1;
+      if(r1 - r0 < 64) return -1;
+      if(genDirtyCount(cu, Sm, Ss, Nm, Ns, r0, r1 - r0) * 2 >= (r1 - r0)) return -1;
+      g.D = D; g.B0 = r0; g.H = r1 - r0; g.flip = flip;
+      P = 0; px = 0; active = true; dirty = false; railWas = false; badFrames = 0;
+      s.begin(); s.scrollDef(g.tfaReg(), g.H, g.bfaReg()); s.scrollAddr(g.sad(0)); s.end();   // identitas: tampilan tak berubah
+      u = cu;
+    } else {
+      int cu = 0, r0 = 0, r1 = 0;
+      if(genDetect(Sm, Nm, g.B0, g.B0 + g.H, cu, r0, r1)
+         && genDirtyCount(cu, Sm, Ss, Nm, Ns, g.B0, g.H) < genDirtyCount(0, Sm, Ss, Nm, Ns, g.B0, g.H)) u = cu;
+    }
+    const int R0 = g.B0, H = g.H;
+    px += u;
+    const int kk = k();
+    s.begin();
+    // 1) baris tetap (status bar/footer): tulis langsung kalau berubah
+    for(int y = 0; y < D; ){
+      if(y >= R0 && y < R0 + H){ y = R0 + H; continue; }
+      if(Nm[y] != Sm[y] || Ns[y] != Ss[y]){
+        int y0 = y;
+        while(y < D && !(y >= R0 && y < R0 + H) && (Nm[y] != Sm[y] || Ns[y] != Ss[y])) y++;
+        s.writeRect(y0, y - y0, y0, 0, W); nRows += (unsigned long)(y - y0);
+      } else y++;
+    }
+    // 2) pita: baris yang tidak cocok dengan hasil geseran
+    int dirtyLines = 0;
+    for(int i = 0; i < H; ){
+      int sidx = i + u;
+      bool md = !(sidx >= 0 && sidx < H && Nm[R0+i] == Sm[R0+sidx]);
+      if(!md){ i++; continue; }
+      int i0 = i;
+      while(i < H){
+        int si = i + u;
+        bool match = (si >= 0 && si < H && Nm[R0+i] == Sm[R0+si]);
+        if(match) break;
+        i++;
+      }
+      dirtyLines += i - i0;
+      genRectLines(s, i0, i, 0, W, kk);
+    }
+    for(int i = 0; i < H; ){                           // 3) baris yang cuma strip-nya berbeda (rail dsb.)
+      int sidx = i + u;
+      bool ok = (sidx >= 0 && sidx < H);
+      bool md = !(ok && Nm[R0+i] == Sm[R0+sidx]);
+      bool sd = !(ok && Ns[R0+i] == Ss[R0+sidx]);
+      if(md || !sd){ i++; continue; }
+      int i0 = i;
+      while(i < H){
+        int si = i + u; bool ok2 = (si >= 0 && si < H);
+        if(!(ok2 && Nm[R0+i] == Sm[R0+si]) || (ok2 && Ns[R0+i] == Ss[R0+si])) break;
+        i++;
+      }
+      genRectLines(s, i0, i, W - sw, sw, kk);
+    }
+    s.scrollAddr(g.sad(kk));
+    s.end();
+    for(int y = 0; y < D; y++){ Sm[y] = Nm[y]; Ss[y] = Ns[y]; }   // panel sekarang == canvas baru
+    lastDirty = dirtyLines;
+    if(dirtyLines * 10 > H * 6) badFrames++; else badFrames = 0;
+    nFast++;
+    if(badFrames >= 4){ wantLeave = true; leave(s, true); }      // banyak berubah = bukan scroll (animasi): kembali ke push biasa
+    return dirtyLines;
   }
   // Keluar: scroll mati. Return true kalau memori ring TIDAK lurus (k!=0) -> pita harus ditulis ulang.
   bool leave(HwsSink& s, bool rewrite){
@@ -302,8 +426,113 @@ struct HwsLgfxSink : HwsSink {
     canvas.pushSprite(&display, 0, 0);
     display.clearClipRect();
   }
+  void writeRect(int yw, int n, int srcY, int x0, int w) override {   // mode generik
+    display.setClipRect(x0, yw, w, n);
+    canvas.pushSprite(&display, 0, yw - srcY);
+    display.clearClipRect();
+  }
 };
 static HwsLgfxSink hwsSink;
+
+// ---------------- MODE GENERIK: layar lain yang menggulir (Pengaturan, Berkas, Chat, Buku, dst.) ----------------
+// Tanpa cache & tanpa pengetahuan per-layar: hash per baris canvas -> deteksi geser -> VSCSAD + tulis baris beda.
+// Daftar layar sengaja eksplisit: hanya layar yang 100% menggambar lewat canvas+push() (tidak menulis display langsung).
+#ifndef RP_HWS_GEN
+#define RP_HWS_GEN 1
+#endif
+static HwsEngine hwsGen;
+static uint64_t *hwsSm = nullptr, *hwsSs = nullptr, *hwsNm = nullptr, *hwsNs = nullptr;
+static bool hwsGenValid = false;     // hash S == isi panel sebenarnya
+static int  hwsGenScreen = -1;
+
+static bool hwsGenScreenOk(){
+  switch(curScreen()){
+    case SCR_SETTINGS: case SCR_NOTEPAD: case SCR_AICHAT: case SCR_FILEEXPLORER: case SCR_TRIVIA:
+    case SCR_APOD: case SCR_NEOWS: case SCR_EPIC: case SCR_NASAIMG: case SCR_HOMEEDIT: case SCR_REMOTE:
+    case SCR_CHAT: case SCR_EBOOK: case SCR_BACKUP: case SCR_ABOUT:
+      return true;
+    default: return false;
+  }
+}
+static bool hwsGenAlloc(){
+  if(hwsSm) return true;
+  uint64_t* p = (uint64_t*)heap_caps_malloc(4 * 480 * sizeof(uint64_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  if(!p) return false;
+  memset(p, 0, 4 * 480 * sizeof(uint64_t));
+  hwsSm = p; hwsSs = p + 480; hwsNm = p + 960; hwsNs = p + 1440;
+  return true;
+}
+static const char* hwsGenWhyNot(){
+  if(hwsModeGet() == 0) return "mode Mati";
+  if(currentOrient != ORIENT_PORTRAIT || display.getRotation() != 0) return "bukan portrait";
+  if(!hwsGenScreenOk()) return "layar tidak didukung";
+  if(locked) return "terkunci";
+  if(appSwitcherOpen) return "App Switcher";
+  if(controlCenterOpen || panelPullActive || ccAnimating) return "Control Center";
+  if(notifShadeOpen) return "Notification Shade";
+  if(homeAodActive) return "AOD";
+  if(diMenuOpen) return "menu Dynamic Island";
+  if(powerMenuOpen) return "menu Daya";
+  if(callOverlayActive()) return "layar panggilan";
+  if(rcApIsUp()) return "Remote Control aktif (butuh canvas)";
+  if(SCR_W != RP_DISP_NATIVE_W || SCR_H != RP_DISP_NATIVE_H) return "geometri layar tak cocok";
+  if(!canvas.getBuffer() || canvas.width() != SCR_W || canvas.height() != SCR_H) return "canvas tak cocok";
+  if(hwsGen.active && hwsGen.g.flip != (hwsModeGet() == 2)) return "mode berubah";
+  return nullptr;
+}
+static void hwsHashCanvas(){
+  const uint32_t* b = (const uint32_t*)canvas.getBuffer();
+  const int wpr = SCR_W / 2, mw = wpr - HWS_RW / 2;
+  for(int y = 0; y < SCR_H; y++){
+    const uint32_t* r = b + (size_t)y * wpr;
+    uint64_t h = 1469598103934665603ULL;
+    for(int x = 0; x < mw; x++){ h ^= r[x]; h *= 1099511628211ULL; }
+    hwsNm[y] = h;
+    h = 1469598103934665603ULL;
+    for(int x = mw; x < wpr; x++){ h ^= r[x]; h *= 1099511628211ULL; }
+    hwsNs[y] = h;
+  }
+}
+static void hwsGenLeave(const char* why, int mode){
+  if(!hwsGen.active) return;
+  const bool canvasOk = canvas.getBuffer() && canvas.width() == SCR_W && canvas.height() == SCR_H
+                        && SCR_W == RP_DISP_NATIVE_W && SCR_H == RP_DISP_NATIVE_H;
+  const int kk = hwsGen.k();
+  hwsGen.leave(hwsSink, mode >= 2 && canvasOk);
+  Serial.printf("[hws] keluar (generik, layar %d): %s (k=%d, sesi: frame=%lu baris=%lu)\n", hwsGenScreen, why ? why : "-", kk, hwsGen.nFast, hwsGen.nRows);
+  hwsGenValid = false;
+#if RP_PUSH_DIFF
+  rpShValid = false;
+#endif
+}
+static bool hwsGenPush(){
+  if(!hwsOnLoop()){ if(hwsGen.active) hwsForeign = true; return false; }
+  const char* why = hwsGenWhyNot();
+  if(why){ if(hwsGen.active) hwsGenLeave(why, 0); hwsGenValid = false; return false; }
+  if(!hwsGenAlloc()){ hwsGenValid = false; return false; }
+  const int scr = (int)curScreen();
+  if(scr != hwsGenScreen){ if(hwsGen.active) hwsGenLeave("ganti layar", 0); hwsGenValid = false; hwsGenScreen = scr; }
+  hwsHashCanvas();
+  const bool was = hwsGen.active;
+  const int r = hwsGen.gen(hwsSink, hwsSm, hwsSs, hwsNm, hwsNs, SCR_H, SCR_W, HWS_RW, hwsModeGet() == 2, hwsGenValid);
+  if(!was && hwsGen.active){
+    hwsGen.nFast = hwsGen.nRows = 0;
+    Serial.printf("[hws] masuk (generik, layar %d): B0=%d H=%d TFA=%d BFA=%d flip=%d\n", scr, hwsGen.g.B0, hwsGen.g.H, hwsGen.g.tfaReg(), hwsGen.g.bfaReg(), (int)hwsGen.g.flip);
+  }
+  if(was && !hwsGen.active){
+    Serial.printf("[hws] keluar (generik): %s (sesi: frame=%lu baris=%lu)\n", hwsGen.wantLeave ? "banyak berubah (bukan scroll)" : "hash tak sah", hwsGen.nFast, hwsGen.nRows);
+#if RP_PUSH_DIFF
+    rpShValid = false;
+#endif
+  }
+  if(r < 0){                              // push penuh biasa menyusul di push(); panel == canvas sesudahnya
+    for(int y = 0; y < SCR_H; y++){ hwsSm[y] = hwsNm[y]; hwsSs[y] = hwsNs[y]; }
+    hwsGenValid = true;
+    return false;
+  }
+  hwsGenValid = true;
+  return true;
+}
 
 // ---------------- sinkronisasi canvas ----------------
 // Frame cepat tidak menggambar ke canvas -> canvas pita basi. Disalin dari cache bila ada yg butuh (keluar mode,
@@ -324,6 +553,10 @@ static void hwsSyncCanvas(){
 //       1 = sinkron canvas saja (transisi akan menulis frame penuh)
 //       2 = sinkron canvas + tulis ulang pita sekarang
 void hwsLeave(const char* why, int mode){
+#if RP_HWS_GEN
+  if(hwsGen.active){ if(!hwsOnLoop()) hwsForeign = true; else hwsGenLeave(why, mode); }
+  hwsGenValid = false;   // transisi/penulis lain akan menyentuh panel -> hash pembanding tak sah lagi
+#endif
   if(!hwsEng.active) return;
   if(!hwsOnLoop()){ hwsForeign = true; return; }   // jangan sentuh display dari core lain
   const bool canvasOk = canvas.getBuffer() && canvas.width() == SCR_W && canvas.height() == SCR_H
@@ -393,6 +626,9 @@ bool hwsBandPush(){
 
 // ---------------- hook: push() frame penuh ----------------
 bool hwsPushHook(){
+#if RP_HWS_GEN
+  if(!hwsEng.active && curScreen() != SCR_HOME) return hwsGenPush();
+#endif
   if(!hwsEng.active) return false;
   if(!hwsOnLoop()){ hwsForeign = true; return false; }
   const char* why = hwsWhyNot();
@@ -428,8 +664,12 @@ static void hwsPrewarm(){
 void hwsLoopGuard(){
   hwsLoopTask = xTaskGetCurrentTaskHandle();
   if(!homeCacheValid) hwsCacheIcon = false;                      // cache dibangun ulang -> ikon cari perlu ditempel lagi
-  if(!hwsEng.active){ hwsPrewarm(); return; }
+#if RP_HWS_GEN
+  if(hwsGen.active){ const char* gw = hwsGenWhyNot(); if(gw){ hwsGenLeave(gw, 2); return; } }
+  else if(hwsGenValid && hwsGenWhyNot()) hwsGenValid = false;
+#endif
   if(hwsForeign){ hwsForeign = false; hwsLeave("push dari core lain", 2); return; }
+  if(!hwsEng.active){ hwsPrewarm(); return; }
   const char* why = hwsWhyNot();
   if(why){ hwsLeave(why, 2); return; }
   if(hwsCanvasStale && (uint32_t)(millis() - hwsLastFastMs) >= 150UL) hwsSyncCanvas();   // diam: canvas dibuat sah lagi (screenshot dll)

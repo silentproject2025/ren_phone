@@ -20518,6 +20518,7 @@ bool dragCloseAllowed(){
   return true;
 }
 void dragCloseBegin(){
+  hwsLeave("drag tutup",1);   // HW_SCROLL_V1: animasi tutup-app menulis display langsung
   canvas.pushSprite(&transShot,0,0);                         // salinan layar app
   int sd=navDepth; navDepth=0; renderCurrentFrame(); navDepth=sd;   // canvas = Home
   dragApp=appIndexForScreen(navStack[0]);
