@@ -475,6 +475,7 @@ void hpStep(float dtMs){
   }
   if((int)lroundf(y) != (int)lroundf(hpX) || !hpSpringing) hpPending = true;
   hpX = y; hpVel = v;
+  if(hpPending) needRedraw = true;   // wajib: tanpa ini frame pegas baru tergambar saat ada redraw lain
 }
 
 // ---------------- titik halaman ----------------
