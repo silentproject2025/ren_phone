@@ -84,11 +84,19 @@ static inline int hpNearestPage(const int* sc, int n, float v){
   return best;
 }
 // Halaman tujuan saat jari dilepas. x = posisi sumbu (px), v = px/ms, start = halaman awal drag.
+// FEEL-FIX: kalibrasi ala launcher HP. Dulu harus seret > 50% layar ATAU flick > 0.35 px/ms, jadi terasa 'cuma ngikut jari lalu mental balik'.
+#define HP_FLICK_V    0.16f   // px/ms: flick lebih pelan dari ini dianggap seret biasa (dulu 0.35)
+#define HP_FLICK_MIN  8.0f    // px: geser minimal supaya flick dihitung (tap/getar jari tidak membalik halaman)
+#define HP_FLIP_FRAC  0.22f   // pecahan lebar layar: seret lebih jauh dari ini = pindah halaman (dulu 0.5)
+#define HP_SPRING_K   0.00070f  // kekakuan pegas (dulu 0.0011): lebih lembut = geser lebih mengalir
+#define HP_SPRING_C   0.050f    // redaman: zeta ~ 0.94 (dulu ~0.75 = memantul/goyang di halaman tujuan)
 static inline int hpPickTarget(float x, float v, int start, int n, int W){
-  int tgt;
-  if(v > 0.35f) tgt = start + 1;
-  else if(v < -0.35f) tgt = start - 1;
-  else { tgt = (int)((x + (float)W * 0.5f) / (float)W); if(x < 0) tgt = 0; }
+  int tgt = start;
+  const float d = x - (float)(start * W);
+  if(v > HP_FLICK_V && d > HP_FLICK_MIN) tgt = start + 1;
+  else if(v < -HP_FLICK_V && d < -HP_FLICK_MIN) tgt = start - 1;
+  else if(d > (float)W * HP_FLIP_FRAC) tgt = start + 1;
+  else if(d < -(float)W * HP_FLIP_FRAC) tgt = start - 1;
   if(tgt < start - 1) tgt = start - 1;
   if(tgt > start + 1) tgt = start + 1;
   if(tgt < 0) tgt = 0;
@@ -501,7 +509,7 @@ void hpRelease(){
 
 // satu langkah pegas ke hpTarget (berbasis waktu nyata)
 void hpStep(float dtMs){
-  const float K = 0.0011f, C = 0.050f;
+  const float K = HP_SPRING_K, C = HP_SPRING_C;
   const float maxX = hpMaxX();
   float remain = dtMs > 64.0f ? 64.0f : dtMs;
   float y = hpX, v = hpVel;
