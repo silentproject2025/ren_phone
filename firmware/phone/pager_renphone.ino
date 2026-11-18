@@ -259,11 +259,22 @@ static void hpRenderPage(int p){      // gambar Home pada scroll halaman p ke ca
   renderCurrentFrame();
   homeScrollY = sv;
   // tutup baris/judul yang terlihat setengah di tepi atas/bawah pita (hanya latar polos; wallpaper dibiarkan)
-  if(!wallpaperReady){
-    int rg[16][2];
+  // HOME-FIX: dulu hanya jalan kalau TIDAK ada wallpaper -> dgn wallpaper baris setengah (atas/bawah) tetap kelihatan.
+  // Sekarang area itu ditimpa potongan wallpaper (atau warna latar kalau tak ada wallpaper).
+  {
+    int rg[17][2];
     const int cols = homeCols(), rows = (homeShowN + cols - 1) / cols;
-    const int n = hpCoverRanges(hpSc[p], homeGridClipTop(), homeDockY() - 4, homeCardH(), homeCardH() + 10, homeGridTop(), HOME_CAT_H, rows, rg, 16);
-    for(int i = 0; i < n; i++) canvas.fillRect(0, rg[i][0], SCR_W - 12, rg[i][1] - rg[i][0], T().bg);   // sisakan 12 px kanan utk rail
+    int n = hpCoverRanges(hpSc[p], homeGridClipTop(), homeDockY() - 4, homeCardH(), homeCardH() + 10, homeGridTop(), HOME_CAT_H, rows, rg, 16);
+    if(p == 0){   // halaman 1 = widget saja: sembunyikan judul + chip + seluruh grid di bawah widget
+      const int cut = homeWidgetsEnd() + 4 - hpSc[0];
+      if(cut < homeDockY() - 4){ rg[n][0] = cut > homeGridClipTop() ? cut : homeGridClipTop(); rg[n][1] = homeDockY() - 4; n++; }
+    }
+    for(int i = 0; i < n; i++){
+      const int a = rg[i][0], h = rg[i][1] - rg[i][0];
+      if(h <= 0) continue;
+      if(wallpaperReady){ canvas.setClipRect(0, a, SCR_W - 12, h); wallpaperImg.pushSprite(&canvas, 0, 0); canvas.clearClipRect(); }
+      else canvas.fillRect(0, a, SCR_W - 12, h, T().bg);   // sisakan 12 px kanan utk rail
+    }
   }
   hpCanvasPg = p;
 }
@@ -553,6 +564,14 @@ static void hpPrewarm(){
   hpIdleSince = 0;
 }
 
+// HOME-FIX: batas Y (layar) mulai area tersembunyi di halaman widget; INT_MAX kalau tidak berlaku (hit-test grid/chip diblok >= nilai ini)
+int hpWidgetCutY(){
+  if(!hpWasOn || hpN < 2 || hpCur != 0 || hpMotionNow()) return 0x7fffffff;
+  return homeWidgetsEnd() + 4 - hpSc[0];
+}
+// HOME-FIX: lepas 3 gambar halaman pager (~900 KB PSRAM) -- dipanggil DOOM sebelum cek blok kontigu; dibangun ulang otomatis saat Home dibuka lagi
+void hpFreeImages(){ hpImgFreeAll(); }
+
 void hpLoopGuard(){
   if(!hpEng.active && (curScreen() != SCR_HOME || locked || !hpGeomOk()) && (hpImg0.getBuffer() || hpImg1.getBuffer() || hpImg2.getBuffer()))
     hpImgFreeAll();                   // PSRAM kembali utk app lain (Doom/NES), pola sama dgn homeCacheFree()
@@ -580,6 +599,8 @@ void hpRelease(){}
 void hpStep(float){}
 void hpDrawDots(LGFX_Sprite&){}
 void hpLoopGuard(){}
+int  hpWidgetCutY(){ return 0x7fffffff; }
+void hpFreeImages(){}
 void hpLeaveHook(const char*, int){}
 int  hpModeGet(){ return 0; }
 bool hpModeSet(int){ return false; }

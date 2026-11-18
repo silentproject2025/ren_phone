@@ -1597,6 +1597,7 @@ bool hwsIsActive(); bool hwsFrame(); bool hwsBandPush(); bool hwsPushHook(); voi
 int hwsModeGet(); bool hwsModeSet(int); const char* hwsModeText(int);
 // HOME_PAGER_V1 (pager_renphone.ino): Home landscape berhalaman + hardware scroll horizontal
 bool hpOn(); bool hpIsActive(); bool hpMotionNow(); bool hpFrame(); bool hpPushHook(); bool hpBandRedirect();
+int hpWidgetCutY(); void hpFreeImages();   // HOME-FIX: halaman 1 = widget saja; lepas gambar pager utk app besar
 void hpTouchHeld(bool,int,int); void hpRelease(); void hpStep(float); void hpDrawDots(LGFX_Sprite&); void hpLoopGuard();
 void hpLeaveHook(const char*,int); int hpModeGet(); bool hpModeSet(int);
 void drawShotThumb(LGFX_Sprite&); bool nyxShotThumbTouch(bool,bool,int,int);
@@ -7258,7 +7259,7 @@ void homeCatDraw(LGFX_Sprite& s,int top,bool wp,int clipTop,int contentBot){
 // index chip yg kena (0..HOME_CAT_N-1) atau -1. Tidak aktif selagi pencarian (chip memang tidak digambar).
 int homeCatHit(int x,int y,float sc){
   if(homeSearchActive()) return -1;
-  if(y<homeGridClipTop() || y>=homeDockY()-4) return -1;
+  if(y<homeGridClipTop() || y>=homeDockY()-4 || y>=hpWidgetCutY()) return -1;   // HOME-FIX: chip tersembunyi di halaman widget
   int top=homeCatChipTop()-homeScrollPx(sc);
   if(y<top-3 || y>top+23) return -1;
   for(int i=0;i<HOME_CAT_N;i++){
@@ -7426,7 +7427,7 @@ Screen homeCheck(int x,int y,float sc){
       if(abs(x-cx)<dw/2) return apps[dockIdx[i]].screen;
     }
   }
-  if(y<homeGridClipTop() || y>=dockY-4) return SCR_HOME;
+  if(y<homeGridClipTop() || y>=dockY-4 || y>=hpWidgetCutY()) return SCR_HOME;
   int scPx=homeScrollPx(sc);
   if(!homeSearchActive()){
     int yc=y+scPx; // koordinat ruang konten
@@ -7546,7 +7547,7 @@ int homeIndexAt(int x,int y,float sc){
     }
     return -1;
   }
-  if(y<homeGridClipTop()) return -1; // v105: tap di area header gak nembus ke ikon yg terpotong (gak kelihatan)
+  if(y<homeGridClipTop() || y>=hpWidgetCutY()) return -1; // v105: tap di area header gak nembus ke ikon yg terpotong (gak kelihatan) | HOME-FIX: halaman widget = grid tersembunyi
   int scPx=homeScrollPx(sc);
   homeLayoutEnsure();
   for(int k=0;k<homeShowN;k++){ // HOME-LAYOUT + HOME-KATEGORI

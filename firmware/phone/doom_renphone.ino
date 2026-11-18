@@ -300,6 +300,7 @@ static void doomMeltIntro(){
 //   level 2 = level 1 + buffer gambar NASA di RAM (app NASA memuat ulang kalau dibuka lagi)
 static void doomPsramClean(int level){
   homeCacheFree();
+  hpFreeImages();   // HOME-FIX: 3 gambar halaman pager (~900 KB) tadinya tidak ikut dilepas -> blok kontigu < 6 MB
 #ifdef SW_THUMB_SLOTS
   for(int i=0;i<SW_THUMB_SLOTS;i++) swThumbFree(i);
 #endif
@@ -309,6 +310,7 @@ static void doomPsramClean(int level){
 void doomEnter(){
   doomErrorMsg = "";
   homeCacheFree();   // DOOM_FREECACHE_V1: lepas cache scroll Home (PSRAM) sebelum cek blok kontigu
+  hpFreeImages();    // HOME-FIX: gambar halaman pager juga
 
   if(doomBusy || doomTaskHandle != nullptr){ // DOOM_RACE_FIX_V1: jangan bikin task ke-2
     doomErrorMsg = "DOOM sebelumnya masih menutup.\nTunggu sebentar lalu buka lagi.";
