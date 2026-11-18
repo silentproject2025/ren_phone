@@ -106,7 +106,10 @@ static long  hpSig = -1;
 static int   hpCur = 0;               // halaman saat diam
 static float hpX = 0.0f;              // posisi sumbu halaman (px layar), 0..(hpN-1)*SCR_W
 static float hpVel = 0.0f;            // px/ms
-static float hpDragRaw = 0.0f, hpTarget = 0.0f, hpFx = 0.0f, hpFxLast = 0.0f, hpAccum = 0.0f;
+static float hpDragRaw = 0.0f, hpTarget = 0.0f, hpFx = 0.0f, hpFxLast = 0.0f, hpFy = 0.0f, hpFyLast = 0.0f, hpAccum = 0.0f;
+static bool  hpCurDirty = true;       // gambar halaman SEKARANG sudah basi (widget hidup berubah); halaman tetangga tidak ikut dibuang
+static unsigned long hpImgAt[3] = { 0, 0, 0 };   // kapan slot dibuat (utk penyegaran tetangga yang tua)
+#define HP_VGAIN 2.4f                 // geser vertikal: 1 px jari = 2.4 px sumbu halaman (~200 px jari = 1 halaman)
 static unsigned long hpSampleMs = 0;
 static int   hpStartPage = 0, hpLock = 0;     // hpLock: 0 belum, 1 horizontal (ikut jari), 2 vertikal (balik halaman)
 static bool  hpDragging = false, hpSpringing = false, hpPending = false, hpWasOn = false;
@@ -203,7 +206,7 @@ static void hpImgFreeAll(){
 static void hpSnapTo(int p){
   if(p < 0) p = 0;
   if(p > hpN - 1) p = hpN - 1;
-  hpCur = p; hpX = (float)(p * hpW());
+  hpCur = p; hpX = (float)(p * hpW()); hpCurDirty = false;
   hpVel = 0.0f; hpSpringing = false; hpDragging = false; hpPending = false;
   homeScrollY = (float)hpSc[p];
   homeScrollVel = 0.0f; homeScrollSpringing = false; homeSpringMode = false;
@@ -267,13 +270,15 @@ static void hpRenderPage(int p){      // gambar Home pada scroll halaman p ke ca
 static LGFX_Sprite* hpImgGet(int p, bool build){
   if(p < 0 || p >= hpN) return nullptr;
   const int s = p % 3;
-  if(hpImgPg[s] == p && hpImgP[s]->getBuffer()) return hpImgP[s];
+  const bool valid = (hpImgPg[s] == p && hpImgP[s]->getBuffer());
+  if(valid && !(build && p == hpCur && hpCurDirty)) return hpImgP[s];   // basi tetap dipakai utk gerakan (tak ada render berat di tengah jari)
   if(!build) return nullptr;
   LGFX_Sprite& im = *hpImgP[s];
   if(!hpImgAlloc(im)){ hpImgPg[s] = -1; return nullptr; }
   if(hpCanvasPg != p) hpRenderPage(p);
   memcpy(im.getBuffer(), canvas.getBuffer(), (size_t)SCR_W * (size_t)SCR_H * 2);
-  hpImgPg[s] = p;
+  hpImgPg[s] = p; hpImgAt[s] = millis();
+  if(p == hpCur) hpCurDirty = false;
   return &im;
 }
 // canvas := tampilan pada offset sumbu px (dari gambar halaman). Gambar yang hilang dibangun DULU
@@ -393,6 +398,7 @@ bool hpFrame(){
     homeScrollY = (float)hpSc[hpCur];
     hpSyncCanvas();                   // canvas = halaman yang tampil (screenshot, frame lambat berikutnya)
     homeBandReady = true;
+    if(hpCur == 0 && millis() - hpImgAt[0] > 1500UL){ hpCurDirty = true; needRedraw = true; }   // widget (jam/baterai) segar lagi begitu mendarat
   }
   rcFrameMark();
   return true;
@@ -400,7 +406,7 @@ bool hpFrame(){
 
 // ---------------- hook: push() frame penuh ----------------
 bool hpPushHook(){
-  if(!hpInternal && !hpMotionNow()){ hpImgInvalidateAll(); hpCanvasPg = (hpOn() && !hpMotionNow() && (int)lroundf(hpX) == hpCur * hpW()) ? hpCur : -2; }
+  if(!hpInternal && !hpMotionNow()){ hpCurDirty = true; hpCanvasPg = (hpOn() && !hpMotionNow() && (int)lroundf(hpX) == hpCur * hpW()) ? hpCur : -2; }
   if(!hpEng.active) return false;
   if(!hwsOnLoop()){ hpForeign = true; return false; }
   const char* why = hpWhyNot();
@@ -430,7 +436,7 @@ void hpTouchHeld(bool isNew, int tx, int ty){
     const bool caught = hpMotionNow();            // jari menangkap halaman yang masih bergerak
     hpSpringing = false; hpDragging = false; hpVel = 0.0f;
     hpDragRaw = hpX; hpAccum = 0.0f; hpSampleMs = now;
-    hpFx = hpFxLast = (float)tx; hpLock = 0;
+    hpFx = hpFxLast = (float)tx; hpFy = hpFyLast = (float)ty; hpLock = 0;
     hpStartPage = hpNearestPage(hpSc, hpN, homeScrollY);
     if(caught){ hpStartPage = (int)((hpX + (float)hpW() * 0.5f) / (float)hpW()); if(hpStartPage < 0) hpStartPage = 0; if(hpStartPage > hpN - 1) hpStartPage = hpN - 1; }
     homeScrollVel = 0.0f; homeScrollSpringing = false; homeSpringMode = false;
@@ -439,6 +445,7 @@ void hpTouchHeld(bool isNew, int tx, int ty){
     return;
   }
   { float dF = (float)tx - hpFx; float aF = 0.45f + fabsf(dF) * 0.08f; if(aF > 1.0f) aF = 1.0f; hpFx += dF * aF; }
+  { float dF = (float)ty - hpFy; float aF = 0.45f + fabsf(dF) * 0.08f; if(aF > 1.0f) aF = 1.0f; hpFy += dF * aF; }
   if(!homeJiggle && !isSwiping && homePressedIdx >= 0 && now - swipeStartTime >= 550UL){
     homeJiggle = true; homePressedIdx = -1; vibTap(); needRedraw = true;   // HOME-JIGGLE: tahan ikon = mode atur
   }
@@ -447,12 +454,13 @@ void hpTouchHeld(bool isNew, int tx, int ty){
     if(abs(dx) > HOME_DRAG_SLOP || abs(dy) > HOME_DRAG_SLOP){
       isSwiping = true; homePressedIdx = -1; homePressAnimIdx = -1; homePressAnim = 0.0f;
       hpLock = (abs(dx) >= abs(dy)) ? 1 : 2;
-      hpFxLast = (float)touchStartX;
-      hpDragging = (hpLock == 1);
+      hpFxLast = (float)touchStartX; hpFyLast = (float)touchStartY;
+      hpDragging = true;
     }
   }
-  if(isSwiping && hpLock == 1){
-    const float raw = hpFxLast - hpFx;            // jari ke kiri -> konten maju
+  if(isSwiping && hpLock != 0){
+    const float raw = (hpLock == 1) ? (hpFxLast - hpFx)                      // jari ke kiri -> konten maju
+                                    : (hpFyLast - hpFy) * HP_VGAIN;          // jari ke atas -> konten maju (kebiasaan lama: tarik ke atas)
     hpDragRaw += raw; hpAccum += raw;
     const float sampleDt = (float)(now - hpSampleMs);
     if(sampleDt >= 12.0f){ hpVel = hpVel * 0.5f + (hpAccum / sampleDt) * 0.5f; hpAccum = 0.0f; hpSampleMs = now; }
@@ -461,7 +469,7 @@ void hpTouchHeld(bool isNew, int tx, int ty){
     else hpX = nx;
   }
   touchLastY = ty;
-  hpFxLast = hpFx;
+  hpFxLast = hpFx; hpFyLast = hpFy;
 }
 
 // jari dilepas (dipanggil sebagai pengganti logika fling vertikal lama)
@@ -469,19 +477,14 @@ void hpRelease(){
   const int W = hpW();
   hpDragging = false;
   int tgt = hpStartPage;
-  if(hpLock == 1){
+  if(hpLock != 0){
     float v = hpVel; if(v > 2.4f) v = 2.4f; if(v < -2.4f) v = -2.4f;
+    hpVel = v;
     tgt = hpPickTarget(hpX, v, hpStartPage, hpN, W);
-  } else if(hpLock == 2){
-    const int dy = touchLastY - touchStartY;      // geser vertikal membalik halaman (ke atas = maju)
-    if(dy < -30) tgt = hpStartPage + 1; else if(dy > 30) tgt = hpStartPage - 1;
-    if(tgt < 0) tgt = 0;
-    if(tgt > hpN - 1) tgt = hpN - 1;
-    hpVel = 0.0f;
   } else { hpVel = 0.0f; }
   hpTarget = (float)(tgt * W);
   hpSpringing = (fabsf(hpX - hpTarget) > 0.4f || fabsf(hpVel) > 0.02f);
-  if(!hpSpringing){ hpX = hpTarget; hpCur = tgt; homeScrollY = (float)hpSc[tgt]; }
+  if(!hpSpringing){ hpX = hpTarget; if(hpCur != tgt) hpCurDirty = false; hpCur = tgt; homeScrollY = (float)hpSc[tgt]; }
   if(hpLock != 0 || hpSpringing){ hpPending = true; needRedraw = true; }
 }
 
@@ -499,7 +502,7 @@ void hpStep(float dtMs){
     if(y > maxX + 60.0f){ y = maxX + 60.0f; if(v > 0.0f) v = 0.0f; }
     if(fabsf(y - hpTarget) < 0.5f && fabsf(v) < 0.02f){
       y = hpTarget; v = 0.0f; hpSpringing = false;
-      hpCur = (int)((hpTarget + 0.5f) / (float)hpW());
+      hpCur = (int)((hpTarget + 0.5f) / (float)hpW()); hpCurDirty = false;
       homeScrollY = (float)hpSc[hpCur];
       break;
     }
@@ -533,9 +536,13 @@ static void hpPrewarm(){
   if(now - hpIdleSince < 250UL) return;                          // Home sudah diam >= 250 ms
   // satu langkah per loop: gambar halaman sekarang, lalu tetangga, lalu masuk mode
   const int cur = hpCur;
-  if(!hpImgGet(cur, false)){ if(!hpImgGet(cur, true)){ hpBlockUntil = now + 5000UL; Serial.println("[hp] pemanasan gagal (PSRAM kurang?)"); } return; }
+  if(!hpImgGet(cur, false) || hpCurDirty){ if(!hpImgGet(cur, true)){ hpBlockUntil = now + 5000UL; Serial.println("[hp] pemanasan gagal (PSRAM kurang?)"); } return; }
   if(cur + 1 < hpN && !hpImgGet(cur + 1, false)){ if(!hpImgGet(cur + 1, true)) hpBlockUntil = now + 5000UL; return; }
   if(cur - 1 >= 0 && !hpImgGet(cur - 1, false)){ if(!hpImgGet(cur - 1, true)) hpBlockUntil = now + 5000UL; return; }
+  for(int d = -1; d <= 1; d += 2){                                   // tetangga yang sudah > 30 dtk: segarkan satu per loop
+    const int q = cur + d; if(q < 0 || q >= hpN) continue;
+    if(now - hpImgAt[q % 3] > 30000UL){ hpImgPg[q % 3] = -1; if(!hpImgGet(q, true)) hpBlockUntil = now + 5000UL; return; }
+  }
   if(hpCanvasPg != cur){ hpCompose(cur * hpW()); hpCanvasPg = cur; }  // canvas dikembalikan ke halaman sekarang
   if(!hpEng.active){
     hpGeomFill(); const HwsGeom& g = hpGeomCur;
