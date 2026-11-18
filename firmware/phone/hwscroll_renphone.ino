@@ -300,6 +300,7 @@ static inline bool hwsOnLoop(){ return hwsLoopTask != nullptr && xTaskGetCurrent
 // ---------------- mode (NVS) ----------------
 const char* hwsModeText(int m){ return m == 1 ? "Otomatis" : (m == 2 ? "Otomatis+Balik" : "Mati"); }
 int hwsModeGet(){
+  if(currentOrient == ORIENT_LANDSCAPE) return hpModeGet();   // HOME_PAGER_V1: mode landscape terpisah (NVS "hwl")
   if(hwsModeV < 0){
     Preferences p; p.begin("ui", true);
     int v = p.getInt("hws", RP_HWS_DEFAULT_MODE);
@@ -311,6 +312,7 @@ int hwsModeGet(){
   return hwsModeV;
 }
 bool hwsModeSet(int v){
+  if(currentOrient == ORIENT_LANDSCAPE) return hpModeSet(v);   // HOME_PAGER_V1
   if(v < 0 || v > 2) return false;
   Preferences p;
   if(!p.begin("ui", false)){ Serial.println("[hws] NVS begin(ui) GAGAL"); return false; }
@@ -555,6 +557,7 @@ static void hwsSyncCanvas(){
 //       1 = sinkron canvas saja (transisi akan menulis frame penuh)
 //       2 = sinkron canvas + tulis ulang pita sekarang
 void hwsLeave(const char* why, int mode){
+  hpLeaveHook(why, mode);   // HOME_PAGER_V1: semua titik keluar lama otomatis mencakup pager
 #if RP_HWS_GEN
   if(hwsGen.active){ if(!hwsOnLoop()) hwsForeign = true; else hwsGenLeave(why, mode); }
   hwsGenValid = false;   // transisi/penulis lain akan menyentuh panel -> hash pembanding tak sah lagi

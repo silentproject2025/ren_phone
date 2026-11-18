@@ -1591,6 +1591,10 @@ void nyxShotThumbCapture(const char*); void nyxShotThumbHide(); bool nyxShotThum
 // HW_SCROLL_V1 (apply_hw_scroll.py, hwscroll_renphone.ino): hardware vertical scroll ST7796, portrait saja
 bool hwsIsActive(); bool hwsFrame(); bool hwsBandPush(); bool hwsPushHook(); void hwsLoopGuard(); void hwsLeave(const char*,int);
 int hwsModeGet(); bool hwsModeSet(int); const char* hwsModeText(int);
+// HOME_PAGER_V1 (pager_renphone.ino): Home landscape berhalaman + hardware scroll horizontal
+bool hpOn(); bool hpIsActive(); bool hpMotionNow(); bool hpFrame(); bool hpPushHook(); bool hpBandRedirect();
+void hpTouchHeld(bool,int,int); void hpRelease(); void hpStep(float); void hpDrawDots(LGFX_Sprite&); void hpLoopGuard();
+void hpLeaveHook(const char*,int); int hpModeGet(); bool hpModeSet(int);
 void drawShotThumb(LGFX_Sprite&); bool nyxShotThumbTouch(bool,bool,int,int);
 bool nyxShotThumbAnimating(); void nyxShotThumbFastFrame(); bool nyxThFreezeFrame();   // NYX_TH_V4
 //   // NYX_TH_STRIP_V3
@@ -9502,7 +9506,7 @@ void drawSettings(LGFX_Sprite& s){
       case SR_HWS: {   // HW_SCROLL_V1: pil 3 pilihan Mati / Auto / Balik
         int m=hwsModeGet();
         s.setTextColor(T().text); s.setCursor(xl,ty-4); s.print("Scroll Hardware");
-        s.setTextColor(T().subtext); s.setCursor(xl,ty+6); s.print(m==0?RPTR("Pakai cache"):(m==1?RPTR("Portrait saja"):RPTR("Portrait, balik")));
+        s.setTextColor(T().subtext); s.setCursor(xl,ty+6); s.print(currentOrient==ORIENT_LANDSCAPE ? (m==0?RPTR("Landscape: vertikal"):(m==1?RPTR("Landscape: halaman"):RPTR("Landscape: balik"))) : (m==0?RPTR("Pakai cache"):(m==1?RPTR("Portrait saja"):RPTR("Portrait, balik")))); // HOME_PAGER_V1
         int sw=150, sx=xr-sw, sy=ry+(rh-22)/2, segW=sw/3;
         nyxAaRR(s, sx,sy,sw,22,11,T().surface2);
         nyxAaRR(s, sx+2+m*segW,sy+2,segW-4,18,9,T().accent);
@@ -12265,7 +12269,7 @@ void push(){ if(nyxThFreezeFrame()) return;
 #if RP_TOUCH_CAPACITIVE
   display.touchPoll();   // TOUCH_RESP_V1: sampling lebih rapat di tengah putaran render
 #endif
-  unsigned long t0=micros(); if(!hwsPushHook()) rpPushCanvas(); nyxPushLastUs=micros()-t0;   // ST7796_DIFFPUSH_V1 + HW_SCROLL_V1
+  unsigned long t0=micros(); if(!hpPushHook() && !hwsPushHook()) rpPushCanvas(); nyxPushLastUs=micros()-t0;   // ST7796_DIFFPUSH_V1 + HW_SCROLL_V1
 #if RP_TOUCH_CAPACITIVE
   display.touchPoll();
 #endif
@@ -12329,7 +12333,7 @@ void renderCurrentFrame(){
   } else if(locked){
     drawLockScreen(canvas);
   } else if(curScreen()==SCR_HOME){
-    if(homeAodActive) drawHomeAod(canvas); else drawHome(canvas,homeScrollY); // v99: AOD Home gantiin drawHome() biasa selagi aktif
+    if(homeAodActive) drawHomeAod(canvas); else { drawHome(canvas,homeScrollY); hpDrawDots(canvas); } // HOME_PAGER_V1: titik halaman. v99: AOD Home gantiin drawHome() biasa selagi aktif
   } else {
     int idx=appIndexForScreen(curScreen());
     if(idx>=0) apps[idx].draw(canvas);
@@ -12450,6 +12454,7 @@ static void homeCacheBlit(float sc){
 
 void renderHomeBandFrame(){
   int bt=homeGridClipTop(), bh=(homeDockY()-4)-bt;
+  if(hpBandRedirect()) return;   // HOME_PAGER_V1: ring pager aktif -> frame penuh lewat push()
   if(hwsFrame()) return;   // HW_SCROLL_V1: scroll hardware (portrait); false = jalur cache/lama di bawah
 #if RP_HOME_CACHE
   if(homeCacheUsable() && !hwsIsActive()){   // HOME_CACHE_V1 (HW_SCROLL_V1: kalau mode aktif, pita wajib lewat pemetaan scroll)
@@ -20755,6 +20760,7 @@ void loop(){
   // "belum ada frame penuh" -> frame Home berikutnya DIPAKSA penuh dulu.
   if(curScreen()!=SCR_HOME || locked || appSwitcherOpen || controlCenterOpen || notifShadeOpen || homeAodActive || diMenuOpen) homeBandReady=false;
   hwsLoopGuard();   // HW_SCROLL_V1
+  hpLoopGuard();    // HOME_PAGER_V1
   if(curScreen()!=SCR_HOME || locked){ if(homeCache.getBuffer()) homeCacheFree(); }   // HOME_CACHE_V1: PSRAM kembali utk app lain (Doom/NES)
   if(!controlCenterOpen && !panelPullActive){   // CC_CACHE_V1: sesi selesai -> cache/snapshot basi; PSRAM dibebaskan kalau bukan di Home
     ccCacheValid=false; ccBgValid=false;
@@ -21096,7 +21102,9 @@ void loop(){
       if(sHit==2){ kbTarget=&homeSearchInput; kbVisible=true; kbMode=KB_LOWER; needRedraw=true; wasTouched=touched; delay(1); return; }
       if(sHit==3 || sHit==4){ searchBarCollapse(homeSearchBar); homeSearchInput=""; wasTouched=touched; delay(1); return; }
     }
-    if(touched){
+    if(touched && !searching && hpOn()){   // HOME_PAGER_V1: seret horizontal = geser halaman
+      hpTouchHeld(!wasTouched,tx,ty);
+    } else if(touched){
       if(!wasTouched){
         touchStartX=tx;touchStartY=ty;touchLastY=ty;
         isSwiping=false;swipeStartTime=millis();
@@ -21173,7 +21181,8 @@ void loop(){
         }
       }
       homePressedIdx=-1; // v-baru: jari lepas -> highlight tekan ilang apapun hasilnya
-      if(!searching){
+      if(!searching && hpOn()){ hpRelease(); }   // HOME_PAGER_V1: pegas ke halaman terdekat
+      else if(!searching){
         // v105: lepas jari -> serahkan ke mesin fisika (glide + pegas). Kalau
         // posisi lagi overscroll, kecepatan jari dikecilkan sesuai landai
         // kurva rubber-band di titik itu (kecepatan TAMPIL != kecepatan jari
@@ -21194,6 +21203,8 @@ void loop(){
           homeScrollY=constrain(homeScrollY,0.0f,maxS);
         }
       }
+    } else if(!searching && hpOn() && hpMotionNow()){   // HOME_PAGER_V1: pegas halaman
+      hpStep(dt);
     } else if(!searching && homeScrollSpringing){
       // v105: glide/pegas berbasis waktu nyata (dt = selang antar iterasi
       // loop) -- kecepatan & jarak tempuh sama di FPS berapapun.
@@ -21244,7 +21255,9 @@ void loop(){
     // searchBarStep APOD/NeoWs/dll di bawah, cuma buat Home).
     bool sbChanged = searchBarStep(homeSearchBar, homeSearchRightX());
     if(sbChanged) needRedraw=true;
-    if(needRedraw){
+    if(needRedraw && hpFrame()){   // HOME_PAGER_V1: frame geser halaman (HW scroll / susun canvas)
+      needRedraw=false;
+    } else if(needRedraw){
       // v106: PITA -- kalau redraw ini murni scroll/tekan ikon, & layar+canvas
       // sudah berisi frame Home polos lengkap, gambar & push cuma pita grid
       // (lihat renderHomeBandFrame). Selain itu (jam berubah, baterai, DI
