@@ -517,7 +517,7 @@ void hpDrawDots(LGFX_Sprite& s){
   if(!hpWasOn || hpN < 2) return;
   const int cur = hpNearestPage(hpSc, hpN, homeScrollY);
   const int gap = 11, total = (hpN - 1) * gap;
-  const int cy = homeDockY() - 2;
+  const int cy = RP_NO_DOCK ? (homeDockY() + 6) : (homeDockY() - 2);   // NO-DOCK: titik di strip bawah, tidak nabrak label baris terakhir
   int x = SCR_W / 2 - total / 2;
   for(int i = 0; i < hpN; i++, x += gap){
     if(i == cur) s.fillCircle(x, cy, 3, T().accent);

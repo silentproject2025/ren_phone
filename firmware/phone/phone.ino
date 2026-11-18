@@ -1553,6 +1553,10 @@ LGFX_Sprite transShot(&display);   // snapshot layar lama, dipakai animasi trans
 Orientation currentOrient = ORIENT_LANDSCAPE;
 int SCR_W = 320, SCR_H = 240;
 #define STATUS_H 22   // tinggi status bar
+// NO-DOCK: Home tanpa dock. Isi dock (Jam/Notepad/AI Chat/Files) sudah ada di grid. 1 = dock dihapus, 0 = dock lama.
+#ifndef RP_NO_DOCK
+#define RP_NO_DOCK 1
+#endif
 
 // Didefinisikan penuh di bagian SENSOR (dekat setup()), di-extern di sini
 // supaya bisa dipakai oleh kode yang letaknya lebih awal di file
@@ -6322,7 +6326,7 @@ bool appBounceAny(bool& dockOnly){
   for(int i=0;i<APP_COUNT;i++){
     if(appBounceU(i)<0.0f) continue;
     any=true;
-    bool inDock=false; for(int k=0;k<4;k++) if(dockIdx[k]==i) inDock=true;
+    bool inDock=false; if(!RP_NO_DOCK) for(int k=0;k<4;k++) if(dockIdx[k]==i) inDock=true;   // NO-DOCK: tak ada ikon dock -> semua pantulan = grid
     if(!inDock) grid=true;
   }
   dockOnly = any && !grid;
@@ -7071,7 +7075,8 @@ int homeCardH(){ return 62; } // HOME-ICON-BULAT: ikon bulat kecil + label, tanp
 // dr tepi bawah diperkecil dikit (10->8) biar tetep "melayang" tp gak makan
 // layar. Radius sudut panel dinaikin di drawHome() (18, dulu 16) supaya
 // proporsinya makin ke arah "squircle" ala iOS drpd cuma kotak dibulatin.
-int homeDockY(){ return SCR_H-38-8; }
+// NO-DOCK: tanpa dock, sisakan strip 16px di bawah grid buat titik halaman (pager). Semua hitungan grid/pager/hwscroll tetap pakai fungsi ini.
+int homeDockY(){ return RP_NO_DOCK ? (SCR_H-16) : (SCR_H-38-8); }
 // v71 REDESIGN: header (sapaan+jam+tanggal) butuh ruang lebih (dulu cuma
 // jam doang), grid ikon digeser turun dikit buat nampung.
 // UI-OVERHAUL home: layout WIDGET (koordinat RUANG KONTEN = belum dikurangi scroll).
@@ -7392,7 +7397,7 @@ void drawHome(LGFX_Sprite& s,float sc){
   if(band) s.setClipRect(0,clipTop,SCR_W,contentH); else s.clearClipRect();
 
   // dock kaca (statis, dilewati di mode pita)
-  if(!band){
+  if(!band && !RP_NO_DOCK){
     int dockY=homeDockY(), dockH=38;
     drawGlassPanel(s, 6,dockY,SCR_W-12,dockH,18, T().surface2, 150);
     int dockIdx[4]={0,4,6,7};
@@ -7413,7 +7418,7 @@ void drawHome(LGFX_Sprite& s,float sc){
 Screen homeCheck(int x,int y,float sc){
   // UI-OVERHAUL: + hit-test widget (jam -> app Jam, baterai -> app Baterai, kartu musik -> kontrol/app Musik)
   int dockY=homeDockY(), dockH=38;
-  if(y>=dockY&&y<=dockY+dockH){
+  if(!RP_NO_DOCK && y>=dockY&&y<=dockY+dockH){
     int dockIdx[4]={0,4,6,7};
     int dw=(SCR_W-12)/4;
     for(int i=0;i<4;i++){
@@ -7622,7 +7627,7 @@ void homeArmZoom(int idx,int tx,int ty,float sc){
     if(homeIconGeom(idx,sc,ox,oy,ow,oh,orad)) navZoomArm(ox,oy,ow,oh,orad,apps[idx].color);
     return;
   }
-  if(ty>=dockY && ty<=dockY+dockH){
+  if(!RP_NO_DOCK && ty>=dockY && ty<=dockY+dockH){
     int dockIdx[4]={0,4,6,7}; int dw=(SCR_W-12)/4;
     for(int i=0;i<4;i++){
       int cx=6+i*dw+dw/2;
