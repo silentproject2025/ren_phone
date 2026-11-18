@@ -298,6 +298,7 @@ jobs:
           cp firmware/phone/gutdl_core.h build_sketch/
           cp firmware/phone/heaplog_renphone.ino build_sketch/
           cp firmware/phone/hwscroll_renphone.ino build_sketch/
+          cp firmware/phone/pager_renphone.ino build_sketch/
           cp firmware/phone/hw_conf.h         build_sketch/
           cp firmware/phone/display_conf.h    build_sketch/
 
