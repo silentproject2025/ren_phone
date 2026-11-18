@@ -3,10 +3,10 @@ name: Build CAM BT Co-Processor
 on:
   push:
     branches: [ "main", "master", "remote-control" ]
-    paths: [ "cam_bt_coprocessor/**", ".github/workflows/build-cam-coprocessor.yml" ]
+    paths: [ "firmware/cam_bt_coprocessor/**", ".github/workflows/build-cam-coprocessor.yml" ]
   pull_request:
     branches: [ "main", "master" ]
-    paths: [ "cam_bt_coprocessor/**" ]
+    paths: [ "firmware/cam_bt_coprocessor/**" ]
   workflow_dispatch:
 
 permissions:
@@ -46,7 +46,7 @@ jobs:
         run: |
           arduino-cli compile --fqbn esp32:esp32:esp32cam \
             --board-options "PartitionScheme=huge_app" \
-            cam_bt_coprocessor --output-dir build_cam
+            firmware/cam_bt_coprocessor --output-dir build_cam
 
       - name: Upload Binary Artifacts
         uses: actions/upload-artifact@v4

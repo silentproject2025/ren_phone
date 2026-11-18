@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 # gen_emoji.py -- bikin emoji_data.h (sprite RGB565 10/16/24 px) + tabel kodepoint utk NyxOS.
 # Semua sprite digambar sendiri (PIL, gaya flat), tanpa font emoji eksternal.
-import math, sys
+import math, os, sys
 from PIL import Image, ImageDraw
 S = 192            # kanvas kerja (supersample)
 SIZES = [10, 16, 24]
@@ -352,4 +352,4 @@ def main(outdir):
         t = E[nm].resize((48, 48), Image.LANCZOS); sheet.paste(t, (8 + (i % (len(names)//2)) * 56 % (sheet.width-8), 8 + (i // (len(names)//2)) * 56), t)
     sheet.save(outdir + '/emoji_preview.png')
     print('OK', N, 'sprite;', len(pairs), 'kodepoint')
-if __name__ == '__main__': main(sys.argv[1] if len(sys.argv) > 1 else '.')
+if __name__ == '__main__': main(sys.argv[1] if len(sys.argv) > 1 else os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'firmware', 'phone'))

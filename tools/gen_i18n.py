@@ -7,7 +7,7 @@ Teks harus sama persis dgn literal di kode (spasi di ujung juga dihitung)."""
 import os, sys
 here = os.path.dirname(os.path.abspath(__file__))
 src  = os.path.join(here, 'i18n_pairs.txt')
-dst  = os.path.join(here, '..', 'i18n_dict.h')
+dst  = os.path.join(here, '..', 'firmware', 'phone', 'i18n_dict.h')
 
 def cesc(s):
     return s.replace('\\', '\\\\').replace('"', '\\"')

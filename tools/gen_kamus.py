@@ -50,7 +50,7 @@ def main():
     h.append("#define KMS_EN_N %d" % len(en))
     h.append(emit("kmsWordsID", ids))
     h.append(emit("kmsWordsEN", en))
-    out = os.path.join(ROOT, "kamus_data.h")
+    out = os.path.join(ROOT, "firmware", "phone", "kamus_data.h")
     open(out, "w", encoding="utf-8").write("\n".join(h))
     print("OK: %s  (ID=%d, EN=%d)" % (out, len(ids), len(en)))
 
