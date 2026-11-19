@@ -77,7 +77,7 @@ jobs:
           arduino-cli core update-index
           # CI_RETRY_V1: unduhan toolchain kadang putus -> ulangi
           for try in 1 2 3 4; do
-            arduino-cli core install esp32:esp32 && break
+            arduino-cli core install esp32:esp32@3.3.6 && break   # PIN: core 4.x (mbedTLS 4 + C23) merusak build; naikkan versi pelan2 setelah dites
             [ "$try" = 4 ] && exit 1
             echo "Unduhan core gagal (percobaan $try), ulangi 20 dtk lagi..."; sleep 20
           done

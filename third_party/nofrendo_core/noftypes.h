@@ -51,11 +51,15 @@ typedef  unsigned short uint16;
 typedef  unsigned int   uint32;
 
 #ifndef __cplusplus
+#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 202311L
+/* C23 (core esp32 4.x): bool/true/false sudah keyword */
+#else
 typedef enum
 {
    false = 0,
    true = 1
 } bool;
+#endif
 
 #ifndef  NULL
 #define  NULL     ((void *) 0)
