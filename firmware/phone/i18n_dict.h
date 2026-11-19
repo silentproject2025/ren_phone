@@ -636,5 +636,17 @@ static const I18nPair I18N_DICT[] = {
   { "cth: 2026-08-23", "e.g.: 2026-08-23" },
   { "Wake word aktif", "Wake word on" },
   { "Wake word mati", "Wake word off" },
+  { "Username publik", "Public username" },
+  { "Menyimpan username...", "Saving username..." },
+  { "Menghapus username...", "Removing username..." },
+  { "Username aktif di dashboard", "Username is live on the dashboard" },
+  { "Username dihapus dari dashboard", "Username removed from the dashboard" },
+  { "Username sudah dipakai orang lain", "Username is already taken" },
+  { "Username ditolak server", "The server rejected the username" },
+  { "Username ini dicadangkan", "That username is reserved" },
+  { "Gagal sinkron, coba lagi nanti", "Sync failed, try again later" },
+  { "Username: 3-16 karakter, huruf/angka/._-", "Username: 3-16 chars, letters/digits/._-" },
+  { "3-16 karakter, kosong = hapus", "3-16 characters, empty = remove" },
+  { "Dashboard dimatikan di build ini", "Dashboard is disabled in this build" },
 };
 static const int I18N_DICT_N = (int)(sizeof(I18N_DICT)/sizeof(I18N_DICT[0]));

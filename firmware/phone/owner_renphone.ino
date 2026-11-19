@@ -45,6 +45,8 @@ static bool      ownerLoaded    = false;
 static char      ownerNameBuf[OWNER_NAME_MAX + 1] = OWNER_DEFAULT_NAME;
 static String    ownerNameEdit;                // hanya terisi saat mengetik
 static bool      ownerEditing   = false;
+static String    ownerUserEdit;                // username publik, hanya terisi saat mengetik
+static bool      ownerUserEditing = false;
 static bool      ownerPickMode  = false;       // true selagi Galeri dibuka utk memilih foto profil
 static bool      ownerPickDone  = false;       // foto sudah dipilih -> tutup Galeri di loop berikutnya
 static unsigned long ownerDelArmUntil = 0;
@@ -357,6 +359,15 @@ void ownerPickChosen(const char* path) {
 // dipanggil tiap putaran loop() -- murah (hanya cek flag)
 void ownerLoopPoll() {
   ownerStatsTick();
+  switch (devRegNameTake()) {                   // hasil sinkron username dari task devreg (0 = tak ada kabar)
+    case DRN_OK:       showToast(RPTR("Username aktif di dashboard"));          needRedraw = true; break;
+    case DRN_CLEARED:  showToast(RPTR("Username dihapus dari dashboard"));      needRedraw = true; break;
+    case DRN_TAKEN:    showToast(RPTR("Username sudah dipakai orang lain"));    needRedraw = true; break;
+    case DRN_INVALID:  showToast(RPTR("Username ditolak server"));              needRedraw = true; break;
+    case DRN_RESERVED: showToast(RPTR("Username ini dicadangkan"));             needRedraw = true; break;
+    case DRN_NETFAIL:  showToast(RPTR("Gagal sinkron, coba lagi nanti"));       needRedraw = true; break;
+    default: break;
+  }
   if (!ownerPickDone) return;
   ownerPickDone = false;
   if (curScreen() == SCR_GALLERY) navBack();
@@ -380,6 +391,39 @@ static void ownerCommitName() {
 }
 
 // ---------------------------------------------------------------------
+// username publik: tampil di dashboard web, disinkronkan oleh devreg_renphone.ino
+// ---------------------------------------------------------------------
+// Buang karakter yg tak boleh dipakai server (huruf, angka, . - _) dan batasi 16 karakter.
+static void ownerUserClean(String& s) {
+  String o;
+  for (unsigned i = 0; i < s.length(); i++) {
+    char c = s[i];
+    bool ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '.' || c == '-';
+    if (ok && o.length() < 16) o += c;
+  }
+  s = o;
+}
+
+// true = editor ditutup. false = format salah, editor tetap terbuka supaya bisa dibetulkan.
+static bool ownerUserCommit() {
+  String n = ownerUserEdit; n.trim();
+  if (n.length() > 0 && !devRegNameValid(n.c_str())) {
+    showToast(RPTR("Username: 3-16 karakter, huruf/angka/._-"));
+    needRedraw = true;
+    return false;
+  }
+  ownerUserEditing = false;
+  kbVisible = false; kbTarget = nullptr;
+  ownerUserEdit = "";
+  if (strcmp(n.c_str(), devRegName()) != 0) {
+    if (devRegSetName(n.c_str())) showToast(n.length() ? RPTR("Menyimpan username...") : RPTR("Menghapus username..."));
+    else                          showToast(RPTR("Dashboard dimatikan di build ini"));
+  }
+  needRedraw = true;
+  return true;
+}
+
+// ---------------------------------------------------------------------
 // layar Profil
 // ---------------------------------------------------------------------
 // Layout: semua statis tanpa struct/parameter (aman dari bug prototype arduino-cli).
@@ -400,13 +444,12 @@ static void ownerLayout() {
   og_bw = (og_bw2 - 6) / 2;
 }
 
-// Tombol utama: 0 Pilih foto | 1 Ubah nama / 2 Bingkai | 3 Statistik / 4 Hapus foto (selebar penuh)
+// Tombol utama (2 kolom x 3 baris): 0 Pilih foto | 1 Ubah nama / 2 Bingkai | 3 Statistik / 4 Username | 5 Hapus foto
 static void ownerBtnRect(int i, int& x, int& y, int& w, int& h) {
   ownerLayout();
-  int row = (i < 4) ? i / 2 : 2, col = (i < 4) ? i % 2 : 0;
+  int row = i / 2, col = i % 2;
   h = og_bh; y = og_by0 + row * (og_bh + og_gap);
-  if (i == 4) { x = og_bx; w = og_bw2; }
-  else        { w = og_bw; x = og_bx + col * (og_bw + 6); }
+  w = og_bw; x = og_bx + col * (og_bw + 6);
 }
 
 static void ownerBtn(LGFX_Sprite& s, int x, int y, int w, int h, const char* lb, uint16_t tint, uint16_t txt) {
@@ -567,6 +610,8 @@ void ownerEnter() {
   ownerStatsEnsure();
   ownerEditing = false;
   ownerNameEdit = "";
+  ownerUserEditing = false;
+  ownerUserEdit = "";
   ownerDelArmUntil = 0;
   ownerStatArmUntil = 0;
   ownerView = 0;
@@ -574,6 +619,11 @@ void ownerEnter() {
 
 void ownerExit() {
   if (ownerEditing) ownerCommitName();
+  if (ownerUserEditing) {                       // keluar saat mengetik: simpan kalau valid, kalau tidak buang saja
+    String n = ownerUserEdit; n.trim();
+    ownerUserEditing = false; kbVisible = false; kbTarget = nullptr; ownerUserEdit = "";
+    if (devRegNameValid(n.c_str()) && strcmp(n.c_str(), devRegName()) != 0) devRegSetName(n.c_str());
+  }
   ownerDelArmUntil = 0;
   ownerStatArmUntil = 0;
   if (ownerStatDirty) ownerStatsSave();
@@ -603,6 +653,25 @@ void drawOwner(LGFX_Sprite& s) {
     return;
   }
 
+  if (ownerUserEditing) {
+    iosTitle(s, 8, 26, RPTR("Username publik"));
+    int fx = 8, fy = 50, fw = SCR_W - 16, fh = 36;
+    drawGlassPanel(s, fx, fy, fw, fh, 10, T().surface2, 190);
+    String t = ownerUserEdit + "|";
+    s.setTextSize(2);
+    s.setTextColor(T().text);
+    s.setCursor(fx + 10, fy + fh / 2 - 8);
+    s.print(t.c_str());
+    s.setTextSize(1);
+    s.setTextColor(T().subtext);
+    const char* hint = RPTR("3-16 karakter, kosong = hapus");
+    s.setCursor(SCR_W / 2 - s.textWidth(hint) / 2, fy + fh + 8);
+    s.print(hint);
+    drawKb(s);
+    drawToast(s);
+    return;
+  }
+
   if (ownerView == 1) { ownerDrawPick(s);  drawBack(s); drawToast(s); return; }
   if (ownerView == 2) { ownerDrawStats(s); drawBack(s); drawToast(s); return; }
 
@@ -620,15 +689,22 @@ void drawOwner(LGFX_Sprite& s) {
   s.print(nm);
   s.setTextSize(1);
   s.setTextColor(T().subtext);
+  const char* un = devRegName();
+  char subBuf[DR_NAME_MAX + 8];
   const char* sub = "Pemilik perangkat";
+  if (un[0]) {                                  // username publik aktif: tampil sebagai @nama ("..." = belum tersinkron)
+    snprintf(subBuf, sizeof(subBuf), "@%s%s", un, devRegNameSynced() ? "" : " ...");
+    sub = subBuf;
+    s.setTextColor(T().accent);
+  }
   s.setCursor(og_acx - s.textWidth(sub) / 2, og_nameY + 22);
   s.print(sub);
 
   bool armed = millis() < ownerDelArmUntil;
-  const char* lbl[4] = { "Pilih foto", "Ubah nama", "Bingkai", "Statistik" };
-  for (int i = 0; i < 5; i++) {
+  const char* lbl[5] = { "Pilih foto", "Ubah nama", "Bingkai", "Statistik", "Username" };
+  for (int i = 0; i < 6; i++) {
     int x, y, w, h; ownerBtnRect(i, x, y, w, h);
-    if (i < 4) ownerBtn(s, x, y, w, h, lbl[i], i == 0 ? T().accent : T().surface2, T().text);
+    if (i < 5) ownerBtn(s, x, y, w, h, lbl[i], i == 0 ? T().accent : T().surface2, T().text);
     else       ownerBtn(s, x, y, w, h, armed ? "Yakin?" : "Hapus foto",
                         armed ? T().danger : T().surface2, armed ? 0xFFFF : T().danger);
   }
@@ -653,6 +729,17 @@ void ownerTouch(int x, int y, bool held, bool isNew) {
     return;
   }
 
+  if (ownerUserEditing) {
+    if (y < kbY() - 2) {
+      ownerUserCommit();
+    } else {
+      kbTouch(x, y);
+      ownerUserClean(ownerUserEdit);
+    }
+    needRedraw = true;
+    return;
+  }
+
   if (isBack(x, y)) {
     if (ownerView != 0) { ownerView = 0; ownerStatArmUntil = 0; needRedraw = true; }   // dari sub-layar balik ke Profil dulu
     else navBack();
@@ -662,7 +749,7 @@ void ownerTouch(int x, int y, bool held, bool isNew) {
   if (ownerView == 2) { ownerTouchStats(x, y); return; }
 
   int idx = -1;
-  for (int i = 0; i < 5; i++) {
+  for (int i = 0; i < 6; i++) {
     int bx, by, bw, bh; ownerBtnRect(i, bx, by, bw, bh);
     if (x >= bx && x <= bx + bw && y >= by && y <= by + bh) { idx = i; break; }
   }
@@ -682,6 +769,11 @@ void ownerTouch(int x, int y, bool held, bool isNew) {
     ownerView = 1; needRedraw = true;
   } else if (idx == 3) {                         // Statistik
     ownerView = 2; ownerStatArmUntil = 0; needRedraw = true;
+  } else if (idx == 4) {                         // Username publik (dashboard web)
+    ownerUserEdit = String(devRegName());
+    ownerUserEditing = true;
+    kbTarget = &ownerUserEdit; kbVisible = true; kbMode = KB_LOWER;
+    needRedraw = true;
   } else {                                       // Hapus foto (ketuk 2x)
     if (!ownerHasAv) { showToast(RPTR("Belum ada foto profil")); needRedraw = true; return; }
     if (millis() < ownerDelArmUntil) {
