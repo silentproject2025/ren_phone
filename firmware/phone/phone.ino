@@ -1421,6 +1421,11 @@ public:
     portEXIT_CRITICAL(&rpTouchMux);
     return r;
   }
+  // TAP-FIX: posisi terakhir jari yg diketahui driver (tetap tersimpan setelah jari diangkat). loop() bisa
+  // terlambat sampai jari sudah lepas (frame berat ~40 ms); posisi ini dipakai utk membedakan ketukan vs geser cepat.
+  void touchLastPoint(int* x,int* y){
+    portENTER_CRITICAL(&rpTouchMux); *x=_sPt[0].x; *y=_sPt[0].y; portEXIT_CRITICAL(&rpTouchMux);
+  }
   // KB_FASTPATH_V1: antrean jari-turun (diisi touchPollInner, dikuras loop())
   bool touchQPop(int* x,int* y,uint32_t* ms){
     bool ok=false;
@@ -1597,7 +1602,7 @@ bool hwsIsActive(); bool hwsFrame(); bool hwsBandPush(); bool hwsPushHook(); voi
 int hwsModeGet(); bool hwsModeSet(int); const char* hwsModeText(int);
 // HOME_PAGER_V1 (pager_renphone.ino): Home landscape berhalaman + hardware scroll horizontal
 bool hpOn(); bool hpIsActive(); bool hpMotionNow(); bool hpFrame(); bool hpPushHook(); bool hpBandRedirect();
-int hpWidgetCutY(); void hpFreeImages();   // HOME-FIX: halaman 1 = widget saja; lepas gambar pager utk app besar
+int hpWidgetCutY(); void hpFreeImages(); void hpFlickFixup(int,int);   // HOME-FIX: halaman 1 = widget saja; lepas gambar pager utk app besar
 void hpTouchHeld(bool,int,int); void hpRelease(); void hpStep(float); void hpDrawDots(LGFX_Sprite&); void hpLoopGuard();
 void hpLeaveHook(const char*,int); int hpModeGet(); bool hpModeSet(int);
 void drawShotThumb(LGFX_Sprite&); bool nyxShotThumbTouch(bool,bool,int,int);
@@ -20752,6 +20757,17 @@ static void kbFastTick(){
   if(kbFastRelOk()) kbFastRelease(); else needRedraw=true;
 }
 
+// TAP-FIX: true kalau jari yg barusan lepas sudah bergeser > slop dari titik sentuh awal (= bukan ketukan),
+// walau loop() tak sempat membaca posisi di tengah gerakan (swipe cepat saat frame berat).
+static bool homeTouchMovedAtRelease(int& lx,int& ly){
+#if RP_TOUCH_CAPACITIVE
+  if(rcApIsUp()){ lx=touchStartX; ly=touchStartY; return false; }   // Remote Control: titik sentuh dari web, bukan dari driver fisik
+  display.touchLastPoint(&lx,&ly);
+  return abs(lx-touchStartX) > 8 || abs(ly-touchStartY) > 8;
+#else
+  lx=touchStartX; ly=touchStartY; return false;
+#endif
+}
 void loop(){
   rpHLLoopPoll();
   { static Screen s_hePrev=SCR_HOME; Screen s_heC=curScreen();   // v130: home anim -- catat saat masuk Home
@@ -21166,6 +21182,13 @@ void loop(){
         homeTyLastF=homeTyF; // HOME_SMOOTH_V3
       }
     } else if(wasTouched){
+      { // TAP-FIX: swipe cepat yg lolos dari deteksi geser -> jangan dihitung ketukan; pager tetap memproses sbg flick
+        int lx=0,ly=0;
+        if(!isSwiping && homeTouchMovedAtRelease(lx,ly)){
+          if(!searching && hpOn()) hpFlickFixup(lx,ly);   // isSwiping=true + posisi/kecepatan flick disusulkan
+          else isSwiping=true;
+        }
+      }
       if(!isSwiping&&millis()-swipeStartTime<400){
         // v-baru: coba index grid (biasa ATAU hasil filter) duluan --
         // homeIndexAt() sadar mode pencarian sendiri. Kalau gak kena grid

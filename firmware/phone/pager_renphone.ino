@@ -572,6 +572,20 @@ static void hpPrewarm(){
   hpIdleSince = 0;
 }
 
+// TAP-FIX: jari sudah lepas tapi hpTouchHeld() tak pernah melihat gerakan (swipe sangat cepat / loop sedang sibuk).
+// (lx,ly) = posisi terakhir jari menurut driver. Susun ulang seret + kecepatan supaya hpRelease() tetap membalik halaman.
+void hpFlickFixup(int lx, int ly){
+  if(isSwiping || hpLock != 0) return;
+  const int dx = lx - touchStartX, dy = ly - touchStartY;
+  if(abs(dx) <= HOME_DRAG_SLOP && abs(dy) <= HOME_DRAG_SLOP){ isSwiping = true; homePressedIdx = -1; return; }   // 9-10 px: bukan ketukan, bukan flick -> abaikan
+  hpLock = (abs(dx) >= abs(dy)) ? 1 : 2;
+  const float raw = (hpLock == 1) ? -(float)dx : -(float)dy * HP_VGAIN;
+  float dt = (float)(millis() - swipeStartTime); if(dt < 16.0f) dt = 16.0f;
+  hpDragRaw += raw;
+  hpX = homeRubber(hpDragRaw, hpMaxX());
+  hpVel = raw / dt;
+  hpDragging = true; isSwiping = true; homePressedIdx = -1; homePressAnimIdx = -1; homePressAnim = 0.0f;
+}
 // HOME-FIX: batas Y (layar) mulai area tersembunyi di halaman widget; INT_MAX kalau tidak berlaku (hit-test grid/chip diblok >= nilai ini)
 int hpWidgetCutY(){
   if(!hpWasOn || hpN < 2 || hpCur != 0 || hpMotionNow()) return 0x7fffffff;
@@ -608,6 +622,7 @@ void hpStep(float){}
 void hpDrawDots(LGFX_Sprite&){}
 void hpLoopGuard(){}
 int  hpWidgetCutY(){ return 0x7fffffff; }
+void hpFlickFixup(int,int){}
 void hpFreeImages(){}
 void hpLeaveHook(const char*, int){}
 int  hpModeGet(){ return 0; }
