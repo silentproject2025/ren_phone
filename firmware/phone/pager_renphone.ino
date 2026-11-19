@@ -39,44 +39,37 @@
 // bh = tinggi pita grid, pitch = tinggi baris grid (kartu+gap 10), gTop = homeGridTop(), catH = HOME_CAT_H.
 // Baris dianggap muat kalau terpotong <= 10 px di bawah (HP_TOLB); bagian itu cuma bayangan kartu/ruang label.
 #define HP_TOLB 10
-static inline int hpPlanPages(int* sc, int maxP, int maxS, int bh, int pitch, int gTop, int catH, int clipTop){
+// HOME-PAGES-V2: tiap halaman = SATU komposisi tetap (bukan potongan scroll):
+//   halaman widget (kalau ada widget) : cuma widget, tanpa judul/chip/ikon
+//   halaman app pertama               : judul "Semua App" + chip kategori + r1 baris utuh
+//   halaman app berikutnya            : r baris utuh (baris pertama rata di bawah status bar)
+// r0[p] = indeks baris grid pertama di halaman p (-1 = halaman widget). sc[] = scroll vertikal-ekuivalen
+// (boleh > maxScroll: halaman terakhir cukup punya ruang kosong di bawah, tidak ada baris yang digeser/terpotong).
+// rows = jumlah baris grid, hasW = ada widget di Home, bh = tinggi pita, pitch = kartu+gap.
+static inline int hpPlanPages(int* sc, int* r0, int maxP, int rows, bool hasW, int bh, int pitch, int gTop, int catH, int clipTop){
   int n = 0;
-  sc[n++] = 0;
-  if(maxS <= 0 || bh < 80 || pitch < 8) return 1;
-  const int gap = 10, titleH = catH + 24;
-  int r1 = (bh - titleH + gap + HP_TOLB) / pitch; if(r1 < 1) r1 = 1;   // halaman 1: judul + chip + r1 baris
-  int r  = (bh - 4 + gap + HP_TOLB) / pitch;      if(r  < 1) r  = 1;   // halaman berikutnya: r baris
-  int next = gTop - titleH - clipTop;             // judul tepat di bawah status bar
-  int rowsShown = 0;
-  while(n < maxP){
-    if(next <= sc[n-1]) next = sc[n-1] + pitch;
-    if(next >= maxS){   // halaman terakhir rata dgn ujung konten; kalau nyaris kembar dgn halaman sebelumnya, gabungkan (tes memastikan tak ada baris hilang)
-      if(sc[n-1] < maxS){ if(n >= 2 && maxS - sc[n-1] <= pitch / 2 + 4) sc[n-1] = maxS; else sc[n++] = maxS; }
-      break;
-    }
-    sc[n++] = next;
-    rowsShown = (n == 2) ? r1 : rowsShown + r;
-    next = gTop + rowsShown * pitch - clipTop - 4;
+  if(bh < 80 || pitch < 8) return 1;
+  const int titleH = catH + 24;
+  if(hasW){ sc[n] = 0; r0[n] = -1; n++; }
+  int r1 = (bh - titleH + HP_TOLB) / pitch; if(r1 < 1) r1 = 1;   // judul + chip + r1 baris
+  int r  = (bh - 4 + HP_TOLB) / pitch;      if(r  < 1) r  = 1;   // halaman berikutnya: r baris
+  sc[n] = gTop - titleH - clipTop; if(sc[n] < 0) sc[n] = 0; r0[n] = 0; n++;
+  int shown = r1;
+  while(shown < rows && n < maxP){
+    sc[n] = gTop + shown * pitch - clipTop - 4; r0[n] = shown; n++;
+    shown += r;
   }
   return n;
 }
-// Area (layar y) yang harus ditutup warna latar supaya tak ada baris/judul yang terlihat setengah.
-// Kembali jumlah segmen (a,b) di out[][2], sudah dipotong ke pita [clipTop, bot].
-static inline int hpCoverRanges(int sc, int clipTop, int bot, int cardH, int pitch, int gTop, int catH, int rows, int out[][2], int maxOut){
-  int c = 0;
-  struct Blk { int a, b, tolTop, tolBot; };
-  // judul+chip: harus utuh (toleransi 0); baris grid: toleransi atas 4, bawah HP_TOLB
-  for(int k = -1; k < rows; k++){
-    Blk bl;
-    if(k < 0){ bl.a = gTop - catH - 24 - sc; bl.b = gTop - 2 - sc; bl.tolTop = 0; bl.tolBot = 0; }
-    else     { bl.a = gTop + k * pitch - sc;  bl.b = bl.a + cardH;  bl.tolTop = 4; bl.tolBot = HP_TOLB; }
-    if(bl.b <= clipTop || bl.a >= bot) continue;                 // di luar pita
-    const bool partial = (bl.a < clipTop - bl.tolTop) || (bl.b > bot + bl.tolBot);
-    if(!partial) continue;
-    int a = bl.a < clipTop ? clipTop : bl.a, b = bl.b > bot ? bot : bl.b;
-    if(b > a && c < maxOut){ out[c][0] = a; out[c][1] = b; c++; }
-  }
-  return c;
+// Jendela konten halaman p (layar y): [*wa, *wb]. Semua di luar jendela (dalam pita [clipTop, bot]) ditutup latar.
+static inline void hpPageWindow(int p, int n, const int* sc, const int* r0, int rows, int clipTop, int cardH, int pitch, int gTop, int catH, int wEnd, int* wa, int* wb){
+  if(r0[p] < 0){ *wa = clipTop; *wb = wEnd + 4 - sc[p]; return; }          // halaman widget
+  const int k0 = r0[p];
+  int k1 = (p + 1 < n) ? r0[p + 1] : rows; if(k1 > rows) k1 = rows;
+  const bool first = (k0 == 0);                                          // halaman dgn judul + chip
+  *wa = first ? (gTop - catH - 24 - sc[p]) : (gTop + k0 * pitch - 4 - sc[p]);
+  if(k1 > k0) *wb = gTop + (k1 - 1) * pitch + cardH - sc[p] + HP_TOLB;
+  else        *wb = gTop + 40 - sc[p];                                   // kategori kosong: pesan "tidak ada app"
 }
 static inline int hpNearestPage(const int* sc, int n, float v){
   int best = 0; float bd = 1e9f;
@@ -110,6 +103,8 @@ static inline int hpPickTarget(float x, float v, int start, int n, int W){
 extern bool homeSearchActive();
 static int   hpN = 0;                 // jumlah halaman (0 = belum dihitung)
 static int   hpSc[HP_MAXP];           // scroll vertikal-ekuivalen tiap halaman
+static int   hpR0[HP_MAXP];           // HOME-PAGES-V2: baris grid pertama tiap halaman (-1 = halaman widget)
+static int   hpRows = 0;              // jumlah baris grid saat rencana dibuat
 static long  hpSig = -1;
 static int   hpCur = 0;               // halaman saat diam
 static float hpX = 0.0f;              // posisi sumbu halaman (px layar), 0..(hpN-1)*SCR_W
@@ -224,18 +219,22 @@ static void hpLeave(const char* why, int mode);
 // Hitung ulang daftar halaman kalau isi/ukuran Home berubah (kategori, app disembunyikan, orientasi, ...).
 static void hpEnsurePages(){
   homeLayoutEnsure();
-  const long sig = (long)homeShowN * 131L + (long)homeCols() * 7919L + (long)homeMaxScroll() * 31L + (long)SCR_W * 104729L + (long)homeDockY();
+  const bool hasW = homeWidgetsEnd() > STATUS_H + 30;
+  const long sig = (long)homeShowN * 131L + (long)homeCols() * 7919L + (long)homeMaxScroll() * 31L + (long)SCR_W * 104729L + (long)homeDockY() + (hasW ? 7L : 0L);
   if(sig == hpSig && hpN > 0) return;
   if(hpEng.active) hpLeave("daftar halaman berubah", 2);
   const int clipTop = homeGridClipTop(), bot = homeDockY() - 4;
-  hpN = hpPlanPages(hpSc, HP_MAXP, homeMaxScroll(), bot - clipTop, homeCardH() + 10, homeGridTop(), HOME_CAT_H, clipTop);
+  const int cols = homeCols();
+  hpRows = (homeShowN + cols - 1) / cols;
+  hpN = hpPlanPages(hpSc, hpR0, HP_MAXP, hpRows, hasW, bot - clipTop, homeCardH() + 10, homeGridTop(), HOME_CAT_H, clipTop);
   hpSig = sig;
   hpImgInvalidateAll(); hpCanvasPg = -2;
   if(hpN >= 2){
-    int p = hpNearestPage(hpSc, hpN, homeScrollY);
-    if(!hpDragging && !hpSpringing){ hpCur = p; hpX = (float)(p * hpW()); }
+    // sedang di Home berhalaman (mis. ganti kategori di halaman app): tetap di nomor halaman yg sama, jangan mental ke halaman widget
+    int p = (hpWasOn && hpCur >= 0) ? (hpCur < hpN ? hpCur : hpN - 1) : hpNearestPage(hpSc, hpN, homeScrollY);
+    if(!hpDragging && !hpSpringing){ hpCur = p; hpX = (float)(p * hpW()); homeScrollY = (float)hpSc[p]; }
   } else { hpCur = 0; hpX = 0.0f; }
-  Serial.printf("[hp] halaman=%d (maxScroll=%d)\n", hpN, homeMaxScroll());
+  Serial.printf("[hp] halaman=%d baris=%d widget=%d\n", hpN, hpRows, (int)hasW);
 }
 // true = pager aktif (landscape + Home + tidak ada overlay + >= 2 halaman)
 bool hpOn(){
@@ -262,30 +261,32 @@ static bool hpImgAlloc(LGFX_Sprite& sp){
   sp.setColorDepth(16); sp.setPsram(true);
   return sp.createSprite(SCR_W, SCR_H);
 }
+// HOME-PAGES-V2: tutup semua yg di luar jendela konten halaman p dgn potongan wallpaper (atau warna latar).
+// Dipakai oleh gambar halaman pager DAN frame Home biasa (hpHomeCover) supaya tampilan diam == gambar halaman.
+static void hpCoverCanvas(LGFX_Sprite& cv, int p){
+  if(p < 0 || p >= hpN) return;
+  const int clipTop = homeGridClipTop(), bot = homeDockY() - 4;
+  int wa, wb;
+  hpPageWindow(p, hpN, hpSc, hpR0, hpRows, clipTop, homeCardH(), homeCardH() + 10, homeGridTop(), HOME_CAT_H, homeWidgetsEnd(), &wa, &wb);
+  int seg[2][2]; int n = 0;
+  if(wa > clipTop){ seg[n][0] = clipTop; seg[n][1] = wa < bot ? wa : bot; n++; }
+  if(wb < bot){ seg[n][0] = wb > clipTop ? wb : clipTop; seg[n][1] = bot; n++; }
+  int32_t cx, cy, cw, ch; cv.getClipRect(&cx, &cy, &cw, &ch);          // pulihkan clip pemanggil (mode pita)
+  for(int i = 0; i < n; i++){
+    const int a = seg[i][0], h = seg[i][1] - seg[i][0];
+    if(h <= 0) continue;
+    if(wallpaperReady){ cv.setClipRect(0, a, SCR_W - 12, h); wallpaperImg.pushSprite(&cv, 0, 0); }
+    else cv.fillRect(0, a, SCR_W - 12, h, T().bg);                  // sisakan 12 px kanan utk rail
+  }
+  cv.setClipRect(cx, cy, cw, ch);
+}
 static void hpRenderPage(int p){      // gambar Home pada scroll halaman p ke canvas
   const float sv = homeScrollY;
   homeScrollY = (float)hpSc[p];
   canvas.clearClipRect();
   renderCurrentFrame();
   homeScrollY = sv;
-  // tutup baris/judul yang terlihat setengah di tepi atas/bawah pita (hanya latar polos; wallpaper dibiarkan)
-  // HOME-FIX: dulu hanya jalan kalau TIDAK ada wallpaper -> dgn wallpaper baris setengah (atas/bawah) tetap kelihatan.
-  // Sekarang area itu ditimpa potongan wallpaper (atau warna latar kalau tak ada wallpaper).
-  {
-    int rg[17][2];
-    const int cols = homeCols(), rows = (homeShowN + cols - 1) / cols;
-    int n = hpCoverRanges(hpSc[p], homeGridClipTop(), homeDockY() - 4, homeCardH(), homeCardH() + 10, homeGridTop(), HOME_CAT_H, rows, rg, 16);
-    if(p == 0){   // halaman 1 = widget saja: sembunyikan judul + chip + seluruh grid di bawah widget
-      const int cut = homeWidgetsEnd() + 4 - hpSc[0];
-      if(cut < homeDockY() - 4){ rg[n][0] = cut > homeGridClipTop() ? cut : homeGridClipTop(); rg[n][1] = homeDockY() - 4; n++; }
-    }
-    for(int i = 0; i < n; i++){
-      const int a = rg[i][0], h = rg[i][1] - rg[i][0];
-      if(h <= 0) continue;
-      if(wallpaperReady){ canvas.setClipRect(0, a, SCR_W - 12, h); wallpaperImg.pushSprite(&canvas, 0, 0); canvas.clearClipRect(); }
-      else canvas.fillRect(0, a, SCR_W - 12, h, T().bg);   // sisakan 12 px kanan utk rail
-    }
-  }
+  hpCoverCanvas(canvas, p);
   hpCanvasPg = p;
 }
 static LGFX_Sprite* hpImgGet(int p, bool build){
@@ -419,7 +420,7 @@ bool hpFrame(){
     homeScrollY = (float)hpSc[hpCur];
     hpSyncCanvas();                   // canvas = halaman yang tampil (screenshot, frame lambat berikutnya)
     homeBandReady = true;
-    if(hpCur == 0 && millis() - hpImgAt[0] > 1500UL){ hpCurDirty = true; needRedraw = true; }   // widget (jam/baterai) segar lagi begitu mendarat
+    if(hpR0[hpCur] < 0 && millis() - hpImgAt[hpCur % 3] > 1500UL){ hpCurDirty = true; needRedraw = true; }   // widget (jam/baterai) segar lagi begitu mendarat
   }
   rcFrameMark();
   return true;
@@ -595,8 +596,18 @@ void hpFlickFixup(int lx, int ly){
 }
 // HOME-FIX: batas Y (layar) mulai area tersembunyi di halaman widget; INT_MAX kalau tidak berlaku (hit-test grid/chip diblok >= nilai ini)
 int hpWidgetCutY(){
-  if(!hpWasOn || hpN < 2 || hpCur != 0 || hpMotionNow()) return 0x7fffffff;
-  return homeWidgetsEnd() + 4 - hpSc[0];
+  if(!hpWasOn || hpN < 2 || hpCur >= hpN || hpMotionNow()) return 0x7fffffff;
+  int wa, wb;
+  hpPageWindow(hpCur, hpN, hpSc, hpR0, hpRows, homeGridClipTop(), homeCardH(), homeCardH() + 10, homeGridTop(), HOME_CAT_H, homeWidgetsEnd(), &wa, &wb);
+  return wb;   // y >= nilai ini = area tertutup di halaman sekarang (tidak boleh kena tap)
+}
+// HOME-PAGES-V2: dipanggil tepat setelah drawHome() di frame biasa -> tampilan diam sama persis dgn gambar halaman
+void hpHomeCover(LGFX_Sprite& s){
+  if(hpN < 2 || !hpAllowed()) return;
+  const int p = hpNearestPage(hpSc, hpN, homeScrollY);
+  const float d = homeScrollY - (float)hpSc[p];
+  if(d > 1.0f || d < -1.0f) return;                   // sedang bergerak/rubber-band: bukan posisi halaman
+  hpCoverCanvas(s, p);
 }
 // HOME-FIX: lepas 3 gambar halaman pager (~900 KB PSRAM) -- dipanggil DOOM sebelum cek blok kontigu; dibangun ulang otomatis saat Home dibuka lagi
 void hpFreeImages(){ hpImgFreeAll(); }
@@ -627,6 +638,7 @@ void hpTouchHeld(bool, int, int){}
 void hpRelease(){}
 void hpStep(float){}
 void hpDrawDots(LGFX_Sprite&){}
+void hpHomeCover(LGFX_Sprite&){}
 void hpLoopGuard(){}
 int  hpWidgetCutY(){ return 0x7fffffff; }
 void hpFlickFixup(int,int){}

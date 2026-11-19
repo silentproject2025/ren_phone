@@ -1618,7 +1618,7 @@ int hwsModeGet(); bool hwsModeSet(int); const char* hwsModeText(int);
 // HOME_PAGER_V1 (pager_renphone.ino): Home landscape berhalaman + hardware scroll horizontal
 bool hpOn(); bool hpIsActive(); bool hpMotionNow(); bool hpFrame(); bool hpPushHook(); bool hpBandRedirect();
 int hpWidgetCutY(); void hpFreeImages(); void hpFlickFixup(int,int);   // HOME-FIX: halaman 1 = widget saja; lepas gambar pager utk app besar
-void hpTouchHeld(bool,int,int); void hpRelease(); void hpStep(float); void hpDrawDots(LGFX_Sprite&); void hpLoopGuard();
+void hpTouchHeld(bool,int,int); void hpRelease(); void hpStep(float); void hpDrawDots(LGFX_Sprite&); void hpHomeCover(LGFX_Sprite&); void hpLoopGuard();
 void hpLeaveHook(const char*,int); int hpModeGet(); bool hpModeSet(int);
 void drawShotThumb(LGFX_Sprite&); bool nyxShotThumbTouch(bool,bool,int,int);
 bool nyxShotThumbAnimating(); void nyxShotThumbFastFrame(); bool nyxThFreezeFrame();   // NYX_TH_V4
@@ -12396,7 +12396,7 @@ void renderCurrentFrame(){
   } else if(locked){
     drawLockScreen(canvas);
   } else if(curScreen()==SCR_HOME){
-    if(homeAodActive) drawHomeAod(canvas); else { drawHome(canvas,homeScrollY); hpDrawDots(canvas); } // HOME_PAGER_V1: titik halaman. v99: AOD Home gantiin drawHome() biasa selagi aktif
+    if(homeAodActive) drawHomeAod(canvas); else { drawHome(canvas,homeScrollY); hpHomeCover(canvas); hpDrawDots(canvas); } // HOME_PAGER_V1: titik halaman. v99: AOD Home gantiin drawHome() biasa selagi aktif
   } else {
     int idx=appIndexForScreen(curScreen());
     if(idx>=0) apps[idx].draw(canvas);
