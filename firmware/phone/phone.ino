@@ -1618,6 +1618,7 @@ int hwsModeGet(); bool hwsModeSet(int); const char* hwsModeText(int);
 // HOME_PAGER_V1 (pager_renphone.ino): Home landscape berhalaman + hardware scroll horizontal
 bool hpOn(); bool hpIsActive(); bool hpMotionNow(); bool hpFrame(); bool hpPushHook(); bool hpBandRedirect();
 int hpWidgetCutY(); void hpFreeImages(); void hpFlickFixup(int,int);   // HOME-FIX: halaman 1 = widget saja; lepas gambar pager utk app besar
+void devRegTick(); const char* devRegId();   // DEVREG_V1 (devreg_renphone.ino)
 void hpTouchHeld(bool,int,int); void hpRelease(); void hpStep(float); void hpDrawDots(LGFX_Sprite&); void hpHomeCover(LGFX_Sprite&); void hpLoopGuard();
 void hpLeaveHook(const char*,int); int hpModeGet(); bool hpModeSet(int);
 void drawShotThumb(LGFX_Sprite&); bool nyxShotThumbTouch(bool,bool,int,int);
@@ -20835,6 +20836,7 @@ void loop(){
   if(curScreen()!=SCR_HOME || locked || appSwitcherOpen || controlCenterOpen || notifShadeOpen || homeAodActive || diMenuOpen) homeBandReady=false;
   hwsLoopGuard();   // HW_SCROLL_V1
   hpLoopGuard();    // HOME_PAGER_V1
+  devRegTick();     // DEVREG_V1: daftar perangkat anonim sekali (no-op kalau sudah / tak dikonfigurasi)
   if(curScreen()!=SCR_HOME || locked){ if(homeCache.getBuffer()) homeCacheFree(); }   // HOME_CACHE_V1: PSRAM kembali utk app lain (Doom/NES)
   if(!controlCenterOpen && !panelPullActive){   // CC_CACHE_V1: sesi selesai -> cache/snapshot basi; PSRAM dibebaskan kalau bukan di Home
     ccCacheValid=false; ccBgValid=false;
