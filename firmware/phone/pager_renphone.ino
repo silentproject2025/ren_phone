@@ -121,6 +121,7 @@ static unsigned long hpImgAt[3] = { 0, 0, 0 };   // kapan slot dibuat (utk penye
 static unsigned long hpSampleMs = 0;
 static int   hpStartPage = 0, hpLock = 0;     // hpLock: 0 belum, 1 horizontal (ikut jari), 2 vertikal (balik halaman)
 static bool  hpDragging = false, hpSpringing = false, hpPending = false, hpWasOn = false;
+static bool  hpOwn = false;                // SENTUH-MILIK-HOME: true hanya utk sentuhan yg TOUCH-DOWN-nya terjadi saat pager Home aktif (sentuhan yg mulai di dalam app lalu "terbawa" ke Home = bukan geseran Home)
 static bool  hpForeign = false, hpInternal = false, hpCanvasStale = false;
 static int   hpCanvasPg = -2;         // halaman yang SEDANG tergambar di canvas (-2 = tak diketahui)
 static unsigned long hpLastFastMs = 0, hpBlockUntil = 0;
@@ -241,6 +242,7 @@ bool hpOn(){
   bool a = hpAllowed();
   if(a){ hpEnsurePages(); if(hpN < 2) a = false; }
   if(a && !hpWasOn){            // baru aktif: rapikan ke halaman terdekat
+    hpOwn = false; hpLock = 0;   // SENTUH-MILIK-HOME: jari yg masih menempel dari app/overlay bukan milik Home
     hpSnapTo(hpNearestPage(hpSc, hpN, homeScrollY));
     needRedraw = true;
   }
@@ -450,6 +452,7 @@ static inline float hpMaxX(){ return (float)((hpN - 1) * hpW()); }
 void hpTouchHeld(bool isNew, int tx, int ty){
   const unsigned long now = millis();
   if(isNew){
+    hpOwn = true;   // SENTUH-MILIK-HOME
     touchStartX = tx; touchStartY = ty; touchLastY = ty;
     isSwiping = false; swipeStartTime = now;
     const bool caught = hpMotionNow();            // jari menangkap halaman yang masih bergerak
@@ -463,6 +466,7 @@ void hpTouchHeld(bool isNew, int tx, int ty){
     else homePressedIdx = homeJiggle ? -1 : homeIndexAt(tx, ty, homeScrollY);
     return;
   }
+  if(!hpOwn){ touchLastY = ty; return; }   // SENTUH-MILIK-HOME: sentuhan terbawa dari app -> abaikan (dulu dipakai utk menyeret halaman pakai sisa data sentuhan lama)
   { float dF = (float)tx - hpFx; float aF = 0.45f + fabsf(dF) * 0.08f; if(aF > 1.0f) aF = 1.0f; hpFx += dF * aF; }
   { float dF = (float)ty - hpFy; float aF = 0.45f + fabsf(dF) * 0.08f; if(aF > 1.0f) aF = 1.0f; hpFy += dF * aF; }
   if(!homeJiggle && !isSwiping && homePressedIdx >= 0 && now - swipeStartTime >= 550UL){
@@ -493,6 +497,8 @@ void hpTouchHeld(bool isNew, int tx, int ty){
 
 // jari dilepas (dipanggil sebagai pengganti logika fling vertikal lama)
 void hpRelease(){
+  if(!hpOwn) return;   // SENTUH-MILIK-HOME: jari dilepas tapi sentuhannya mulai di app -> jangan pegas ke halaman lain
+  hpOwn = false;
   const int W = hpW();
   hpDragging = false;
   int tgt = hpStartPage;
@@ -575,6 +581,7 @@ static void hpPrewarm(){
 // TAP-FIX: jari sudah lepas tapi hpTouchHeld() tak pernah melihat gerakan (swipe sangat cepat / loop sedang sibuk).
 // (lx,ly) = posisi terakhir jari menurut driver. Susun ulang seret + kecepatan supaya hpRelease() tetap membalik halaman.
 void hpFlickFixup(int lx, int ly){
+  if(!hpOwn){ isSwiping = true; return; }   // SENTUH-MILIK-HOME: bukan geseran Home, jangan dijadikan flick
   if(isSwiping || hpLock != 0) return;
   const int dx = lx - touchStartX, dy = ly - touchStartY;
   if(abs(dx) <= HOME_DRAG_SLOP && abs(dy) <= HOME_DRAG_SLOP){ isSwiping = true; homePressedIdx = -1; return; }   // 9-10 px: bukan ketukan, bukan flick -> abaikan
