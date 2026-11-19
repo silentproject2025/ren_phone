@@ -27,7 +27,7 @@ Power is read from the **INA219** sensor over I2C. The app has five tabs (Summar
 Updates the firmware from GitHub without a cable, with several layers of protection.
 
 1. Choose a **channel** (a branch name) as the firmware source.
-2. *Check for updates* reads `info.txt` (branch, build, code base, size, MD5).
+2. *Check for updates* reads `info.txt` (branch, build, code base, size, MD5). When an update is found it also downloads the optional `changelog.txt` and opens a **What's new** screen with the English release notes (tap *Close* or Back to dismiss; tap the status text on the top card to reopen it). A missing changelog never blocks the update.
 3. The device **refuses** firmware from a different "code base". (A phone also refuses firmware whose `display=` value does not match its display; see [Hardware](../hardware.md#35-st7796-display-variant).)
 4. Before installing, the device checks the size, the ESP32-S3 image header and the **MD5 of the whole file**. If any check fails, the update is aborted and the old firmware is untouched.
 5. **Boot safeguard:** the new firmware is marked *pending*. If it has not been declared healthy (the loop alive for 30 seconds) by the 4th boot, the device **automatically returns to the previous firmware**.

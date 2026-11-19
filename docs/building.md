@@ -25,7 +25,20 @@ Every *push* triggers the **Build Firmware Binaries** workflow, which publishes 
 | `ren_phone_s3_merged.bin` | Complete ESP32-S3 image (bootloader, partitions, app) for a first flash. |
 | `firmware.bin` | App-only image, used by OTA updates. |
 | `info.txt` | OTA metadata (branch, build, code base, size, MD5). Published on the `channel-<branch>` Release together with `firmware.bin`. |
+| `changelog.txt` | English release notes shown on the phone before an OTA update is installed. Built from [`CHANGELOG.md`](../CHANGELOG.md); optional. |
 | `cam_merged.bin` | Complete ESP32-CAM image, from the **Build CAM BT Co-Processor** workflow. |
+
+### Writing the changelog
+
+`CHANGELOG.md` in the repository root holds one section per release, newest first. The heading must contain the number from [`VERSION`](../VERSION):
+
+```markdown
+## 1.0.1
+- New: something added
+- Fixed: something repaired
+```
+
+During the build, the workflow copies the section that matches `VERSION` (or the first section if none matches) into `changelog.txt`, keeps ASCII characters only and trims it to about 1,400 bytes. It is uploaded next to `info.txt`. If the file is missing or empty, updates still work, the phone just shows no release notes. Write plain English and avoid emoji or accented letters: the phone font cannot draw them.
 
 Tag naming: `build-<number>` for the S3, `cam-<number>` for the CAM, and `channel-<branch>` for per-branch OTA channels. The `main`, `master` and `remote-control` branches are published as regular releases; every other branch is always a *prerelease*. The 3.5″ ST7796 build has its own tags and channels, see [Hardware → ST7796 variant](./hardware.md#35-st7796-display-variant).
 

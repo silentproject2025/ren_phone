@@ -44,6 +44,7 @@ NyxOS is neither Android nor Linux. The launcher, notification center, network s
 - [Known limitations](#known-limitations)
 - [Security notice](#security-notice)
 - [Contributing](#contributing)
+- [Support the project](#support-the-project)
 - [License and acknowledgements](#license-and-acknowledgements)
 
 ## Feature overview
@@ -172,6 +173,7 @@ The firmware is assembled from `firmware/phone/` and `third_party/` by the CI wo
 ├── tools/                    Generators and helpers (emoji, fonts, dictionaries, i18n)
 │   ├── ci/                   Helper scripts used by the CI workflows
 │   └── legacy-patches/       Archived one-shot patch scripts (see its README)
+├── CHANGELOG.md              Release notes; the matching section is shown on the phone during an OTA update
 ├── CONTRIBUTING.md
 ├── LICENSE                   AGPL-3.0
 └── VERSION                   Project version (read by CI)
@@ -188,6 +190,7 @@ The folder name `firmware/phone/` matches `phone.ino` so the sketch can also be 
 | System design: memory, tasks, rendering, the RPLink coprocessor protocol | [docs/architecture.md](./docs/architecture.md) |
 | Components, pin mapping, assembly notes, ST7796 variant | [docs/hardware.md](./docs/hardware.md) |
 | Install, build, CI, OTA channels, custom libraries | [docs/building.md](./docs/building.md) |
+| Release notes shown on the phone during an update | [CHANGELOG.md](./CHANGELOG.md) |
 | SD card layout and configuration files | [docs/configuration.md](./docs/configuration.md) |
 | Feature guides | [docs/features/](./docs/features/) |
 | UI language system (English / Indonesian) | [docs/localization.md](./docs/localization.md) |
@@ -218,6 +221,14 @@ This project is a personal, experimental device. Before using it with sensitive 
 ## Contributing
 
 Test reports from real hardware are the most valuable contribution. See [CONTRIBUTING.md](./CONTRIBUTING.md) for what needs testing most, how to report a bug, and how to work on the code.
+
+## Support the project
+
+Accretion Phone is built and tested by one person on real hardware. If it is useful to you, a donation helps cover parts, prototype boards and test devices.
+
+[![Support on Saweria](https://img.shields.io/badge/Support-Saweria-orange)](https://saweria.co/accretionlabs)
+
+Donating is entirely optional: the firmware is, and will stay, free under AGPL-3.0. Starring the repository, sharing it and sending hardware test reports help just as much.
 
 ## License and acknowledgements
 
