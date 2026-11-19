@@ -46,7 +46,7 @@
 #define DR_MIN_UPTIME_MS   45000UL
 #define DR_RETRY_MS        120000UL
 #define DR_MAX_FAILS       5
-#define DR_MIN_INT_BLOCK   40000      // blok internal terbesar yg dibutuhkan handshake TLS
+#define DR_MIN_INT_BLOCK   26000      // blok internal terbesar yg dibutuhkan handshake TLS (diturunkan dari 40000)
 #define DR_NAME_MIN        3
 #define DR_NAME_MAX        16
 
