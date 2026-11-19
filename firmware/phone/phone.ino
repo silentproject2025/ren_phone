@@ -12050,6 +12050,82 @@ static void updDrawChanRow(LGFX_Sprite& s){
   s.fillRect(acx-2, acy-1, 8, 3, rbFg);
 }
 
+// ---- layar changelog (English) -- muncul otomatis setelah "Cek update" menemukan update ----
+static int updNotesPage  = 0;
+static int updNotesTotal = 1;     // jumlah halaman; diisi updDrawNotes()
+
+#define UPD_NT_X   6
+#define UPD_NT_Y   (UPD_HERO_Y)
+#define UPD_NT_W   (SCR_W-12)
+#define UPD_NT_H   (SCR_H-UPD_HERO_Y-34)   // sisakan dasar layar utk tombol Kembali / home indicator
+#define UPD_NT_BTN_H 20
+
+// bungkus kata per baris (font 6 px/huruf), gambar baris halaman aktif; hitung total halaman
+static void updDrawNotes(LGFX_Sprite& s){
+  iosRR(s, UPD_NT_X, UPD_NT_Y, UPD_NT_W, UPD_NT_H, 10, T().surface);
+  s.setTextSize(1);
+  s.setTextColor(T().accent);
+  s.setCursor(UPD_NT_X+10, UPD_NT_Y+8); s.print(RPTR("What's new"));
+  s.setTextColor(T().subtext);
+  String hd = otaNotesTitle();
+  int hx = UPD_NT_X + UPD_NT_W - 10 - (int)hd.length()*6;
+  if(hx < UPD_NT_X+10+60) hx = UPD_NT_X+10+60;
+  s.setCursor(hx, UPD_NT_Y+8); s.print(hd.c_str());
+  s.fillRect(UPD_NT_X+10, UPD_NT_Y+20, UPD_NT_W-20, 1, T().divider);
+
+  const int bodyY  = UPD_NT_Y + 26;
+  const int lineH  = 11;
+  const int btnY   = UPD_NT_Y + UPD_NT_H - UPD_NT_BTN_H - 6;
+  int perPage = (btnY - 4 - bodyY) / lineH;  if(perPage < 1) perPage = 1;
+  const int maxCh = (UPD_NT_W - 20) / 6;
+  const String& txt = otaNotesText();
+
+  int line = 0, i = 0, n = (int)txt.length();
+  int firstLine = updNotesPage * perPage, lastLine = firstLine + perPage;
+  while(i <= n){
+    int e = txt.indexOf('\n', i); if(e < 0) e = n;
+    String para = txt.substring(i, e);
+    i = e + 1;
+    // indentasi lanjutan untuk butir "- " supaya baris sambungan rapi
+    String ind = para.startsWith("- ") ? "  " : "";
+    if(para.length() == 0){ line++; continue; }               // baris kosong
+    bool firstSeg = true;
+    while(para.length()){
+      int lim = maxCh - (firstSeg ? 0 : (int)ind.length());
+      String seg;
+      if((int)para.length() <= lim){ seg = para; para = ""; }
+      else {
+        int cut = para.lastIndexOf(' ', lim);
+        if(cut <= 0) cut = lim;                                // kata terlalu panjang: potong paksa
+        seg = para.substring(0, cut); para = para.substring(cut); para.trim();
+      }
+      if(line >= firstLine && line < lastLine){
+        s.setTextColor(T().text);
+        s.setCursor(UPD_NT_X+10, bodyY + (line-firstLine)*lineH);
+        s.print((firstSeg ? seg : ind + seg).c_str());
+      }
+      line++; firstSeg = false;
+    }
+  }
+  updNotesTotal = (line + perPage - 1) / perPage; if(updNotesTotal < 1) updNotesTotal = 1;
+  if(updNotesPage >= updNotesTotal) updNotesPage = updNotesTotal - 1;
+
+  // tombol bawah: [Tutup]  dan  [Lanjut n/N] bila lebih dari 1 halaman
+  bool multi = updNotesTotal > 1;
+  int bw = multi ? (UPD_NT_W-30)/2 : UPD_NT_W-20;
+  iosRR(s, UPD_NT_X+10, btnY, bw, UPD_NT_BTN_H, 7, T().surface2);
+  s.setTextColor(T().text);
+  updCenterText(s, UPD_NT_X+10, bw, btnY+6, RPTR("Close"));
+  if(multi){
+    char nb[24];
+    bool last = (updNotesPage+1 >= updNotesTotal);
+    snprintf(nb, sizeof(nb), "%s %d/%d", last ? "<<" : ">>", updNotesPage+1, updNotesTotal);
+    iosRR(s, UPD_NT_X+20+bw, btnY, bw, UPD_NT_BTN_H, 7, T().accent);
+    s.setTextColor(T().bg);
+    updCenterText(s, UPD_NT_X+20+bw, bw, btnY+6, nb);
+  }
+}
+
 void drawUpdate(LGFX_Sprite& s){
   otaAddBranchPoll(); // simpan branch baru begitu keyboard tertutup
   iosBackdrop(s); drawStatusBar(s);
@@ -12141,6 +12217,8 @@ void drawUpdate(LGFX_Sprite& s){
   updCenterText(s, 6, SCR_W-12, UPD_BTN_Y+8,
                 !wifiConnected ? "WiFi tidak terhubung" : (pendingWifi ? "Yakin? Ketuk lagi" : "Unduh & Pasang"));
 
+  if(otaNotesIsOpen()) updDrawNotes(s);
+
   if(kbVisible) drawKb(s); else drawBack(s);
   drawToast(s);
 }
@@ -12148,6 +12226,21 @@ void drawUpdate(LGFX_Sprite& s){
 void updTouch(int x,int y,bool held,bool isNew){
   if(updBusy) return;
   otaAddBranchPoll();
+
+  // layar changelog terbuka: hanya ia yang menerima sentuhan
+  if(otaNotesIsOpen()){
+    if(!isNew) return;
+    if(isBack(x,y)){ otaNotesClose(); updNotesPage = 0; return; }       // Kembali = tutup changelog dulu
+    int btnY = UPD_NT_Y + UPD_NT_H - UPD_NT_BTN_H - 6;
+    if(y >= btnY-4 && y <= btnY+UPD_NT_BTN_H+4){
+      bool multi = updNotesTotal > 1;
+      int bw = multi ? (UPD_NT_W-30)/2 : UPD_NT_W-20;
+      if(!multi || x < UPD_NT_X+10+bw+5){ otaNotesClose(); updNotesPage = 0; return; }
+      updNotesPage = (updNotesPage+1 >= updNotesTotal) ? 0 : updNotesPage+1;
+      needRedraw = true; return;
+    }
+    return;
+  }
 
   if(kbVisible){
     if(!isNew) return;
@@ -12160,6 +12253,11 @@ void updTouch(int x,int y,bool held,bool isNew){
   if(!isNew) return;
 
   if(isBack(x,y)){ navBack(); return; }
+
+  // kartu atas: ketuk teks kiri = buka lagi changelog (kalau ada)
+  if(otaNotesAvailable() && x < UPD_HB_X-4 && y>=UPD_HERO_Y && y<=UPD_HERO_Y+UPD_HERO_H){
+    updNotesPage = 0; otaNotesOpen(); return;
+  }
 
   // kartu atas: Cek update
   if(x>=UPD_HB_X && x<=UPD_HB_X+UPD_HB_W && y>=UPD_HB_Y-4 && y<=UPD_HB_Y+UPD_HB_H+4){

@@ -471,6 +471,22 @@ jobs:
             echo "display=${VARIANT}"
           } > info.txt
           cat info.txt
+          # changelog Inggris untuk layar Update di HP: ambil bagian versi ini dari CHANGELOG.md
+          # (kalau tidak ada bagian utk versi ini -> bagian pertama). ASCII saja, maks ~1400 byte.
+          rm -f changelog.txt
+          if [ -f CHANGELOG.md ]; then
+            # ambil isi bagian "## ...<VER>..."; kalau tak ada bagian utk versi ini -> bagian "## " pertama
+            sec() { awk -v pat="$1" 'BEGIN{on=0} /^## /{ if(on) exit; if(pat=="" || index($0, pat)) on=1; next } on{print}' CHANGELOG.md; }
+            sec "$VER" > cl_sec.txt
+            [ -s cl_sec.txt ] || sec "" > cl_sec.txt
+            { sed -e 's/\*\*//g' -e 's/`//g' -e 's/^[*+] /- /' -e 's/^### *//' cl_sec.txt \
+                | LC_ALL=C tr -cd '\11\12\40-\176' | sed -e 's/[[:space:]]*$//' | cat -s \
+                | head -c 1400 > changelog.txt; } || true
+            sed -i -e '/./,$!d' changelog.txt 2>/dev/null || true     # buang baris kosong di awal
+            rm -f cl_sec.txt
+            [ -s changelog.txt ] || rm -f changelog.txt                # kosong -> tidak dipublikasikan
+          fi
+          if [ -s changelog.txt ]; then echo "--- changelog.txt ---"; cat changelog.txt; else echo "(tidak ada changelog)"; fi
 
       - name: Publish GitHub Release
         if: github.event_name != 'pull_request'
@@ -504,13 +520,16 @@ jobs:
           # channel bergerak per-branch -- dibaca fitur "pilih branch" di app Update (selalu prerelease)
           CH="channel-${RP_BRANCH}"
           NOTES="Channel branch ${RP_BRANCH}: build ${{ github.run_number }}, commit ${{ github.sha }}"
+          OTA_FILES="firmware.bin info.txt"
+          [ -s changelog.txt ] && OTA_FILES="$OTA_FILES changelog.txt"
           if gh release view "$CH" >/dev/null 2>&1; then
           gh release delete-asset "$CH" firmware.bin -y 2>/dev/null || true
           gh release delete-asset "$CH" info.txt -y 2>/dev/null || true
-            gh release upload "$CH" firmware.bin info.txt --clobber
+          gh release delete-asset "$CH" changelog.txt -y 2>/dev/null || true   # buang changelog build lama (kalau build ini tak punya)
+            gh release upload "$CH" $OTA_FILES --clobber
             gh release edit "$CH" --prerelease --notes "$NOTES"
           else
-            gh release create "$CH" firmware.bin info.txt --prerelease \
+            gh release create "$CH" $OTA_FILES --prerelease \
               --target "${{ github.sha }}" \
               --title "Channel ${RP_BRANCH}" \
               --notes "$NOTES"

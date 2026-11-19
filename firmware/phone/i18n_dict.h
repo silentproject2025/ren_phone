@@ -648,5 +648,7 @@ static const I18nPair I18N_DICT[] = {
   { "Username: 3-16 karakter, huruf/angka/._-", "Username: 3-16 chars, letters/digits/._-" },
   { "3-16 karakter, kosong = hapus", "3-16 characters, empty = remove" },
   { "Dashboard dimatikan di build ini", "Dashboard is disabled in this build" },
+  { "Yang baru", "What's new" },
+  { "Membaca changelog...", "Reading changelog..." },
 };
 static const int I18N_DICT_N = (int)(sizeof(I18N_DICT)/sizeof(I18N_DICT[0]));

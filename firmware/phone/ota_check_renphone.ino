@@ -68,6 +68,13 @@ static String otaExpUrl = "";
 static String otaExpMd5 = "";
 static int    otaExpSize = 0;
 
+// ---- changelog (English) untuk update yg ditemukan "Cek update" ----
+// Dibaca dari  releases/download/channel-<branch>/changelog.txt  (dibuat workflow dari CHANGELOG.md).
+// Opsional: kalau file tidak ada / gagal diunduh, update tetap jalan seperti biasa tanpa changelog.
+static String otaNotes     = "";     // isi changelog (ASCII, baris dipisah \n)
+static String otaNotesHead = "";     // judul, mis. "v1.0.1 b57 [chat]"
+static bool   otaNotesShow = false;  // true = layar changelog sedang terbuka di app Update
+
 // =====================================================================
 // CHANNEL (branch) -- daftar, pilihan, tambah
 // =====================================================================
@@ -151,6 +158,7 @@ static int otaChanIndexOf(const String& name) {
 static void otaResetCheck() {
   otaCheckedOk = false; otaStateVal = 0; otaLatestNum = -1;
   otaExpUrl = ""; otaExpMd5 = ""; otaExpSize = 0;
+  otaNotes = ""; otaNotesHead = ""; otaNotesShow = false;
 }
 
 String otaBranchName()  { return String(RP_STR(RP_BRANCH)); }   // branch firmware yg SEDANG jalan
@@ -279,6 +287,39 @@ static String otaKv(const String& body, const char* key) {
     i = e + 1;
   }
   return "";
+}
+
+// ---- changelog: aksesor untuk UI app Update (phone.ino) ----
+const String& otaNotesText() { return otaNotes; }
+const String& otaNotesTitle() { return otaNotesHead; }
+bool otaNotesAvailable() { return otaNotes.length() > 0; }
+bool otaNotesIsOpen()    { return otaNotesShow && otaNotes.length() > 0; }
+void otaNotesOpen()      { if (otaNotes.length()) { otaNotesShow = true; needRedraw = true; } }
+void otaNotesClose()     { otaNotesShow = false; needRedraw = true; }
+
+// Unduh changelog.txt di folder channel yg sama dgn info.txt. TIDAK PERNAH menggagalkan update:
+// 404 / error / terlalu besar -> changelog kosong, selesai.
+static void otaFetchNotes(const String& base, const String& head) {
+  otaNotes = ""; otaNotesHead = ""; otaNotesShow = false;
+  String nb = "";
+  updBusy = true;
+  updDrawBusy(RPTR("Reading changelog..."));
+  int c = otaHttpGetSmall(base + "changelog.txt", nb, 1536);
+  updBusy = false;
+  needRedraw = true;
+  if (c != HTTP_CODE_OK) return;
+  // bersihkan: hanya ASCII tercetak + \n (font layar tidak punya glyph lain), buang \r
+  String clean = "";
+  for (size_t i = 0; i < nb.length() && clean.length() < 1500; i++) {
+    char ch = nb[i];
+    if (ch == '\n' || (ch >= 32 && ch < 127)) clean += ch;
+    else if (ch == '\t') clean += ' ';
+  }
+  clean.trim();
+  if (!clean.length()) return;
+  otaNotes = clean;
+  otaNotesHead = head;
+  otaNotesShow = true;                 // buka otomatis begitu ada update
 }
 
 // =====================================================================
@@ -414,6 +455,11 @@ void otaCheckAndFill() {
     otaStateVal = 2;
     updUrl = base + "firmware.bin";
     otaExpUrl = updUrl; otaExpMd5 = md5; otaExpSize = size;
+    {   // changelog (opsional) -- judul: versi + build + channel
+      String ver = otaKv(body, "version"); ver.trim();
+      String head = (ver.length() ? String("v") + ver + " " : String("")) + "b" + String(build) + " [" + ch + "]";
+      otaFetchNotes(base, head);
+    }
     if (switching) {
       String m = String(otaCrossDisp ? "LAYAR LAIN: '" : "Pindah ke '") + ch + "' b" + String(build) + ". Ketuk Unduh & Pasang";
       showToast(m.c_str(), 3200);

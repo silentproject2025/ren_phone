@@ -665,3 +665,6 @@ Gagal sinkron, coba lagi nanti ::: Sync failed, try again later
 Username: 3-16 karakter, huruf/angka/._- ::: Username: 3-16 chars, letters/digits/._-
 3-16 karakter, kosong = hapus ::: 3-16 characters, empty = remove
 Dashboard dimatikan di build ini ::: Dashboard is disabled in this build
+# --- Update: changelog ---
+Yang baru ::: What's new
+Membaca changelog... ::: Reading changelog...
