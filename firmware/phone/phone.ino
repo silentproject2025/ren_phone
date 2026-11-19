@@ -664,7 +664,7 @@ enum NavAnim { NAV_ANIM_PUSH, NAV_ANIM_BACK, NAV_ANIM_HOME };
 // RAM_OPT_V1: teks per baris disimpan di char[] fixed-size (BUKAN String), jadi tidak ada
 // alokasi heap kecil per baris. Array-nya sendiri dialokasikan di PSRAM (lihat aiLinesPtr()).
 // Panjang baris dibatasi maxChars (<= ~78 di layar 480 px), 96 sudah cukup; sisanya dipotong aman.
-#define AI_LINE_CH 96
+enum { AI_LINE_CH = 96 };
 struct AiLine {
   struct Txt {
     char c[AI_LINE_CH];
