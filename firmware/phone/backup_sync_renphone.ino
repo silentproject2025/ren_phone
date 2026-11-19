@@ -74,10 +74,14 @@ static bool bsChipSecret(uint8_t out[32]) {
   p.end();
   return ok;
 }
-static bool bsKeys(BkCloudKeys& k) {
+// Parameter sengaja tipe primitif: arduino-cli membuat prototipe otomatis di atas file, sebelum struct BkCloudKeys dikenal.
+static bool bsKeys(char* token65, uint8_t* enc32) {
   uint8_t chip[32];
   if (!bsChipSecret(chip)) return false;
+  BkCloudKeys k;
   bkCloudDerive(chip, devRegId(), k);
+  memcpy(token65, k.token, 65); memcpy(enc32, k.enc, 32);
+  bkZero(&k, sizeof(k));
   bkZero(chip, sizeof(chip));
   return true;
 }
@@ -131,7 +135,7 @@ static int bsRpc(const char* fn, const char* body, size_t blen, char** resp, siz
 static void bsTask(void*) {
   BkCloudKeys k; memset(&k, 0, sizeof(k));
   char* resp = NULL; size_t rn = 0;
-  if (!bsKeys(k)) { bsDone("Kunci perangkat gagal dibuat"); vTaskDelete(NULL); return; }
+  if (!bsKeys(k.token, k.enc)) { bsDone("Kunci perangkat gagal dibuat"); vTaskDelete(NULL); return; }
   const char* id = devRegId();
 
   if (bsOp == BS_OP_PUT) {
