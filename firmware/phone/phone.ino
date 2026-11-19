@@ -661,7 +661,22 @@ enum NavAnim { NAV_ANIM_PUSH, NAV_ANIM_BACK, NAV_ANIM_HOME };
 // Kalau struct ini didefinisikan di tengah file, build GAGAL dengan error
 // "AiLine was not declared in this scope" karena prototype fungsi yang
 // memakainya di-generate SEBELUM baris struct ini kalau ditaruh di bawah.
-struct AiLine { String text; uint16_t color; };
+// RAM_OPT_V1: teks per baris disimpan di char[] fixed-size (BUKAN String), jadi tidak ada
+// alokasi heap kecil per baris. Array-nya sendiri dialokasikan di PSRAM (lihat aiLinesPtr()).
+// Panjang baris dibatasi maxChars (<= ~78 di layar 480 px), 96 sudah cukup; sisanya dipotong aman.
+#define AI_LINE_CH 96
+struct AiLine {
+  struct Txt {
+    char c[AI_LINE_CH];
+    const char* c_str() const { return c; }
+    void set(const char* p, int n){
+      if(n < 0) n = 0;
+      if(n > AI_LINE_CH-1){ n = AI_LINE_CH-1; while(n>0 && (((unsigned char)p[n])&0xC0)==0x80) n--; }
+      memcpy(c, p, n); c[n] = 0;
+    }
+  } text;
+  uint16_t color;
+};
 
 // Sama seperti AiLine di atas: dipakai sbg parameter fungsi rot3f() di app
 // "Orientasi 3D", jadi HARUS didefinisikan di sini (bukan di dekat fungsinya)
@@ -10009,38 +10024,57 @@ void canvasTouch(int x,int y,bool held,bool isNew){
 // =============================================
 #define AI_CHAT_TOP 46
 #define AI_MAX_LINES 400
-AiLine aiLinesBuf[AI_MAX_LINES];
+// RAM_OPT_V1: array baris AI Chat dialokasikan di PSRAM saat pertama dipakai (dulu: array global
+// di RAM internal + String per baris). Semua pemakai tetap menulis aiLinesBuf[i] seperti biasa.
+static AiLine* aiLinesPtr(){
+  static AiLine* p = nullptr;
+  if(!p){
+    p = (AiLine*)heap_caps_calloc(AI_MAX_LINES, sizeof(AiLine), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if(!p) p = (AiLine*)calloc(AI_MAX_LINES, sizeof(AiLine));   // cadangan: RAM internal
+    if(!p){ Serial.println("[RAM] aiLinesBuf gagal alokasi -> restart"); delay(100); ESP.restart(); }
+  }
+  return p;
+}
+#define aiLinesBuf (aiLinesPtr())
 
 void aiEnter(){ aiRespScrollY = 0; }
 void aiExit(){}
 
 // Word-wrap manual (font default = ~6px/karakter) supaya kita tahu persis
 // tinggi total konten -> bisa dibatasi scroll-nya & di-clip dgn benar.
-int aiWrapAppend(AiLine* buf,int cap,int count,const String& text,uint16_t color,int maxChars){
+// RAM_OPT_V1: logika wrap SAMA dgn versi lama, tapi langsung di atas char* (tanpa String::substring
+// per baris). Fungsi ini dipanggil tiap redraw; versi lama membuat puluhan String sementara tiap frame.
+int aiWrapAppend(AiLine* buf,int cap,int count,const char* text,uint16_t color,int maxChars){
   if(maxChars<4) maxChars=4;
-  int start=0, len=text.length();
-  if(len==0){ if(count<cap){ buf[count].text=""; buf[count].color=color; count++; } return count; }
+  if(!text) text="";
+  int len=(int)strlen(text), start=0;
+  if(len==0){ if(count<cap){ buf[count].text.set("",0); buf[count].color=color; count++; } return count; }
   while(start<len && count<cap){
-    int nl = text.indexOf('\n', start);
-    int segEnd = (nl==-1)? len : nl;
-    String seg = text.substring(start, segEnd);
-    if(seg.length()==0){
-      buf[count].text=""; buf[count].color=color; count++;
+    const char* nlp = (const char*)memchr(text+start, '\n', len-start);
+    int segEnd = nlp ? (int)(nlp-text) : len;
+    const char* seg = text+start;
+    int segLen = segEnd-start;
+    if(segLen==0){
+      buf[count].text.set("",0); buf[count].color=color; count++;
     } else {
-      while((int)seg.length() > maxChars && count<cap){
+      while(segLen > maxChars && count<cap){
         int cut = maxChars, sp = -1;
         for(int k=maxChars;k>0;k--){ if(seg[k]==' '){ sp=k; break; } }
         if(sp>0) cut=sp;
         while(cut>1 && (((unsigned char)seg[cut])&0xC0)==0x80) cut--;   // jangan belah emoji (UTF-8)
-        buf[count].text = seg.substring(0,cut); buf[count].color=color; count++;
-        seg = seg.substring(cut);
-        while(seg.length() && seg[0]==' ') seg = seg.substring(1);
+        buf[count].text.set(seg,cut); buf[count].color=color; count++;
+        seg += cut; segLen -= cut;
+        while(segLen>0 && seg[0]==' '){ seg++; segLen--; }
       }
-      if(count<cap){ buf[count].text=seg; buf[count].color=color; count++; }
+      if(count<cap){ buf[count].text.set(seg,segLen); buf[count].color=color; count++; }
     }
     start = segEnd+1;
   }
   return count;
+}
+// Overload String: semua pemanggil lama (String) tetap jalan.
+int aiWrapAppend(AiLine* buf,int cap,int count,const String& text,uint16_t color,int maxChars){
+  return aiWrapAppend(buf,cap,count,text.c_str(),color,maxChars);
 }
 
 // v27: animasi "sedang mengetik" (titik2 bergelombang naik-turun, pola
@@ -10335,7 +10369,16 @@ String expViewFileName = "";
 // spt pola scroll teks di AI Chat (reuse AiLine + aiWrapAppend), lengkap dgn
 // momentum halus stlh jari dilepas.
 #define EXP_MAX_LINES 400
-AiLine expLinesBuf[EXP_MAX_LINES];
+static AiLine* expLinesPtr(){
+  static AiLine* p = nullptr;
+  if(!p){
+    p = (AiLine*)heap_caps_calloc(EXP_MAX_LINES, sizeof(AiLine), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if(!p) p = (AiLine*)calloc(EXP_MAX_LINES, sizeof(AiLine));
+    if(!p){ Serial.println("[RAM] expLinesBuf gagal alokasi -> restart"); delay(100); ESP.restart(); }
+  }
+  return p;
+}
+#define expLinesBuf (expLinesPtr())
 float  expViewScrollY = 0;
 int    expViewMaxScroll = 0;
 float  expViewScrollVel = 0;
