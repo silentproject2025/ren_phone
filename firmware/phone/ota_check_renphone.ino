@@ -226,27 +226,43 @@ void otaAddBranchPoll() {
 // HTTP kecil (info.txt) -- ikuti redirect GitHub -> CDN
 // =====================================================================
 static int otaHttpGetSmall(const String& url, String& out, size_t maxLen) {
-  nasaWaitForHeap();                 // guard heap sebelum TLS, sama spt jalur update lain
-  WiFiClientSecure client;
-  client.setInsecure();
-  client.setTimeout(15000);
-  HTTPClient http;
   int code = -1;
-  if (http.begin(client, url)) {
-    http.setTimeout(15000);
-    http.setConnectTimeout(15000);
-    http.setUserAgent("RenPhone-OTA");
-    http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
-    code = http.GET();
-    if (code == HTTP_CODE_OK) {
-      int len = http.getSize();
-      if (len > 0 && (size_t)len > maxLen) code = -2;
-      else {
-        out = http.getString();
-        if (out.length() > maxLen) code = -2;
+  for (int attempt = 0; attempt < 2; attempt++) {          // OTA-DIAG: -1 (koneksi gagal) sering sementara -> coba sekali lagi
+    if (attempt) { Serial.println(F("[OTA] ulangi sekali...")); delay(1200); }
+    nasaWaitForHeap();                 // guard heap sebelum TLS, sama spt jalur update lain
+    WiFiClientSecure client;
+    client.setInsecure();
+    client.setTimeout(15000);
+    HTTPClient http;
+    code = -1;
+    const unsigned long t0 = millis();
+    if (http.begin(client, url)) {
+      http.setTimeout(15000);
+      http.setConnectTimeout(15000);
+      http.setUserAgent("RenPhone-OTA");
+      http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+      code = http.GET();
+      if (code == HTTP_CODE_OK) {
+        int len = http.getSize();
+        if (len > 0 && (size_t)len > maxLen) code = -2;
+        else {
+          out = http.getString();
+          if (out.length() > maxLen) code = -2;
+        }
       }
+      if (code < 0) {                  // OTA-DIAG: catat penyebab sebenarnya di serial
+        char eb[100] = {0}; int le = client.lastError(eb, sizeof(eb));
+        IPAddress ip; int dns = WiFi.hostByName("github.com", ip);
+        Serial.printf("[OTA] GET %s -> %d (%s) %lu ms | TLS err=%d '%s' | WiFi=%d RSSI=%d DNS=%d | RAM internal: blok %u B, bebas %u B\n",
+                      url.c_str(), code, HTTPClient::errorToString(code).c_str(), (unsigned long)(millis() - t0), le, eb,
+                      (int)WiFi.status(), (int)WiFi.RSSI(), dns,
+                      (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL), (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+      }
+      http.end();
+    } else {
+      Serial.printf("[OTA] http.begin gagal untuk %s\n", url.c_str());
     }
-    http.end();
+    if (code != -1) break;             // sukses / kode HTTP asli / -2: tidak perlu ulang
   }
   return code;
 }
@@ -357,7 +373,7 @@ void otaCheckAndFill() {
   if (code == 404 && ch == OTA_DEFAULT_CHANNEL) { otaCheckLegacy(); return; }
   if (code == 404) { showToast(RPTR("Channel belum dipublikasikan (branch belum di-build)"), 3000); return; }
   if (code != HTTP_CODE_OK) {
-    showToast((String(RPTR("Gagal cek channel, kode ")) + String(code)).c_str(), 2500);
+    showToast((String(RPTR("Gagal cek channel, kode ")) + String(code) + nasaHttpErrHint(code)).c_str(), 2500);   // OTA-DIAG
     return;
   }
 
