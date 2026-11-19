@@ -124,6 +124,13 @@ jobs:
           git ls-remote --exit-code --heads https://github.com/espressif/arduino-esp32.git "$AR_BRANCH"
           git clone -b "$AR_BRANCH" https://github.com/espressif/arduino-esp32.git components/arduino
           git -C components/arduino log -1 --oneline
+          # LIBS_SRCVER_V1: catat versi SEBENARNYA dari source arduino-esp32 yang dipakai library ini (ujung branch
+          # release), BUKAN versi core pin di arduino-cli. Kalau beda, header (mis. tinyusb) tidak cocok dgn source
+          # core saat build firmware dan compile gagal. Build firmware memasang core dgn versi yang sama persis.
+          SRC_VER=$(python3 -c "import json;print(json.load(open('components/arduino/package.json'))['version'])")
+          test -n "$SRC_VER" || (echo "::error::versi source arduino-esp32 tidak terbaca" && exit 1)
+          echo "Versi source arduino-esp32: $SRC_VER (core arduino-cli: $CORE_VER)"
+          echo "$SRC_VER" > "$RUNNER_TEMP/core-version.txt"
           echo "=== baris skrip yang menyebut URL/token ==="
           grep -rnE "AR_REPO|AR_SOURCE|arduino-esp32|GITHUB_TOKEN|git clone" tools/*.sh build.sh || true
 
