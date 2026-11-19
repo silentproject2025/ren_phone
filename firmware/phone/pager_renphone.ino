@@ -51,8 +51,8 @@ static inline int hpPlanPages(int* sc, int* r0, int maxP, int rows, bool hasW, i
   if(bh < 80 || pitch < 8) return 1;
   const int titleH = catH + 24;
   if(hasW){ sc[n] = 0; r0[n] = -1; n++; }
-  int r1 = (bh - titleH + HP_TOLB) / pitch; if(r1 < 1) r1 = 1;   // judul + chip + r1 baris
-  int r  = (bh - 4 + HP_TOLB) / pitch;      if(r  < 1) r  = 1;   // halaman berikutnya: r baris
+  int r1 = (bh - titleH + 10 + HP_TOLB) / pitch; if(r1 < 1) r1 = 1;   // judul + chip + r1 baris
+  int r  = (bh - 4 + 10 + HP_TOLB) / pitch; if(r  < 1) r  = 1;   // halaman berikutnya: r baris
   sc[n] = gTop - titleH - clipTop; if(sc[n] < 0) sc[n] = 0; r0[n] = 0; n++;
   int shown = r1;
   while(shown < rows && n < maxP){
@@ -603,7 +603,9 @@ int hpWidgetCutY(){
 }
 // HOME-PAGES-V2: dipanggil tepat setelah drawHome() di frame biasa -> tampilan diam sama persis dgn gambar halaman
 void hpHomeCover(LGFX_Sprite& s){
-  if(hpN < 2 || !hpAllowed()) return;
+  // BUKAN hpAllowed(): Control Center / shade / dll menggambar di ATAS Home, jadi latar Home tetap harus bersih
+  if(hpN < 2 || hwlModeLoad() == 0 || !hpGeomOk()) return;
+  if(homeSearchActive() || homeSearchBar.open || homeSearchBar.animating || homeJiggle || homeGoneIdx >= 0) return;
   const int p = hpNearestPage(hpSc, hpN, homeScrollY);
   const float d = homeScrollY - (float)hpSc[p];
   if(d > 1.0f || d < -1.0f) return;                   // sedang bergerak/rubber-band: bukan posisi halaman
