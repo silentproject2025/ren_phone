@@ -3361,7 +3361,7 @@ void navDrawLower(LGFX_Sprite& spr,int sx,int edge){
 // Home memanggil navZoomArm() sesaat sebelum navPush(); playNavTransition(PUSH) memakainya SEKALI.
 // Kalau tidak di-arm (buka dari App Switcher, notifikasi, dll) -> tetap animasi geser lama.
 #ifndef NAV_ZOOM_MS
-#define NAV_ZOOM_MS 300UL
+#define NAV_ZOOM_MS 340UL   // SMOOTH-ZOOM: 300->340 (kurva quad + strip delta, lebih banyak frame antara)
 #endif
 bool navZoomArmed=false;
 unsigned long navZoomArmMs=0;
@@ -3383,6 +3383,7 @@ void navZoomArm(int x,int y,int w,int h,int r,uint16_t col){
 }
 // Fase 1: balok berwarna ikon membesar (sudut membulat -> persegi), warnanya pelan2 menyatu ke warna latar app.
 // Fase 2: layar baru "terbuka" di jendela yg terus membesar. Rect hanya TUMBUH, jadi tiap piksel ditulis tanpa sisa.
+void navZoomPushHome(int x,int y,int w,int h);   // SMOOTH-ZOOM: definisi di bawah (tempel potongan canvas ke panel, di-clip)
 void navPlayZoomOpen(){
   renderCurrentFrame();   // canvas = layar BARU; panel masih menampilkan Home (frame terakhir)
   const int ox=navZoomX, oy=navZoomY, ow=navZoomW, oh=navZoomH, orad=navZoomR;
@@ -3391,6 +3392,7 @@ void navPlayZoomOpen(){
   navZoomScr=SCR_W*1000+SCR_H; navZoomSaved=true;
   const unsigned long t0=millis();
   int lx0=-1,ly0=-1,lx1=-1,ly1=-1;
+  bool inApp=false;       // SMOOTH-ZOOM: true = rect terakhir di panel sudah berisi isi app (fase 2)
   display.startWrite();
   for(;;){
     uiBoostKick();
@@ -3398,13 +3400,14 @@ void navPlayZoomOpen(){
     bool lastFrame = el>=NAV_ZOOM_MS;
     float lin = lastFrame ? 1.0f : (float)el/(float)NAV_ZOOM_MS;
     float inv=1.0f-lin;
-    float ez=1.0f-inv*inv*inv;                            // ease-out cubic: cepat di awal, mendarat halus
+    float ez=1.0f-inv*inv;                                // SMOOTH-ZOOM: ease-out quad (dulu cubic: frame pertama sudah loncat ~50%)
     int x0=(int)lroundf(ox*(1.0f-ez));
     int y0=(int)lroundf(oy*(1.0f-ez));
     int x1=(int)lroundf((ox+ow)*(1.0f-ez)+SCR_W*ez);
     int y1=(int)lroundf((oy+oh)*(1.0f-ez)+SCR_H*ez);
     if(x0<0) x0=0; if(y0<0) y0=0; if(x1>SCR_W) x1=SCR_W; if(y1>SCR_H) y1=SCR_H;
     if(x1>x0 && y1>y0 && (x0!=lx0||y0!=ly0||x1!=lx1||y1!=ly1)){
+      const int px0=lx0, py0=ly0, px1=lx1, py1=ly1;     // rect frame sebelumnya (rect hanya TUMBUH)
       lx0=x0; ly0=y0; lx1=x1; ly1=y1;
       int w=x1-x0, h=y1-y0;
       if(ez<0.5f){
@@ -3412,10 +3415,16 @@ void navPlayZoomOpen(){
         int rr=(int)lroundf(orad*(1.0f-cr));
         if(rr>w/2) rr=w/2; if(rr>h/2) rr=h/2; if(rr<0) rr=0;
         display.fillRoundRect(x0,y0,w,h,rr,blend565(col,dst,(uint8_t)(ez*2.0f*190.0f)));
+      } else if(!inApp){
+        navZoomPushHome(x0,y0,w,h);                     // SMOOTH-ZOOM: pindah balok -> isi app: tempel SELURUH jendela sekali
+        inApp=true;
       } else {
-        display.setClipRect(x0,y0,w,h);
-        canvas.pushSprite(0,0);
-        display.clearClipRect();
+        // SMOOTH-ZOOM: jendela sebelumnya sudah berisi isi app yg sama -> kirim HANYA 4 strip yg baru terbuka
+        // (dulu seluruh jendela tiap frame, ~300 KB di akhir animasi -> ~16 fps @40 MHz).
+        navZoomPushHome(x0,y0,w,py0-y0);                // strip atas
+        navZoomPushHome(x0,py1,w,y1-py1);               // strip bawah
+        navZoomPushHome(x0,py0,px0-x0,py1-py0);         // strip kiri
+        navZoomPushHome(px1,py0,x1-px1,py1-py0);        // strip kanan
       }
     }
     if(lastFrame) break;

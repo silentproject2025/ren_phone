@@ -290,7 +290,7 @@ static LGFX_Sprite* hpImgGet(int p, bool build){
   if(p < 0 || p >= hpN) return nullptr;
   const int s = p % 3;
   const bool valid = (hpImgPg[s] == p && hpImgP[s]->getBuffer());
-  if(valid && !(build && p == hpCur && hpCurDirty)) return hpImgP[s];   // basi tetap dipakai utk gerakan (tak ada render berat di tengah jari)
+  if(valid && !(build && p == hpCur && hpCurDirty && !hpMotionNow())) return hpImgP[s];   // SMOOTH-PAGER: selagi jari/pegas bergerak, halaman kotor tetap dipakai apa adanya (tak ada render+memcpy 300 KB di frame pertama geser); dibangun ulang oleh hpPrewarm() setelah diam   // basi tetap dipakai utk gerakan (tak ada render berat di tengah jari)
   if(!build) return nullptr;
   LGFX_Sprite& im = *hpImgP[s];
   if(!hpImgAlloc(im)){ hpImgPg[s] = -1; return nullptr; }
