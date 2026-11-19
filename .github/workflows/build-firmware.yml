@@ -314,6 +314,8 @@ jobs:
           cp firmware/phone/backup_renphone.ino build_sketch/
           cp firmware/phone/backup_core.h build_sketch/
           cp firmware/phone/backup_crypto.h build_sketch/
+          cp firmware/phone/backup_cloud.h build_sketch/
+          cp firmware/phone/backup_sync_renphone.ino build_sketch/
           cp firmware/phone/gutendex_core.h build_sketch/
           cp firmware/phone/gutdl_core.h build_sketch/
           cp firmware/phone/heaplog_renphone.ino build_sketch/
