@@ -211,6 +211,13 @@ out:
 // API untuk UI (backup_renphone.ino). Hanya tipe primitif.
 // ---------------------------------------------------------------------
 bool bkCloudBusy() { return bsBusy; }
+// Token (64 hex + NUL) utk kunci username di devreg_renphone.ino. false = rahasia chip tak tersedia.
+bool bkCloudToken(char* token65) {
+  BkCloudKeys k; uint8_t enc[32];
+  if (!bsKeys(k.token, enc)) return false;
+  memcpy(token65, k.token, 65); bkZero(enc, sizeof(enc)); bkZero(&k, sizeof(k));
+  return true;
+}
 
 // false = tidak dimulai (alasannya langsung dilaporkan lewat bkCloudTake).
 bool bkCloudStart(int op, bool secrets) {

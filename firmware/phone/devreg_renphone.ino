@@ -47,6 +47,8 @@
 #define DR_RETRY_MS        120000UL
 #define DR_MAX_FAILS       5
 #define DR_MIN_INT_BLOCK   26000      // blok internal terbesar yg dibutuhkan handshake TLS (diturunkan dari 40000)
+bool bkCloudToken(char* token65);      // backup_sync_renphone.ino: token (64 hex) turunan rahasia chip; false = tak tersedia
+
 #define DR_NAME_MIN        3
 #define DR_NAME_MAX        16
 
@@ -194,14 +196,17 @@ static void drTask(void*){
       } else netOk = false;
     }
     if(netOk && doName){
-      char body[96], resp[48];
-      snprintf(body, sizeof(body), "{\"p_device_id\":\"%s\",\"p_username\":\"%s\"}", drId, want);
+      char body[200], resp[48], tok[65];
+      // token membuktikan kamu pemilik perangkat (kode perangkat saja bisa dihitung dari MAC). Lihat supabase/username_token.sql.
+      if(bkCloudToken(tok)) snprintf(body, sizeof(body), "{\"p_device_id\":\"%s\",\"p_username\":\"%s\",\"p_token\":\"%s\"}", drId, want, tok);
+      else                  snprintf(body, sizeof(body), "{\"p_device_id\":\"%s\",\"p_username\":\"%s\"}", drId, want);
       int code = drPost(net, "set_username", body, resp, sizeof(resp));
       if(code >= 200 && code < 300){
         if     (strstr(resp, "\"ok\""))             res = DRN_OK;
         else if(strstr(resp, "\"cleared\""))        res = DRN_CLEARED;
         else if(strstr(resp, "\"taken\""))          res = DRN_TAKEN;
         else if(strstr(resp, "\"invalid\""))        res = DRN_INVALID;
+        else if(strstr(resp, "\"denied\""))         res = DRN_INVALID;   // perangkat ini terkunci pada token lain
         else if(strstr(resp, "\"reserved\""))       res = DRN_RESERVED;
         else if(strstr(resp, "unknown_device"))     { reRegister = true; netOk = false; }   // server tak kenal id ini (database direset): daftar ulang
         else netOk = false;
