@@ -4,7 +4,7 @@ These tests run on a PC (or in Termux) with `g++` and Python 3; no ESP32 is need
 
 | Suite | Folder | What it checks |
 |---|---|---|
-| Backup | `tests/backup/` | The `.nbk` format, CRC32, SHA-256, PBKDF2, AES-256-CTR (compared with Python `hashlib`/`cryptography`) |
+| Backup | `tests/backup/` | The `.nbk` format, CRC32, SHA-256, PBKDF2, AES-256-CTR (compared with Python `hashlib`/`cryptography`), cloud backup key derivation, base64 and JSON, and the backup screen against mocks |
 | Camera | `tests/camera/` | RPLink camera protocol, header dedup, flow control, AVI writer |
 | Chess | `tests/chess/` | Rules and *perft*, AI levels, style-model serialisation, Gemini match logic, second core |
 | Dictionary | `tests/dictionary/` | Keyboard suggestions and autocorrect |
@@ -19,6 +19,9 @@ The tests include the real firmware sources from `firmware/phone/` (and `firmwar
 # Backup
 g++ -std=c++11 -O1 -Ifirmware/phone -o /tmp/test_backup tests/backup/test_backup.cpp && /tmp/test_backup
 python3 tests/backup/crypto_check.py
+g++ -std=c++11 -O1 -D_GNU_SOURCE -Ifirmware/phone -o /tmp/test_cloud tests/backup/test_cloud.cpp && /tmp/test_cloud
+python3 tests/backup/cloud_check.py
+g++ -std=c++11 -Ifirmware/phone -Itests/backup -Itests/backup/stub -o /tmp/bk_glue tests/backup/glue_test.cpp && /tmp/bk_glue
 
 # Dictionary
 g++ -std=c++11 -O1 -Ifirmware/phone -o /tmp/test_kamus tests/dictionary/test_kamus.cpp && /tmp/test_kamus

@@ -59,7 +59,25 @@ Saves all NyxOS settings to the SD card and restores them, for example before re
 - When restoring, the file from the SD card is treated as untrusted: CRC32 is checked in full, all lengths are checked against buffer limits and system namespaces are never written. A corrupted backup is rejected.
 - One file is at most 96 KB; NVS values above 32 KB are skipped. Buffers are allocated in PSRAM only for the duration of the operation.
 
-The file format and crypto are written as pure C++ (`backup_core.h`, `backup_crypto.h`) and tested on a PC, including comparison against Python's `hashlib` and `cryptography` (`tests/backup/`). **Not tested on a device yet.**
+**Cloud backup (Cloud tab).** The same screen has a second tab, **Cloud**, that stores your settings in the project database (Supabase) without an account or password. Needs WiFi and `supabase/backup.sql` run once on the server.
+
+| Action | Result |
+|---|---|
+| **Back Up to Cloud** | Settings are encrypted on the phone and uploaded. One slot per device; a new backup replaces the old one (at most once every 30 seconds). |
+| **Restore** / **Delete** | Tap twice to confirm. Restore downloads, verifies and decrypts the backup, writes it back to NVS and restarts. Delete removes it from the server. |
+| **Include passwords and API keys** | Same switch as the SD tab, **off** by default. Still encrypted when on. |
+
+How it is protected:
+
+- **Your device code is your user** (shown on the tab, derived from the chip's MAC, cannot be changed). It is *not* a secret, since a MAC is broadcast over WiFi and Bluetooth, so it never opens anything by itself.
+- Every request carries a **token** derived from a secret that never leaves the chip (the eFuse unique ID). The server stores only the SHA-256 of the token and releases or changes a backup only when it matches. The first device to use a code owns it.
+- The file is encrypted **on the phone** (AES-256 + HMAC) with a second key derived from the same secret and never sent. The server and the database admin see only random data, and the server rejects anything that is not an encrypted file. A modified backup is rejected before anything is applied.
+- Nothing personal is uploaded: no name, email, IP or SSID. Only the device code, the encrypted blob, its size and time. The file header (time, number of values, whether passwords are included) is not encrypted.
+- Because the key comes from the chip, a cloud backup can be restored **only on the same device**. To move to another unit, use the SD card.
+- If a chip has no usable unique ID, a random key is kept in NVS instead (the tab warns you). That backup cannot be restored after *erase flash*.
+- TLS: set `RP_REG_CA` in `devreg_conf.h` to verify the server. Left empty, the connection is not verified (like the other network modules); the data stays encrypted but the token could be intercepted by an active attacker on the same network.
+
+The file format and crypto are written as pure C++ (`backup_core.h`, `backup_crypto.h`, `backup_cloud.h`) and tested on a PC, including comparison against Python's `hashlib` and `cryptography` (`tests/backup/`). **Not tested on a device yet.**
 
 ## Crash log `BETA`
 

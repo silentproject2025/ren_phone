@@ -1,70 +1,94 @@
 <!doctype html>
-<html lang="id"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ren_phone · perangkat</title>
 <style>
-:root{--bg:#0b0e13;--panel:#131821;--line:#232b38;--tx:#e6ebf2;--sub:#8a96a8;--acc:#4da3ff;--ok:#3ddc84}
-@media(prefers-color-scheme:light){:root{--bg:#f3f5f8;--panel:#fff;--line:#dde3ec;--tx:#141a24;--sub:#5c6879;--acc:#1c6fd6;--ok:#12934f}}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--tx);font:14px/1.45 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;padding:16px;max-width:980px;margin:auto}
-h1{font-size:15px;letter-spacing:.08em;text-transform:uppercase;color:var(--sub);margin:4px 0 14px;font-weight:600}
-.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px;margin-bottom:12px}
-input,button{font:inherit;color:var(--tx);background:var(--bg);border:1px solid var(--line);border-radius:7px;padding:8px 10px;width:100%;margin:3px 0}
-button{background:var(--acc);color:#fff;border:0;cursor:pointer;font-weight:600}
-.grid{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(150px,1fr))}
-.big{font-size:34px;font-weight:700;line-height:1}.lbl{color:var(--sub);font-size:12px;margin-top:4px}
-.bar{display:flex;align-items:center;gap:8px;margin:4px 0}.bar i{display:block;height:8px;background:var(--acc);border-radius:4px}
-.tw{overflow-x:auto}table{border-collapse:collapse;width:100%;min-width:560px}th,td{text-align:left;padding:7px 8px;border-bottom:1px solid var(--line);white-space:nowrap}
-th{color:var(--sub);font-weight:500;font-size:12px}td.id{color:var(--acc);cursor:pointer}.live{color:var(--ok)}
-.hide{display:none}.err{color:#ff6b6b;min-height:1.2em}
-</style></head><body>
-<h1>ren_phone · perangkat terdaftar</h1>
+:root{--bg:#f1ede4;--ink:#1b1a17;--mute:#7a7366;--line:#d6cfc0;--ok:#2f7d4f;--bad:#b3261e}
+@media(prefers-color-scheme:dark){:root{--bg:#15140f;--ink:#ece6d8;--mute:#8d8676;--line:#2e2c23;--ok:#6bcf8f;--bad:#ff8a80}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;padding:28px 20px 60px}
+.wrap{max-width:560px;margin:0 auto}
+h1{font:600 15px/1 inherit;margin:0 0 36px}
+input{width:100%;background:none;border:0;border-bottom:2px solid var(--ink);color:var(--ink);font:inherit;padding:10px 0;margin:0 0 14px;outline:0}
+input::placeholder{color:var(--mute)}
+button{background:var(--ink);color:var(--bg);border:0;font:inherit;padding:10px 20px;cursor:pointer;margin-top:6px}
+button.link{background:none;color:var(--mute);padding:0;text-decoration:underline;margin-top:40px}
+.err{color:var(--bad);min-height:1.5em;margin-top:12px}
+.hide{display:none}
+.nums{display:flex;gap:40px;margin-bottom:32px}
+.nums b{display:block;font:700 56px/1 Georgia,serif}
+.nums span{color:var(--mute);font-size:13px}
+.nums .on b{color:var(--ok)}
+table{width:100%;border-collapse:collapse}
+td{padding:11px 0;border-bottom:1px solid var(--line);white-space:nowrap}
+td.id{font-family:ui-monospace,Menlo,Consolas,monospace;cursor:pointer}
+td.r{text-align:right;color:var(--mute);font-size:13px}
+td small{display:block;color:var(--mute);font-size:12px}
+.msg{color:var(--mute);padding:24px 0;text-align:center}
+#t{position:fixed;left:50%;bottom:20px;transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:6px 14px;font-size:13px;opacity:0;transition:opacity .2s;pointer-events:none}
+#t.on{opacity:1}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>ren_phone · perangkat</h1>
 
-<div id="login" class="panel">
-  <input id="url" placeholder="Project URL  https://xxxx.supabase.co" autocomplete="off">
-  <input id="key" placeholder="anon public key" autocomplete="off">
-  <input id="em" type="email" placeholder="email akun Supabase Auth">
-  <input id="pw" type="password" placeholder="password">
-  <button id="go">Masuk</button><div class="err" id="err"></div>
-</div>
+  <div id="login">
+    <input id="em" type="email" placeholder="email" autocomplete="username">
+    <input id="pw" type="password" placeholder="kata sandi" autocomplete="current-password">
+    <button id="go">Masuk</button>
+    <div class="err" id="err"></div>
+  </div>
 
-<div id="app" class="hide">
-  <div class="grid">
-    <div class="panel"><div class="big" id="n_all">–</div><div class="lbl">total perangkat</div></div>
-    <div class="panel"><div class="big live" id="n_7">–</div><div class="lbl">aktif 7 hari</div></div>
-    <div class="panel"><div class="big" id="n_new">–</div><div class="lbl">baru 7 hari</div></div>
+  <div id="app" class="hide">
+    <div class="nums">
+      <div><b id="n_all">–</b><span>perangkat</span></div>
+      <div class="on"><b id="n_7">–</b><span>aktif 7 hari terakhir</span></div>
+    </div>
+    <input id="q" placeholder="cari kode atau versi" autocomplete="off" spellcheck="false">
+    <table><tbody id="rows"></tbody></table>
+    <div class="msg hide" id="none">Tidak ada yang cocok.</div>
+    <button class="link" id="out">Keluar</button>
   </div>
-  <div class="grid">
-    <div class="panel"><div class="lbl">versi firmware</div><div id="by_ver"></div></div>
-    <div class="panel"><div class="lbl">layar</div><div id="by_hw"></div></div>
-  </div>
-  <div class="panel tw"><table><thead><tr><th>ID (klik = salin)</th><th>versi</th><th>build</th><th>layar</th><th>pertama</th><th>terakhir</th></tr></thead><tbody id="rows"></tbody></table></div>
-  <button id="out" style="background:var(--line);color:var(--tx)">Keluar</button>
 </div>
+<div id="t"></div>
 
 <script>
-const $=id=>document.getElementById(id),LS=localStorage;
-$('url').value=LS.rp_url||'';$('key').value=LS.rp_key||'';$('em').value=LS.rp_em||'';
-const fmt=t=>t?new Date(t).toLocaleString('id-ID',{dateStyle:'medium',timeStyle:'short'}):'-';
-function bars(el,obj){const m=Math.max(1,...Object.values(obj));el.innerHTML=Object.entries(obj).sort((a,b)=>b[1]-a[1]).map(([k,v])=>`<div class="bar"><span style="min-width:90px">${k||'?'}</span><i style="width:${v/m*100}%;min-width:4px"></i><span>${v}</span></div>`).join('')||'-'}
-async function load(){
-  const url=$('url').value.trim().replace(/\/$/,''),key=$('key').value.trim();
-  $('err').textContent='';
-  const a=await fetch(url+'/auth/v1/token?grant_type=password',{method:'POST',headers:{apikey:key,'Content-Type':'application/json'},body:JSON.stringify({email:$('em').value.trim(),password:$('pw').value})});
-  const j=await a.json(); if(!a.ok) throw new Error(j.error_description||j.msg||'login gagal');
-  const r=await fetch(url+'/rest/v1/devices?select=*&order=last_seen.desc&limit=5000',{headers:{apikey:key,Authorization:'Bearer '+j.access_token}});
-  const d=await r.json(); if(!r.ok) throw new Error(d.message||'gagal membaca data');
-  LS.rp_url=url;LS.rp_key=key;LS.rp_em=$('em').value.trim();
-  const wk=Date.now()-7*864e5,ver={},hw={};
-  d.forEach(x=>{ver[x.fw_version]=(ver[x.fw_version]||0)+1;hw[x.hw]=(hw[x.hw]||0)+1});
-  $('n_all').textContent=d.length;
-  $('n_7').textContent=d.filter(x=>+new Date(x.last_seen)>wk).length;
-  $('n_new').textContent=d.filter(x=>+new Date(x.first_seen)>wk).length;
-  bars($('by_ver'),ver);bars($('by_hw'),hw);
-  $('rows').innerHTML=d.map(x=>`<tr><td class="id" data-id="${x.device_id}">${x.device_id}</td><td>${x.fw_version||'-'}</td><td>${x.fw_build??'-'}</td><td>${x.hw||'-'}</td><td>${fmt(x.first_seen)}</td><td>${fmt(x.last_seen)}</td></tr>`).join('');
-  $('login').classList.add('hide');$('app').classList.remove('hide');$('pw').value='';
-}
-$('go').onclick=()=>load().catch(e=>$('err').textContent=e.message);
-$('pw').onkeydown=e=>{if(e.key==='Enter')$('go').click()};
-$('out').onclick=()=>{$('app').classList.add('hide');$('login').classList.remove('hide')};
-$('rows').onclick=e=>{const id=e.target.dataset&&e.target.dataset.id;if(id)navigator.clipboard&&navigator.clipboard.writeText(id)};
-</script></body></html>
+(function(){
+  // Kunci "publishable" memang publik. Samakan dengan firmware/phone/devreg_conf.h.
+  var URL="https://ywhyfkxkihyxhrehoqya.supabase.co",KEY="sb_publishable_qB00w154m7mc4f6YmtPnRw_Y1ZZ-oWs";
+  var $=function(i){return document.getElementById(i)},D=[];
+  function esc(s){return String(s==null?"-":s).replace(/[&<>"']/g,function(c){return{"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]})}
+  function ago(t){var s=(Date.now()-t)/1000;if(s<600)return"menyala";if(s<3600)return Math.floor(s/60)+" mnt lalu";if(s<86400)return Math.floor(s/3600)+" jam lalu";return Math.floor(s/86400)+" hari lalu"}
+  function toast(m){var e=$("t");e.textContent=m;e.className="on";clearTimeout(toast.h);toast.h=setTimeout(function(){e.className=""},1400)}
+  try{$("em").value=localStorage.rp_em||""}catch(e){}
+
+  function draw(){
+    var q=$("q").value.trim().toLowerCase();
+    var l=D.filter(function(x){return!q||x.device_id.indexOf(q)>=0||String(x.fw_version||"").toLowerCase().indexOf(q)>=0});
+    $("rows").innerHTML=l.slice(0,200).map(function(x){
+      return'<tr><td class="id" data-id="'+esc(x.device_id)+'">'+esc(x.device_id)+'<small>'+esc(x.fw_version)+'</small></td><td class="r">'+ago(+new Date(x.last_seen))+'</td></tr>'}).join("");
+    $("none").className=l.length?"msg hide":"msg";
+  }
+  async function load(){
+    $("err").textContent="";
+    var a=await fetch(URL+"/auth/v1/token?grant_type=password",{method:"POST",headers:{apikey:KEY,"Content-Type":"application/json"},body:JSON.stringify({email:$("em").value.trim(),password:$("pw").value})});
+    var j=await a.json();if(!a.ok)throw new Error("Email atau kata sandi salah.");
+    var r=await fetch(URL+"/rest/v1/devices?select=device_id,fw_version,last_seen&order=last_seen.desc&limit=5000",{headers:{apikey:KEY,Authorization:"Bearer "+j.access_token}});
+    D=await r.json();if(!r.ok)throw new Error("Akun ini tidak punya izin membaca data.");
+    try{localStorage.rp_em=$("em").value.trim()}catch(e){}
+    var wk=Date.now()-7*864e5;
+    $("n_all").textContent=D.length;$("n_7").textContent=D.filter(function(x){return+new Date(x.last_seen)>wk}).length;
+    $("login").className="hide";$("app").className="";$("pw").value="";draw();
+  }
+  $("go").onclick=function(){load().catch(function(e){$("err").textContent=e.message||"Tidak bisa tersambung."})};
+  $("pw").onkeydown=function(e){if(e.key==="Enter")$("go").click()};
+  $("q").oninput=draw;
+  $("out").onclick=function(){D=[];$("app").className="hide";$("login").className=""};
+  $("rows").onclick=function(e){var c=e.target.closest("td.id");if(!c)return;(navigator.clipboard?navigator.clipboard.writeText(c.dataset.id):Promise.reject()).then(function(){toast("kode disalin")},function(){toast("gagal menyalin")})};
+})();
+</script>
+</body>
+</html>

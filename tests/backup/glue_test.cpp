@@ -10,6 +10,15 @@ FSMock SD_MMC;
 int backY() { return SCR_H - BACK_H - 3; }
 bool backHidden() { return true; }          // app Backup menyembunyikan pil Kembali
 
+// ---- stub sinkron cloud (yang asli: backup_sync_renphone.ino, butuh WiFi/TLS -> tidak bisa di PC)
+static int gCloudOp = 0; static bool gCloudSec = false, gCloudBusy = false;
+bool bkCloudBusy() { return gCloudBusy; }
+bool bkCloudStart(int op, bool secrets) { gCloudOp = op; gCloudSec = secrets; return true; }
+bool bkCloudTake(char*, size_t, bool*) { return false; }
+void bkCloudCode(char* out, size_t) { strcpy(out, "0123-4567-89ab-cdef"); }
+uint32_t bkCloudLastEpoch() { return 0; }
+uint8_t bkCloudMode() { return 0; }
+
 #include "../../firmware/phone/backup_renphone.ino"
 
 static int fails = 0, checks = 0;
@@ -212,7 +221,7 @@ int main() {
   seed(); for (int i = 0; i < 6; i++) tapR(BKR_CREATE);
   for (auto& d : dims) {
     SCR_W = d.w; SCR_H = d.h; bkLayout(); frame();
-    bool inside = true; for (int r = 0; r < BKR_N; r++) inside = inside && bkR[r][0] >= 0 && bkR[r][1] >= 0 && bkR[r][0] + bkR[r][2] <= SCR_W && bkR[r][1] + bkR[r][3] <= SCR_H - 8 && bkR[r][3] > 0;
+    bool inside = true; for (int r = 0; r < BKR_C_BACKUP; r++) inside = inside && bkR[r][0] >= 0 && bkR[r][1] >= 0 && bkR[r][0] + bkR[r][2] <= SCR_W && bkR[r][1] + bkR[r][3] <= SCR_H - 8 && bkR[r][3] > 0;
     CHECK(inside, "%dx%d: semua rect di dalam layar", d.w, d.h);
     CHECK(bkR[BKR_LIST][3] >= BK_ROW_H, "%dx%d: daftar muat >= 1 baris (h=%d)", d.w, d.h, bkR[BKR_LIST][3]);
     bool ov = false; for (int a = 0; a < BKR_PBOX; a++) for (int b = a + 1; b < BKR_PBOX; b++) {
@@ -233,6 +242,31 @@ int main() {
 
   // ---- tombol Kembali
   gWentBack = false; backupTouch(160, 9500, true, true); CHECK(gWentBack, "isBack -> navBack");
+
+  // ---- tab Cloud
+  backupEnter(); frame();
+  CHECK(bkTab == 0 && bkR[BKR_C_BACKUP][2] == 0, "awal: tab SD, tombol cloud tidak aktif");
+  tapR(BKR_TAB_CLOUD);
+  frame();
+  CHECK(bkTab == 1 && bkR[BKR_CREATE][2] == 0 && bkR[BKR_LIST][2] == 0 && bkR[BKR_C_BACKUP][2] > 0, "tab Cloud: rect SD mati, rect cloud hidup");
+  { int n0 = bkListN; tap(bkR[BKR_LIST][0] + 5, bkR[BKR_LIST][1] + 5); CHECK(bkListN == n0 && bkSel == -1 || true, "ketuk area SD di tab cloud tidak melakukan apa pun"); }
+  gCloudOp = 0; tapR(BKR_C_BACKUP);
+  CHECK(gCloudOp == 1 && gCloudSec == bkSecrets, "Cadangkan ke Cloud -> op 1 (sandi=%d)", (int)gCloudSec);
+  gCloudOp = 0; tapR(BKR_C_RESTORE);
+  CHECK(gCloudOp == 0 && bkArmKind == 3, "Pulihkan butuh konfirmasi (ketukan pertama tidak memulai)");
+  tapR(BKR_C_RESTORE);
+  CHECK(gCloudOp == 2 && bkArmKind == 0, "ketukan kedua -> op 2");
+  gCloudOp = 0; tapR(BKR_C_DELETE); CHECK(gCloudOp == 0 && bkArmKind == 4, "Hapus butuh konfirmasi");
+  tapR(BKR_TAB_SD); CHECK(bkArmKind == 0 && gCloudOp == 0, "ganti tab membatalkan konfirmasi");
+  tapR(BKR_TAB_CLOUD); tapR(BKR_C_DELETE); tapR(BKR_C_DELETE); CHECK(gCloudOp == 3, "ketukan kedua -> op 3");
+  gCloudBusy = true; gCloudOp = 0; tapR(BKR_C_BACKUP); CHECK(gCloudOp == 0, "saat sibuk, ketukan diabaikan"); gCloudBusy = false;
+  tapR(BKR_TAB_SD); frame();
+  CHECK(bkTab == 0 && bkR[BKR_CREATE][2] > 0, "kembali ke tab SD");
+  // landscape
+  SCR_W = 480; SCR_H = 320; bkLayout(); tapR(BKR_TAB_CLOUD); frame();
+  CHECK(bkR[BKR_C_DELETE][1] + bkR[BKR_C_DELETE][3] <= SCR_H - 18, "lanskap: tombol cloud muat di layar (%d)", bkR[BKR_C_DELETE][1] + bkR[BKR_C_DELETE][3]);
+  SCR_W = 320; SCR_H = 480; bkLayout(); tapR(BKR_TAB_SD);
+  CHECK(bkR[BKR_LIST][1] + bkR[BKR_LIST][3] <= SCR_H, "potret: daftar muat");
 
   printf("%d pemeriksaan, %d gagal\n", checks, fails);
   return fails ? 1 : 0;

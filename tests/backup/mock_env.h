@@ -95,6 +95,9 @@ struct Preferences {
   void end() {}
   bool getBool(const char* k, bool d) { auto it = st().find(ns + "/" + k); return it == st().end() ? d : it->second; }
   void putBool(const char* k, bool v) { st()[ns + "/" + k] = v; }
+  static std::map<std::string, int>& si() { static std::map<std::string, int> m; return m; }
+  int  getInt(const char* k, int d) { auto it = si().find(ns + "/" + k); return it == si().end() ? d : it->second; }
+  void putInt(const char* k, int v) { si()[ns + "/" + k] = v; }
 };
 
 // ---------------- SD palsu berbasis folder /tmp/nyx_sd
@@ -104,6 +107,7 @@ struct File {
   operator bool() const { return f != nullptr || d != nullptr; }
   size_t size() { long p = ftell(f); fseek(f, 0, SEEK_END); long e = ftell(f); fseek(f, p, SEEK_SET); return (size_t)e; }
   size_t read(uint8_t* b, size_t n) { return fread(b, 1, n, f); }
+  bool seek(size_t p) { return f && fseek(f, (long)p, SEEK_SET) == 0; }
   size_t write(const uint8_t* b, size_t n) { return fwrite(b, 1, n, f); }
   void close() { if (f) fclose(f); if (d) closedir(d); f = nullptr; d = nullptr; }
   bool isDirectory() { return isdir; }
@@ -118,6 +122,7 @@ struct FSMock {
   bool exists(const char* p) { struct stat st; return stat((std::string(SDROOT) + p).c_str(), &st) == 0; }
   bool mkdir(const char* p) { return ::mkdir((std::string(SDROOT) + p).c_str(), 0755) == 0; }
   bool remove(const char* p) { return ::remove((std::string(SDROOT) + p).c_str()) == 0; }
+  bool rename(const char* a, const char* b) { return ::rename((std::string(SDROOT) + a).c_str(), (std::string(SDROOT) + b).c_str()) == 0; }
 };
 
 // ---------------- LovyanGFX / UI palsu
@@ -136,6 +141,9 @@ static inline uint16_t blend565(uint16_t a, uint16_t, uint8_t) { return a; }
 static inline void nyxAaRR(lgfx::LGFXBase&, int,int,int,int,int,uint16_t) {}
 static inline void nyxAaCircle(lgfx::LGFXBase&, int,int,int,uint16_t) {}
 static std::string gToast;
+struct SerialMock { template <typename... A> void printf(const char*, A...) {} template <typename T> void println(T) {} template <typename T> void print(T) {} } static Serial;
+static inline void delay(unsigned) {}
+#define RPTR(x) x
 static inline void showToast(const char* m, int = 1400) { gToast = m; }
 static inline void drawGlassPanel(LGFX_Sprite&, int,int,int,int,int,uint16_t,uint8_t) {}
 static inline void drawGlassCard(LGFX_Sprite&, int,int,int,int,int,uint16_t,uint8_t) {}

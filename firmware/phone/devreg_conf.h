@@ -9,3 +9,7 @@
 #ifndef RP_REG_KEY
 #define RP_REG_KEY "sb_publishable_qB00w154m7mc4f6YmtPnRw_Y1ZZ-oWs"   // publishable key (publik by design)
 #endif
+
+// OPSIONAL (disarankan utk Backup ke database): sertifikat root CA (PEM) server Supabase. Bila diisi, koneksi backup
+// memverifikasi server; kosong = tanpa verifikasi seperti modul jaringan lain (data backup tetap terenkripsi, tapi
+// token bisa disadap penyerang aktif di jaringan yg sama). Contoh:  #define RP_REG_CA "-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----\n"

@@ -7,6 +7,8 @@
 //   * "Pulihkan"    : tulis balik isi file ke NVS lalu HP restart sendiri (nilai pengaturan
 //                     dibaca ke RAM saat boot, jadi restart perlu supaya semuanya terpakai)
 //   * "Hapus"       : buang satu file backup
+//   * Tab "Cloud" (backup_sync_renphone.ino): cadangkan / pulihkan / hapus pengaturan di database tanpa akun atau
+//                     sandi. Identitas = kode perangkat; isi dienkripsi di HP dgn kunci dari chip (lihat backup_cloud.h).
 //   * Sakelar "Sertakan sandi & API key" (default MATI): sandi WiFi, akun SIP, akun Chat, API key
 //     Gemini, dan sandi AP Remote Control hanya ikut kalau sakelar ini nyala. File di SD
 //     TIDAK dienkripsi, jadi default-nya tidak menyertakan rahasia.
@@ -47,7 +49,19 @@
 #define BK_ROW_H      36
 #define BK_NVS_NS     "nyxbak"
 
-enum { BKR_CREATE = 0, BKR_TOGGLE, BKR_ENC, BKR_LIST, BKR_RESTORE, BKR_DELETE, BKR_PBOX, BKR_POK, BKR_PCANCEL, BKR_N };
+enum { BKR_CREATE = 0, BKR_TOGGLE, BKR_ENC, BKR_LIST, BKR_RESTORE, BKR_DELETE, BKR_PBOX, BKR_POK, BKR_PCANCEL,
+       BKR_TAB_SD, BKR_TAB_CLOUD, BKR_C_BACKUP, BKR_C_RESTORE, BKR_C_DELETE, BKR_N };
+
+// ---- sinkron cloud: diimplementasi di backup_sync_renphone.ino (hanya tipe primitif)
+bool     bkCloudBusy();
+bool     bkCloudStart(int op, bool secrets);                    // 1 cadangkan | 2 pulihkan | 3 hapus
+bool     bkCloudTake(char* msg, size_t n, bool* restart);
+void     bkCloudCode(char* out, size_t n);
+uint32_t bkCloudLastEpoch();
+uint8_t  bkCloudMode();
+#define BK_CARD_H (SCR_W > SCR_H ? 44 : 60)
+
+static int           bkTab       = 0;              // 0 = SD Card | 1 = Cloud
 
 static bool          bkSecrets   = false;
 static bool          bkEnc       = false;          // backup baru dienkripsi dgn sandi (sandi ditanya tiap kali, TIDAK disimpan)
@@ -435,7 +449,10 @@ static bool bkIn(int r, int x, int y) {
 }
 static void bkLayout() {
   const int m = 8, bh = 34, tg = 34;
-  const int y0 = 26 + 18;
+  const bool land = SCR_W > SCR_H;
+  const int y0 = land ? 44 : 26 + 18 + 34;              // potret: 34 = baris tab SD Card | Cloud; lanskap: tab di sebaris judul (hemat tinggi)
+  if (land) { int tw = 66; bkSet(BKR_TAB_SD, SCR_W - m - 2 * tw - 6, 22, tw, 20); bkSet(BKR_TAB_CLOUD, SCR_W - m - tw, 22, tw, 20); }
+  else      { int tw = (SCR_W - 2 * m - 6) / 2; bkSet(BKR_TAB_SD, m, 44, tw, 26); bkSet(BKR_TAB_CLOUD, m + tw + 6, 44, SCR_W - 2 * m - 6 - tw, 26); }
   {                                                     // kotak sandi: di atas keyboard sistem
     const int top = 26, ch = 78, cw = SCR_W - 2 * m;
     bkSet(BKR_PBOX,    m + 8, top + 20, cw - 16, 24);
@@ -466,6 +483,17 @@ static void bkLayout() {
     int ly = y0 + bh + 8 + 2 * tg + 4 + 8 + 16;         // 16 = baris judul "RIWAYAT"
     bkSet(BKR_LIST,    m, ly, w, by - 6 - ly);
   }
+  for (int r = BKR_C_BACKUP; r <= BKR_C_DELETE; r++) bkSet(r, 0, 0, 0, 0);
+  if (bkTab == 1) {                                     // tab Cloud: tumpukan sederhana, rect tab SD dimatikan
+    const int rs[] = { BKR_CREATE, BKR_ENC, BKR_RESTORE, BKR_DELETE, BKR_LIST };
+    for (int i = 0; i < 5; i++) bkSet(rs[i], 0, 0, 0, 0);
+    const bool ls = SCR_W > SCR_H; const int w = SCR_W - 2 * m, h = ls ? 30 : 34;
+    int y = y0 + BK_CARD_H + 6;
+    bkSet(BKR_TOGGLE, m, y, w, h); y += h + 6;
+    bkSet(BKR_C_BACKUP, m, y, w, h); y += h + 6;
+    int hw = (w - 8) / 2;
+    bkSet(BKR_C_RESTORE, m, y, hw, h); bkSet(BKR_C_DELETE, m + hw + 8, y, w - hw - 8, h);
+  }
 }
 
 // ---------------------------------------------------------------------
@@ -474,6 +502,7 @@ static void bkLayout() {
 void backupEnter() {
   { Preferences p; p.begin(BK_NVS_NS, true); bkSecrets = p.getBool("sec", false); bkEnc = p.getBool("enc", false); p.end(); }
   bkPromptClose();
+  bkTab = 0;
   bkSel = -1; bkScroll = 0; bkArmKind = 0; bkRestartAt = 0; bkDown = false; bkMsg[0] = 0;
   bkLayout();
   bkScan(false);
@@ -532,6 +561,44 @@ static void bkDrawPrompt(LGFX_Sprite& s) {
   bkButton(s, BKR_POK, bkPrompt == 1 ? RPTR("Lanjut") : (bkPrompt == 2 ? RPTR("Buat Backup") : RPTR("Pulihkan")), T().accent, 0xFFFF, 235);
 }
 
+static void bkDrawTabs(LGFX_Sprite& s) {
+  bkButton(s, BKR_TAB_SD,    RPTR("SD Card"), bkTab == 0 ? T().accent : T().surface2, bkTab == 0 ? 0xFFFF : T().subtext, bkTab == 0 ? 235 : 170);
+  bkButton(s, BKR_TAB_CLOUD, RPTR("Cloud"),   bkTab == 1 ? T().accent : T().surface2, bkTab == 1 ? 0xFFFF : T().subtext, bkTab == 1 ? 235 : 170);
+}
+
+static void bkDrawCloud(LGFX_Sprite& s) {
+  const int m = 8, w = SCR_W - 2 * m, ch = BK_CARD_H;
+  const bool ls = SCR_W > SCR_H;
+  const int y0 = bkR[BKR_TOGGLE][1] - 6 - ch;
+  drawGlassCard(s, m, y0, w, ch, 12, T().surface, 215);
+  char code[24], t[20], b[48];
+  bkCloudCode(code, sizeof(code));
+  s.setTextColor(T().subtext); s.setCursor(m + 12, y0 + 7);  s.print(RPTR("Kode perangkat"));
+  s.setTextColor(T().text);    s.setCursor(m + 12, y0 + 19); s.print(code);
+  uint32_t ep = bkCloudLastEpoch();
+  if (ep) { bkStamp(t, sizeof(t), ep); snprintf(b, sizeof(b), "Cadangan terakhir: %s", t); }
+  else    snprintf(b, sizeof(b), "Belum ada cadangan cloud");
+  s.setTextColor(T().subtext); s.setCursor(m + 12, y0 + 31); s.print(b);
+  if (!ls) {
+    s.setCursor(m + 12, y0 + 44);
+    s.print(bkCloudMode() == 1 ? "Kunci di NVS: hilang jika flash dihapus" : "Terenkripsi di HP, server tak bisa membaca");
+  }
+  bkToggleRow(s, BKR_TOGGLE, "Sertakan sandi & API key", "Ikut, tetap terenkripsi di HP", bkSecrets);
+  const bool busy = bkCloudBusy();
+  bkButton(s, BKR_C_BACKUP, busy ? RPTR("Memproses...") : RPTR("Cadangkan ke Cloud"), T().accent, 0xFFFF, busy ? 150 : 235);
+  bool armR = (bkArmKind == 3), armD = (bkArmKind == 4);
+  bkButton(s, BKR_C_RESTORE, armR ? RPTR("Yakin? Ketuk lagi") : RPTR("Pulihkan"),
+           armR ? T().danger : T().surface2, armR ? 0xFFFF : T().accent, armR ? 235 : 190);
+  bkButton(s, BKR_C_DELETE, armD ? RPTR("Yakin? Ketuk lagi") : RPTR("Hapus"),
+           armD ? T().danger : T().surface2, armD ? 0xFFFF : T().danger, armD ? 235 : 190);
+  if (bkMsg[0]) {
+    int ty = bkR[BKR_C_RESTORE][1] + bkR[BKR_C_RESTORE][3] + 10;
+    char mm[48]; strncpy(mm, bkMsg, sizeof(mm) - 1); mm[sizeof(mm) - 1] = 0;
+    for (int L = (int)strlen(mm); L > 1 && s.textWidth(mm) > w - 8; ) mm[--L] = 0;
+    s.setTextColor(T().accent); s.setCursor(m + 4, ty); s.print(mm);
+  }
+}
+
 void drawBackup(LGFX_Sprite& s) {
   bkLayout();
   if (bkRestartAt) { needRedraw = true; if ((long)(millis() - bkRestartAt) >= 0) ESP.restart(); }
@@ -543,6 +610,12 @@ void drawBackup(LGFX_Sprite& s) {
   drawStatusBar(s);
   iosTitle(s, 8, 26, "Backup & Restore");
   s.setTextSize(1);
+
+  { char cm[48]; bool rs = false;                                    // hasil operasi cloud (task terpisah)
+    if (bkCloudTake(cm, sizeof(cm), &rs)) { bkSay(cm, 3200); if (rs) bkRestartAt = millis() + 2200; }
+    if (bkCloudBusy()) needRedraw = true; }
+  bkDrawTabs(s);
+  if (bkTab == 1) { bkDrawCloud(s); drawBack(s); drawToast(s); return; }
 
   // ---- Buat Backup
   bkButton(s, BKR_CREATE, RPTR("Buat Backup Sekarang"), T().accent, 0xFFFF, 235);
@@ -621,7 +694,47 @@ void drawBackup(LGFX_Sprite& s) {
 // ---------------------------------------------------------------------
 // sentuh: ketuk dieksekusi saat JARI DILEPAS (supaya geser-scroll tidak memicu tombol)
 // ---------------------------------------------------------------------
+static void bkCloudTap(int x, int y) {
+  if (bkCloudBusy()) { bkSay("Sedang memproses...", 1200); return; }
+  if (bkIn(BKR_TOGGLE, x, y)) {
+    bkSecrets = !bkSecrets; bkArmKind = 0;
+    { Preferences p; p.begin(BK_NVS_NS, false); p.putBool("sec", bkSecrets); p.end(); }
+    bkSay(bkSecrets ? "Sandi & API key ikut di-backup" : "Sandi & API key tidak ikut", 1800);
+    return;
+  }
+  if (bkIn(BKR_C_BACKUP, x, y)) {
+    bkArmKind = 0;
+    if (bkCloudStart(1, bkSecrets)) bkSay("Mengirim cadangan terenkripsi...", 15000);
+    needRedraw = true;
+    return;
+  }
+  if (bkIn(BKR_C_RESTORE, x, y)) {
+    if (bkArmKind != 3) { bkArmKind = 3; bkArmUntil = millis() + 4000; bkSay("Ketuk lagi: pengaturan ditimpa & HP restart", 3600); return; }
+    bkArmKind = 0;
+    if (bkCloudStart(2, false)) bkSay("Mengambil cadangan...", 15000);
+    needRedraw = true;
+    return;
+  }
+  if (bkIn(BKR_C_DELETE, x, y)) {
+    if (bkArmKind != 4) { bkArmKind = 4; bkArmUntil = millis() + 4000; bkSay("Ketuk lagi: cadangan cloud dihapus permanen", 3600); return; }
+    bkArmKind = 0;
+    if (bkCloudStart(3, false)) bkSay("Menghapus cadangan cloud...", 15000);
+    needRedraw = true;
+    return;
+  }
+}
+
 static void bkTap(int x, int y) {
+  if (bkIn(BKR_TAB_SD, x, y) || bkIn(BKR_TAB_CLOUD, x, y)) {
+    int t = bkIn(BKR_TAB_CLOUD, x, y) ? 1 : 0;
+    if (t != bkTab) {
+      bkTab = t; bkArmKind = 0; bkPromptClose(); bkMsg[0] = 0; bkLayout();
+      if (t == 1 && bkCloudMode() == 1) bkSay("Kunci di NVS: hilang jika flash dihapus", 3500);
+      needRedraw = true;
+    }
+    return;
+  }
+  if (bkTab == 1) { bkCloudTap(x, y); return; }
   if (bkIn(BKR_CREATE, x, y)) {
     bkArmKind = 0;
     if (bkEnc) { if (!sdReady) { bkSay("SD Card tidak terdeteksi", 2200); return; } bkPromptOpen(1, -1); }
