@@ -1375,13 +1375,31 @@ static int turnAttrXorAddr(uint8_t* b, int len, uint16_t type, IPAddress ip, int
   return turnAttr(b, len, type, v, 8);
 }
 
+// HMAC-SHA1 portabel: hanya pakai mbedtls_md() satu-tembak. mbedtls_md_hmac() ikut hilang di mbedTLS 4 (core esp32 4.x / ESP-IDF 6),
+// jadi dihitung manual: H((K^opad) || H((K^ipad) || pesan)), blok SHA-1 = 64 byte.
+static void turnHmacSha1(const uint8_t* key, size_t klen, const uint8_t* msg, size_t mlen, uint8_t* out) {
+  memset(out, 0, 20);
+  const mbedtls_md_info_t* mi = mbedtls_md_info_from_type(MBEDTLS_MD_SHA1);
+  if (!mi || klen > 64) return;
+  uint8_t k[64]; memset(k, 0, sizeof(k)); memcpy(k, key, klen);
+  uint8_t* buf = (uint8_t*)malloc(64 + mlen);
+  if (!buf) return;
+  for (int i = 0; i < 64; i++) buf[i] = k[i] ^ 0x36;
+  memcpy(buf + 64, msg, mlen);
+  uint8_t inner[20];
+  mbedtls_md(mi, buf, 64 + mlen, inner);
+  free(buf);
+  uint8_t ob[64 + 20];
+  for (int i = 0; i < 64; i++) ob[i] = k[i] ^ 0x5c;
+  memcpy(ob + 64, inner, 20);
+  mbedtls_md(mi, ob, sizeof(ob), out);
+}
 // MESSAGE-INTEGRITY (long-term): HMAC-SHA1(key, pesan dgn field panjang sudah memuat atribut MI)
 static int turnFinish(uint8_t* b, int len, bool integrity) {
   if (integrity) {
     turnPut16(b + 2, len - 20 + 24);
     uint8_t mac[20];
-    const mbedtls_md_info_t* mi = mbedtls_md_info_from_type(MBEDTLS_MD_SHA1);
-    if (mi) mbedtls_md_hmac(mi, turnKey, 16, b, (size_t)len, mac); else memset(mac, 0, sizeof(mac));
+    turnHmacSha1(turnKey, 16, b, (size_t)len, mac);   // dulu mbedtls_md_hmac() -> hilang di mbedTLS 4
     len = turnAttr(b, len, 0x0008, mac, 20);
   }
   turnPut16(b + 2, len - 20);
