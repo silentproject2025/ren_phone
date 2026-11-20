@@ -57,6 +57,7 @@ Find your symptom in the table. For memory-related problems, the **HWmonitor** a
 | Symptom | Likely cause | Action |
 |---|---|---|
 | Backup shows "SD card not detected" | The SD card cannot be read | Check the SD card; backups are stored in `/backup/` on the SD card. |
+| Cloud restore shows "No backup for this device" right after a successful cloud backup | Firmware 1.0.0 could not read the server's reply when it contained spaces after the colons (`"status": "ok"`) | Update to 1.0.1 or newer. If it still happens: no backup was ever saved under this device code, or the key was kept in NVS (the Cloud tab warns about it) and was lost after *erase flash*. |
 | Restore shows "Backup corrupted, rejected" or "Wrong password" | The file is corrupted or modified, or the encryption password is wrong | Choose another backup; for an encrypted file enter the same password used when the backup was made. |
 | The message *Channel not published yet* appears | The branch has never been built | Run the build workflow for that branch once. |
 | An OTA update is rejected | The firmware's code base differs (or the `display=` value does not match the phone's display) | Intended behaviour; use firmware from the same code base and display variant. |

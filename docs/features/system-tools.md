@@ -46,7 +46,7 @@ Saves all NyxOS settings to the SD card and restores them, for example before re
 |---|---|
 | **Back Up Now** | All settings in NVS (theme, brightness, Home layout, calibration, learned dictionary words, Remote Control, and more) are written to `/backup/nyx_NNN.nbk`. The NVS contents are scanned rather than a fixed list, so settings from new features are included automatically. System namespaces (`nvs*`, `phy*`, `bt*`, `otaguard`) are excluded. |
 | **History** | A list of backups with number, time, value count and size. At most **6** files; the oldest is removed automatically when a new backup is made. |
-| **Restore** | Choose a backup and tap twice (*Sure? Tap again*). The values are written back to NVS, then the phone **restarts by itself** because settings are read into RAM at boot. Restore overwrites values present in the file; settings created after the backup are not deleted. |
+| **Restore** | Choose a backup and tap twice (*Sure? Tap again*). The values are written back to NVS, then the phone **restarts by itself** because settings are read into RAM at boot. A short countdown ("Restarting... 3") is shown first so the restart is not a surprise. Restore overwrites values present in the file; settings created after the backup are not deleted. |
 | **Delete** | Removes one backup file (also with a double-tap confirmation). |
 | **Include passwords and API keys** | A switch, **off** by default. WiFi passwords, SIP account, Chat account, Gemini API key and the Remote Control AP password are only included when this switch is on. |
 | **Encrypt with a password** | A switch. Subsequent backups are encrypted with a 6 to 64 character password that is asked for every time (twice when creating) and is **not stored**. |
@@ -64,7 +64,7 @@ Saves all NyxOS settings to the SD card and restores them, for example before re
 | Action | Result |
 |---|---|
 | **Back Up to Cloud** | Settings are encrypted on the phone and uploaded. One slot per device; a new backup replaces the old one (at most once every 30 seconds). |
-| **Restore** / **Delete** | Tap twice to confirm. Restore downloads, verifies and decrypts the backup, writes it back to NVS and restarts. Delete removes it from the server. |
+| **Restore** / **Delete** | Tap twice to confirm. Restore downloads, verifies and decrypts the backup, writes it back to NVS, shows a short restart countdown and restarts. Delete removes it from the server. |
 | **Include passwords and API keys** | Same switch as the SD tab, **off** by default. Still encrypted when on. |
 
 How it is protected:
@@ -77,7 +77,7 @@ How it is protected:
 - If a chip has no usable unique ID, a random key is kept in NVS instead (the tab warns you). That backup cannot be restored after *erase flash*.
 - TLS: set `RP_REG_CA` in `devreg_conf.h` to verify the server. Left empty, the connection is not verified (like the other network modules); the data stays encrypted but the token could be intercepted by an active attacker on the same network.
 
-The file format and crypto are written as pure C++ (`backup_core.h`, `backup_crypto.h`, `backup_cloud.h`) and tested on a PC, including comparison against Python's `hashlib` and `cryptography` (`tests/backup/`). **Not tested on a device yet.**
+The file format and crypto are written as pure C++ (`backup_core.h`, `backup_crypto.h`, `backup_cloud.h`) and tested on a PC, including comparison against Python's `hashlib` and `cryptography` (`tests/backup/`). The **Cloud tab has been tested on a device** (back up, then restore). The **SD Card tab is not tested on a device yet.**
 
 ## Crash log `BETA`
 

@@ -23,7 +23,7 @@
 
 - **Chat:** the screen shows ASCII and emoji (other letters appear as `?`); there is no notification while the app is closed.
 - **Chess:** there is no chess clock. Not tested on a device; online mode needs an MQTT broker with your own account (separate from Chat).
-- **Backup & Restore:** at most 6 files, a single file at most 96 KB, NVS values above 32 KB are skipped. Restore overwrites values present in the file and does not delete settings created afterwards. An unencrypted backup can be read by anyone holding the SD card. Not tested on a device.
+- **Backup & Restore:** at most 6 files, a single file at most 96 KB, NVS values above 32 KB are skipped. Restore overwrites values present in the file and does not delete settings created afterwards. An unencrypted backup can be read by anyone holding the SD card. The Cloud tab is tested on a device; the SD Card tab is not.
 - **Emoji:** single emoji only (one code point). Flags, ZWJ sequences, keycaps and skin-tone variants do not have their own sprites; at most 4,000 sprites, and a large set uses PSRAM (about 1.8 KB per emoji). Details in [System UI](./features/system-ui.md#emoji-beta).
 - **Battery:** the percentage is an estimate. If the INA219 is not detected, the percentage and voltage stop updating (there is no ADC *fallback*).
 - **Gutenberg download:** TXT at most 3 MB and EPUB at most 40 MB; the list holds at most 96 books; one download at a time. The language filter is only for the Gutendex source. The source choice (Gutendex/OPDS) is not remembered after a restart (default: Gutendex). A two-parallel-connection download exists in the code but is turned off (`GUT_PARALLEL 0`).

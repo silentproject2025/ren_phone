@@ -29,7 +29,7 @@ NyxOS is neither Android nor Linux. The launcher, notification center, network s
 > - **Phone calls** are only partially verified: they work with a `sip2sip.info` account (SIP over TCP); other SIP providers, LAN mode and TURN are unconfirmed.
 > - **NyxPPU** is an experiment (phase 1) and **SPI overclock** depends on cable quality.
 > - **New system gestures** (pull-to-refresh, edge swipe-back, panels that follow the finger) are `BETA`.
-> - **Backup & Restore** and **Chess** (online and vs. AI) are `BETA`: the logic is tested on a PC but not yet on a device.
+> - **Backup & Restore**: the **Cloud** tab (back up and restore) is tested on a device; the **SD Card** tab is `BETA` (tested on a PC, not yet on a device). **Chess** (online and vs. AI) is `BETA`: the logic is tested on a PC but not yet on a device.
 >
 > Each feature is described in full in the [feature documentation](./docs/features/).
 
@@ -78,7 +78,7 @@ Status markers used throughout the documentation:
 | | [Books (`.txt`, `.md`, `.epub`) and Project Gutenberg downloads](./docs/features/books.md) | `OK` |
 | **Voice and AI** | [Wake word "Hei Nyx", Gemini AI Chat, voice memo](./docs/features/voice-and-ai.md) | `OK` (voice commands `BETA`) |
 | **System** | [Battery (INA219), per-channel OTA, HWmonitor, crash log](./docs/features/system-tools.md) | `OK` (per-app energy and crash log `BETA`) |
-| | [Settings Backup & Restore](./docs/features/system-tools.md#settings-backup-and-restore-beta) | `BETA` |
+| | [Settings Backup & Restore](./docs/features/system-tools.md#settings-backup-and-restore-beta) | `OK` (Cloud) / `BETA` (SD Card) |
 | **Games** | [Inferno, NES, DOOM, Maze, classics, PPU demo](./docs/features/games.md) | `OK` |
 | **Experimental** | [SPI overclock (`HW`), NyxPPU pixel engine (`EXP`)](./docs/features/experimental.md) | — |
 | **Platform** | mbedTLS in PSRAM (custom core libraries), applied automatically by CI | `OK` |
