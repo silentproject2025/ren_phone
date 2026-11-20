@@ -94,6 +94,29 @@ static void bkSay(const char* m, int ms) {
   needRedraw = true;
 }
 
+// Restart setelah restore: tampilkan hitung mundur supaya pengguna tidak kaget.
+// Teks dipotong di "..." pertama (mis. "Restart...") lalu diganti "... 3", "... 2", "... 1".
+static char bkRsBase[44] = "";
+static int  bkRsLast = -1;
+static void bkArmRestart(const char* base) {
+  strncpy(bkRsBase, base, sizeof(bkRsBase) - 1); bkRsBase[sizeof(bkRsBase) - 1] = 0;
+  char* p = strstr(bkRsBase, "..."); if (p) *p = 0;
+  bkRsLast = -1;
+  bkRestartAt = millis() + 3500;
+}
+static void bkTickRestart() {
+  if (!bkRestartAt) return;
+  long left = (long)(bkRestartAt - millis());
+  if (left <= 0) { ESP.restart(); return; }
+  int sec = (int)((left + 999) / 1000);
+  if (sec != bkRsLast) {
+    bkRsLast = sec;
+    char m[44]; snprintf(m, sizeof(m), "%s... %d", bkRsBase, sec);
+    bkSay(m, 1200);
+  }
+  needRedraw = true;
+}
+
 // ---------------------------------------------------------------------
 // iterasi NVS (API berubah antara ESP-IDF 4.x dan 5.x)
 // ---------------------------------------------------------------------
@@ -386,7 +409,7 @@ static int bkDoRestore(int idx, const char* pass) {
   if (fail) snprintf(m, sizeof(m), RPTR("Dipulihkan %d, gagal %d. Restart..."), ok, fail);
   else      snprintf(m, sizeof(m), RPTR("Dipulihkan %d nilai. Restart..."), ok);
   bkSay(m, 2600);
-  bkRestartAt = millis() + 2200;                                   // drawBackup() melakukan restart
+  bkArmRestart(m);                                                 // drawBackup() melakukan restart (dengan hitung mundur)
   return 0;
 }
 
@@ -601,7 +624,7 @@ static void bkDrawCloud(LGFX_Sprite& s) {
 
 void drawBackup(LGFX_Sprite& s) {
   bkLayout();
-  if (bkRestartAt) { needRedraw = true; if ((long)(millis() - bkRestartAt) >= 0) ESP.restart(); }
+  bkTickRestart();
   if (bkArmKind && (long)(millis() - bkArmUntil) >= 0) bkArmKind = 0;
   if (bkArmKind) needRedraw = true;                                  // label "Yakin?" kembali sendiri saat waktu habis
   bkClampScroll();
@@ -612,7 +635,7 @@ void drawBackup(LGFX_Sprite& s) {
   s.setTextSize(1);
 
   { char cm[48]; bool rs = false;                                    // hasil operasi cloud (task terpisah)
-    if (bkCloudTake(cm, sizeof(cm), &rs)) { bkSay(cm, 3200); if (rs) bkRestartAt = millis() + 2200; }
+    if (bkCloudTake(cm, sizeof(cm), &rs)) { bkSay(cm, 3200); if (rs) bkArmRestart(cm); }
     if (bkCloudBusy()) needRedraw = true; }
   bkDrawTabs(s);
   if (bkTab == 1) { bkDrawCloud(s); drawBack(s); drawToast(s); return; }
