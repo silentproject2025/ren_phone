@@ -112,7 +112,7 @@ static float hpVel = 0.0f;            // px/ms
 static float hpDragRaw = 0.0f, hpTarget = 0.0f, hpFx = 0.0f, hpFxLast = 0.0f, hpFy = 0.0f, hpFyLast = 0.0f, hpAccum = 0.0f;
 static bool  hpCurDirty = true;       // gambar halaman SEKARANG sudah basi (widget hidup berubah); halaman tetangga tidak ikut dibuang
 static unsigned long hpImgAt[3] = { 0, 0, 0 };   // kapan slot dibuat (utk penyegaran tetangga yang tua)
-#define HP_VGAIN 2.4f                 // geser vertikal: 1 px jari = 2.4 px sumbu halaman (~200 px jari = 1 halaman)
+#define HP_VGAIN 0.0f   /* HP_NO_VFLIP_V1: 0 = geser vertikal tidak membalik halaman; 2.4f = perilaku lama */ //                // geser vertikal: 1 px jari = 2.4 px sumbu halaman (~200 px jari = 1 halaman)
 static unsigned long hpSampleMs = 0;
 static int   hpStartPage = 0, hpLock = 0;     // hpLock: 0 belum, 1 horizontal (ikut jari), 2 vertikal (balik halaman)
 static bool  hpDragging = false, hpSpringing = false, hpPending = false, hpWasOn = false;
