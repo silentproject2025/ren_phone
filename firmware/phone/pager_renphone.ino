@@ -604,7 +604,9 @@ int hpWidgetCutY(){
 // HOME-PAGES-V2: dipanggil tepat setelah drawHome() di frame biasa -> tampilan diam sama persis dgn gambar halaman
 void hpHomeCover(LGFX_Sprite& s){
   // BUKAN hpAllowed(): Control Center / shade / dll menggambar di ATAS Home, jadi latar Home tetap harus bersih
-  if(hpN < 2 || hwlModeLoad() == 0 || !hpGeomOk()) return;
+  if(hwlModeLoad() == 0 || !hpGeomOk()) return;
+  if(hpN == 0) hpEnsurePages();   // HP_COVER_BOOT_V1: halaman belum dihitung (frame Home pertama setelah boot) -> hitung sekarang, jangan biarkan grid app terlihat
+  if(hpN < 2) return;
   if(homeSearchActive() || homeSearchBar.open || homeSearchBar.animating || homeJiggle || homeGoneIdx >= 0) return;
   const int p = hpNearestPage(hpSc, hpN, homeScrollY);
   const float d = homeScrollY - (float)hpSc[p];
