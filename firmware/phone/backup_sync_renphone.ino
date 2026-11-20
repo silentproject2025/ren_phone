@@ -135,24 +135,24 @@ static int bsRpc(const char* fn, const char* body, size_t blen, char** resp, siz
 static void bsTask(void*) {
   BkCloudKeys k; memset(&k, 0, sizeof(k));
   char* resp = NULL; size_t rn = 0;
-  if (!bsKeys(k.token, k.enc)) { bsDone("Kunci perangkat gagal dibuat"); vTaskDelete(NULL); return; }
+  if (!bsKeys(k.token, k.enc)) { bsDone(RPTR("Kunci perangkat gagal dibuat")); vTaskDelete(NULL); return; }
   const char* id = devRegId();
 
   if (bsOp == BS_OP_PUT) {
     uint8_t* buf = bkAlloc(BK_BUF_MAX); size_t len = 0; int cnt = 0;
-    if (!buf) { bsDone("PSRAM tidak cukup"); goto out; }
+    if (!buf) { bsDone(RPTR("PSRAM tidak cukup")); goto out; }
     { int rc = bkCollect(buf, BK_BUF_MAX, bsSec, &len, &cnt);
-      if (rc != 0) { free(buf); bsDone(rc == 1 ? "Pengaturan terlalu besar" : "Gagal membaca pengaturan"); goto out; } }
+      if (rc != 0) { free(buf); bsDone(rc == 1 ? RPTR("Pengaturan terlalu besar") : RPTR("Gagal membaca pengaturan")); goto out; } }
     {
       size_t ecap = len + BK_ENC_OVERHEAD + 16; uint8_t* eb = bkAlloc(ecap);
-      if (!eb) { bkZero(buf, len); free(buf); bsDone("PSRAM tidak cukup"); goto out; }
+      if (!eb) { bkZero(buf, len); free(buf); bsDone(RPTR("PSRAM tidak cukup")); goto out; }
       uint8_t rnd[32]; for (int i = 0; i < 32; i += 4) { uint32_t r = esp_random(); memcpy(rnd + i, &r, 4); }
       // kunci enc = 256 bit acak -> 1 putaran PBKDF2 cukup (tidak ada sandi manusia yg perlu diperlambat)
       size_t el = bkEncrypt(buf, len, k.enc, 32, rnd, rnd + 16, 1, eb, ecap);
       bkZero(buf, len); free(buf); bkZero(rnd, sizeof(rnd));
-      if (!el) { free(eb); bsDone("Gagal mengenkripsi"); goto out; }
+      if (!el) { free(eb); bsDone(RPTR("Gagal mengenkripsi")); goto out; }
       size_t bcap = bkCloudPutCap(el); char* body = (char*)bkAlloc(bcap);
-      if (!body) { free(eb); bsDone("PSRAM tidak cukup"); goto out; }
+      if (!body) { free(eb); bsDone(RPTR("PSRAM tidak cukup")); goto out; }
       size_t bl = bkCloudBuildPut(eb, el, id, k.token, body, bcap);
       bkZero(eb, el); free(eb);
       int code = bl ? bsRpc("put_backup", body, bl, &resp, &rn, 64) : -4;
@@ -161,45 +161,45 @@ static void bsTask(void*) {
       if (code >= 200 && code < 300 && resp) bkCloudPlainStr(resp, rn, st, sizeof(st));
       if      (!strcmp(st, "ok")) {
         Preferences p; if (p.begin(BK_NVS_NS, false)) { time_t t = time(nullptr); p.putUInt("cloudt", t > 1600000000 ? (uint32_t)t : 0); p.putUInt("cloudn", (uint32_t)el); p.end(); }
-        char m[48]; snprintf(m, sizeof(m), "Cadangan cloud tersimpan (%d nilai)", cnt); bsDone(m);
+        char m[48]; snprintf(m, sizeof(m), RPTR("Cadangan cloud tersimpan (%d nilai)"), cnt); bsDone(m);
       }
-      else if (!strcmp(st, "too_soon"))        bsDone("Terlalu cepat, tunggu 30 detik");
-      else if (!strcmp(st, "denied"))          bsDone("Kode ini sudah diklaim perangkat lain");
-      else if (!strcmp(st, "unknown_device"))  bsDone("Perangkat belum terdaftar, coba lagi nanti");
-      else if (!strcmp(st, "too_big"))         bsDone("Pengaturan terlalu besar utk cloud");
-      else if (!strcmp(st, "full"))            bsDone("Server penuh, coba lagi nanti");
-      else                                     bsDone(code < 0 ? "Gagal tersambung ke server" : "Server menolak permintaan");
+      else if (!strcmp(st, "too_soon"))        bsDone(RPTR("Terlalu cepat, tunggu 30 detik"));
+      else if (!strcmp(st, "denied"))          bsDone(RPTR("Kode ini sudah diklaim perangkat lain"));
+      else if (!strcmp(st, "unknown_device"))  bsDone(RPTR("Perangkat belum terdaftar, coba lagi nanti"));
+      else if (!strcmp(st, "too_big"))         bsDone(RPTR("Pengaturan terlalu besar utk cloud"));
+      else if (!strcmp(st, "full"))            bsDone(RPTR("Server penuh, coba lagi nanti"));
+      else                                     bsDone(code < 0 ? RPTR("Gagal tersambung ke server") : RPTR("Server menolak permintaan"));
     }
   } else if (bsOp == BS_OP_GET) {
     char ab[200]; size_t al = bkCloudBuildAuth(id, k.token, 0, ab, sizeof(ab));
     int code = bsRpc("get_backup", ab, al, &resp, &rn, BS_RESP_MAX);
     const char* v; size_t vl;
-    if (code < 200 || code >= 300 || !resp) { bsDone(code == -2 ? "Balasan server terlalu besar" : "Gagal tersambung ke server"); goto out; }
-    if (!bkCloudJsonStr(resp, rn, "status", &v, &vl) || !bkCloudJsonEq(v, vl, "ok")) { bsDone("Tidak ada cadangan utk perangkat ini"); goto out; }
-    if (!bkCloudJsonStr(resp, rn, "data", &v, &vl)) { bsDone("Balasan server tidak lengkap"); goto out; }
+    if (code < 200 || code >= 300 || !resp) { bsDone(code == -2 ? RPTR("Balasan server terlalu besar") : RPTR("Gagal tersambung ke server")); goto out; }
+    if (!bkCloudJsonStr(resp, rn, "status", &v, &vl) || !bkCloudJsonEq(v, vl, "ok")) { bsDone(RPTR("Tidak ada cadangan utk perangkat ini")); goto out; }
+    if (!bkCloudJsonStr(resp, rn, "data", &v, &vl)) { bsDone(RPTR("Balasan server tidak lengkap")); goto out; }
     {
       uint8_t* raw = bkAlloc(vl); uint8_t* pb = bkAlloc(vl);
-      if (!raw || !pb) { if (raw) free(raw); if (pb) free(pb); bsDone("PSRAM tidak cukup"); goto out; }
+      if (!raw || !pb) { if (raw) free(raw); if (pb) free(pb); bsDone(RPTR("PSRAM tidak cukup")); goto out; }
       long n = bkB64Dec(v, vl, raw, vl);
       size_t pl = 0; int dr = (n > 0) ? bkDecrypt(raw, (size_t)n, k.enc, 32, pb, vl, &pl) : BK_DEC_FORMAT;
       bkZero(raw, vl); free(raw);
-      if (dr == BK_DEC_PASS)      { bkZero(pb, vl); free(pb); bsDone("Bukan cadangan perangkat ini / rusak"); goto out; }
-      if (dr != BK_DEC_OK)        { bkZero(pb, vl); free(pb); bsDone("Cadangan rusak, ditolak"); goto out; }
+      if (dr == BK_DEC_PASS)      { bkZero(pb, vl); free(pb); bsDone(RPTR("Bukan cadangan perangkat ini / rusak")); goto out; }
+      if (dr != BK_DEC_OK)        { bkZero(pb, vl); free(pb); bsDone(RPTR("Cadangan rusak, ditolak")); goto out; }
       int fail = 0; int ok = bkApply(pb, pl, &fail);
       bkZero(pb, vl); free(pb);
-      if (ok < 0) { bsDone("Cadangan rusak, ditolak"); goto out; }
+      if (ok < 0) { bsDone(RPTR("Cadangan rusak, ditolak")); goto out; }
       char m[48];
-      if (fail) snprintf(m, sizeof(m), "Dipulihkan %d, gagal %d. Restart...", ok, fail);
-      else      snprintf(m, sizeof(m), "Dipulihkan %d nilai. Restart...", ok);
+      if (fail) snprintf(m, sizeof(m), RPTR("Dipulihkan %d, gagal %d. Restart..."), ok, fail);
+      else      snprintf(m, sizeof(m), RPTR("Dipulihkan %d nilai. Restart..."), ok);
       bsDone(m, true);
     }
   } else {
     char ab[200]; size_t al = bkCloudBuildAuth(id, k.token, -1, ab, sizeof(ab));
     int code = bsRpc("delete_backup", ab, al, &resp, &rn, 64);
     char st[16] = ""; if (code >= 200 && code < 300 && resp) bkCloudPlainStr(resp, rn, st, sizeof(st));
-    if (!strcmp(st, "ok")) { Preferences p; if (p.begin(BK_NVS_NS, false)) { p.putUInt("cloudt", 0); p.end(); } bsDone("Cadangan cloud dihapus"); }
-    else if (!strcmp(st, "none")) bsDone("Tidak ada cadangan cloud");
-    else bsDone(code < 0 ? "Gagal tersambung ke server" : "Server menolak permintaan");
+    if (!strcmp(st, "ok")) { Preferences p; if (p.begin(BK_NVS_NS, false)) { p.putUInt("cloudt", 0); p.end(); } bsDone(RPTR("Cadangan cloud dihapus")); }
+    else if (!strcmp(st, "none")) bsDone(RPTR("Tidak ada cadangan cloud"));
+    else bsDone(code < 0 ? RPTR("Gagal tersambung ke server") : RPTR("Server menolak permintaan"));
   }
 out:
   if (resp) { bkZero(resp, rn); free(resp); }
@@ -223,10 +223,10 @@ bool bkCloudToken(char* token65) {
 bool bkCloudStart(int op, bool secrets) {
   if (bsBusy) return false;
   if (sizeof(RP_REG_URL) <= 1) { bsDone("Fitur cloud dimatikan di firmware"); return false; }
-  if (WiFi.status() != WL_CONNECTED) { bsDone("WiFi belum tersambung"); return false; }
-  if (heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL) < BS_MIN_INT_BLOCK) { bsDone("RAM kurang, tutup app lain dulu"); return false; }
+  if (WiFi.status() != WL_CONNECTED) { bsDone(RPTR("WiFi belum tersambung")); return false; }
+  if (heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL) < BS_MIN_INT_BLOCK) { bsDone(RPTR("RAM kurang, tutup app lain dulu")); return false; }
   bsOp = (uint8_t)op; bsSec = secrets; bsReady = false; bsRestart = false; bsBusy = true;
-  if (xTaskCreatePinnedToCore(bsTask, "bkcloud", 12288, NULL, 1, NULL, 0) != pdPASS) { bsDone("Gagal memulai tugas"); return false; }
+  if (xTaskCreatePinnedToCore(bsTask, "bkcloud", 12288, NULL, 1, NULL, 0) != pdPASS) { bsDone(RPTR("Gagal memulai tugas")); return false; }
   return true;
 }
 // Hasil akhir yang belum dibaca (sekali pakai).

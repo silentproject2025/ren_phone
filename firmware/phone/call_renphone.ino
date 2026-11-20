@@ -567,13 +567,13 @@ bool musExtLinkUp();
 // ---------------------------------------------------------------------
 static const char* callAudioErr(int rc) {
   switch (rc) {
-    case 1: return "Bluetooth mati (nyalakan di Control Center)";
+    case 1: return RPTR("Bluetooth mati (nyalakan di Control Center)");
     case 2: return "Modul BT (ESP32-CAM) tdk terdeteksi";
-    case 3: return "TWS belum tersambung (Musik > cari TWS)";
+    case 3: return RPTR("TWS belum tersambung (Musik > cari TWS)");
     case 4: return "RAM kurang utk audio";
-    case 5: return "Audio belum siap (buka Telepon dulu)";
+    case 5: return RPTR("Audio belum siap (buka Telepon dulu)");
     case 9: return "Audio dipakai pemutar lain";
-    default: return "Audio keluar gagal";
+    default: return RPTR("Audio keluar gagal");
   }
 }
 
@@ -957,7 +957,7 @@ static bool callResolveServer() {
     viaSrv = callSrvLookup(tHostName, callTcpActive(), ip, &port);
     char dg[40];
     if (viaSrv) snprintf(dg, sizeof(dg), "SRV %s:%d", ip, port);
-    else snprintf(dg, sizeof(dg), "SRV tdk ada, pakai A");
+    else snprintf(dg, sizeof(dg), "%s", RPTR("SRV tdk ada, pakai A"));
     callDbgPush(dg);
   }
   if (!viaSrv) {
@@ -1076,18 +1076,18 @@ static void regSend(const char* authLine) {
 
 static void regStart() {
   if (!callResolveServer()) {
-    callRegState = 3; callSetRegMsg("DNS server gagal");
+    callRegState = 3; callSetRegMsg(RPTR("DNS server gagal"));
     regNextAt = millis() + 15000UL; return;
   }
   if (callTcpActive() && !tcpUp && !tcpConnect(callPhase == CPH_IDLE ? 3000 : 1000)) {
     if (callTcpActive()) {                        // masih TCP (belum jatuh ke UDP): coba lagi setelah jeda
-      if (callRegState != 2) { callRegState = 3; callSetRegMsg("TCP belum tersambung"); }
+      if (callRegState != 2) { callRegState = 3; callSetRegMsg(RPTR("TCP belum tersambung")); }
       regNextAt = ((int32_t)(tcpNextTry - millis()) > 0) ? tcpNextTry : millis() + 2000UL;
       return;
     }
   }
   if (!srvOk && !callResolveServer()) {
-    callRegState = 3; callSetRegMsg("DNS server gagal");
+    callRegState = 3; callSetRegMsg(RPTR("DNS server gagal"));
     regNextAt = millis() + 15000UL; return;
   }
   callRandHex(regCallId, 16); strcat(regCallId, "@nyx");
@@ -1120,10 +1120,10 @@ static void callOnRegResp(const char* msg, int code) {
     }
   }
   if (code == 401 || code == 407) {
-    if (regAuthSent) { regFail("Username/password VoIP salah", 60000UL); return; }
+    if (regAuthSent) { regFail(RPTR("Username/password VoIP salah"), 60000UL); return; }
     char uri[100]; snprintf(uri, sizeof(uri), "sip:%s", tHostName);
     char auth[700];
-    if (!callBuildAuth(msg, code == 407, "REGISTER", uri, auth, sizeof(auth))) { regFail("Auth tdk didukung server", 60000UL); return; }
+    if (!callBuildAuth(msg, code == 407, "REGISTER", uri, auth, sizeof(auth))) { regFail(RPTR("Auth tdk didukung server"), 60000UL); return; }
     regAuthSent = true;
     regSend(auth);
     return;
@@ -1141,9 +1141,9 @@ static void callOnRegResp(const char* msg, int code) {
     return;
   }
   char b[40];
-  if (code == 403) callCopy(b, sizeof(b), "Ditolak server (403)");
-  else if (code == 404) callCopy(b, sizeof(b), "Akun tidak ada (404)");
-  else snprintf(b, sizeof(b), "Gagal daftar (%d)", code);
+  if (code == 403) callCopy(b, sizeof(b), RPTR("Ditolak server (403)"));
+  else if (code == 404) callCopy(b, sizeof(b), RPTR("Akun tidak ada (404)"));
+  else snprintf(b, sizeof(b), RPTR("Gagal daftar (%d)"), code);
   regFail(b, 30000UL);
 }
 
@@ -1156,7 +1156,7 @@ static void callRegStep(uint32_t now) {
   }
   if (regPending) {
     if ((int32_t)(now - regSentAt) >= (int32_t)regBackoff) {
-      if (regTries >= 5) { regFail("Server tdk merespons", 30000UL); return; }
+      if (regTries >= 5) { regFail(RPTR("Server tdk merespons"), 30000UL); return; }
       sipResend(); regTries++; regSentAt = now; if (regBackoff < 4000) regBackoff *= 2;
     }
     return;
@@ -1201,7 +1201,7 @@ static const char* sdpEol(const char* p) {            // akhir baris: \r atau \n
 
 static bool callParseSdp(const char* body) {
   sdpWhy = nullptr;
-  if (!body || !body[0]) { sdpWhy = "Lawan tdk kirim SDP"; return false; }
+  if (!body || !body[0]) { sdpWhy = RPTR("Lawan tdk kirim SDP"); return false; }
 
   // cari baris m=audio pertama yang port-nya > 0; kalau profilnya SRTP (SAVP) catat saja
   const char* m = body;
@@ -1220,7 +1220,7 @@ static bool callParseSdp(const char* body) {
     m = eol;
   }
   if (!hit) {
-    sdpWhy = sawSrtp ? "Lawan wajib SRTP (enkripsi)"
+    sdpWhy = sawSrtp ? RPTR("Lawan wajib SRTP (enkripsi)")
            : sawZeroPort ? "Lawan menolak audio"
            : "SDP lawan tanpa audio";
     return false;
@@ -1241,7 +1241,7 @@ static bool callParseSdp(const char* body) {
   host[n] = 0;
   char ip[16];
   if (!callResolve(host, ip) || !ip[0]) { sdpWhy = "Alamat media lawan tak valid"; return false; }
-  if (strcmp(ip, "0.0.0.0") == 0) { sdpWhy = "Lawan minta panggilan ditahan"; return false; }
+  if (strcmp(ip, "0.0.0.0") == 0) { sdpWhy = RPTR("Lawan minta panggilan ditahan"); return false; }
 
   // daftar payload di baris m= : ambil PCMU(0) / PCMA(8)
   const char* av = strstr(m, "RTP/AVP");
@@ -1518,7 +1518,7 @@ static bool callTurnAllocate() {
   if (!host[0] || !turnUser[0] || !turnPass[0]) return false;            // TURN tdk diatur: bukan error
   if (!rtpOpen) return false;
   char ip[16];
-  if (!callResolve(host, ip) || !turnSrv.fromString(ip)) { callCopy(turnErr, sizeof(turnErr), "DNS TURN gagal"); return false; }
+  if (!callResolve(host, ip) || !turnSrv.fromString(ip)) { callCopy(turnErr, sizeof(turnErr), RPTR("DNS TURN gagal")); return false; }
   turnPort = (uint16_t)(port > 0 ? port : 3478);
   turnRealm[0] = 0; turnNonce[0] = 0;
 
@@ -1527,19 +1527,19 @@ static bool callTurnAllocate() {
   int code = turnTransact(n, &rl);
   if (code == 401 || code == 438) {
     turnTakeRealmNonce(turnRsp, rl);
-    if (!turnRealm[0]) { callCopy(turnErr, sizeof(turnErr), "TURN: realm kosong"); return false; }
+    if (!turnRealm[0]) { callCopy(turnErr, sizeof(turnErr), RPTR("TURN: realm kosong")); return false; }
     n = turnBuildReq(0x0003, true, -1, false, IPAddress(), true);
     code = turnTransact(n, &rl);
   }
   if (code != 1) {
     if (code == 0) callCopy(turnErr, sizeof(turnErr), "TURN tdk merespons");
-    else snprintf(turnErr, sizeof(turnErr), "TURN ditolak (%d)", code);
+    else snprintf(turnErr, sizeof(turnErr), RPTR("TURN ditolak (%d)"), code);
     return false;
   }
   int al = 0;
   const uint8_t* e = turnFindAttr(turnRsp, rl, 0x0016, &al);                 // XOR-RELAYED-ADDRESS
   char rip[16]; int rport = 0;
-  if (!e || !turnDecodeXor(e, al, rip, sizeof(rip), &rport) || rport <= 0) { callCopy(turnErr, sizeof(turnErr), "TURN: alamat relay tdk ada"); return false; }
+  if (!e || !turnDecodeXor(e, al, rip, sizeof(rip), &rport) || rport <= 0) { callCopy(turnErr, sizeof(turnErr), RPTR("TURN: alamat relay tdk ada")); return false; }
   callCopy(dlg.myRtpIp, sizeof(dlg.myRtpIp), rip);
   dlg.myRtpPort = rport;
   turnOn = true;
@@ -1759,7 +1759,7 @@ static void callMediaStart() {
   rxInit = false; rxLoss = 0; rxGapAt = 0; memset(jbUsed, 0, sizeof(jbUsed)); memset(rxLast, 0, sizeof(rxLast));
   lastRtpRx = millis();
   toneMode = 0;
-  if (!callMicStart()) callToast("Mic dipakai app lain: suara kamu tdk terkirim");
+  if (!callMicStart()) callToast(RPTR("Mic dipakai app lain: suara kamu tdk terkirim"));
   if (!aoOn) { int rc = callAudioStart(); if (rc != 0) callToast(callAudioErr(rc)); }
   mediaOn = true;
   callStartMs = millis();
@@ -1773,30 +1773,30 @@ static void callBeginDial(const char* targetIn) {
   char t[72]; callCopy(t, sizeof(t), targetIn);
   { int l = (int)strlen(t); while (l > 0 && (t[l - 1] == ' ' || t[l - 1] == '\n')) t[--l] = 0; }
   char* tp = t; while (*tp == ' ') tp++;
-  if (!*tp) { callToast("Isi tujuan dulu"); return; }
+  if (!*tp) { callToast(RPTR("Isi tujuan dulu")); return; }
 
   char reqUri[110], user[40], host[64]; int port = 0;
   if (strchr(tp, '@')) snprintf(reqUri, sizeof(reqUri), "sip:%s", tp);
   else if (callLooksLikeIp(tp)) snprintf(reqUri, sizeof(reqUri), "sip:nyx@%s", tp);
   else {
-    if (!tHostName[0]) { callToast("Isi akun VoIP dulu (Atur)"); return; }
+    if (!tHostName[0]) { callToast(RPTR("Isi akun VoIP dulu (Atur)")); return; }
     snprintf(reqUri, sizeof(reqUri), "sip:%s@%s", tp, tHostName);
   }
-  if (!sipUri(reqUri, user, sizeof(user), host, sizeof(host), &port)) { callToast("Alamat tidak valid"); return; }
+  if (!sipUri(reqUri, user, sizeof(user), host, sizeof(host), &port)) { callToast(RPTR("Alamat tidak valid")); return; }
 
   char dip[16]; int dport; bool viaServer = false, direct = false;
   if (callLooksLikeIp(host)) { direct = true; callCopy(dip, sizeof(dip), host); dport = port > 0 ? port : 5060; }
   else if (tHostName[0] && strcasecmp(host, tHostName) == 0) {
-    if (!callResolveServer()) { callToast("DNS server VoIP gagal"); return; }
+    if (!callResolveServer()) { callToast(RPTR("DNS server VoIP gagal")); return; }
     viaServer = true; callCopy(dip, sizeof(dip), srvIpStr); dport = tPort;
   } else {
-    if (!callResolve(host, dip)) { callToast("Alamat tidak ditemukan"); return; }
+    if (!callResolve(host, dip)) { callToast(RPTR("Alamat tidak ditemukan")); return; }
     dport = port > 0 ? port : 5060;
   }
-  if (viaServer && callRegState != 2) { callToast("VoIP belum terdaftar"); return; }
+  if (viaServer && callRegState != 2) { callToast(RPTR("VoIP belum terdaftar")); return; }
 
   wakeYieldMic(4000);
-  if (micI2SReady) { callToast("Mic sedang dipakai app lain"); return; }
+  if (micI2SReady) { callToast(RPTR("Mic sedang dipakai app lain")); return; }
 
   callMarkT(20);
   memset(&dlg, 0, sizeof(dlg));
@@ -1858,7 +1858,7 @@ static void callOnInvite(const char* msg, const char* srcIp, int srcPort) {
       int n = sipBuildReply(1, 180, "Ringing", nullptr, nullptr, sipTx, SIP_BUF);
       sipTxTo(dlg.peerIp, dlg.peerPort, sipTx, n);
     } else {
-      char dg[40]; snprintf(dg, sizeof(dg), "-> 486 sibuk (fase %d)", (int)callPhase);
+      char dg[40]; snprintf(dg, sizeof(dg), RPTR("-> 486 sibuk (fase %d)"), (int)callPhase);
       callDbgPush(dg);
       int n = sipBuildReply(0, 486, "Busy Here", nullptr, nullptr, sipTx, SIP_BUF);
       sipTxTo(srcIp, srcPort, sipTx, n);
@@ -1902,7 +1902,7 @@ static void callOnInvite(const char* msg, const char* srcIp, int srcPort) {
   callMarkT(72);
 
   callPhase = CPH_INCOMING;
-  callSetStatus(dlg.lan ? "Panggilan langsung (LAN)" : "Panggilan VoIP masuk");
+  callSetStatus(dlg.lan ? RPTR("Panggilan langsung (LAN)") : RPTR("Panggilan VoIP masuk"));
   int rc = callAudioStart();                       // supaya nada dering terdengar di TWS (kalau ada)
   callMarkT(73);
   if (rc == 0) { toneMode = 2; toneT = 0; toneLastMs = 0; }
@@ -1929,7 +1929,7 @@ static void callAnswer() {
   { char dg[40]; snprintf(dg, sizeof(dg), "tx 200 OK %dB %s", n, sipRtxTcp ? "TCP" : "UDP"); callDbgPush(dg); }
   dlg.retxAt = millis() + 500UL; dlg.retxN = 0; dlg.ackd = false;
   callPhase = CPH_ACTIVE;
-  callSetStatus("Terhubung");
+  callSetStatus(RPTR("Terhubung"));
   callMediaStart();
 }
 
@@ -1982,18 +1982,18 @@ static void callOnInviteResp(const char* msg, int code) {
     callSendAck2xx();
     if (callPhase == CPH_ENDING || !sdpOk) {                            // sudah dibatalkan / SDP tak cocok
       callSendBye();
-      callFinish(sdpOk ? "Dibatalkan" : (sdpWhy ? sdpWhy : "Codec tidak cocok"));
+      callFinish(sdpOk ? RPTR("Dibatalkan") : (sdpWhy ? sdpWhy : RPTR("Codec tidak cocok")));
       return;
     }
     callPhase = CPH_ACTIVE;
     dlg.ackd = true;
-    callSetStatus("Terhubung");
+    callSetStatus(RPTR("Terhubung"));
     callMediaStart();
     return;
   }
   if (code == 401 || code == 407) {
     callSendAckNon2xx(msg);
-    if (dlg.authTried || !tUser[0]) { callFinish("Autentikasi ditolak"); return; }
+    if (dlg.authTried || !tUser[0]) { callFinish(RPTR("Autentikasi ditolak")); return; }
     char auth[700];
     if (!callBuildAuth(msg, code == 407, "INVITE", dlg.reqUri, auth, sizeof(auth))) { callFinish("Auth tdk didukung"); return; }
     dlg.authTried = true;
@@ -2004,21 +2004,21 @@ static void callOnInviteResp(const char* msg, int code) {
   callSendAckNon2xx(msg);
   char b[44];
   switch (code) {
-    case 404: callCopy(b, sizeof(b), "Tujuan tidak ditemukan"); break;
-    case 480: callCopy(b, sizeof(b), "Tidak tersedia"); break;
-    case 486: callCopy(b, sizeof(b), "Sedang sibuk"); break;
-    case 487: callCopy(b, sizeof(b), "Dibatalkan"); break;
+    case 404: callCopy(b, sizeof(b), RPTR("Tujuan tidak ditemukan")); break;
+    case 480: callCopy(b, sizeof(b), RPTR("Tidak tersedia")); break;
+    case 486: callCopy(b, sizeof(b), RPTR("Sedang sibuk")); break;
+    case 487: callCopy(b, sizeof(b), RPTR("Dibatalkan")); break;
     case 488: {
       char wn[80]; wn[0] = 0;
       sipHdr(msg, "Warning", "", 0, wn, sizeof(wn));
       Serial.printf("[CALL] 488 dari lawan. Warning: %s\n", wn[0] ? wn : "(kosong)");
-      const char* why = "Ditolak 488: codec/enkripsi";
+      const char* why = RPTR("Ditolak 488: codec/enkripsi");
       if (strstr(wn, "301") || strstr(wn, "302") || strstr(wn, "304")) why = "Lawan tdk cocok (media)";
       callCopy(b, sizeof(b), why);
     } break;
-    case 603: callCopy(b, sizeof(b), "Ditolak"); break;
-    case 408: case 504: callCopy(b, sizeof(b), "Tidak terjangkau"); break;
-    default: snprintf(b, sizeof(b), "Gagal (%d)", code); break;
+    case 603: callCopy(b, sizeof(b), RPTR("Ditolak")); break;
+    case 408: case 504: callCopy(b, sizeof(b), RPTR("Tidak terjangkau")); break;
+    default: snprintf(b, sizeof(b), RPTR("Gagal (%d)"), code); break;
   }
   callFinish(b);
 }
@@ -2064,7 +2064,7 @@ static void callOnBye(const char* msg, const char* srcIp, int srcPort) {
   int n = sipBuildReply(0, 200, "OK", nullptr, nullptr, sipTx, SIP_BUF);
   sipTxTo(srcIp, srcPort, sipTx, n);
   if (callPhase == CPH_IDLE || strcmp(rq.callId, dlg.callId) != 0) return;
-  if (callPhase == CPH_ACTIVE || callPhase == CPH_ENDING) callFinish("Panggilan selesai");
+  if (callPhase == CPH_ACTIVE || callPhase == CPH_ENDING) callFinish(RPTR("Panggilan selesai"));
 }
 
 static void callOnCancel(const char* msg, const char* srcIp, int srcPort) {
@@ -2074,7 +2074,7 @@ static void callOnCancel(const char* msg, const char* srcIp, int srcPort) {
   if (callPhase == CPH_INCOMING && strcmp(rq.callId, dlg.callId) == 0) {
     n = sipBuildReply(1, 487, "Request Terminated", nullptr, nullptr, sipTx, SIP_BUF);
     sipTxTo(dlg.peerIp, dlg.peerPort, sipTx, n);
-    callFinish("Panggilan terlewat");
+    callFinish(RPTR("Panggilan terlewat"));
   }
 }
 
@@ -2148,7 +2148,7 @@ static void callOnSip(const char* msg, int len, const char* srcIp, int srcPort) 
     if (strstr(cs, "REGISTER")) callOnRegResp(msg, code);
     else if (strstr(cs, "INVITE")) callOnInviteResp(msg, code);
     else if (strstr(cs, "OPTIONS")) { if (code == 200) callOnScanResp(msg, srcIp); }
-    else if (strstr(cs, "BYE")) { if (callPhase == CPH_ENDING && code >= 200) callFinish("Panggilan selesai"); }
+    else if (strstr(cs, "BYE")) { if (callPhase == CPH_ENDING && code >= 200) callFinish(RPTR("Panggilan selesai")); }
     return;
   }
   char method[12]; sipMethodOf(msg, method, sizeof(method));
@@ -2182,7 +2182,7 @@ static void callHangup() {
       callPhase = CPH_ENDING; callSetStatus("Mengakhiri...");
       break;
     case CPH_INCOMING:
-      callRejectIncoming(603, "Decline", "Ditolak");
+      callRejectIncoming(603, "Decline", RPTR("Ditolak"));
       break;
     default: break;
   }
@@ -2197,7 +2197,7 @@ static void callHandleReq() {
   switch (rqv) {
     case CRQ_DIAL:   callBeginDial(arg); break;
     case CRQ_ANSWER: callAnswer(); break;
-    case CRQ_REJECT: if (callPhase == CPH_INCOMING) callRejectIncoming(486, "Busy Here", "Ditolak"); break;
+    case CRQ_REJECT: if (callPhase == CPH_INCOMING) callRejectIncoming(486, "Busy Here", RPTR("Ditolak")); break;
     case CRQ_HANGUP: callHangup(); break;
     case CRQ_REREG:  regPending = false; regNextAt = 0; callRegState = 0; break;
     case CRQ_SCAN:   callStartScan(); break;
@@ -2213,7 +2213,7 @@ static void callPhaseTimers(uint32_t now) {
   switch (callPhase) {
     case CPH_DIAL: case CPH_RINGBACK:
       if (!dlg.gotProv && (int32_t)(now - dlg.retxAt) >= 0) {
-        if (dlg.retxN >= 7) { callFinish("Tidak ada respon"); break; }
+        if (dlg.retxN >= 7) { callFinish(RPTR("Tidak ada respon")); break; }
         sipResend();
         uint32_t step = 500UL << dlg.retxN; if (step > 4000UL) step = 4000UL;
         dlg.retxAt = now + step; dlg.retxN++;
@@ -2222,13 +2222,13 @@ static void callPhaseTimers(uint32_t now) {
       break;
     case CPH_ENDING:
       if ((int32_t)(now - dlg.retxAt) >= 0) {
-        if (dlg.retxN >= 3 || (int32_t)(now - dlg.t0) > 4000) { callFinish(dlg.byeSent ? "Panggilan selesai" : "Dibatalkan"); break; }
+        if (dlg.retxN >= 3 || (int32_t)(now - dlg.t0) > 4000) { callFinish(dlg.byeSent ? RPTR("Panggilan selesai") : RPTR("Dibatalkan")); break; }
         sipResend();
         dlg.retxAt = now + (500UL << dlg.retxN); dlg.retxN++;
       }
       break;
     case CPH_INCOMING:
-      if ((int32_t)(now - dlg.t0) > (int32_t)CALL_RING_MS) callRejectIncoming(480, "Temporarily Unavailable", "Panggilan terlewat");
+      if ((int32_t)(now - dlg.t0) > (int32_t)CALL_RING_MS) callRejectIncoming(480, "Temporarily Unavailable", RPTR("Panggilan terlewat"));
       break;
     case CPH_ACTIVE:
       if (!dlg.uac && !dlg.ackd && (int32_t)(now - dlg.retxAt) >= 0) {   // ulangi 200 OK sampai ACK
@@ -2435,7 +2435,7 @@ static void callTaskFunc(void*) {
       if (callPhase != CPH_IDLE) callFinish("WiFi terputus");
       tcpReset();
       if (sipOpen) { sipUdp.stop(); sipTcp.end(); sipOpen = false; }
-      if (callRegState != 0) { callRegState = 0; callSetRegMsg("WiFi belum tersambung"); regPending = false; regNextAt = 0; }
+      if (callRegState != 0) { callRegState = 0; callSetRegMsg(RPTR("WiFi belum tersambung")); regPending = false; regNextAt = 0; }
       srvOk = false;
       vTaskDelay(pdMS_TO_TICKS(500));
       continue;
@@ -2922,7 +2922,7 @@ void drawCallOverlay(LGFX_Sprite& s) {
 static const char* callCfgLabel(int i) {
   static const char* L[7] = { "Server VoIP (mis. sip.linphone.org)", "Username VoIP", "Password VoIP", "Nama tampilan",
                               "Server TURN (host atau host:port)", "Username TURN", "Password TURN" };
-  return L[i];
+  return RPTR(L[i]);   // I18N: array statis -> terjemahkan saat dipakai
 }
 static String* callCfgField(int i) {
   switch (i) {
@@ -2943,7 +2943,7 @@ static void callDrawTurnCfg(LGFX_Sprite& s) {
     int maxC = (SCR_W - 28) / 6;
     if ((int)v.length() > maxC) v = String("..") + v.substring(v.length() - (maxC - 2));
     s.setTextColor(v.length() ? (uint16_t)T().text : (uint16_t)T().subtext);
-    s.setCursor(12, ly + 13); s.print(v.length() ? v.c_str() : "ketuk untuk mengisi...");
+    s.setCursor(12, ly + 13); s.print(v.length() ? v.c_str() : RPTR("ketuk untuk mengisi..."));
   }
   int by = 40 + 3 * 27 + 8;
   bool sdCfg = sdReady && SD_MMC.exists("/turn.cfg");
@@ -2972,7 +2972,7 @@ static void callDrawCfg(LGFX_Sprite& s) {
     if ((int)v.length() > maxC - 1) v = String("..") + v.substring(v.length() - (maxC - 3));
     v += "_";
     s.setTextColor(T().text); s.setCursor(12, 69); s.print(v.c_str());
-    s.setTextColor(T().subtext); s.setCursor(10, 92); s.print("Ketuk area di atas keyboard = selesai");
+    s.setTextColor(T().subtext); s.setCursor(10, 92); s.print(RPTR("Ketuk area di atas keyboard = selesai"));
     return;
   }
   for (int i = 0; i < 4; i++) {
@@ -2984,7 +2984,7 @@ static void callDrawCfg(LGFX_Sprite& s) {
     int maxC = (SCR_W - 28) / 6;
     if ((int)v.length() > maxC) v = String("..") + v.substring(v.length() - (maxC - 2));
     s.setTextColor(v.length() ? (uint16_t)T().text : (uint16_t)T().subtext);
-    s.setCursor(12, ly + 13); s.print(v.length() ? v.c_str() : "ketuk untuk mengisi...");
+    s.setCursor(12, ly + 13); s.print(v.length() ? v.c_str() : RPTR("ketuk untuk mengisi..."));
   }
   iosRR(s, SCR_W - 62, 20, 56, 16, 6, T().surface2);
   s.setTextColor(T().accent); callCenter(s, SCR_W - 62, 56, 24, "TURN >");
@@ -3011,7 +3011,7 @@ static void callRegText(char* out, int cap, uint16_t* col) {
   if (st == 2) { callCopy(out, cap, "VoIP terdaftar"); *col = T().good; }
   else if (st == 1) { callCopy(out, cap, "mendaftar..."); *col = T().subtext; }
   else if (st == 3) { char m[40]; callLock(); callCopy(m, sizeof(m), callRegMsg); callUnlock(); callCopy(out, cap, m); *col = T().danger; }
-  else { callCopy(out, cap, callSipConfigured() ? "VoIP belum aktif" : "VoIP belum diatur"); *col = T().subtext; }
+  else { callCopy(out, cap, callSipConfigured() ? RPTR("VoIP belum aktif") : RPTR("VoIP belum diatur")); *col = T().subtext; }
 }
 
 void drawCall(LGFX_Sprite& s) {
@@ -3056,7 +3056,7 @@ void drawCall(LGFX_Sprite& s) {
   if ((int)v.length() > maxC - 1) v = String("..") + v.substring(v.length() - (maxC - 3));
   if (typing) v += "_";
   s.setTextColor(v.length() ? (uint16_t)T().text : (uint16_t)T().subtext);
-  s.setCursor(12, 87); s.print(v.length() ? v.c_str() : (callTab == 0 ? "ketuk untuk mengetik..." : "mis. 192.168.1.23"));
+  s.setCursor(12, 87); s.print(v.length() ? v.c_str() : (callTab == 0 ? RPTR("ketuk untuk mengetik...") : "mis. 192.168.1.23"));
   iosRR(s, 6, 106, SCR_W - 12, 24, 8, T().good);
   s.setTextColor(T().bg); callCenter(s, 6, SCR_W - 12, 114, RPTR("Panggil"));
   int y = 136;

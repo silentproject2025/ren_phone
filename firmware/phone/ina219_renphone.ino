@@ -564,7 +564,7 @@ static const char* inaStatusText() {
   if (!inaOk) return "Sensor offline";
   if (!inaActive) return "Standby";
   if (inaCharging) return "Mengisi";
-  if (inaSoc >= 100) return "Penuh";
+  if (inaSoc >= 100) return RPTR("Penuh");
   if (inaI == 0) return "Idle";
   return "Memakai";
 }
@@ -615,14 +615,14 @@ static void inaDrawSummary(LGFX_Sprite& s, int top, int bottom) {
   snprintf(v, sizeof(v), "%.1f mW", fabsf(inaP));
   inaRow(s, y, "Daya", v, T().text); y += lh;
   if (inaCapLearn > 0) snprintf(v, sizeof(v), "%.0f mAh (%.0f%%)", (double)inaCapLearn, (double)(100.0f * inaCapLearn / (float)inaCapMah));
-  else snprintf(v, sizeof(v), "%s", inaLrnActive ? "mengukur..." : "belum terukur");
+  else snprintf(v, sizeof(v), "%s", inaLrnActive ? RPTR("mengukur...") : RPTR("belum terukur"));
   inaRow(s, y, "Kapasitas terukur", v, T().text); y += lh;
   snprintf(v, sizeof(v), "-%.0f / +%.0f mAh", inaMahOut, inaMahIn);
   inaRow(s, y, "Sesi keluar / masuk", v, T().text); y += lh;
   {
-    char d[16]; float h = -1; const char* lb = "Sisa waktu";
+    char d[16]; float h = -1; const char* lb = RPTR("Sisa waktu");
     if (inaCharging) {
-      lb = "Penuh dalam";
+      lb = RPTR("Penuh dalam");
       if (-inaIavg > 5.0f) h = ((100.0f - inaSocF) / 100.0f * inaCapEff()) / (-inaIavg);
     } else if (inaIavg > 5.0f) {
       h = (inaSocF / 100.0f * inaCapEff()) / inaIavg;

@@ -3385,6 +3385,7 @@ int navZoomCloseApp=-1;     // v118: index app utk tujuan animasi TUTUP (-1 = pa
 bool homeIconGeom(int idx,float sc,int& ox,int& oy,int& ow,int& oh,int& orad); // definisi dekat homeArmZoom()
 void navZoomAppOrigin(int ai,int& ox,int& oy,int& ow,int& oh,int& orad);         // v120: asal/tujuan zoom mengikuti kolom ikon app
 void navZoomFallbackArm(Screen s);                                              // definisi dekat homeArmZoom()
+void homeWarmMarkReady();                                                       // WARMUP-V1: definisi tepat sebelum loop()
 extern float homeScrollY;
 int navZoomX=0,navZoomY=0,navZoomW=0,navZoomH=0,navZoomR=0;
 uint16_t navZoomCol=0;
@@ -3584,6 +3585,7 @@ void navGoHome(){
   kbVisible=false; kbTarget=nullptr;
   playNavTransition(NAV_ANIM_HOME);
   needRedraw=false;
+  homeWarmMarkReady();   // WARMUP-V1: lihat homeWarmMarkReady() di atas loop()
   homeAodWake(); // v99: reset timer idle AOD Home tiap kali BENERAN nyampe Home -- jgn langsung dianggap "udah lama idle"
 }
 // v124: UNLOCK -- Home membesar (zoom) dari bawah-tengah di atas lock screen, bukan geser turun.
@@ -3598,6 +3600,7 @@ void unlockZoomHome(){
   navPlayZoomOpen();                                   // renderCurrentFrame() sudah Home (locked=false)
   navZoomSaved=false; navZoomArmed=false;
   needRedraw=false;
+  homeWarmMarkReady();   // WARMUP-V1: panel + canvas sudah berisi Home polos penuh -> pemanasan cache/pager boleh jalan
   homeAodWake();
 }
 void navBack(){
@@ -3609,6 +3612,7 @@ void navBack(){
   kbVisible=false; kbTarget=nullptr;
   playNavTransition(NAV_ANIM_BACK);
   needRedraw=false;
+  if(navDepth==0) homeWarmMarkReady();   // WARMUP-V1
   if(navDepth==0) homeAodWake(); // v99: navBack() jg bisa balik ke Home (navDepth abis) -- reset jg spy konsisten dgn navGoHome()
 }
 
@@ -7368,7 +7372,7 @@ void drawHome(LGFX_Sprite& s,float sc){
     s.setTextSize(1);
     { // HOME-KATEGORI: judul ikut kategori terpilih, lalu baris chip di bawahnya
       char ttl[28];
-      if(homeCat==0) strcpy(ttl,"Semua App"); else snprintf(ttl,sizeof(ttl),"%s (%d)",HOME_CAT_NAME[homeCat],homeShowN);
+      if(homeCat==0) strcpy(ttl,RPTR("Semua App")); else snprintf(ttl,sizeof(ttl),"%s (%d)",HOME_CAT_NAME[homeCat],homeShowN);
       uiText(s,14,gridTop-HOME_CAT_H-20-scPx,ttl,wp?(uint16_t)0xDEFB:T().subtext,wp,false);
       homeCatDraw(s,homeCatChipTop()-scPx,wp,clipTop,contentBot);
     }
@@ -7398,7 +7402,7 @@ void drawHome(LGFX_Sprite& s,float sc){
       }
     }
     if(homeShowN==0){ // HOME-KATEGORI: kategori kosong (semua appnya disembunyikan lewat Atur Home)
-      const char* em="Tidak ada app di kategori ini";
+      const char* em=RPTR("Tidak ada app di kategori ini");
       s.setTextColor(wp?(uint16_t)0xDEFB:T().subtext); s.setTextSize(1);
       s.setCursor(SCR_W/2-s.textWidth(em)/2, gridTop+14-scPx); s.print(em);
     }
@@ -12137,8 +12141,8 @@ void drawUpdate(LGFX_Sprite& s){
   drawGlassCard(s, 6, UPD_HERO_Y, SCR_W-12, UPD_HERO_H, 10, T().surface, 200);
   updIconArrow(s, 26, UPD_HERO_Y+UPD_HERO_H/2, stCol);
   char line[40];
-  if(st==2)      snprintf(line, sizeof(line), "Ada update: build %d", otaLatestBuild());
-  else if(st==1) snprintf(line, sizeof(line), "Sudah versi terbaru");
+  if(st==2)      snprintf(line, sizeof(line), RPTR("Ada update: build %d"), otaLatestBuild());
+  else if(st==1) snprintf(line, sizeof(line), "%s", RPTR("Sudah versi terbaru"));
   else           snprintf(line, sizeof(line), "Firmware terpasang");
   String heroL = String(line);
   { String hb = String(" [") + otaBranchName() + "]"; // branch firmware yg sedang jalan (kalau muat)
@@ -12205,7 +12209,7 @@ void drawUpdate(LGFX_Sprite& s){
   updDrawChanRow(s);
   iosRR(s, 6, UPD_URL_Y, SCR_W-12, UPD_URL_H, 6, T().surface);
   int maxU = (SCR_W-28)/6;
-  String uDisp = updUrl.length() ? updUrl : String("ketuk untuk isi URL...");
+  String uDisp = updUrl.length() ? updUrl : String(RPTR("ketuk untuk isi URL..."));
   if((int)uDisp.length() > maxU) uDisp = uDisp.substring(0, maxU-2) + "..";
   s.setTextColor(updUrl.length() ? T().text : T().subtext);
   s.setCursor(14, UPD_URL_Y+6); s.print(uDisp.c_str());
@@ -12215,7 +12219,7 @@ void drawUpdate(LGFX_Sprite& s){
   iosRR(s, 6, UPD_BTN_Y, SCR_W-12, UPD_BTN_H, 8, wifiBtnColor);
   s.setTextColor((!wifiConnected) ? T().subtext : T().bg);
   updCenterText(s, 6, SCR_W-12, UPD_BTN_Y+8,
-                !wifiConnected ? "WiFi tidak terhubung" : (pendingWifi ? "Yakin? Ketuk lagi" : "Unduh & Pasang"));
+                !wifiConnected ? RPTR("WiFi tidak terhubung") : (pendingWifi ? RPTR("Yakin? Ketuk lagi") : RPTR("Unduh & Pasang")));
 
   if(otaNotesIsOpen()) updDrawNotes(s);
 
@@ -12570,7 +12574,7 @@ static bool homeCacheBuild(){
   s.setTextSize(1);
   {
     char ttl[28];
-    if(homeCat==0) strcpy(ttl,"Semua App"); else snprintf(ttl,sizeof(ttl),"%s (%d)",HOME_CAT_NAME[homeCat],homeShowN);
+    if(homeCat==0) strcpy(ttl,RPTR("Semua App")); else snprintf(ttl,sizeof(ttl),"%s (%d)",HOME_CAT_NAME[homeCat],homeShowN);
     uiText(s,14,gridTop-HOME_CAT_H-20,ttl,T().subtext,false,false);
     homeCatDraw(s,homeCatChipTop(),false,0,needH);
   }
@@ -12585,7 +12589,7 @@ static bool homeCacheBuild(){
     homeDrawLabel(s, RPTR(apps[i].name), x+cw/2, y+ch-14, cw+6);
   }
   if(homeShowN==0){
-    const char* em="Tidak ada app di kategori ini";
+    const char* em=RPTR("Tidak ada app di kategori ini");
     s.setTextColor(T().subtext); s.setTextSize(1);
     s.setCursor(SCR_W/2-s.textWidth(em)/2, gridTop+14); s.print(em);
   }
@@ -20919,6 +20923,20 @@ static bool homeTouchMovedAtRelease(int& lx,int& ly){
   lx=touchStartX; ly=touchStartY; return false;
 #endif
 }
+// WARMUP-V1: hwsPrewarm() & hpPrewarm() (cache Home + gambar halaman + masuk mode hardware scroll saat Home diam)
+// WAJIB homeBandReady==true. Padahal homeBandReady hanya jadi true lewat frame penuh Home di cabang needRedraw (di loop())
+// dan di-nol-kan tiap Home ditinggal. Transisi yang BERAKHIR di Home polos (buka kunci / tutup app) sudah menaruh frame
+// Home lengkap di panel + canvas lewat push() tapi tidak menyalakan needRedraw -> pemanasan tidak pernah mulai, dan
+// app PERTAMA yang diketuk lewat jalur dingin (cache + pager belum siap -> tampilan loncat/geser setengah). Di sini
+// frame itu ditandai sah, dgn syarat 'polos' yang sama persis spt plainNow di loop().
+void homeWarmMarkReady(){
+  if(curScreen()!=SCR_HOME) return;
+  const bool plain = !locked && !appSwitcherOpen && !controlCenterOpen && !notifShadeOpen && !homeAodActive && !diMenuOpen
+                     && !kbVisible && !homeSearchActive() && !toastVisibleNow() && !homeSearchBar.open && !homeSearchBar.animating
+                     && ((int)(diCurY+diCurH) < homeGridClipTop());
+  if(plain) homeBandReady = true;
+}
+
 void loop(){
   rpHLLoopPoll();
   { static Screen s_hePrev=SCR_HOME; Screen s_heC=curScreen();   // v130: home anim -- catat saat masuk Home

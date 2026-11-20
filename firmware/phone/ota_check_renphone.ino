@@ -177,9 +177,10 @@ void otaCrossDispToggle() {
   otaCrossDisp = !otaCrossDisp;
   otaResetCheck();
   if (otaCrossDisp) {
-    String m = String("Target firmware layar ") + (strcmp(otaTargetDispId(), "st7796") == 0 ? "ST7796" : "ILI9341") +
-               ". Layar ini bisa gelap setelah pasang!";
-    showToast(m.c_str(), 3500);
+    char mb[112];
+    snprintf(mb, sizeof(mb), RPTR("Target firmware layar %s. Layar ini bisa gelap setelah pasang!"),
+             strcmp(otaTargetDispId(), "st7796") == 0 ? "ST7796" : "ILI9341");
+    showToast(mb, 3500);
   } else {
     showToast(RPTR("Target: firmware layar ini"), 1800);
   }
@@ -327,8 +328,8 @@ static void otaFetchNotes(const String& base, const String& head) {
 // =====================================================================
 String otaWifiLabel() {
   char b[48];
-  if (otaCheckedOk) snprintf(b, sizeof(b), "WiFi - terbaru b%d (kini b%d):", otaLatestNum, (int)RP_BUILD_NUM);
-  else              snprintf(b, sizeof(b), "WiFi - unduh dari URL (kini b%d):", (int)RP_BUILD_NUM);
+  if (otaCheckedOk) snprintf(b, sizeof(b), RPTR("WiFi - terbaru b%d (kini b%d):"), otaLatestNum, (int)RP_BUILD_NUM);
+  else              snprintf(b, sizeof(b), RPTR("WiFi - unduh dari URL (kini b%d):"), (int)RP_BUILD_NUM);
   return String(b);
 }
 
@@ -442,7 +443,7 @@ void otaCheckAndFill() {
   }
   if (baseRv != RP_BASE_REV) {
     char b[72];
-    snprintf(b, sizeof(b), "Tidak kompatibel (base %d, HP base %d). Dibatalkan", baseRv, (int)RP_BASE_REV);
+    snprintf(b, sizeof(b), RPTR("Tidak kompatibel (base %d, HP base %d). Dibatalkan"), baseRv, (int)RP_BASE_REV);
     showToast(b, 3800);
     otaResetCheck();
     return;
@@ -461,7 +462,7 @@ void otaCheckAndFill() {
       otaFetchNotes(base, head);
     }
     if (switching) {
-      String m = String(otaCrossDisp ? "LAYAR LAIN: '" : "Pindah ke '") + ch + "' b" + String(build) + ". Ketuk Unduh & Pasang";
+      String m = String(otaCrossDisp ? RPTR("LAYAR LAIN: '") : RPTR("Pindah ke '")) + ch + "' b" + String(build) + RPTR(". Ketuk Unduh & Pasang");
       showToast(m.c_str(), 3200);
     } else {
       showToast(RPTR("Ada update! Ketuk Unduh & Pasang"), 2600);
@@ -521,8 +522,9 @@ bool otaHdrFeed(const uint8_t* b, size_t n, size_t off) {
 // sebelum Update.begin: ukuran harus cocok dgn info.txt (kalau URL berasal dari "Cek update")
 bool otaPreInstall(const String& url, int contentLen, String& why) {
   if (otaExpUrl.length() && url == otaExpUrl && otaExpSize > 0 && contentLen != otaExpSize) {
-    why = String("Ukuran file (") + String(contentLen) + ") tidak cocok dgn info channel (" + String(otaExpSize) +
-          "). Dibatalkan, firmware lama aman.";
+    char wb[144];
+    snprintf(wb, sizeof(wb), RPTR("Ukuran file (%d) tidak cocok dgn info channel (%d). Dibatalkan, firmware lama aman."), contentLen, otaExpSize);
+    why = String(wb);
     return false;
   }
   return true;
@@ -581,7 +583,7 @@ bool otaRollbackNow(bool userInitiated) {
     display.fillScreen(TFT_BLACK);
     display.setTextSize(1);
     display.setTextColor(0x07FF);
-    const char* t1 = "Kembali ke versi sebelumnya...";
+    const char* t1 = RPTR("Kembali ke versi sebelumnya...");
     display.setCursor((SCR_W - display.textWidth(t1)) / 2, SCR_H / 2 - 4);
     display.print(t1);
     delay(1500);

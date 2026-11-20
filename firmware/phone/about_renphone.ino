@@ -83,7 +83,7 @@ static void aboutRefresh() {
     if (bn > 0) snprintf(a, sizeof(a), "%s (build %d)", vl, bn); else snprintf(a, sizeof(a), "%s", vl); }
   aboutAdd("Versi firmware", a);
   snprintf(a, sizeof(a), "%s %s", __DATE__, __TIME__);
-  aboutAdd("Waktu build", a);
+  aboutAdd(RPTR("Waktu build"), a);
   aboutAdd("Papan", ABOUT_BOARD_NAME);
 
   // ---- chip & CPU ----
@@ -113,7 +113,7 @@ static void aboutRefresh() {
     aboutFmtBytes(c, sizeof(c), psTotal);
     snprintf(a, sizeof(a), "%s bebas / %s", b, c);
   } else {
-    snprintf(a, sizeof(a), "Tidak terdeteksi");
+    snprintf(a, sizeof(a), "%s", RPTR("Tidak terdeteksi"));
   }
   aboutAdd("PSRAM", a);
 
@@ -123,14 +123,14 @@ static void aboutRefresh() {
     aboutFmtBytes(c, sizeof(c), SD_MMC.totalBytes());
     snprintf(a, sizeof(a), "%s terpakai / %s", b, c);
   } else {
-    snprintf(a, sizeof(a), "Tidak terdeteksi");
+    snprintf(a, sizeof(a), "%s", RPTR("Tidak terdeteksi"));
   }
   aboutAdd("SD Card", a);
 
   // ---- layar & baterai ----
-  aboutAdd("Layar", RP_DISP_NAME);
+  aboutAdd(RPTR("Layar"), RP_DISP_NAME);
   snprintf(a, sizeof(a), "%d%% (%.2f V)", battPercent, battVoltage);
-  aboutAdd("Baterai", a);
+  aboutAdd(RPTR("Baterai"), a);
 
   // ---- WiFi ----
   if (WiFi.status() == WL_CONNECTED) {
@@ -141,7 +141,7 @@ static void aboutRefresh() {
     snprintf(a, sizeof(a), "%u.%u.%u.%u", ip[0], ip[1], ip[2], ip[3]);
     aboutAdd("Alamat IP", a);
   } else {
-    aboutAdd("WiFi", "Tidak tersambung");
+    aboutAdd("WiFi", RPTR("Tidak tersambung"));
   }
   uint64_t mac = ESP.getEfuseMac();
   snprintf(a, sizeof(a), "%02X:%02X:%02X:%02X:%02X:%02X",
@@ -151,7 +151,7 @@ static void aboutRefresh() {
 
   nyxAboutRows();   // NYX-EXTRAS-V1: reset terakhir, layar & RAM saat crash, backtrace
   aboutFmtUptime(a, sizeof(a), millis());
-  aboutAdd("Waktu aktif", a);
+  aboutAdd(RPTR("Waktu aktif"), a);
 }
 
 // ---------------------------------------------------------------------

@@ -668,3 +668,156 @@ Dashboard dimatikan di build ini ::: Dashboard is disabled in this build
 # --- Update: changelog ---
 Yang baru ::: What's new
 Membaca changelog... ::: Reading changelog...
+# --- Backup & Restore ---
+Pengaturan terlalu besar ::: Settings too large
+Gagal membaca pengaturan ::: Failed to read settings
+Gagal mengenkripsi ::: Encryption failed
+Backup #%03d dibuat (%d nilai) +kunci ::: Backup #%03d created (%d values) +keys
+Backup #%03d dibuat (%d nilai) ::: Backup #%03d created (%d values)
+File tidak bisa dibuka ::: Cannot open file
+Ukuran file tidak wajar ::: Unexpected file size
+File terbaca tidak utuh ::: File read incomplete
+Backup rusak, ditolak ::: Backup corrupted, rejected
+Dipulihkan %d, gagal %d. Restart... ::: Restored %d, failed %d. Restarting...
+Dipulihkan %d nilai. Restart... ::: Restored %d values. Restarting...
+Tidak sama, ulangi ::: Doesn't match, retry
+Sandi salah ::: Wrong password
+Backup #%03d dihapus ::: Backup #%03d deleted
+Gagal menghapus #%03d ::: Failed to delete #%03d
+tanpa waktu ::: no timestamp
+Sandi backup (min 6 karakter) ::: Backup password (min 6 chars)
+Ketik ulang sandi yang sama ::: Retype the same password
+Sandi untuk backup #%03d ::: Password for backup #%03d
+Cadangan terakhir: %s ::: Last backup: %s
+Belum ada cadangan cloud ::: No cloud backup yet
+Terenkripsi di HP, server tak bisa membaca ::: Encrypted on phone, server can't read it
+Sertakan sandi & API key ::: Include passwords & API keys
+File dienkripsi AES-256 dgn sandimu ::: AES-256 encrypted with your password
+File di SD tidak terenkripsi ::: SD file is not encrypted
+Enkripsi dengan sandi ::: Encrypt with password
+Sandi ditanya tiap backup, tidak disimpan ::: Asked on every backup, never stored
+Backup bisa dibaca siapa saja yg pegang SD ::: Anyone with the SD card can read it
+Belum ada backup ::: No backups yet
+File rusak ::: Corrupted file
+bukan backup NyxOS (%.1f KB) ::: not a NyxOS backup (%.1f KB)
+Sedang memproses... ::: Working...
+Sandi & API key ikut di-backup ::: Passwords & API keys included
+Sandi & API key tidak ikut ::: Passwords & API keys not included
+Mengirim cadangan terenkripsi... ::: Uploading encrypted backup...
+Ketuk lagi: pengaturan ditimpa & HP restart ::: Tap again: overwrite settings & restart
+Mengambil cadangan... ::: Downloading backup...
+Ketuk lagi: cadangan cloud dihapus permanen ::: Tap again: delete cloud backup forever
+Menghapus cadangan cloud... ::: Deleting cloud backup...
+Backup berikutnya dienkripsi sandi ::: Next backups: password-encrypted
+Backup berikutnya tanpa enkripsi ::: Next backups: unencrypted
+Pilih satu backup dulu ::: Select a backup first
+File ini rusak, tidak bisa dipulihkan ::: Corrupted file, cannot restore
+Kunci perangkat gagal dibuat ::: Device key could not be created
+Cadangan cloud tersimpan (%d nilai) ::: Cloud backup saved (%d values)
+Terlalu cepat, tunggu 30 detik ::: Too fast, wait 30 seconds
+Kode ini sudah diklaim perangkat lain ::: Code already claimed by another device
+Perangkat belum terdaftar, coba lagi nanti ::: Device not registered, retry later
+Pengaturan terlalu besar utk cloud ::: Settings too large for the cloud
+Server penuh, coba lagi nanti ::: Server full, try again later
+Gagal tersambung ke server ::: Cannot reach the server
+Server menolak permintaan ::: Server rejected the request
+Balasan server terlalu besar ::: Server reply too large
+Tidak ada cadangan utk perangkat ini ::: No backup for this device
+Balasan server tidak lengkap ::: Server reply incomplete
+Bukan cadangan perangkat ini / rusak ::: Not this device's backup / corrupted
+Cadangan rusak, ditolak ::: Backup corrupted, rejected
+Cadangan cloud dihapus ::: Cloud backup deleted
+Tidak ada cadangan cloud ::: No cloud backup
+RAM kurang, tutup app lain dulu ::: Low RAM, close other apps first
+Gagal memulai tugas ::: Failed to start the task
+# --- Telepon / VoIP ---
+Bluetooth mati (nyalakan di Control Center) ::: Bluetooth off (enable in Control Center)
+TWS belum tersambung (Musik > cari TWS) ::: TWS not connected (Music > search TWS)
+Audio belum siap (buka Telepon dulu) ::: Audio not ready (open Phone first)
+Audio keluar gagal ::: Audio output failed
+TCP tersambung ::: TCP connected
+TCP gagal -> UDP ::: TCP failed -> UDP
+TCP gagal konek ::: TCP connect failed
+TCP kirim gagal ::: TCP send failed
+TCP buf penuh ::: TCP buffer full
+TCP aliran rusak ::: TCP stream corrupted
+TCP pesan %dB dibuang ::: TCP message %dB dropped
+TCP putus ::: TCP disconnected
+SRV tdk ada, pakai A ::: No SRV record, using A
+server berubah ::: server changed
+DNS server gagal ::: Server DNS failed
+TCP belum tersambung ::: TCP not connected yet
+Username/password VoIP salah ::: Wrong VoIP username/password
+Auth tdk didukung server ::: Auth not supported by server
+Ditolak server (403) ::: Rejected by server (403)
+Akun tidak ada (404) ::: Account not found (404)
+Gagal daftar (%d) ::: Registration failed (%d)
+Server tdk merespons ::: Server not responding
+Lawan tdk kirim SDP ::: Remote sent no SDP
+Lawan wajib SRTP (enkripsi) ::: Remote requires SRTP (encryption)
+Lawan minta panggilan ditahan ::: Remote put the call on hold
+DNS TURN gagal ::: TURN DNS failed
+TURN: realm kosong ::: TURN: empty realm
+TURN ditolak (%d) ::: TURN rejected (%d)
+TURN: alamat relay tdk ada ::: TURN: no relay address
+Via terlalu panjang ::: Via too long
+Mic dipakai app lain: suara kamu tdk terkirim ::: Mic in use: your voice is not sent
+Isi akun VoIP dulu (Atur) ::: Set up the VoIP account first
+Alamat tidak valid ::: Invalid address
+DNS server VoIP gagal ::: VoIP server DNS failed
+Alamat tidak ditemukan ::: Address not found
+VoIP belum terdaftar ::: VoIP not registered yet
+Mic sedang dipakai app lain ::: Mic is in use by another app
+-> 486 sibuk (fase %d) ::: -> 486 busy (phase %d)
+Panggilan langsung (LAN) ::: Direct call (LAN)
+Panggilan VoIP masuk ::: Incoming VoIP call
+Terhubung ::: Connected
+Codec tidak cocok ::: Codec mismatch
+Autentikasi ditolak ::: Authentication rejected
+Tujuan tidak ditemukan ::: Destination not found
+Tidak tersedia ::: Unavailable
+Sedang sibuk ::: Busy
+Ditolak 488: codec/enkripsi ::: Rejected 488: codec/encryption
+Ditolak ::: Rejected
+Tidak terjangkau ::: Unreachable
+Gagal (%d) ::: Failed (%d)
+Panggilan selesai ::: Call ended
+Panggilan terlewat ::: Missed call
+Tidak ada respon ::: No response
+-> ditolak: NES/DOOM jalan ::: -> rejected: NES/DOOM is running
+Server VoIP (mis. sip.linphone.org) ::: VoIP server (e.g. sip.linphone.org)
+Nama tampilan ::: Display name
+Server TURN (host atau host:port) ::: TURN server (host or host:port)
+ketuk untuk mengisi... ::: tap to fill in...
+# --- Backup & Telepon: sisa ---
+Kunci di NVS: hilang jika flash dihapus ::: Key in NVS: lost if flash is erased
+Ikut, tetap terenkripsi di HP ::: Included, encrypted on phone
+VoIP belum aktif ::: VoIP not active
+VoIP belum diatur ::: VoIP not set up
+ketuk untuk mengetik... ::: tap to type...
+Ketuk area di atas keyboard = selesai ::: Tap above the keyboard = done
+# --- About / Update / OTA / Baterai ---
+Waktu build ::: Build time
+Layar ::: Display
+Tidak tersambung ::: Not connected
+Waktu aktif ::: Uptime
+Ukuran file (%d) tidak cocok dgn info channel (%d). Dibatalkan, firmware lama aman. ::: File size (%d) does not match the channel info (%d). Cancelled, old firmware is safe.
+Kembali ke versi sebelumnya... ::: Reverting to the previous version...
+Tidak kompatibel (base %d, HP base %d). Dibatalkan ::: Incompatible (base %d, phone base %d). Cancelled
+WiFi - unduh dari URL (kini b%d): ::: WiFi - download from URL (now b%d):
+WiFi - terbaru b%d (kini b%d): ::: WiFi - latest b%d (now b%d):
+Target firmware layar %s. Layar ini bisa gelap setelah pasang! ::: Target display firmware: %s. The screen may go dark after installing!
+LAYAR LAIN: ' ::: OTHER DISPLAY: '
+Pindah ke ' ::: Switch to '
+. Ketuk Unduh & Pasang ::: . Tap Download & Install
+Penuh ::: Full
+Sisa waktu ::: Time left
+Penuh dalam ::: Full in
+belum terukur ::: not measured yet
+Ada update: build %d ::: Update available: build %d
+ketuk untuk isi URL... ::: tap to enter URL...
+WiFi tidak terhubung ::: WiFi not connected
+Semua App ::: All Apps
+Tidak ada app di kategori ini ::: No apps in this category
+Unduh & Pasang ::: Download & Install
+mengukur... ::: measuring...

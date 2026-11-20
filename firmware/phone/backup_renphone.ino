@@ -305,22 +305,22 @@ static void bkZero(void* p, size_t n) { for (size_t i = 0; i < n; i++) ((volatil
 
 // pass == NULL -> file biasa; selain itu file dienkripsi AES-256 + HMAC dgn kunci dari sandi (lihat backup_crypto.h)
 static void bkDoCreate(const char* pass) {
-  if (!sdReady) { bkSay("SD Card tidak terdeteksi", 2200); return; }
+  if (!sdReady) { bkSay(RPTR("SD Card tidak terdeteksi"), 2200); return; }
   uint8_t* buf = bkAlloc(BK_BUF_MAX);
-  if (!buf) { bkSay("PSRAM tidak cukup", 2200); return; }
+  if (!buf) { bkSay(RPTR("PSRAM tidak cukup"), 2200); return; }
   size_t len = 0; int cnt = 0;
   int rc = bkCollect(buf, BK_BUF_MAX, bkSecrets, &len, &cnt);
-  if (rc == 1) { free(buf); bkSay("Pengaturan terlalu besar", 2400); return; }
-  if (rc != 0) { free(buf); bkSay("Gagal membaca pengaturan", 2400); return; }
+  if (rc == 1) { free(buf); bkSay(RPTR("Pengaturan terlalu besar"), 2400); return; }
+  if (rc != 0) { free(buf); bkSay(RPTR("Gagal membaca pengaturan"), 2400); return; }
   uint8_t* wbuf = buf; size_t wlen = len; uint8_t* eb = NULL;
   if (pass) {                                                     // enkripsi di memori; isi biasa (bisa memuat sandi) langsung ditimpa nol
     size_t cap = len + BK_ENC_OVERHEAD + 16;
     eb = bkAlloc(cap);
-    if (!eb) { bkZero(buf, len); free(buf); bkSay("PSRAM tidak cukup", 2200); return; }
+    if (!eb) { bkZero(buf, len); free(buf); bkSay(RPTR("PSRAM tidak cukup"), 2200); return; }
     uint8_t rnd[32]; for (int i = 0; i < 32; i += 4) { uint32_t r = esp_random(); memcpy(rnd + i, &r, 4); }
     wlen = bkEncrypt(buf, len, (const uint8_t*)pass, strlen(pass), rnd, rnd + 16, BK_ENC_ITER_DEF, eb, cap);
     bkZero(buf, len); bkZero(rnd, sizeof(rnd));
-    if (!wlen) { free(eb); free(buf); bkSay("Gagal mengenkripsi", 2400); return; }
+    if (!wlen) { free(eb); free(buf); bkSay(RPTR("Gagal mengenkripsi"), 2400); return; }
     wbuf = eb;
   }
   if (!SD_MMC.exists(BK_DIR)) SD_MMC.mkdir(BK_DIR);
@@ -345,11 +345,11 @@ static void bkDoCreate(const char* pass) {
     if (g) g.close();
   }
   bkZero(buf, len); free(buf); if (eb) free(eb);
-  if (!ok) { SD_MMC.remove(path); bkSay("Gagal menulis ke SD", 2400); return; }
+  if (!ok) { SD_MMC.remove(path); bkSay(RPTR("Gagal menulis ke SD"), 2400); return; }
   { Preferences pr; if (pr.begin(BK_NVS_NS, false)) { pr.putInt("last", next); pr.end(); } }   // BK_PROBE_V1: petunjuk nomor terakhir
   bkScan(true);
   bkSel = 0; bkScroll = 0; bkArmKind = 0;
-  char m[44]; snprintf(m, sizeof(m), pass ? "Backup #%03d dibuat (%d nilai) +kunci" : "Backup #%03d dibuat (%d nilai)", next, cnt);
+  char m[44]; snprintf(m, sizeof(m), pass ? RPTR("Backup #%03d dibuat (%d nilai) +kunci") : RPTR("Backup #%03d dibuat (%d nilai)"), next, cnt);
   bkSay(m, 2400);
 }
 
@@ -357,34 +357,34 @@ static void bkDoCreate(const char* pass) {
 static int bkDoRestore(int idx, const char* pass) {
   char path[40]; bkMakeName(path, sizeof(path), bkNum[idx]);
   File f = SD_MMC.open(path, FILE_READ);
-  if (!f) { bkSay("File tidak bisa dibuka", 2200); return 0; }
+  if (!f) { bkSay(RPTR("File tidak bisa dibuka"), 2200); return 0; }
   size_t n = (size_t)f.size();
-  if (n < BK_HDR + 5 || n > BK_BUF_MAX + BK_ENC_OVERHEAD + 16) { f.close(); bkSay("Ukuran file tidak wajar", 2200); return 0; }
+  if (n < BK_HDR + 5 || n > BK_BUF_MAX + BK_ENC_OVERHEAD + 16) { f.close(); bkSay(RPTR("Ukuran file tidak wajar"), 2200); return 0; }
   uint8_t* buf = bkAlloc(n);
-  if (!buf) { f.close(); bkSay("PSRAM tidak cukup", 2200); return 0; }
+  if (!buf) { f.close(); bkSay(RPTR("PSRAM tidak cukup"), 2200); return 0; }
   size_t got = f.read(buf, n); f.close();
-  if (got != n) { free(buf); bkSay("File terbaca tidak utuh", 2200); return 0; }
+  if (got != n) { free(buf); bkSay(RPTR("File terbaca tidak utuh"), 2200); return 0; }
   BkHdr hh; bool isEnc = bkParseHdr(buf, n, hh) && hh.enc;
   uint8_t* pb = NULL; const uint8_t* src = buf; size_t sn = n;
   if (isEnc) {
     if (!pass) { free(buf); return -2; }
     pb = bkAlloc(n);
-    if (!pb) { free(buf); bkSay("PSRAM tidak cukup", 2200); return 0; }
+    if (!pb) { free(buf); bkSay(RPTR("PSRAM tidak cukup"), 2200); return 0; }
     size_t pl = 0;
     int dr = bkDecrypt(buf, n, (const uint8_t*)pass, strlen(pass), pb, n, &pl);
     free(buf); buf = NULL;
     if (dr == BK_DEC_PASS) { bkZero(pb, n); free(pb); return BK_DEC_PASS; }          // sandi salah ATAU file diubah
-    if (dr != BK_DEC_OK) { bkZero(pb, n); free(pb); bkSay("Backup rusak, ditolak", 2600); return 0; }
+    if (dr != BK_DEC_OK) { bkZero(pb, n); free(pb); bkSay(RPTR("Backup rusak, ditolak"), 2600); return 0; }
     src = pb; sn = pl;
   }
   int fail = 0;
   int ok = bkApply(src, sn, &fail);
   if (pb) { bkZero(pb, n); free(pb); }
   if (buf) free(buf);
-  if (ok < 0) { bkSay("Backup rusak, ditolak", 2600); return 0; }
+  if (ok < 0) { bkSay(RPTR("Backup rusak, ditolak"), 2600); return 0; }
   char m[44];
-  if (fail) snprintf(m, sizeof(m), "Dipulihkan %d, gagal %d. Restart...", ok, fail);
-  else      snprintf(m, sizeof(m), "Dipulihkan %d nilai. Restart...", ok);
+  if (fail) snprintf(m, sizeof(m), RPTR("Dipulihkan %d, gagal %d. Restart..."), ok, fail);
+  else      snprintf(m, sizeof(m), RPTR("Dipulihkan %d nilai. Restart..."), ok);
   bkSay(m, 2600);
   bkRestartAt = millis() + 2200;                                   // drawBackup() melakukan restart
   return 0;
@@ -415,7 +415,7 @@ static void bkPromptOk() {
   if (bkPrompt == 2) {
     if (!(bkPassA == bkPassB)) {                                    // salah ketik = backup tak bisa dibuka lagi -> wajib dua kali sama
       bkWipe(bkPassA); bkWipe(bkPassB); bkPrompt = 1; kbTarget = &bkPassA; kbVisible = true;
-      strcpy(bkPromptErr, "Tidak sama, ulangi"); needRedraw = true; return;
+      strcpy(bkPromptErr, RPTR("Tidak sama, ulangi")); needRedraw = true; return;
     }
     String pw = bkPassA; bkPromptClose();
     bkDoCreate(pw.c_str()); bkWipe(pw);
@@ -425,7 +425,7 @@ static void bkPromptOk() {
     int idx = bkPromptIdx; String pw = bkPassA;
     if (idx < 0 || idx >= bkListN) { bkWipe(pw); bkPromptClose(); return; }
     int rc = bkDoRestore(idx, pw.c_str()); bkWipe(pw);
-    if (rc == BK_DEC_PASS) { bkWipe(bkPassA); strcpy(bkPromptErr, "Sandi salah"); kbTarget = &bkPassA; kbVisible = true; needRedraw = true; return; }
+    if (rc == BK_DEC_PASS) { bkWipe(bkPassA); strcpy(bkPromptErr, RPTR("Sandi salah")); kbTarget = &bkPassA; kbVisible = true; needRedraw = true; return; }
     bkPromptClose();
   }
 }
@@ -436,7 +436,7 @@ static void bkDoDelete(int idx) {
   bool ok = SD_MMC.remove(path);
   bkSel = -1; bkArmKind = 0;
   bkScan(false); bkClampScroll();
-  char m[44]; snprintf(m, sizeof(m), ok ? "Backup #%03d dihapus" : "Gagal menghapus #%03d", num);
+  char m[44]; snprintf(m, sizeof(m), ok ? RPTR("Backup #%03d dihapus") : RPTR("Gagal menghapus #%03d"), num);
   bkSay(m, 1800);
 }
 
@@ -513,7 +513,7 @@ void backupExit() { bkDown = false; bkArmKind = 0; bkPromptClose(); }
 // gambar
 // ---------------------------------------------------------------------
 static void bkStamp(char* out, size_t n, uint32_t ep) {
-  if (ep < 1600000000UL) { snprintf(out, n, "tanpa waktu"); return; }
+  if (ep < 1600000000UL) { snprintf(out, n, "%s", RPTR("tanpa waktu")); return; }
   time_t tt = (time_t)ep; struct tm t; localtime_r(&tt, &t);
   snprintf(out, n, "%02d/%02d/%04d %02d:%02d", t.tm_mday, t.tm_mon + 1, t.tm_year + 1900, t.tm_hour, t.tm_min);
 }
@@ -546,9 +546,9 @@ static void bkDrawPrompt(LGFX_Sprite& s) {
   drawGlassCard(s, m, top, cw, ch, 12, T().surface, 250);
   char title[40];
   if (bkPromptErr[0]) { strncpy(title, bkPromptErr, sizeof(title) - 1); title[sizeof(title) - 1] = 0; }
-  else if (bkPrompt == 1) strcpy(title, "Sandi backup (min 6 karakter)");
-  else if (bkPrompt == 2) strcpy(title, "Ketik ulang sandi yang sama");
-  else snprintf(title, sizeof(title), "Sandi untuk backup #%03d", (bkPromptIdx >= 0 && bkPromptIdx < bkListN) ? bkNum[bkPromptIdx] : 0);
+  else if (bkPrompt == 1) strcpy(title, RPTR("Sandi backup (min 6 karakter)"));
+  else if (bkPrompt == 2) strcpy(title, RPTR("Ketik ulang sandi yang sama"));
+  else snprintf(title, sizeof(title), RPTR("Sandi untuk backup #%03d"), (bkPromptIdx >= 0 && bkPromptIdx < bkListN) ? bkNum[bkPromptIdx] : 0);
   for (int L = (int)strlen(title); L > 1 && s.textWidth(title) > cw - 20; ) title[--L] = 0;
   s.setTextColor(bkPromptErr[0] ? T().danger : T().text); s.setCursor(m + 10, top + 7); s.print(title);
   drawGlassPanel(s, bkR[BKR_PBOX][0], bkR[BKR_PBOX][1], bkR[BKR_PBOX][2], bkR[BKR_PBOX][3], 8, T().surface2, 200);
@@ -576,14 +576,14 @@ static void bkDrawCloud(LGFX_Sprite& s) {
   s.setTextColor(T().subtext); s.setCursor(m + 12, y0 + 7);  s.print(RPTR("Kode perangkat"));
   s.setTextColor(T().text);    s.setCursor(m + 12, y0 + 19); s.print(code);
   uint32_t ep = bkCloudLastEpoch();
-  if (ep) { bkStamp(t, sizeof(t), ep); snprintf(b, sizeof(b), "Cadangan terakhir: %s", t); }
-  else    snprintf(b, sizeof(b), "Belum ada cadangan cloud");
+  if (ep) { bkStamp(t, sizeof(t), ep); snprintf(b, sizeof(b), RPTR("Cadangan terakhir: %s"), t); }
+  else    snprintf(b, sizeof(b), "%s", RPTR("Belum ada cadangan cloud"));
   s.setTextColor(T().subtext); s.setCursor(m + 12, y0 + 31); s.print(b);
   if (!ls) {
     s.setCursor(m + 12, y0 + 44);
-    s.print(bkCloudMode() == 1 ? "Kunci di NVS: hilang jika flash dihapus" : "Terenkripsi di HP, server tak bisa membaca");
+    s.print(bkCloudMode() == 1 ? RPTR("Kunci di NVS: hilang jika flash dihapus") : RPTR("Terenkripsi di HP, server tak bisa membaca"));
   }
-  bkToggleRow(s, BKR_TOGGLE, "Sertakan sandi & API key", "Ikut, tetap terenkripsi di HP", bkSecrets);
+  bkToggleRow(s, BKR_TOGGLE, RPTR("Sertakan sandi & API key"), RPTR("Ikut, tetap terenkripsi di HP"), bkSecrets);
   const bool busy = bkCloudBusy();
   bkButton(s, BKR_C_BACKUP, busy ? RPTR("Memproses...") : RPTR("Cadangkan ke Cloud"), T().accent, 0xFFFF, busy ? 150 : 235);
   bool armR = (bkArmKind == 3), armD = (bkArmKind == 4);
@@ -621,8 +621,8 @@ void drawBackup(LGFX_Sprite& s) {
   bkButton(s, BKR_CREATE, RPTR("Buat Backup Sekarang"), T().accent, 0xFFFF, 235);
 
   // ---- sakelar: sandi & API key | enkripsi sandi
-  bkToggleRow(s, BKR_TOGGLE, "Sertakan sandi & API key", bkEnc ? "File dienkripsi AES-256 dgn sandimu" : "File di SD tidak terenkripsi", bkSecrets);
-  bkToggleRow(s, BKR_ENC, "Enkripsi dengan sandi", bkEnc ? "Sandi ditanya tiap backup, tidak disimpan" : "Backup bisa dibaca siapa saja yg pegang SD", bkEnc);
+  bkToggleRow(s, BKR_TOGGLE, RPTR("Sertakan sandi & API key"), bkEnc ? RPTR("File dienkripsi AES-256 dgn sandimu") : RPTR("File di SD tidak terenkripsi"), bkSecrets);
+  bkToggleRow(s, BKR_ENC, RPTR("Enkripsi dengan sandi"), bkEnc ? RPTR("Sandi ditanya tiap backup, tidak disimpan") : RPTR("Backup bisa dibaca siapa saja yg pegang SD"), bkEnc);
 
   // ---- judul daftar + pesan status
   {
@@ -644,7 +644,7 @@ void drawBackup(LGFX_Sprite& s) {
     drawGlassPanel(s, lx, ly - 2, lw, lh + 4, 12, T().surface2, 150);
     s.setClipRect(lx, ly, lw, lh);
     if (bkListN == 0) {
-      const char* e = sdReady ? "Belum ada backup" : "SD Card tidak terdeteksi";
+      const char* e = sdReady ? RPTR("Belum ada backup") : RPTR("SD Card tidak terdeteksi");
       s.setTextColor(T().subtext); s.setCursor(lx + lw / 2 - s.textWidth(e) / 2, ly + lh / 2 - 4); s.print(e);
     }
     for (int i = 0; i < bkListN; i++) {
@@ -659,8 +659,8 @@ void drawBackup(LGFX_Sprite& s) {
         snprintf(a, sizeof(a), "#%03d  %s", bkNum[i], t);
         snprintf(b, sizeof(b), "%u nilai - %.1f KB%s%s", (unsigned)bkCnt[i], bkSize[i] / 1024.0, bkEncF[i] ? " - terkunci" : "", (bkFlg[i] & BK_FLAG_SECRETS) ? " - +sandi" : "");
       } else {
-        snprintf(a, sizeof(a), "#%03d  File rusak", bkNum[i]);
-        snprintf(b, sizeof(b), "bukan backup NyxOS (%.1f KB)", bkSize[i] / 1024.0);
+        snprintf(a, sizeof(a), "#%03d  %s", bkNum[i], RPTR("File rusak"));
+        snprintf(b, sizeof(b), RPTR("bukan backup NyxOS (%.1f KB)"), bkSize[i] / 1024.0);
       }
       s.setTextColor(bkValid[i] ? T().text : T().danger); s.setCursor(lx + 14, ry + 7);  s.print(a);
       s.setTextColor(T().subtext);                        s.setCursor(lx + 14, ry + 19); s.print(b);
@@ -695,30 +695,30 @@ void drawBackup(LGFX_Sprite& s) {
 // sentuh: ketuk dieksekusi saat JARI DILEPAS (supaya geser-scroll tidak memicu tombol)
 // ---------------------------------------------------------------------
 static void bkCloudTap(int x, int y) {
-  if (bkCloudBusy()) { bkSay("Sedang memproses...", 1200); return; }
+  if (bkCloudBusy()) { bkSay(RPTR("Sedang memproses..."), 1200); return; }
   if (bkIn(BKR_TOGGLE, x, y)) {
     bkSecrets = !bkSecrets; bkArmKind = 0;
     { Preferences p; p.begin(BK_NVS_NS, false); p.putBool("sec", bkSecrets); p.end(); }
-    bkSay(bkSecrets ? "Sandi & API key ikut di-backup" : "Sandi & API key tidak ikut", 1800);
+    bkSay(bkSecrets ? RPTR("Sandi & API key ikut di-backup") : RPTR("Sandi & API key tidak ikut"), 1800);
     return;
   }
   if (bkIn(BKR_C_BACKUP, x, y)) {
     bkArmKind = 0;
-    if (bkCloudStart(1, bkSecrets)) bkSay("Mengirim cadangan terenkripsi...", 15000);
+    if (bkCloudStart(1, bkSecrets)) bkSay(RPTR("Mengirim cadangan terenkripsi..."), 15000);
     needRedraw = true;
     return;
   }
   if (bkIn(BKR_C_RESTORE, x, y)) {
-    if (bkArmKind != 3) { bkArmKind = 3; bkArmUntil = millis() + 4000; bkSay("Ketuk lagi: pengaturan ditimpa & HP restart", 3600); return; }
+    if (bkArmKind != 3) { bkArmKind = 3; bkArmUntil = millis() + 4000; bkSay(RPTR("Ketuk lagi: pengaturan ditimpa & HP restart"), 3600); return; }
     bkArmKind = 0;
-    if (bkCloudStart(2, false)) bkSay("Mengambil cadangan...", 15000);
+    if (bkCloudStart(2, false)) bkSay(RPTR("Mengambil cadangan..."), 15000);
     needRedraw = true;
     return;
   }
   if (bkIn(BKR_C_DELETE, x, y)) {
-    if (bkArmKind != 4) { bkArmKind = 4; bkArmUntil = millis() + 4000; bkSay("Ketuk lagi: cadangan cloud dihapus permanen", 3600); return; }
+    if (bkArmKind != 4) { bkArmKind = 4; bkArmUntil = millis() + 4000; bkSay(RPTR("Ketuk lagi: cadangan cloud dihapus permanen"), 3600); return; }
     bkArmKind = 0;
-    if (bkCloudStart(3, false)) bkSay("Menghapus cadangan cloud...", 15000);
+    if (bkCloudStart(3, false)) bkSay(RPTR("Menghapus cadangan cloud..."), 15000);
     needRedraw = true;
     return;
   }
@@ -729,7 +729,7 @@ static void bkTap(int x, int y) {
     int t = bkIn(BKR_TAB_CLOUD, x, y) ? 1 : 0;
     if (t != bkTab) {
       bkTab = t; bkArmKind = 0; bkPromptClose(); bkMsg[0] = 0; bkLayout();
-      if (t == 1 && bkCloudMode() == 1) bkSay("Kunci di NVS: hilang jika flash dihapus", 3500);
+      if (t == 1 && bkCloudMode() == 1) bkSay(RPTR("Kunci di NVS: hilang jika flash dihapus"), 3500);
       needRedraw = true;
     }
     return;
@@ -737,20 +737,20 @@ static void bkTap(int x, int y) {
   if (bkTab == 1) { bkCloudTap(x, y); return; }
   if (bkIn(BKR_CREATE, x, y)) {
     bkArmKind = 0;
-    if (bkEnc) { if (!sdReady) { bkSay("SD Card tidak terdeteksi", 2200); return; } bkPromptOpen(1, -1); }
+    if (bkEnc) { if (!sdReady) { bkSay(RPTR("SD Card tidak terdeteksi"), 2200); return; } bkPromptOpen(1, -1); }
     else bkDoCreate(NULL);
     return;
   }
   if (bkIn(BKR_ENC, x, y)) {
     bkEnc = !bkEnc;
     { Preferences p; p.begin(BK_NVS_NS, false); p.putBool("enc", bkEnc); p.end(); }
-    bkSay(bkEnc ? "Backup berikutnya dienkripsi sandi" : "Backup berikutnya tanpa enkripsi", 1900);
+    bkSay(bkEnc ? RPTR("Backup berikutnya dienkripsi sandi") : RPTR("Backup berikutnya tanpa enkripsi"), 1900);
     return;
   }
   if (bkIn(BKR_TOGGLE, x, y)) {
     bkSecrets = !bkSecrets;
     { Preferences p; p.begin(BK_NVS_NS, false); p.putBool("sec", bkSecrets); p.end(); }
-    bkSay(bkSecrets ? "Sandi & API key ikut di-backup" : "Sandi & API key tidak ikut", 1800);
+    bkSay(bkSecrets ? RPTR("Sandi & API key ikut di-backup") : RPTR("Sandi & API key tidak ikut"), 1800);
     return;
   }
   if (bkIn(BKR_LIST, x, y)) {
@@ -760,16 +760,16 @@ static void bkTap(int x, int y) {
     return;
   }
   if (bkIn(BKR_RESTORE, x, y)) {
-    if (bkSel < 0 || bkSel >= bkListN) { bkSay("Pilih satu backup dulu", 1600); return; }
-    if (!bkValid[bkSel]) { bkSay("File ini rusak, tidak bisa dipulihkan", 2200); return; }
-    if (bkArmKind != 1) { bkArmKind = 1; bkArmUntil = millis() + 4000; bkSay("Ketuk lagi: pengaturan ditimpa & HP restart", 3600); return; }
+    if (bkSel < 0 || bkSel >= bkListN) { bkSay(RPTR("Pilih satu backup dulu"), 1600); return; }
+    if (!bkValid[bkSel]) { bkSay(RPTR("File ini rusak, tidak bisa dipulihkan"), 2200); return; }
+    if (bkArmKind != 1) { bkArmKind = 1; bkArmUntil = millis() + 4000; bkSay(RPTR("Ketuk lagi: pengaturan ditimpa & HP restart"), 3600); return; }
     bkArmKind = 0;
     if (bkEncF[bkSel]) bkPromptOpen(3, bkSel);                       // file terkunci: minta sandi dulu
     else bkDoRestore(bkSel, NULL);
     return;
   }
   if (bkIn(BKR_DELETE, x, y)) {
-    if (bkSel < 0 || bkSel >= bkListN) { bkSay("Pilih satu backup dulu", 1600); return; }
+    if (bkSel < 0 || bkSel >= bkListN) { bkSay(RPTR("Pilih satu backup dulu"), 1600); return; }
     if (bkArmKind != 2) { bkArmKind = 2; bkArmUntil = millis() + 4000; needRedraw = true; return; }
     bkArmKind = 0; bkDoDelete(bkSel);
     return;
