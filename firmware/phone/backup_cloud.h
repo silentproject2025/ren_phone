@@ -143,11 +143,15 @@ static inline size_t bkCloudBuildAuth(const char* devId, const char* token, int 
 static inline bool bkCloudJsonStr(const char* j, size_t n, const char* key, const char** val, size_t* vlen) {
   size_t kl = strlen(key);
   if (kl == 0 || kl > 32) return false;
-  char pat[40]; pat[0] = '"'; memcpy(pat + 1, key, kl); pat[kl + 1] = '"'; pat[kl + 2] = ':'; pat[kl + 3] = '"';
-  size_t pl = kl + 4;
-  for (size_t i = 0; i + pl <= n; i++) {
+  char pat[40]; pat[0] = '"'; memcpy(pat + 1, key, kl); pat[kl + 1] = '"'; pat[kl + 2] = ':';
+  size_t pl = kl + 3;
+  for (size_t i = 0; i + pl < n; i++) {
     if (j[i] != '"' || memcmp(j + i, pat, pl) != 0) continue;
-    size_t s = i + pl, e = s;
+    size_t s = i + pl;
+    while (s < n && (j[s] == ' ' || j[s] == '\n' || j[s] == '\r' || j[s] == '\t')) s++;
+    if (s >= n || j[s] != '"') continue;
+    s++;
+    size_t e = s;
     while (e < n && j[e] != '"') { if (j[e] == '\\') return false; e++; }
     if (e >= n) return false;
     *val = j + s; *vlen = e - s;
@@ -171,6 +175,7 @@ static inline long bkCloudJsonInt(const char* j, size_t n, const char* key) {
   for (size_t i = 0; i + pl < n; i++) {
     if (j[i] != '"' || memcmp(j + i, pat, pl) != 0) continue;
     size_t s = i + pl; long v = 0; int d = 0;
+    while (s < n && (j[s] == ' ' || j[s] == '\n' || j[s] == '\r' || j[s] == '\t')) s++;
     while (s < n && j[s] >= '0' && j[s] <= '9' && d < 9) { v = v * 10 + (j[s] - '0'); s++; d++; }
     return d ? v : -1;
   }
