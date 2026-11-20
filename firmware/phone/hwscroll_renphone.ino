@@ -568,7 +568,7 @@ void hwsLeave(const char* why, int mode){
                         && SCR_W == RP_DISP_NATIVE_W && SCR_H == RP_DISP_NATIVE_H;
   if(mode >= 1 && canvasOk) hwsSyncCanvas(); else mode = 0;
   const int kk = hwsEng.k();
-  bool need = hwsEng.leave(hwsSink, mode >= 2 && canvasOk);
+  bool need = hwsEng.leave(hwsSink, canvasOk && (mode >= 2 || (mode == 1 && kk != 0)));   // HWS_LEAVE_REWRITE_V1
   Serial.printf("[hws] keluar: %s (k=%d, mode-tulis=%d, sesi: cepat=%lu penuh=%lu lambat=%lu baris=%lu)\n",
                 why ? why : "-", kk, mode, hwsEng.nFast, hwsEng.nFull, hwsEng.nSlow, hwsEng.nRows);
   (void)need;

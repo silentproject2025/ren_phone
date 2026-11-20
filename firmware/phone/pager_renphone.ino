@@ -376,7 +376,7 @@ static void hpLeave(const char* why, int mode){
   const bool canvasOk = hpGeomOk();
   if(mode >= 1 && canvasOk) hpSyncCanvas(); else mode = 0;
   const int kk = hpEng.k();
-  hpEng.leave(hpSink, mode >= 2 && canvasOk);
+  hpEng.leave(hpSink, canvasOk && (mode >= 2 || (mode == 1 && kk != 0)));   // HWS_LEAVE_REWRITE_V1
   Serial.printf("[hp] keluar: %s (k=%d, mode-tulis=%d, sesi: cepat=%lu penuh=%lu lambat=%lu kolom=%lu)\n",
                 why ? why : "-", kk, mode, hpEng.nFast, hpEng.nFull, hpEng.nSlow, hpEng.nRows);
   hpCanvasStale = false;
