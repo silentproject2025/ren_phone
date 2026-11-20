@@ -124,6 +124,28 @@ static const char* hpLastWhy = nullptr;
 static HwsEngine hpEng;
 static int   hwlModeV = -1;
 
+// HP_HINT_V1: petunjuk arah geser. Geser vertikal di Home berhalaman -> halaman goyang sedikit ke samping.
+// Berhenti sendiri setelah HP_HINT_DONE kali geser horizontal yang berhasil pindah halaman (disimpan di NVS "ui"/"hph").
+#define HP_HINT_DONE  3        // jumlah geser horizontal berhasil sebelum petunjuk berhenti
+#define HP_NUDGE_V    1.8f     // px/ms: dorongan awal goyangan (puncak sekitar 25 px, lalu pegas mengembalikan)
+static int hpHintN = -1;       // -1 = belum dimuat dari NVS
+static int hpHintLoad(){
+  if(hpHintN < 0){
+    Preferences p; p.begin("ui", true);
+    hpHintN = p.getInt("hph", 0);
+    p.end();
+    if(hpHintN < 0) hpHintN = 0;
+  }
+  return hpHintN;
+}
+static void hpHintOk(){        // satu geser horizontal berhasil pindah halaman
+  if(hpHintLoad() >= HP_HINT_DONE) return;
+  hpHintN++;
+  Preferences p;
+  if(p.begin("ui", false)){ p.putInt("hph", hpHintN); p.end(); }
+  Serial.printf("[hp] petunjuk geser: %d/%d\n", hpHintN, HP_HINT_DONE);
+}
+
 static LGFX_Sprite hpImg0(&display), hpImg1(&display), hpImg2(&display);
 static LGFX_Sprite* const hpImgP[3] = { &hpImg0, &hpImg1, &hpImg2 };
 static int   hpImgPg[3] = { -1, -1, -1 };     // halaman yang tersimpan di slot (p % 3); -1 = tak sah
@@ -507,6 +529,10 @@ void hpRelease(){
     float v = hpVel; if(v > 2.4f) v = 2.4f; if(v < -2.4f) v = -2.4f;
     hpVel = v;
     tgt = hpPickTarget(hpX, v, hpStartPage, hpN, W);
+    if(hpLock == 2){   // HP_HINT_V1: geser vertikal tidak pindah halaman; goyang sedikit ke samping selama petunjuk masih aktif
+      tgt = hpStartPage; hpVel = 0.0f;
+      if(hpHintLoad() < HP_HINT_DONE) hpVel = (hpStartPage + 1 < hpN) ? HP_NUDGE_V : -HP_NUDGE_V;
+    } else if(tgt != hpStartPage) hpHintOk();
   } else { hpVel = 0.0f; }
   hpTarget = (float)(tgt * W);
   hpSpringing = (fabsf(hpX - hpTarget) > 0.4f || fabsf(hpVel) > 0.02f);

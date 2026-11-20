@@ -159,3 +159,31 @@ void powerMenuTouch(bool newT, int tx, int ty) {
     }
   }
 }
+
+// ============================================================
+//  BRI_NVS_V1 -- kecerahan layar tersimpan di NVS (namespace "ui", kunci "bri")
+//  briLoad() dipanggil paling awal di setup(); briTick() tiap loop().
+//  Disimpan 2 detik setelah nilai berhenti berubah (slider tidak menulis flash tiap piksel).
+// ============================================================
+static int briSaved = -1, briSeen = -1;
+static unsigned long briChangeMs = 0;
+void briLoad(){
+  Preferences p; p.begin("ui", true);
+  int v = p.getInt("bri", -1);
+  p.end();
+  if(v >= 10 && v <= 255) brightness = v;
+  briSaved = briSeen = brightness;
+  Serial.printf("[bri] NVS=%d -> pakai %d\n", v, brightness);
+}
+void briTick(){
+  if(briSeen < 0) return;                                   // belum dimuat
+  if(brightness != briSeen){ briSeen = brightness; briChangeMs = millis(); return; }
+  if(brightness != briSaved && millis() - briChangeMs >= 2000UL){
+    Preferences p;
+    if(p.begin("ui", false)){
+      p.putInt("bri", brightness); p.end();
+      briSaved = brightness;
+      Serial.printf("[bri] tersimpan %d\n", brightness);
+    } else briChangeMs = millis();                          // gagal buka NVS: coba lagi nanti
+  }
+}

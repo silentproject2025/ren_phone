@@ -1619,7 +1619,7 @@ int hwsModeGet(); bool hwsModeSet(int); const char* hwsModeText(int);
 bool hpOn(); bool hpIsActive(); bool hpMotionNow(); bool hpFrame(); bool hpPushHook(); bool hpBandRedirect();
 int hpWidgetCutY(); void hpFreeImages(); void hpFlickFixup(int,int);   // HOME-FIX: halaman 1 = widget saja; lepas gambar pager utk app besar
 void devRegTick(); const char* devRegId();   // DEVREG_V1 (devreg_renphone.ino)
-void hpTouchHeld(bool,int,int); void hpRelease(); void hpStep(float); void hpDrawDots(LGFX_Sprite&); void hpHomeCover(LGFX_Sprite&); void hpLoopGuard();
+void hpTouchHeld(bool,int,int); void hpRelease(); void hpStep(float); void hpDrawDots(LGFX_Sprite&); void hpHomeCover(LGFX_Sprite&); void hpLoopGuard(); void briLoad(); void briTick();   // BRI_NVS_V1
 void hpLeaveHook(const char*,int); int hpModeGet(); bool hpModeSet(int);
 void drawShotThumb(LGFX_Sprite&); bool nyxShotThumbTouch(bool,bool,int,int);
 bool nyxShotThumbAnimating(); void nyxShotThumbFastFrame(); bool nyxThFreezeFrame();   // NYX_TH_V4
@@ -20467,6 +20467,7 @@ void setup(){
   // (DOOM, NES, Telepon) dipin ke Core 1, jadi kalau loop() juga di Core 1 mereka berbagi CPU
   // dgn UI. Lihat log ini di Serial Monitor sebelum memindahkan task antar core.
   Serial.printf("[CORE] setup/loop berjalan di core %d (task DOOM/NES/Telepon dipin ke core 1, musTask ke core 0)\n", (int)xPortGetCoreID());
+  briLoad();   // BRI_NVS_V1: muat kecerahan tersimpan sebelum layar pertama menyala
   otaGuardBoot(); // PALING AWAL: pengaman update -- rollback otomatis kalau firmware baru tak kunjung sehat
 
   // v29 FIX: proyek ini SAMA SEKALI gak pakai Bluetooth/BLE (sudah dicek
@@ -20951,6 +20952,7 @@ void loop(){
   // "belum ada frame penuh" -> frame Home berikutnya DIPAKSA penuh dulu.
   if(curScreen()!=SCR_HOME || locked || appSwitcherOpen || controlCenterOpen || notifShadeOpen || homeAodActive || diMenuOpen) homeBandReady=false;
   hwsLoopGuard();   // HW_SCROLL_V1
+  briTick();        // BRI_NVS_V1
   hpLoopGuard();    // HOME_PAGER_V1
   devRegTick();     // DEVREG_V1: daftar perangkat anonim sekali (no-op kalau sudah / tak dikonfigurasi)
   if(curScreen()!=SCR_HOME || locked){ if(homeCache.getBuffer()) homeCacheFree(); }   // HOME_CACHE_V1: PSRAM kembali utk app lain (Doom/NES)
