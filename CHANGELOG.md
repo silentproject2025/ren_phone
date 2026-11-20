@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.1
+- Fixed: Cloud restore always said "No backup for this device" even right after a successful backup
+- New: countdown before the automatic restart after a restore (SD Card and Cloud)
+
 ## 1.0.0
 - New: OTA updates now show an English changelog before you install
 - New: one-time device registration to Supabase on first online boot
