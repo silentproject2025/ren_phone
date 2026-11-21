@@ -89,7 +89,7 @@ The variant is selected with `-DRP_BOARD_AETHER`. Its profile is at the top of `
 | Block | Signal → GPIO |
 |---|---|
 | Display (SPI) | SCLK 12 · MOSI 11 · MISO 13 · CS 10 · DC 7 · RST 4 · BL 3 |
-| microSD (SPI, shared with the display bus) | CS 14, 20 MHz; `SD_MMC` calls are redirected to the Arduino `SD` library |
+| microSD (SPI, shared with the display bus) | CS 14, 20 MHz; `SD_MMC` calls are redirected to the Arduino `SD` library. Because the bus is shared, DOOM releases its display transaction around every SD read, and NES ROMs are read through an internal-RAM buffer (a direct SD-to-PSRAM read returns zeros) |
 | Touch FT6336U (I2C) | SDA 8 · SCL 9 · RST 5 · INT 6 (not used; touch is polled) |
 | MPU6050 and INA219 (`Wire1`) | SDA 1 · SCL 2 (the ST7796 defaults 5/4 clash with the touch and display reset pins) |
 

@@ -66,7 +66,10 @@ Find your symptom in the table. For memory-related problems, the **HWmonitor** a
 
 | Symptom | Likely cause | Action |
 |---|---|---|
-| DOOM restarts the device with `assert failed: spi_flash_disable_interrupts_caches_and_other_cpu ... esp_task_stack_is_sane_cache_disabled()` | Old firmware: the DOOM task (stack in PSRAM) read the WAD from FFat | Update the firmware (an FFat WAD is now loaded into PSRAM first), or put the WAD on the SD card. |
+| DOOM restarts the device with `assert failed: spi_flash_disable_interrupts_caches_and_other_cpu ... esp_task_stack_is_sane_cache_disabled()` | Old firmware: the DOOM task (stack in PSRAM) read the WAD from FFat | Update the firmware (an FFat WAD is now read through the `wadio` helper task), or put the WAD on the SD card. |
+| DOOM stops in the middle of a level, the log shows `Z_Malloc: failed on allocation of ...` and the device restarts | DOOM ran out of zone memory. Older firmware loaded a 4 MB WAD from FFat into PSRAM, which left a zone of only 1 MiB (check `zone memory: 100000 allocated for zone`); with fragmented PSRAM the zone can also drop to 5 or 4 MiB | Update the firmware (an FFat WAD is now streamed and the zone is 5 to 6 MiB), restart the phone and open DOOM first, or use a smaller WAD. |
+| Aether Board: DOOM restarts the device while playing from an SD WAD | The SD card shares the SPI bus with the display, and DOOM held a display transaction open while reading the card | Update the firmware (the display transaction is now released around every SD read). If it still happens, lower the SD speed (`RP_SD_FREQ`) to 10 MHz. |
+| Aether Board: a NES game opens to a blank screen | Reading the ROM from the SPI SD card straight into PSRAM returned zeros; the serial log shows `header=00 00 00 00` | Update the firmware (the ROM is now read through an internal-RAM buffer). |
 | The `/remote` page over home WiFi answers `403` | The *Allow via home WiFi* option is off | Turn the AP on in the *Remote* app (or reboot if *Auto start* is on), connect to the Accretion-Phone WiFi, open `http://192.168.4.1/remote`, then turn the option on. |
 | Wake Word is hard to recognise | A noisy room or unrepresentative samples | Re-record the 4 samples in a quiet environment; adjust the *Sensitivity* slider. |
 
