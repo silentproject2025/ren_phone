@@ -299,11 +299,11 @@ jobs:
             for OPT in CONFIG_ELF_LOADER CONFIG_ELF_LOADER_LOAD_PSRAM; do
               if grep -q "^$OPT=y" "$OUT/sdkconfig"; then echo "OK   $OPT=y"; else echo "::warning::$OPT tidak aktif di sdkconfig hasil build (Kconfig elf_loader tidak terbaca?)"; fi
             done
-            ELFA=$(find "$OUT/lib" -name 'libelf_loader.a' | head -n1)
+            ELFA=$(find "$OUT/lib" -name '*elf_loader*.a' | head -n1)
             ELFH=$(find "$OUT" -name 'esp_elf.h' | head -n1)
             if [ -n "$ELFA" ]; then echo "OK   $ELFA"; else echo "::warning::libelf_loader.a TIDAK ada di hasil -> komponen tidak ikut terhubung; Nyx Apps tetap 'tanpa loader'"; fi
             if [ -n "$ELFH" ]; then echo "OK   $ELFH"; else echo "::warning::esp_elf.h TIDAK ada di hasil -> NYXAPP_HAVE_ELF akan 0"; fi
-            find "$OUT" -name 'esp_elf.h' -o -name 'libelf_loader.a' | head
+            find "$OUT" -name 'esp_elf.h' -o -name '*elf_loader*.a' | head
           fi
           echo "=== batas malloc internal (SPIRAM_MALLOC_ALWAYSINTERNAL) ==="
           grep -E '^CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=' "$OUT/sdkconfig" || echo "::warning::ALWAYSINTERNAL tidak ditemukan di sdkconfig hasil (pakai bawaan 16384)"
