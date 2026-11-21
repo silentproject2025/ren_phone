@@ -465,14 +465,6 @@ struct HomeRect{ int x,y,w,h; }; // harus paling atas: prototype otomatis Arduin
 #include <time.h>
 #include "FS.h"
 #include "SD_MMC.h"
-#if RP_SD_SPI
-// AETHER: kartu SD lewat SPI (berbagi bus dgn layar). Seluruh kode memakai objek `SD_MMC`;
-// di sini diarahkan ke library SD (API sama: open/exists/remove/mkdir/rename/rmdir/totalBytes/usedBytes/end).
-#include <SPI.h>
-#include <SD.h>
-static SPIClass rpSdSpi(FSPI);   // SPI2 = host yg sama dgn layar (LGFX spi_host=SPI2_HOST), bus_shared=true
-#define SD_MMC SD
-#endif
 #include <FFat.h> // v47: fallback penyimpanan wallpaper (flash internal) pas SD Card gak kedetek
 #include "esp_heap_caps.h"
 #include "sysmem_fw.h"   // SYSMEM_V1: API manajer memori firmware (tipe sysmem:: harus terbaca sebelum prototipe otomatis)
@@ -760,6 +752,14 @@ struct Theme {
   uint16_t bg, surface, surface2, accent, accent2,
            text, subtext, divider, good, danger;
 };
+#if RP_SD_SPI
+// AETHER: kartu SD lewat SPI (berbagi bus dgn layar). Seluruh kode memakai objek `SD_MMC`;
+// di sini diarahkan ke library SD (API sama: open/exists/remove/mkdir/rename/rmdir/totalBytes/usedBytes/end).
+#include <SPI.h>
+#include <SD.h>
+static SPIClass rpSdSpi(FSPI);   // SPI2 = host yg sama dgn layar (LGFX spi_host=SPI2_HOST), bus_shared=true
+#define SD_MMC SD
+#endif
 // PREFS_SD_V1: sengaja DI SINI (sesudah struct Theme), bukan di blok yg dipindah ci_hoist_types.py -- blok itu
 // tidak boleh berisi #define. Preferences pertama kali dipakai jauh sesudah baris ini.
 // ===== PREFS_SD_V1 BEGIN =====
