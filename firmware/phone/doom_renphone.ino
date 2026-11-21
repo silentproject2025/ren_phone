@@ -330,7 +330,7 @@ void doomEnter(){
   // dalam doomgeneric gagal diam-diam / crash ambigu di tengah task.
   size_t freeBlock = heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM);
   // DOOM_PSRAM_CLEAN_V1: bersihkan bertahap, cek ulang tiap langkah (langkah 2 hanya kalau langkah 1 belum cukup)
-  const size_t doomNeedBlk = (size_t)6*1024*1024;
+  const size_t doomNeedBlk = (size_t)4*1024*1024 + 512*1024;  // DOOM_GATE_FIX_V1: MIN_RAM engine 4MiB + reserve; zone turun otomatis 6->5->4 (i_system.c)
   const size_t doomBlk0 = freeBlock;
   const size_t doomNasaKB = nasaRamImgLen/1024;
   int doomCleanLv = 0;
@@ -340,7 +340,7 @@ void doomEnter(){
                 (unsigned)(doomBlk0/1024), (unsigned)(freeBlock/1024), doomCleanLv,
                 (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM)/1024), (unsigned)(doomNeedBlk/1024), (unsigned)doomNasaKB);
   if(freeBlock < doomNeedBlk){
-    doomErrorMsg = "PSRAM kontigu tidak cukup utk DOOM\n(butuh ~6MB, tersedia " + String(freeBlock/1024) +
+    doomErrorMsg = "PSRAM kontigu tidak cukup utk DOOM\n(butuh ~4.5MB, tersedia " + String(freeBlock/1024) +
                    "KB;\nsebelum dibersihkan " + String(doomBlk0/1024) + "KB, total bebas " +
                    String(heap_caps_get_free_size(MALLOC_CAP_SPIRAM)/1024) + "KB).\nTutup app lain / restart device.";
     return;
