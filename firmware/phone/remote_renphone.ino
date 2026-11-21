@@ -176,7 +176,7 @@ static void rcLoadCfg() {
   if (!had || strlen(rcCfg.pass) < 8 || strcmp(rcCfg.pass, RC_DEFAULT_PASS) == 0) {   // RCPASS_V1: sandi default publik -> ganti acak
     rcGenPass(rcCfg.pass, 8);
     rcSaveCfg();
-    Serial.printf("[RC] sandi AP baru: %s\n", rcCfg.pass);
+    Serial.println("[RC] sandi AP baru dibuat (lihat layar Remote Control)");
   }
 }
 

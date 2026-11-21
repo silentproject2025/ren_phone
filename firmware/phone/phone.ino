@@ -2180,8 +2180,25 @@ const char* webAuthSetPassword(const String& pw) {
 }
 void webAuthResetRandom() { char g[9]; webPwGen(g); webPwStore(g); }   // kembali ke sandi acak
 const char* webAuthPassword() { return webPw(); }              // dipakai File Explorer utk menampilkan sandi di layar
+// LOGINLOCK_V1 -- 5x sandi salah -> login dikunci 60 dtk (hanya hitung kalau ada header Authorization)
+static uint8_t  webFailN = 0;
+static uint32_t webLockUntil = 0;                               // millis(); 0 = tidak dikunci
+static bool webLocked() {
+  if (webLockUntil && (int32_t)(millis() - webLockUntil) >= 0) webLockUntil = 0;
+  return webLockUntil != 0;
+}
+static bool webCheckCred() {                                    // true = sandi benar
+  if (webLocked()) return false;
+  if (webServer.authenticate("admin", webPw())) { webFailN = 0; return true; }
+  if (webServer.hasHeader("Authorization") && ++webFailN >= 5) {
+    webFailN = 0; webLockUntil = millis() + 60000UL; if (!webLockUntil) webLockUntil = 1;
+    Serial.println("[Web] 5x sandi salah -> login dikunci 60 dtk");
+  }
+  return false;
+}
 static bool webAuthOk() {
-  if (webServer.authenticate("admin", webPw())) return true;
+  if (webCheckCred()) return true;
+  if (webLocked()) { webServer.send(429, "text/plain", "Terlalu banyak percobaan. Coba lagi 1 menit lagi."); return false; }
   webServer.requestAuthentication(BASIC_AUTH, "Accretion Phone");
   return false;
 }
@@ -2390,7 +2407,7 @@ static bool   ffatUpFail   = false;
 static String ffatUpName;
 void handleUploadStream() {
   HTTPUpload& upload = webServer.upload();
-  if (upload.status == UPLOAD_FILE_START) webUpAuthed = webServer.authenticate("admin", webPw()) && webCsrfOk();   // WEBAUTH_V1
+  if (upload.status == UPLOAD_FILE_START) webUpAuthed = webCheckCred() && webCsrfOk();   // WEBAUTH_V1
   if (!webUpAuthed) return;
   if (upload.status == UPLOAD_FILE_START) {
     String filename = upload.filename;
@@ -2552,8 +2569,8 @@ void startWebServer(){
   webServer.on("/apikey", HTTP_GET, handleApiKeyGet);
   webServer.on("/apikey_save", HTTP_POST, handleApiKeySavePost);
   rcRegisterRoutes(); // Remote Control: /remote, /rc/*
-  { static const char* hk[] = { "Sec-Fetch-Site", "Origin", "Host" }; webServer.collectHeaders(hk, 3); }   // WEBAUTH_V1
-  Serial.printf("[Web] login File Manager: admin / %s\n", webPw());
+  { static const char* hk[] = { "Sec-Fetch-Site", "Origin", "Host", "Authorization" }; webServer.collectHeaders(hk, 4); }   // WEBAUTH_V1
+  Serial.println("[Web] login File Manager aktif (sandi: lihat layar File Explorer)");
   webServer.begin();
   webServerRunning = true;
 }

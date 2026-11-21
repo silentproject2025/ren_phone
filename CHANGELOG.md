@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- New: Web File Manager login is locked for 60 seconds after 5 wrong passwords; passwords are no longer printed to the serial log
 - New: you can now change the Web File Manager password yourself (tap the "Login web" line in File Explorer), or reset it to a new random one
 - New: Nyx Store — browse, install, update and remove Nyx Apps from your phone (open it with the Store button in Nyx Apps; needs WiFi)
 
