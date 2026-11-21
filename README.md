@@ -8,7 +8,7 @@
 [![Build CAM](https://github.com/silentproject2025/ren_phone/actions/workflows/build-cam-coprocessor.yml/badge.svg)](https://github.com/silentproject2025/ren_phone/actions/workflows/build-cam-coprocessor.yml)
 [![Build Nyx Apps](https://github.com/silentproject2025/ren_phone/actions/workflows/build-nyxapps.yml/badge.svg)](https://github.com/silentproject2025/ren_phone/actions/workflows/build-nyxapps.yml)
 [![Nyx Apps tests](https://github.com/silentproject2025/ren_phone/actions/workflows/nyxapp-tests.yml/badge.svg)](https://github.com/silentproject2025/ren_phone/actions/workflows/nyxapp-tests.yml)
-![Version](https://img.shields.io/badge/version-1.0.2-green)
+![Version](https://img.shields.io/badge/version-1.0.3-green)
 ![MCU](https://img.shields.io/badge/MCU-ESP32--S3-red)
 ![Framework](https://img.shields.io/badge/framework-Arduino-00979D)
 [![License: AGPL v3](https://img.shields.io/badge/license-AGPL--3.0-blue)](./LICENSE)
@@ -23,7 +23,7 @@ NyxOS is neither Android nor Linux. The launcher, notification center, network s
 | **Built-in apps** | 46 |
 | **Code size** | ~65,000 lines of main firmware + ~1,500 lines of coprocessor firmware (third-party code and generated data tables excluded) |
 | **UI language** | English (default) and Indonesian, switchable in *Settings → Language* |
-| **Version** | 1.0.2 (see [`VERSION`](./VERSION)) |
+| **Version** | 1.0.3 (see [`VERSION`](./VERSION)) |
 | **License** | AGPL-3.0 |
 
 > **A note on testing status.** Most features were tested by the maintainer on physical hardware. Please be aware of these exceptions up front:

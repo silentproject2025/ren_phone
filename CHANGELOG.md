@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.0.3
 - New: Nyx Store - browse, install, update and remove Nyx Apps from your phone (Store button in Nyx Apps; needs WiFi)
 - Improved: new look for Nyx Store, the Nyx Apps list and File Explorer (squircle icons, glass rows, file tiles colored by type)
 - New: the Web File Manager now needs a login (user admin, random password). The password is stored only as a salted hash, shown masked in File Explorer (tap to reveal for 10 s), and can be changed on the phone or on the web page (/passwd)
