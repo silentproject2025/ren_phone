@@ -459,6 +459,11 @@ static bool hwsGenScreenOk(){
     default: return false;
   }
 }
+// HWS_FLATBG_V1: true = layar generik yang boleh hardware scroll (portrait, mode != Mati) -> backdrop polos.
+// Sengaja TIDAK memeriksa overlay (CC/kunci/dll) supaya latar tidak berganti-ganti saat overlay muncul.
+bool hwsFlatBgNow(){
+  return hwsModeGet() != 0 && currentOrient == ORIENT_PORTRAIT && hwsGenScreenOk();
+}
 static bool hwsGenAlloc(){
   if(hwsSm) return true;
   uint64_t* p = (uint64_t*)heap_caps_malloc(4 * 480 * sizeof(uint64_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
@@ -684,6 +689,7 @@ void hwsLoopGuard(){
 #else   // ---- build tanpa HW scroll (ILI9341 / -DRP_HW_SCROLL=0): semua hook no-op ----
 bool hwsFrame(){ return false; }
 bool hwsIsActive(){ return false; }
+bool hwsFlatBgNow(){ return false; }   // HWS_FLATBG_V1
 bool hwsBandPush(){ return false; }
 bool hwsPushHook(){ return false; }
 void hwsLoopGuard(){}

@@ -1626,7 +1626,7 @@ String nyxVoiceInstruction(); String nyxVoiceStatus(); bool nyxVoiceExtract(Stri
 void nyxShotThumbCapture(const char*); void nyxShotThumbHide(); bool nyxShotThumbActive();
 // HW_SCROLL_V1 (apply_hw_scroll.py, hwscroll_renphone.ino): hardware vertical scroll ST7796, portrait saja
 bool hwsIsActive(); bool hwsFrame(); bool hwsBandPush(); bool hwsPushHook(); void hwsLoopGuard(); void hwsLeave(const char*,int);
-int hwsModeGet(); bool hwsModeSet(int); const char* hwsModeText(int);
+int hwsModeGet(); bool hwsModeSet(int); const char* hwsModeText(int); bool hwsFlatBgNow();   // HWS_FLATBG_V1
 // HOME_PAGER_V1 (pager_renphone.ino): Home landscape berhalaman + hardware scroll horizontal
 bool hpOn(); bool hpIsActive(); bool hpMotionNow(); bool hpFrame(); bool hpPushHook(); bool hpBandRedirect();
 int hpWidgetCutY(); void hpFreeImages(); void hpFlickFixup(int,int);   // HOME-FIX: halaman 1 = widget saja; lepas gambar pager utk app besar
@@ -3881,7 +3881,7 @@ void drawToast(LGFX_Sprite& s){
 // vertikal halus + rim + bayangan. Murah dirender tiap frame scroll.
 void drawGlassCard(LGFX_Sprite& s,int x,int y,int w,int h,int r,uint16_t tint,uint8_t a){
   if(w<=0||h<=0||y>=SCR_H||y+h<=0) return;
-  uint16_t base=glassSampleAvg(s,x,y,w,h,4);
+  uint16_t base=hwsFlatBgNow()?T().bg:glassSampleAvg(s,x,y,w,h,4);   // HWS_FLATBG_V1
   uint16_t fillC=blend565(base,tint,a);
   nyxAaRR(s, x,y+2,w,h,r,blend565(base,0x0000,70)); // bayangan tipis
   nyxAaRR(s, x,y,w,h,r,fillC);
@@ -3957,6 +3957,7 @@ void iosTitle(LGFX_Sprite& s,int x,int y,const char* t){
 // supaya dua cahaya gak pernah saling timpa (portrait maupun landscape).
 void iosBackdrop(LGFX_Sprite& s){
   s.fillSprite(T().bg);
+  if(hwsFlatBgNow()) return;   // HWS_FLATBG_V1: glow tetap-di-layar merusak pencocokan baris hardware scroll
   int m = SCR_W<SCR_H ? SCR_W : SCR_H;
   modernGlow(s, m/10,        -m/20,       (m*95)/100, T().accent,  44);
   modernGlow(s, SCR_W,       SCR_H,       (m*60)/100, T().accent2, 30);
