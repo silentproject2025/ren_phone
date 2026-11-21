@@ -99,7 +99,8 @@ static void nyxPickFs() {
   nyxAppFs = nullptr; nyxFsFlash = false;
 }
 
-static void nyxFsExec(NyxFsReq* r) {
+static void nyxFsExec(void* vp) {
+  NyxFsReq* r = (NyxFsReq*)vp;
   fs::FS& F = *nyxAppFs;
   switch (r->op) {
     case NYXF_OPEN: {
