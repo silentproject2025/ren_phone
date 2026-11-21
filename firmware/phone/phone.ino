@@ -2147,21 +2147,38 @@ bool looksLikeText(const String& content){
 }
 
 // WEBAUTH_V1 -- login untuk Web File Manager (lihat apply_security_patch.py)
-static char webPwBuf[12] = "";
+static char webPwBuf[33] = "";
 static bool webUpAuthed = false;
+static void webPwGen(char* g) {                                // 8 karakter acak, tanpa i,l,o,0,1 (mudah salah baca)
+  static const char A[] = "abcdefghjkmnpqrstuvwxyz23456789";
+  for (int i = 0; i < 8; i++) g[i] = A[esp_random() % (sizeof(A) - 1)];
+  g[8] = 0;
+}
+static void webPwStore(const char* pw) {
+  Preferences p; p.begin("webauth", false); p.putString("pw", pw); p.end();
+  strlcpy(webPwBuf, pw, sizeof(webPwBuf));
+}
 static const char* webPw() {
   if (webPwBuf[0]) return webPwBuf;
   Preferences p; p.begin("webauth", false);
   String sv = p.getString("pw", "");
-  if (sv.length() < 8) {
-    static const char A[] = "abcdefghjkmnpqrstuvwxyz23456789";   // tanpa i,l,o,0,1 (mudah salah baca)
-    char g[9]; for (int i = 0; i < 8; i++) g[i] = A[esp_random() % (sizeof(A) - 1)];
-    g[8] = 0; sv = String(g); p.putString("pw", sv);
-  }
   p.end();
-  sv.toCharArray(webPwBuf, sizeof(webPwBuf));
+  if (sv.length() < 8 || sv.length() > 32) { char g[9]; webPwGen(g); webPwStore(g); }
+  else sv.toCharArray(webPwBuf, sizeof(webPwBuf));
   return webPwBuf;
 }
+// Ganti sandi sendiri. Mengembalikan nullptr kalau berhasil, atau teks alasan kalau ditolak.
+const char* webAuthSetPassword(const String& pw) {
+  if (pw.length() < 8)  return "Min. 8 karakter";
+  if (pw.length() > 32) return "Maks. 32 karakter";
+  for (unsigned i = 0; i < pw.length(); i++) {
+    unsigned char c = (unsigned char)pw[i];
+    if (c < 33 || c > 126) return "Tanpa spasi / emoji";
+  }
+  webPwStore(pw.c_str());
+  return nullptr;
+}
+void webAuthResetRandom() { char g[9]; webPwGen(g); webPwStore(g); }   // kembali ke sandi acak
 const char* webAuthPassword() { return webPw(); }              // dipakai File Explorer utk menampilkan sandi di layar
 static bool webAuthOk() {
   if (webServer.authenticate("admin", webPw())) return true;
@@ -10594,7 +10611,16 @@ void expGoUp(){
 }
 
 // Kembali: tutup isi file -> naik folder -> baru keluar app
+// WEBPW_EDIT_V1 -- ganti/reset sandi Web File Manager dari layar File Explorer
+bool   webPwEditing = false;
+String webPwInput;
+static void webPwClose(){
+  webPwEditing = false; webPwInput = "";
+  if(kbTarget == &webPwInput) kbTarget = nullptr;
+  kbVisible = false; needRedraw = true;
+}
 void expGoBack(){
+  if(webPwEditing){ webPwClose(); return; }   // WEBPW_EDIT_V1
   if(expViewFileName.length() > 0){
     expViewFileName = ""; expViewContent = "";
     expViewScrollY = 0; expViewScrollVel = 0;
@@ -10728,7 +10754,7 @@ int  expPtrSx = 0, expPtrSy = 0, expPtrLy = 0, expPtrAcc = 0;
 // Dipanggil tiap loop() selagi layar = File Explorer (hook di loop(), pola sama
 // dgn settingsPointerTick): geser daftar + ketuk-saat-lepas.
 void fileExpPointerTick(bool touched, bool wasT, int tx, int ty){
-  if(expViewFileName.length() > 0 || !sdReady){ expPtrDown = false; return; }
+  if(expViewFileName.length() > 0 || !sdReady || webPwEditing){ expPtrDown = false; return; }   // WEBPW_EDIT_V1
   int listY = 44, itemH = 26, gap = 4;
   int pageY = backY() - 2;
   if(touched){
@@ -10768,7 +10794,7 @@ void fileExpEnter(){
   scanSdFiles();
   expClampScroll();
 }
-void fileExpExit(){}
+void fileExpExit(){ if(webPwEditing) webPwClose(); }   // WEBPW_EDIT_V1
 
 // FILEEXP_UI_V2: warna ubin menurut ekstensi
 static bool fxExtIn(const char* e, const char* csv) {   // csv "jpg,png,bmp"
@@ -10809,6 +10835,59 @@ static void fxDrawTile(LGFX_Sprite& s, int x, int y, int w, int h, bool isDir, c
   }
 }
 
+// WEBPW_EDIT_V1 -- panel ganti sandi (keyboard di bawah)
+#define WPW_BTN_Y 104
+#define WPW_BTN_H 22
+static void webPwBtnRect(int i, int& bx, int& bw){
+  int gapb = 6; bw = (SCR_W - 12 - 2*gapb) / 3; bx = 6 + i * (bw + gapb);
+}
+static void drawWebPwEdit(LGFX_Sprite& s){
+  s.setTextSize(1);
+  s.setTextColor(T().text);    s.setCursor(8, 50); s.print(RPTR("Ganti sandi Web File Manager"));
+  s.setTextColor(T().subtext); s.setCursor(8, 62); s.print(RPTR("8-32 karakter, tanpa spasi"));
+  iosRR(s, 6, 74, SCR_W-12, 22, 5, T().surface2);
+  int maxc = (SCR_W - 28) / 6;
+  String shown = webPwInput;
+  if((int)shown.length() > maxc - 1) shown = shown.substring(shown.length() - (maxc - 1));
+  s.setTextColor(T().accent); s.setCursor(12, 81); s.print(shown.c_str()); s.print("_");
+  const char* lbl[3] = { RPTR("Simpan"), RPTR("Acak"), RPTR("Batal") };
+  uint16_t col[3] = { T().good, T().accent, T().subtext };
+  for(int i = 0; i < 3; i++){
+    int bx, bw; webPwBtnRect(i, bx, bw);
+    nyxAaRR(s, bx, WPW_BTN_Y, bw, WPW_BTN_H, 10, blend565(T().surface2, col[i], 60));
+    s.setTextColor(col[i]);
+    s.setCursor(bx + (bw - s.textWidth(lbl[i])) / 2, WPW_BTN_Y + 7); s.print(lbl[i]);
+  }
+  if(kbVisible && kbTarget == &webPwInput) drawKb(s);
+  drawBack(s); drawToast(s);
+}
+static void webPwTouch(int x, int y, bool isNew){
+  if(!isNew) return;
+  if(isBack(x,y)){ webPwClose(); return; }
+  if(kbVisible && kbTarget == &webPwInput && y >= kbY() - 2){
+    kbTouch(x, y);
+    if(webPwInput.length() > 32) webPwInput.remove(32);
+    needRedraw = true; return;
+  }
+  if(y >= 74 && y <= 96){                      // ketuk kotak input -> munculkan keyboard lagi
+    kbTarget = &webPwInput; kbVisible = true; kbMode = KB_LOWER; needRedraw = true; return;
+  }
+  if(y >= WPW_BTN_Y && y <= WPW_BTN_Y + WPW_BTN_H){
+    for(int i = 0; i < 3; i++){
+      int bx, bw; webPwBtnRect(i, bx, bw);
+      if(x < bx || x > bx + bw) continue;
+      if(i == 0){
+        const char* err = webAuthSetPassword(webPwInput);
+        if(err){ showToast(RPTR(err), 1800); needRedraw = true; return; }
+        webPwClose(); showToast(RPTR("Sandi web disimpan"), 1600);
+      } else if(i == 1){
+        webAuthResetRandom(); webPwClose(); showToast(RPTR("Sandi diacak ulang"), 1600);
+      } else webPwClose();
+      return;
+    }
+  }
+}
+
 void drawFileExplorer(LGFX_Sprite& s){
   iosBackdrop(s); drawStatusBar(s);
   s.setTextSize(1);
@@ -10821,7 +10900,11 @@ void drawFileExplorer(LGFX_Sprite& s){
       String ipStr = "Web: " + WiFi.localIP().toString();
       s.print(ipStr.c_str());
       s.setTextColor(T().subtext); s.setCursor(8, 35);   // WEBAUTH_V1
-      s.print("Login web: admin / "); s.print(webAuthPassword());
+      { String hl = String("Login web: admin / ") + webAuthPassword();   // WEBPW_EDIT_V1
+        int maxh = (SCR_W - 16) / 6;
+        if((int)hl.length() + 8 <= maxh) hl += "  [ubah]";
+        else if((int)hl.length() > maxh) hl = hl.substring(0, maxh - 2) + "..";
+        s.print(hl.c_str()); }
     } else {
       s.setTextColor(T().subtext);s.setCursor(120,26);
       s.print("Web: Off (No WiFi)");
@@ -10833,6 +10916,7 @@ void drawFileExplorer(LGFX_Sprite& s){
     s.setTextColor(0x3ADF);s.setCursor(8,26);s.print(hdr.c_str());
   }
 
+  if(webPwEditing){ drawWebPwEdit(s); return; }   // WEBPW_EDIT_V1
   if(expViewFileName.length() > 0){
     iosRR(s,SCR_W-64,24,58,18,4,T().surface2);
     s.setTextColor(T().accent);s.setCursor(SCR_W-54,29);s.print(RPTR("Tutup"));
@@ -10969,6 +11053,7 @@ void drawFileExplorer(LGFX_Sprite& s){
 void fileExpTouch(int x,int y,bool held,bool isNew){
   static int dragLastY=0;
   int viewTop=44, viewBot=backY()-6; // v12: sama dgn area kotak isi file di drawFileExplorer
+  if(webPwEditing){ webPwTouch(x,y,isNew); return; }   // WEBPW_EDIT_V1
 
   if(isNew){
     if(isBack(x,y)){ expGoBack(); return; }
@@ -10987,6 +11072,11 @@ void fileExpTouch(int x,int y,bool held,bool isNew){
         expViewScrollVel = 0; // reset sisa momentum di awal sentuhan baru
       }
       return;
+    }
+
+    if(expCwd == "/" && wifiConnected && webServerRunning && y >= 31 && y < 44){   // WEBPW_EDIT_V1: ketuk baris login
+      webPwInput = ""; webPwEditing = true;
+      kbTarget = &webPwInput; kbVisible = true; kbMode = KB_LOWER; needRedraw = true; return;
     }
 
     if(!sdReady) return;
