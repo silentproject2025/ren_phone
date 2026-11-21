@@ -21,7 +21,7 @@ NyxOS is neither Android nor Linux. The launcher, notification center, network s
 |---|---|
 | **Microcontroller** | ESP32-S3, 16 MB flash, 8 MB OPI PSRAM |
 | **Built-in apps** | 46 |
-| **Code size** | ~63,000 lines of main firmware + ~1,500 lines of coprocessor firmware (third-party code and generated data tables excluded) |
+| **Code size** | ~65,000 lines of main firmware + ~1,500 lines of coprocessor firmware (third-party code and generated data tables excluded) |
 | **UI language** | English (default) and Indonesian, switchable in *Settings → Language* |
 | **Version** | 1.0.2 (see [`VERSION`](./VERSION)) |
 | **License** | AGPL-3.0 |
@@ -31,7 +31,8 @@ NyxOS is neither Android nor Linux. The launcher, notification center, network s
 > - **Phone calls** are only partially verified: they work with a `sip2sip.info` account (SIP over TCP); other SIP providers, LAN mode and TURN are unconfirmed.
 > - **NyxPPU** is an experiment (phase 1) and **SPI overclock** depends on cable quality.
 > - **New system gestures** (pull-to-refresh, edge swipe-back, panels that follow the finger) are `BETA`.
-> - **Nyx Apps** (native ELF apps) is `EXP`. The memory manager and the host API are tested on a PC, and CI now compiles the example apps to real ELF files and offers them on the web flasher. But the launcher, its storage choice (SD card, or internal flash when no SD card is inserted) and the ELF loader itself are **not yet tested on a device**. The loader is only present when the custom core libraries are built with the `elf_loader` option (on by default in that workflow).
+> - **Nyx Apps** (native ELF apps) is `EXP`. The memory manager and the host API are tested on a PC, and CI now compiles the example apps to real ELF files and offers them on the web flasher. But the launcher, the Nyx Store, its storage choice (SD card, or internal flash when no SD card is inserted) and the ELF loader itself are **not yet tested on a device**. The loader is only present when the custom core libraries are built with the `elf_loader` option (on by default in that workflow).
+> - **Security hardening** (Web File Manager login, encrypted API keys, random Remote Control password, optional signed OTA updates) is `BETA`: its core logic is covered by PC tests (`tests/security/`) and the firmware glue is not yet confirmed on a device. Signed OTA stays off until you add a public key; see the [security notice](#security-notice).
 > - **SysMem** (the central memory manager for the main firmware) is `BETA`: its core logic is tested on a PC, its firmware glue is only syntax-checked.
 > - **Device registry** (anonymous, one-time registration with a public dashboard) is `BETA`; see the [security notice](#security-notice).
 > - **Backup & Restore**: the **Cloud** tab (back up and restore) is tested on a device; the **SD Card** tab is `BETA` (tested on a PC, not yet on a device). **Chess** (online and vs. AI) is `BETA`: the logic is tested on a PC but not yet on a device.
@@ -72,6 +73,7 @@ Status markers used throughout the documentation:
 |---|---|---|
 | **System UI** | Home, Lock Screen, Control Center, themes, squircle icons, bento widgets, app open/close animations — [details](./docs/features/system-ui.md) | `OK` |
 | | Charging animation on the lock screen | `OK` |
+| | Redesigned File Explorer (glass rows, file tiles colored by type), Nyx Apps list and Nyx Store screens (squircle icons, detail cards) | `BETA` |
 | | Landscape Home with swipeable pages (widgets first, then apps) and ST7796 hardware scroll (portrait Home grid, landscape page swipes) — [details](./docs/features/system-ui.md#home-pages-and-hardware-scroll-st7796) | `OK` (ST7796 builds) |
 | | Hardware scroll on other portrait screens (Settings, Files, Notepad, AI Chat, Chat, Books, Backup, About, Gallery grid and more) — [details](./docs/features/system-ui.md#home-pages-and-hardware-scroll-st7796) | `BETA` (ST7796 builds) |
 | | Row-diff screen push (`RP_PUSH_DIFF`): only the rows that changed are sent to the panel | `BETA` (ST7796 and Aether, on by default) |
@@ -91,6 +93,7 @@ Status markers used throughout the documentation:
 | | [Settings Backup & Restore](./docs/features/system-tools.md#settings-backup-and-restore-beta) | `OK` (Cloud) / `BETA` (SD Card) |
 | | [Device registry](./docs/security.md) (anonymous id, optional public username, public dashboard) | `BETA` |
 | | [Nyx Apps](./docs/features/native-apps.md): native ELF apps loaded from the SD card, or from internal flash when no SD card is inserted. Example apps are compiled by CI and downloadable from the web flasher, or installable on the phone itself through the **Nyx Store** | `EXP` |
+| | [Security hardening](./docs/security.md): Web File Manager login (salted PBKDF2 hash, escalating lockout, only active while File Explorer is open), encrypted Gemini/NASA API keys, random Remote Control WiFi password, optional signed OTA updates (ECDSA P-256) | `BETA` |
 | | [SysMem](./docs/sysmem.md): per-feature memory accounting, budgets, reserve floor and one reclaim path for the main firmware | `BETA` |
 | **Games** | [Inferno, NES, DOOM, Maze, classics, PPU demo](./docs/features/games.md) | `OK` |
 | **Experimental** | [SPI overclock (`HW`), NyxPPU pixel engine (`EXP`)](./docs/features/experimental.md) | — |
@@ -219,10 +222,12 @@ Without an SD card, upload `manifest.txt` and `app.elf` through the phone's Web 
 │   └── prebuilt/             Alternative prebuilt firmware (Bruce fork), separate from NyxOS
 ├── supabase/                 SQL, registration page and dashboard for the optional device registry
 ├── third_party/              Vendored third-party code (Nofrendo NES core, ESP-DOOM core)
-├── tests/                    Host-side (PC) tests: backup, chess, ebook, gutenberg, camera, dictionary, nyxapp, sysmem
+├── tests/                    Host-side (PC) tests: backup, chess, ebook, gutenberg, camera, dictionary, nyxapp, sysmem, security
 ├── tools/                    Generators and helpers (emoji, fonts, dictionaries, i18n, Nyx App packaging)
 │   ├── pack_app.py           Lay out one app as <sd>/apps/<id>/{app.elf,manifest.txt,data/}
 │   ├── nyxapps_release.py    Zip built ELFs + build the nyxapps.json index for the web flasher
+│   ├── ota_keygen.sh         Create the ECDSA key pair for signed OTA updates (see docs/security.md)
+│   ├── ota_sign.sh           Sign an OTA info.txt (used by CI when the OTA_SIGNING_KEY secret is set)
 │   ├── patches/              Idempotent patch scripts for phone.ino; the Nyx Apps and SysMem ones are still checked by CI, the rest are kept as history
 │   ├── ci/                   Helper scripts used by the CI workflows
 │   └── legacy-patches/       Archived one-shot patch scripts, including elf_loader.patch (see its README)
@@ -245,7 +250,7 @@ The folder name `firmware/phone/` matches `phone.ino` so the sketch can also be 
 | **Build Arduino Libs** (`build-arduino-libs.yml`) | Manual: builds the custom core libraries (mbedTLS in PSRAM, cache sizes, WiFi/lwIP in PSRAM, optional `elf_loader` 2.0.0). Re-run only when the core version or the options change. |
 | **Build Nyx Apps (ELF)** (`build-nyxapps.yml`) | Compiles each `examples/native/<id>/` with ESP-IDF to an ELF, checks it (magic, Xtensa, ≤ 1 MB), and on `main`/`master` publishes zips to the `nyxapps` pre-release and refreshes the web flasher. Pushes and pull requests only prove the apps still compile. |
 | **Web Flasher (GitHub Pages)** (`flasher-pages.yml`) | Builds the flasher page: stable vs. test firmware, `.bin` downloads, SHA-256, and the Nyx Apps tab. |
-| **nyxapp-tests**, **sysmem-tests** | Run the PC test suites when the related files change. |
+| **nyxapp-tests**, **sysmem-tests**, **security-tests** | Run the PC test suites when the related files change. `security-tests` also checks the OTA signing flow (key generation, signing, device-style verification). |
 
 The Nyx Apps workflow is new and has been checked only on a PC (packaging and page generation). The first real ESP-IDF run in GitHub Actions may need small fixes.
 
@@ -276,7 +281,7 @@ A short list; the full list is in [docs/limitations.md](./docs/limitations.md).
 - DOOM needs a contiguous block of about 6.25 MB of PSRAM for its full 6 MiB zone; with less it runs with a 5 or 4 MiB zone and big levels may fail. A WAD on FFat is streamed by a helper task and no longer has to fit in PSRAM (see [Games](./docs/features/games.md#doom-wad-files)).
 - Hardware scroll and row-diff push exist only on ST7796 and Aether builds. Vertical scrolling in landscape cannot use hardware scroll, because the panel can only scroll along its long (480-pixel) axis; landscape Home uses swipeable pages instead. Hardware scroll also steps aside while someone views Remote Control, in game mode, while an overlay is open and, on portrait Home, when a wallpaper is set (see [System UI](./docs/features/system-ui.md#home-pages-and-hardware-scroll-st7796)).
 - Phone calls: partially tested; no ICE; TURN over UDP only; no PSTN numbers through free services.
-- TLS certificates are not verified (see the security notice).
+- TLS certificates are not verified (see the security notice). The Web File Manager uses HTTP Basic authentication over plain HTTP, so use it only on networks you trust.
 - Nyx Apps need the ELF loader, which is only in custom core libraries built with `elf_loader` enabled; none of this has run on a device yet. App files on internal flash share the roughly 9 MB FFat partition. See [Nyx Apps](./docs/features/native-apps.md).
 - There is no memory compaction: native apps use real pointers, so blocks are never moved. Fragmentation is limited (per-app arenas, block merging, the TLS gate), not removed.
 - Most CI steps do not pin tool versions, so upstream updates can break a build without any change in this repository. The Nyx Apps build pins its ESP-IDF image and `elf_loader` (2.0.0).
@@ -287,8 +292,10 @@ This project is a personal, experimental device. Before using it with sensitive 
 
 - TLS certificates are **not verified** (`setInsecure()`); do not send sensitive information.
 - SIP signalling and RTP audio are **not encrypted**.
-- The Web File Manager has **no authentication**; enable it only on trusted networks.
-- API keys are stored as plain text on the SD card.
+- The Web File Manager requires a login (user `admin`, random password on first start). The password is stored only as a salted hash and shown masked in File Explorer. Wrong passwords lock the login (60 s, 5 min, 15 min, 1 h). The page answers only while File Explorer is open and for 10 minutes afterwards. Basic authentication over plain HTTP is **not encrypted**, so enable it only on trusted networks.
+- Gemini and NASA API keys are stored **encrypted** (`enc1:...`) with a key bound to the device, so an SD card moved to another device cannot read them. This does not protect against someone who dumps the flash of the device itself.
+- The Remote Control WiFi uses WPA2 with a random password (the old public default is replaced automatically).
+- OTA updates can be verified with an ECDSA P-256 signature. This is **off by default**: it starts working once a public key is placed in `firmware/phone/ota_pubkey.h` (see [docs/security.md](./docs/security.md)).
 - On the first WiFi connection the device registers itself once with an anonymous id (a hash of the chip MAC) and sends its firmware version, build, branch and display type. A public username is optional and shown on the dashboard only if you set one. Leave the username empty to stay off the public list; details are in [docs/security.md](./docs/security.md).
 
 ## Contributing
