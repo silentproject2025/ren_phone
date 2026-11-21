@@ -10723,6 +10723,45 @@ void fileExpEnter(){
 }
 void fileExpExit(){}
 
+// FILEEXP_UI_V2: warna ubin menurut ekstensi
+static bool fxExtIn(const char* e, const char* csv) {   // csv "jpg,png,bmp"
+  size_t n = strlen(e); if (!n) return false;
+  const char* p = csv;
+  while (*p) {
+    const char* q = strchr(p, ','); size_t l = q ? (size_t)(q - p) : strlen(p);
+    if (l == n && strncasecmp(p, e, n) == 0) return true;
+    if (!q) break; p = q + 1;
+  }
+  return false;
+}
+static uint16_t fxTileCol(const char* ext) {
+  if (fxExtIn(ext, "jpg,jpeg,png,bmp,gif,webp")) return 0xFD20;     // gambar: oranye
+  if (fxExtIn(ext, "mp3,wav,flac,ogg,m4a,aac"))  return 0xB81F;     // audio: ungu
+  if (fxExtIn(ext, "avi,mp4,mjpg,mjpeg,mkv"))    return 0xF9A6;     // video: merah
+  if (fxExtIn(ext, "txt,md,log,json,ini,cfg,csv")) return 0x4DBF;   // teks: biru muda
+  if (fxExtIn(ext, "ino,h,cpp,c,py,js,html"))    return 0x3E6C;     // kode: hijau
+  if (fxExtIn(ext, "zip,tar,gz,7z"))             return 0xFEA0;     // arsip: kuning
+  if (fxExtIn(ext, "epub,pdf"))                  return 0x7D7C;     // buku: teal
+  if (fxExtIn(ext, "elf,bin,nes,rom"))           return 0x9CD3;     // app/biner: abu
+  return 0x8410;                                                    // lainnya
+}
+static void fxDrawTile(LGFX_Sprite& s, int x, int y, int w, int h, bool isDir, const char* name, uint16_t accent) {
+  const char* dot = strrchr(name, '.'); const char* ext = (dot && dot != name) ? dot + 1 : "";
+  uint16_t col = isDir ? accent : fxTileCol(ext);
+  nyxAaRR(s, x, y, w, h, 6, col);
+  uint16_t ink = appIconInk(col);
+  if (isDir) {
+    nyxAaRR(s, x + 4, y + 5, 7, 3, 1, ink);
+    nyxAaRR(s, x + 4, y + 7, w - 8, h - 12, 2, ink);
+  } else {
+    char t[4] = {0, 0, 0, 0};
+    for (int i = 0; i < 3 && ext[i]; i++) t[i] = (char)toupper((unsigned char)ext[i]);
+    if (!t[0]) { t[0] = '?'; }
+    s.setTextSize(1); s.setTextColor(ink);
+    s.setCursor(x + (w - s.textWidth(t)) / 2, y + (h - 8) / 2); s.print(t);
+  }
+}
+
 void drawFileExplorer(LGFX_Sprite& s){
   iosBackdrop(s); drawStatusBar(s);
   s.setTextSize(1);
@@ -10818,7 +10857,7 @@ void drawFileExplorer(LGFX_Sprite& s){
     int vi = expScrollItem + r;
     if(vi >= total) break;
     int itemY = listY + r * (itemH + gap);
-    iosRR(s,4,itemY,SCR_W-8,itemH,6,T().surface);
+    drawGlassPanel(s,4,itemY,SCR_W-8,itemH,9,T().surface2,150);   // FILEEXP_UI_V2
 
     if(upRow && vi == 0){                      // baris ".." (naik satu folder)
       s.setTextColor(T().accent2);s.setCursor(12,itemY+8);s.print("..");
@@ -10829,17 +10868,7 @@ void drawFileExplorer(LGFX_Sprite& s){
     bool isDir = expEntries[ei].dir;
     bool armed = (expDelArmIdx == vi && millis() < expDelArmUntil);
 
-    if(isDir){                                 // ikon folder
-      uint16_t fc = T().accent;
-      nyxAaRR(s, 10,itemY+7,9,4,1,fc);
-      nyxAaRR(s, 10,itemY+9,17,12,2,fc);
-    } else {                                   // ikon file
-      uint16_t fc = T().accent2;
-      nyxAaRRRing(s, 12,itemY+6,12,15,2,fc);
-      s.drawFastHLine(15,itemY+11,6,fc);
-      s.drawFastHLine(15,itemY+14,6,fc);
-      s.drawFastHLine(15,itemY+17,6,fc);
-    }
+    fxDrawTile(s, 8, itemY + 3, 22, 20, isDir, expEntries[ei].name, T().accent);   // FILEEXP_UI_V2
 
     int nameX = 34;
     int availPx = (SCR_W - 8) - nameX - (isDir ? 62 : 92);
@@ -10852,10 +10881,10 @@ void drawFileExplorer(LGFX_Sprite& s){
       int cx = SCR_W - 58, cy = itemY + itemH / 2;
       s.drawLine(cx-3,cy-5,cx+2,cy,T().subtext); s.drawLine(cx+2,cy,cx-3,cy+5,T().subtext);
     } else {
-      iosRR(s,SCR_W-84,itemY+3,36,20,4,T().surface2);
+      nyxAaRR(s,SCR_W-84,itemY+3,36,20,10,blend565(T().surface2,T().good,60));
       s.setTextColor(T().good);s.setCursor(SCR_W-76,itemY+8);s.print(RPTR("Buka"));
     }
-    iosRR(s,SCR_W-44,itemY+3,36,20,4,armed ? T().danger : T().surface2);
+    nyxAaRR(s,SCR_W-44,itemY+3,36,20,10,armed ? T().danger : T().surface2);
     s.setTextColor(armed ? 0xFFFF : T().danger);
     s.setCursor(armed ? SCR_W-41 : SCR_W-38, itemY+8);
     s.print(armed ? RPTR("Yakin?") : "Hps");

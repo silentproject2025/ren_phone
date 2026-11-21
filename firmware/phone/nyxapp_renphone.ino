@@ -44,7 +44,7 @@
 #define NYXAPP_SD_GRACE   3000      // tambahan bila macet di dalam operasi SD
 #define NYXAPP_ELF_MAX    (1024 * 1024)
 #define NYXAPP_HTTP_BUF   (128 * 1024)
-#define NYXAPP_ROW_H      52
+#define NYXAPP_ROW_H      60   // NYXAPPS_UI_V2 (dulu 52)
 
 enum { NYX_ST_LIST = 0, NYX_ST_RUN = 1, NYX_ST_ERR = 2, NYX_ST_STORE = 3 };   // NYXSTORE_V1: 3 = Nyx Store (nyxstore_renphone.ino)
 
@@ -475,6 +475,15 @@ static void nyxDrawLetter(LGFX_Sprite& s, int cx, int cy, int r, char sym, uint1
   s.setTextSize(1);
 }
 
+// NYXAPPS_UI_V2: ikon squircle berkilap + huruf kontras (sama dengan Nyx Store)
+static void nyxIconV2(LGFX_Sprite& s, int cx, int cy, int r, char sym, uint16_t col) {
+  modernIconBase(s, cx, cy, r, col);
+  s.setTextColor(appIconInk(col)); s.setTextSize(2);
+  char t[2] = { sym, 0 };
+  s.setCursor(cx - s.textWidth(t) / 2, cy - 8); s.print(t);
+  s.setTextSize(1);
+}
+
 // NYXSTORE_V1: tombol "Store" di kanan-atas daftar (hit-test di nyxAppTouch memakai konstanta yang sama)
 #define NYX_STORE_PILL_W 62
 #define NYX_STORE_PILL_Y 22
@@ -509,10 +518,12 @@ static void nyxDrawList(LGFX_Sprite& s) {
   for (int i = 0; i < nyxN; i++) {
     int ry = top + i * NYXAPP_ROW_H - (int)nyxScroll;
     if (ry + NYXAPP_ROW_H < top || ry > bot) continue;
-    drawGlassPanel(s, 8, ry + 2, SCR_W - 16, NYXAPP_ROW_H - 6, 10, T().surface2, 170);
-    nyxDrawLetter(s, 8 + 10 + 16, ry + NYXAPP_ROW_H / 2 - 1, 16, nyxSyms[i], nyxCols[i]);
-    s.setTextSize(2); s.setTextColor(T().text); s.setCursor(8 + 10 + 40, ry + 8); s.print(nyxNames[i]);
-    s.setTextSize(1); s.setTextColor(T().subtext); s.setCursor(8 + 10 + 40, ry + 28); s.print(nyxIds[i]);
+    drawGlassPanel(s, 8, ry + 3, SCR_W - 16, NYXAPP_ROW_H - 7, 14, T().surface2, 170);   // NYXAPPS_UI_V2
+    nyxIconV2(s, 8 + 12 + 19, ry + NYXAPP_ROW_H / 2, 19, nyxSyms[i], nyxCols[i]);
+    s.setTextSize(2); s.setTextColor(T().text); s.setCursor(8 + 12 + 46, ry + 11); s.print(nyxNames[i]);
+    s.setTextSize(1); s.setTextColor(T().subtext); s.setCursor(8 + 12 + 46, ry + 34); s.print(nyxIds[i]);
+    { int cx = SCR_W - 8 - 16, cy = ry + NYXAPP_ROW_H / 2;                              // chevron "buka"
+      s.drawLine(cx - 3, cy - 6, cx + 3, cy, T().subtext); s.drawLine(cx + 3, cy, cx - 3, cy + 6, T().subtext); }
   }
   s.clearClipRect();
 }
