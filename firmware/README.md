@@ -15,7 +15,7 @@ Arduino concatenates every `.ino` file in a sketch folder, so the files here are
 | `phone.ino` | NyxOS core: UI, boot, networking, base apps, some games |
 | `phone_notif_center.ino` | Notifications and Dynamic Island |
 | `*_renphone.ino` | One file per feature (gallery, avi, musicbt, remote, chat, call, camera, ina219, about, owner, homeedit, ota_check, wakeword, gamepad, power, doom, nes_*, features, chess, ebook, gutenberg, backup, kamus, emoji, ptr, hwscroll, pager, nyxextras, ppu_engine, and others) |
-| `*_core.h`, `backup_crypto.h`, `ryne_engine.h` | Pure C++ logic with no Arduino dependency, so it can be tested on a PC (backup, dictionary, ebook, Gutenberg, RYNE) |
+| `*_core.h`, `backup_crypto.h`, `sec_core.h`, `ryne_engine.h` | Pure C++ logic with no Arduino dependency, so it can be tested on a PC (backup, dictionary, ebook, Gutenberg, RYNE) |
 | `rplink.h`, `cam_rx.h`, `cam_avi.h`, `MjpegClass.h` | RPLink protocol, camera frame receiver, AVI writer, MJPEG parser |
 | `hw_conf.h`, `display_conf.h` | Hardware and display-variant configuration |
 | `i18n.h`, `i18n_dict.h` | UI language engine and generated dictionary |

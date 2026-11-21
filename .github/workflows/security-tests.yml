@@ -1,0 +1,17 @@
+name: security-tests
+on:
+  push:
+    paths: ['firmware/phone/sec_core.h', 'firmware/phone/backup_crypto.h', 'tests/security/**', 'tools/ota_*.sh']
+  pull_request:
+    paths: ['firmware/phone/sec_core.h', 'firmware/phone/backup_crypto.h', 'tests/security/**', 'tools/ota_*.sh']
+jobs:
+  pc-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tes PC inti keamanan (hash sandi, API key terenkripsi, penguncian, info.txt bertanda tangan) + ASan/UBSan
+        run: |
+          pip install cryptography
+          ./tests/security/run.sh
+      - name: Tes tanda tangan OTA (keygen -> sign -> verifikasi gaya perangkat)
+        run: ./tests/security/ota_sign_check.sh

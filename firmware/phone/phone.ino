@@ -1960,6 +1960,45 @@ String sanitizeKeyLine(String line) {
   return line;
 }
 
+// KEYENC_V1 -- API key disimpan TERENKRIPSI ("enc1:<hex>", AES-256-CTR + HMAC) dgn kunci dari rahasia
+// khusus perangkat (NVS "nyxsec"/"dk") + MAC chip. Melindungi dari SD card yg dicuri / disalin / ikut di-upload.
+// BUKAN perlindungan dari orang yg membongkar flash perangkat ini. File teks biasa yg ditempel user
+// (mis. lewat /edit atau komputer) tetap terbaca & otomatis dimigrasikan jadi terenkripsi saat dimuat.
+// Logika murni: sec_core.h (tes PC: tests/security).
+#define BK_YIELD() yield()
+#include "sec_core.h"
+static void keyEncKeys(uint8_t* ek, uint8_t* mk){
+  static uint8_t dk[32]; static bool have = false;
+  if(!have){
+    Preferences p; p.begin("nyxsec", false);
+    if(p.getBytes("dk", dk, 32) != 32){ esp_fill_random(dk, 32); p.putBytes("dk", dk, 32); }
+    p.end(); have = true;
+  }
+  uint8_t ikm[38]; memcpy(ikm, dk, 32);
+  uint64_t mac = ESP.getEfuseMac(); memcpy(ikm + 32, &mac, 6);
+  secKeyDerive(ikm, sizeof(ikm), ek, mk);
+  memset(ikm, 0, sizeof(ikm));
+}
+String keyEncode(const String& plain){
+  if(plain.length() == 0 || plain.length() > SEC_KEY_MAX || plain == "YOUR_GEMINI_API_KEY_HERE" ||
+     plain == "DEMO_KEY" || plain.startsWith(SEC_KEY_PREFIX)) return plain;      // kosong / placeholder / sudah terenkripsi
+  uint8_t ek[32], mk[32], iv[16]; keyEncKeys(ek, mk); esp_fill_random(iv, 16);
+  char txt[SEC_KEY_TXT_CAP];
+  size_t n = secKeySeal(ek, mk, iv, plain.c_str(), plain.length(), txt, sizeof(txt));
+  memset(ek, 0, 32); memset(mk, 0, 32);
+  return n ? String(txt) : plain;
+}
+// 0 = teks biasa (out tak diisi) | 1 = berhasil (out = key) | -1 = terenkripsi tapi tak bisa dibuka (SD dari perangkat lain / rusak)
+int keyDecode(const String& line, String& out){
+  uint8_t ek[32], mk[32]; keyEncKeys(ek, mk);
+  char buf[SEC_KEY_MAX + 1];
+  int r = secKeyOpen(ek, mk, line.c_str(), line.length(), buf, sizeof(buf));
+  memset(ek, 0, 32); memset(mk, 0, 32);
+  if(r == 1) out = String(buf);
+  memset(buf, 0, sizeof(buf));
+  return r;
+}
+
 // v27: fallback NVS (flash internal) utk API key kalau SD card gak ada.
 // Dipisah ke namespace Preferences sendiri ("gemini") biar gak numpuk sm
 // "ui"/"wifi"/dll. Diisi manual lewat web server (/apikey) krn kalau SD
@@ -1967,13 +2006,17 @@ String sanitizeKeyLine(String line) {
 const char* GEMINI_NVS_NS = "gemini";
 void saveGeminiKeyNVS(){
   Preferences p; p.begin(GEMINI_NVS_NS, false);
-  p.putString("apikey", geminiApiKey);
+  p.putString("apikey", keyEncode(geminiApiKey));   // KEYENC_V1
   p.end();
 }
 String loadGeminiKeyNVS(){
   Preferences p; p.begin(GEMINI_NVS_NS, true);
   String v = p.getString("apikey", "");
   p.end();
+  String dec; int kd = keyDecode(v, dec);          // KEYENC_V1
+  if(kd == 1) return dec;
+  if(kd == -1){ Serial.println("[Gemini] key NVS terenkripsi tak bisa dibuka -> dikosongkan"); return ""; }
+  if(v.length() > 0){ Preferences w; w.begin(GEMINI_NVS_NS, false); w.putString("apikey", keyEncode(v)); w.end(); }   // migrasi teks biasa -> terenkripsi
   return v;
 }
 
@@ -2016,17 +2059,22 @@ void loadGeminiKey(){
   raw.replace("\r", "\n");
 
   int start = 0;
+  bool keyMigrate = false;                          // KEYENC_V1: ketemu key teks biasa -> tulis ulang terenkripsi
   while (start < (int)raw.length()) {
     int nl = raw.indexOf('\n', start);
     String line = (nl == -1) ? raw.substring(start) : raw.substring(start, nl);
     line = sanitizeKeyLine(line);
     if (line.length() > 0 && line.charAt(0) != '#') {
-      geminiApiKey = line;
+      String dec; int kd = keyDecode(line, dec);
+      if (kd == 1) geminiApiKey = dec;
+      else if (kd == 0) { geminiApiKey = line; keyMigrate = (line != "YOUR_GEMINI_API_KEY_HERE"); }
+      else Serial.println("[Gemini] key terenkripsi tak bisa dibuka (SD dari perangkat lain?) -> isi ulang key");
       break;
     }
     if (nl == -1) break;
     start = nl + 1;
   }
+  if (keyMigrate) { saveGeminiKey(); Serial.println("[Gemini] key teks biasa dimigrasikan jadi terenkripsi"); }
 
   Serial.printf("[Gemini] Key loaded, length=%d\n", geminiApiKey.length());
   if (geminiApiKey.length() > 8) {
@@ -2050,8 +2098,10 @@ void saveGeminiKey(){
     f.print("# GEMINI API KEY CONFIGURATION (ESP32-S3)\r\n");
     f.print("# Dapatkan API key gratis dari Google AI Studio:\r\n");
     f.print("# https://aistudio.google.com/app/apikey\r\n");
+    f.print("# Key disimpan terenkripsi (enc1:...) & hanya terbaca di perangkat ini.\r\n");
+    f.print("# Mau ganti? Hapus baris di bawah, tempel key baru (teks biasa) -- otomatis dienkripsi lagi.\r\n");
     f.print("# =============================================\r\n");
-    f.print(geminiApiKey);
+    f.print(keyEncode(geminiApiKey));                // KEYENC_V1
     f.print("\r\n");
     f.close();
   }
@@ -2146,59 +2196,136 @@ bool looksLikeText(const String& content){
   return suspicious < (checkLen/20);    // toleransi < 5% karakter aneh
 }
 
-// WEBAUTH_V1 -- login untuk Web File Manager (lihat apply_security_patch.py)
-static char webPwBuf[33] = "";
-static bool webUpAuthed = false;
+// WEBAUTH_V2 -- login Web File Manager (menggantikan WEBAUTH_V1):
+//   * sandi disimpan sbg HASH (PBKDF2-HMAC-SHA256 + salt acak) -- bukan teks biasa;
+//   * sandi polos hanya ada di RAM kalau dibuat/diganti pada boot ini (utk ditampilkan di layar, disamarkan);
+//   * nama pengguna bisa diganti (default "admin");
+//   * 5x salah -> dikunci bertingkat 60 dtk -> 5 mnt -> 15 mnt -> 1 jam; tingkatnya disimpan & bertahan setelah reboot;
+//   * hasil verifikasi sukses di-cache di RAM 5 menit (PBKDF2 ~0,1 dtk tdk dihitung ulang tiap permintaan).
+// Logika murni ada di sec_core.h (tes PC: tests/security).
+#include "mbedtls/base64.h"
+static bool     webUpAuthed = false;
+static char     webPwBuf[SEC_PW_MAX + 1] = "";          // "" = sandi polos tidak diketahui (hanya hash tersimpan)
+static uint8_t  webSalt[16], webHash[32];
+static char     webUser[SEC_USER_MAX + 1] = "admin";
+static bool     webCredReady = false;
+static uint8_t  webLockLvl = 0;                         // jumlah penguncian sejak login sukses terakhir (NVS)
+static uint8_t  webFailN = 0;
+static uint32_t webLockUntil = 0;                       // millis(); 0 = tidak dikunci
+static uint8_t  webOkCache[32]; static uint32_t webOkCacheMs = 0; static bool webOkCacheOn = false;
+
 static void webPwGen(char* g) {                                // 8 karakter acak, tanpa i,l,o,0,1 (mudah salah baca)
   static const char A[] = "abcdefghjkmnpqrstuvwxyz23456789";
   for (int i = 0; i < 8; i++) g[i] = A[esp_random() % (sizeof(A) - 1)];
   g[8] = 0;
 }
-static void webPwStore(const char* pw) {
-  Preferences p; p.begin("webauth", false); p.putString("pw", pw); p.end();
-  strlcpy(webPwBuf, pw, sizeof(webPwBuf));
-}
-static const char* webPw() {
-  if (webPwBuf[0]) return webPwBuf;
+static void webCacheClear() { webOkCacheOn = false; memset(webOkCache, 0, sizeof(webOkCache)); }
+static void webCredSet(const char* user, const char* pw) {      // salah satu boleh nullptr = tidak diubah
+  if (user) strlcpy(webUser, user, sizeof(webUser));
+  if (pw) {
+    esp_fill_random(webSalt, sizeof(webSalt));
+    secPwHash(pw, strlen(pw), webSalt, webHash);
+    strlcpy(webPwBuf, pw, sizeof(webPwBuf));
+  }
   Preferences p; p.begin("webauth", false);
-  String sv = p.getString("pw", "");
+  if (pw)   { p.putBytes("h", webHash, sizeof(webHash)); p.putBytes("s", webSalt, sizeof(webSalt)); p.remove("pw"); }   // "pw" = format lama (teks biasa)
+  if (user) p.putString("u", webUser);
   p.end();
-  if (sv.length() < 8 || sv.length() > 32) { char g[9]; webPwGen(g); webPwStore(g); }
-  else sv.toCharArray(webPwBuf, sizeof(webPwBuf));
-  return webPwBuf;
+  webCacheClear();
+}
+static void webLockSave() { Preferences p; p.begin("webauth", false); p.putUChar("lvl", webLockLvl); p.end(); }
+static void webCredLoad() {
+  if (webCredReady) return;
+  Preferences p; p.begin("webauth", false);
+  bool haveH = (p.getBytes("h", webHash, sizeof(webHash)) == sizeof(webHash)) && (p.getBytes("s", webSalt, sizeof(webSalt)) == sizeof(webSalt));
+  String u = p.getString("u", "admin");
+  String legacy = p.getString("pw", "");
+  webLockLvl = p.getUChar("lvl", 0);
+  p.end();
+  if (!secUserPolicy(u.c_str(), u.length())) strlcpy(webUser, u.c_str(), sizeof(webUser)); else strcpy(webUser, "admin");
+  webCredReady = true;
+  if (!haveH) {
+    if (legacy.length() && !secPwPolicy(legacy.c_str(), legacy.length())) {
+      webCredSet(nullptr, legacy.c_str());                          // migrasi sandi teks biasa (format lama) -> hash
+      Serial.println("[Web] sandi lama dimigrasikan ke hash");
+    } else { char g[9]; webPwGen(g); webCredSet(nullptr, g); }      // pertama kali: sandi acak
+  }
+  if (webLockLvl) {                                                 // masih dalam hukuman? reboot tidak menghapusnya
+    webLockUntil = millis() + secLockSecs(webLockLvl - 1) * 1000UL; if (!webLockUntil) webLockUntil = 1;
+  }
 }
 // Ganti sandi sendiri. Mengembalikan nullptr kalau berhasil, atau teks alasan kalau ditolak.
 const char* webAuthSetPassword(const String& pw) {
-  if (pw.length() < 8)  return "Min. 8 karakter";
-  if (pw.length() > 32) return "Maks. 32 karakter";
-  for (unsigned i = 0; i < pw.length(); i++) {
-    unsigned char c = (unsigned char)pw[i];
-    if (c < 33 || c > 126) return "Tanpa spasi / emoji";
-  }
-  webPwStore(pw.c_str());
+  webCredLoad();
+  const char* e = secPwPolicy(pw.c_str(), pw.length());
+  if (e) return e;
+  webCredSet(nullptr, pw.c_str());
   return nullptr;
 }
-void webAuthResetRandom() { char g[9]; webPwGen(g); webPwStore(g); }   // kembali ke sandi acak
-const char* webAuthPassword() { return webPw(); }              // dipakai File Explorer utk menampilkan sandi di layar
-// LOGINLOCK_V1 -- 5x sandi salah -> login dikunci 60 dtk (hanya hitung kalau ada header Authorization)
-static uint8_t  webFailN = 0;
-static uint32_t webLockUntil = 0;                               // millis(); 0 = tidak dikunci
+const char* webAuthSetUser(const String& u) {
+  webCredLoad();
+  const char* e = secUserPolicy(u.c_str(), u.length());
+  if (e) return e;
+  webCredSet(u.c_str(), nullptr);
+  return nullptr;
+}
+void webAuthResetRandom() { webCredLoad(); char g[9]; webPwGen(g); webCredSet(nullptr, g); }   // kembali ke sandi acak
+const char* webAuthPassword() { webCredLoad(); return webPwBuf; }   // "" = tidak diketahui (hanya hash); layar menyamarkannya
+const char* webAuthUser()     { webCredLoad(); return webUser; }
+
 static bool webLocked() {
   if (webLockUntil && (int32_t)(millis() - webLockUntil) >= 0) webLockUntil = 0;
   return webLockUntil != 0;
 }
+static uint32_t webLockLeftS() { return webLockUntil ? (uint32_t)((int32_t)(webLockUntil - millis()) / 1000) + 1 : 0; }
+static void webNoteFail() {                                     // 1 percobaan salah; 5x -> kunci bertingkat
+  if (++webFailN < 5) return;
+  webFailN = 0;
+  uint32_t secs = secLockSecs(webLockLvl);
+  webLockUntil = millis() + secs * 1000UL; if (!webLockUntil) webLockUntil = 1;
+  if (webLockLvl < 250) webLockLvl++;
+  webLockSave();
+  webCacheClear();
+  Serial.printf("[Web] 5x sandi salah -> login dikunci %u dtk\n", (unsigned)secs);
+}
+static void webNoteOk() { webFailN = 0; if (webLockLvl) { webLockLvl = 0; webLockSave(); } }
+static bool webVerifyPlain(const char* user, size_t ul, const char* pw, size_t pl) {
+  webCredLoad();
+  if (pl == 0 || pl > 64) return false;
+  bool uok = (ul == strlen(webUser)) && bkCtEq((const uint8_t*)user, (const uint8_t*)webUser, ul);
+  bool pok = secPwCheck(pw, pl, webSalt, webHash);              // selalu dihitung (waktu tetap, tak bocorkan nama benar/salah)
+  return uok && pok;
+}
 static bool webCheckCred() {                                    // true = sandi benar
   if (webLocked()) return false;
-  if (webServer.authenticate("admin", webPw())) { webFailN = 0; return true; }
-  if (webServer.hasHeader("Authorization") && ++webFailN >= 5) {
-    webFailN = 0; webLockUntil = millis() + 60000UL; if (!webLockUntil) webLockUntil = 1;
-    Serial.println("[Web] 5x sandi salah -> login dikunci 60 dtk");
+  webCredLoad();
+  if (!webServer.hasHeader("Authorization")) return false;      // permintaan pertama browser (belum ada sandi) tidak dihitung salah
+  String ah = webServer.header("Authorization");
+  uint8_t hh[32]; bkSha256((const uint8_t*)ah.c_str(), ah.length(), hh);
+  if (webOkCacheOn && (uint32_t)(millis() - webOkCacheMs) < 300000UL && bkCtEq(hh, webOkCache, 32)) return true;
+  bool ok = false;
+  if (ah.startsWith("Basic ") && ah.length() < 200) {
+    String b64 = ah.substring(6); b64.trim();
+    uint8_t dec[130]; size_t ol = 0;
+    if (mbedtls_base64_decode(dec, sizeof(dec) - 1, &ol, (const unsigned char*)b64.c_str(), b64.length()) == 0) {
+      dec[ol] = 0;
+      const char *u, *p; size_t ul, pl;
+      if (secSplitCred((const char*)dec, ol, &u, &ul, &p, &pl)) ok = webVerifyPlain(u, ul, p, pl);
+    }
+    memset(dec, 0, sizeof(dec));
   }
+  if (ok) { webNoteOk(); memcpy(webOkCache, hh, 32); webOkCacheMs = millis(); webOkCacheOn = true; return true; }
+  webNoteFail();
   return false;
 }
 static bool webAuthOk() {
   if (webCheckCred()) return true;
-  if (webLocked()) { webServer.send(429, "text/plain", "Terlalu banyak percobaan. Coba lagi 1 menit lagi."); return false; }
+  if (webLocked()) {
+    uint32_t left = webLockLeftS();
+    webServer.sendHeader("Retry-After", String(left));
+    webServer.send(429, "text/plain", String("Terlalu banyak percobaan. Coba lagi ") + String(left) + " detik lagi.");
+    return false;
+  }
   webServer.requestAuthentication(BASIC_AUTH, "Accretion Phone");
   return false;
 }
@@ -2231,6 +2358,54 @@ static bool webGuard(bool write) {
   return true;
 }
 
+// WEBPW_WEB_V1 -- ganti sandi / nama pengguna dari halaman web (wajib isi sandi lama)
+static void webPasswdSend(const String& msg, bool good, int code) {
+  String h = "<!DOCTYPE html><html><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width, initial-scale=1'><title>Ubah login</title>";
+  h += "<style>body{font-family:sans-serif;background:#121212;color:#fff;padding:15px;max-width:650px;margin:auto;}";
+  h += ".card{background:#1e1e1e;padding:15px;border-radius:10px;margin-bottom:15px;}a{color:#00e5ff;}";
+  h += "input[type=text],input[type=password]{width:92%;padding:8px;margin:4px 0 12px;background:#2a2a2a;color:#fff;border:1px solid #444;border-radius:6px;}";
+  h += ".btn{background:#e91e63;color:#fff;padding:8px 14px;border:none;border-radius:6px;cursor:pointer;font-weight:bold;}</style></head><body>";
+  h += "<h2>Ubah login Web File Manager</h2><div class='card'>";
+  if (msg.length()) h += String("<p style='color:") + (good ? "#4caf50" : "#ff5252") + "'><b>" + msg + "</b></p>";
+  h += "<form method='POST' action='/passwd' autocomplete='off'>";
+  h += "<label>Sandi saat ini</label><br><input type='password' name='old' required maxlength='64' autocomplete='current-password'><br>";
+  h += String("<label>Nama pengguna (3-16: huruf, angka, _ - .)</label><br><input type='text' name='user' maxlength='16' value='") + webAuthUser() + "'><br>";
+  h += "<label>Sandi baru (8-32 karakter, tanpa spasi; kosongkan kalau tidak diganti)</label><br><input type='password' name='pw' maxlength='32' autocomplete='new-password'><br>";
+  h += "<label>Ulangi sandi baru</label><br><input type='password' name='pw2' maxlength='32' autocomplete='new-password'><br>";
+  h += "<input type='submit' class='btn' value='Simpan'></form>";
+  h += "<p style='color:#aaa;font-size:13px'>Setelah disimpan, browser akan meminta login ulang. Sandi hanya disimpan sebagai hash di perangkat.</p></div>";
+  h += "<a href='/'>&larr; Kembali</a></body></html>";
+  webServer.send(code, "text/html", h);
+}
+void handleWebPasswdGet() {
+  if (!webGuard(false)) return;
+  webPasswdSend("", true, 200);
+}
+void handleWebPasswdPost() {
+  if (!webGuard(true)) return;
+  webCredLoad();
+  String old = webServer.arg("old"), nu = webServer.arg("user"), np = webServer.arg("pw"), np2 = webServer.arg("pw2");
+  nu.trim();
+  if (webLocked()) { webPasswdSend(String("Terlalu banyak percobaan. Coba lagi ") + String(webLockLeftS()) + " detik lagi.", false, 429); return; }
+  if (old.length() == 0 || !webVerifyPlain(webUser, strlen(webUser), old.c_str(), old.length())) {
+    webNoteFail();                                                       // percobaan sandi lama yg salah ikut dihitung utk penguncian
+    if (webLocked()) { webPasswdSend(String("Terlalu banyak percobaan. Coba lagi ") + String(webLockLeftS()) + " detik lagi.", false, 429); return; }
+    webPasswdSend("Sandi saat ini salah.", false, 403); return;
+  }
+  webNoteOk();
+  bool chUser = nu.length() && nu != webUser;
+  bool chPw   = np.length() > 0;
+  if (!chUser && !chPw) { webPasswdSend("Tidak ada yang diubah.", false, 200); return; }
+  if (chPw && np != np2) { webPasswdSend("Konfirmasi sandi baru tidak cocok.", false, 200); return; }
+  const char* e = nullptr;
+  if (chUser) e = secUserPolicy(nu.c_str(), nu.length());
+  if (!e && chPw) e = secPwPolicy(np.c_str(), np.length());
+  if (e) { webPasswdSend(e, false, 200); return; }
+  webCredSet(chUser ? nu.c_str() : nullptr, chPw ? np.c_str() : nullptr);
+  Serial.println("[Web] login diubah lewat halaman web");
+  webPasswdSend("Tersimpan. Login ulang dgn data baru.", true, 200);
+}
+
 void handleWebRoot() {
   if (!webGuard(false)) return;   // WEBAUTH_V1
   String html = "<!DOCTYPE html><html><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width, initial-scale=1'>";
@@ -2258,6 +2433,8 @@ void handleWebRoot() {
   if (!sdReady) html += "<p style='color:#ffca28;font-size:13px;'>SD Card tidak terdeteksi -- key akan disimpan di NVS (flash internal).</p>";
   html += "<a href='/apikey' class='btn' style='display:inline-block;text-decoration:none;'>Atur API Key</a>";
   html += "</div>";
+  html += "<div class='card'><h3>Login Web File Manager</h3><p>Nama pengguna: <b>" + String(webAuthUser()) + "</b></p>";   // WEBPW_WEB_V1
+  html += "<a href='/passwd' class='btn' style='display:inline-block;text-decoration:none;'>Ubah login</a></div>";
 
   // v47: kartu status Wallpaper Home Screen. Sengaja gak bikin halaman
   // upload terpisah -- manfaatin form Upload yg SUDAH ADA di atas: user
@@ -2584,6 +2761,8 @@ void startWebServer(){
   webServer.on("/download", HTTP_GET, handleWebDownload);
   webServer.on("/apikey", HTTP_GET, handleApiKeyGet);
   webServer.on("/apikey_save", HTTP_POST, handleApiKeySavePost);
+  webServer.on("/passwd", HTTP_GET, handleWebPasswdGet);        // WEBPW_WEB_V1
+  webServer.on("/passwd", HTTP_POST, handleWebPasswdPost);
   rcRegisterRoutes(); // Remote Control: /remote, /rc/*
   { static const char* hk[] = { "Sec-Fetch-Site", "Origin", "Host", "Authorization" }; webServer.collectHeaders(hk, 4); }   // WEBAUTH_V1
   Serial.println("[Web] login File Manager aktif (sandi: lihat layar File Explorer)");
@@ -10647,6 +10826,7 @@ void expGoUp(){
 // WEBPW_EDIT_V1 -- ganti/reset sandi Web File Manager dari layar File Explorer
 bool   webPwEditing = false;
 String webPwInput;
+static uint32_t webPwRevealUntil = 0;     // PWMASK_V1: sandi di layar disamarkan; ketuk bagian sandi = tampil 10 dtk
 static void webPwClose(){
   webPwEditing = false; webPwInput = "";
   if(kbTarget == &webPwInput) kbTarget = nullptr;
@@ -10787,6 +10967,7 @@ int  expPtrSx = 0, expPtrSy = 0, expPtrLy = 0, expPtrAcc = 0;
 // Dipanggil tiap loop() selagi layar = File Explorer (hook di loop(), pola sama
 // dgn settingsPointerTick): geser daftar + ketuk-saat-lepas.
 void fileExpPointerTick(bool touched, bool wasT, int tx, int ty){
+  if(webPwRevealUntil && (int32_t)(millis() - webPwRevealUntil) >= 0){ webPwRevealUntil = 0; needRedraw = true; }   // PWMASK_V1: sembunyikan lagi otomatis
   if(expViewFileName.length() > 0 || !sdReady || webPwEditing){ expPtrDown = false; return; }   // WEBPW_EDIT_V1
   int listY = 44, itemH = 26, gap = 4;
   int pageY = backY() - 2;
@@ -10827,7 +11008,7 @@ void fileExpEnter(){
   scanSdFiles();
   expClampScroll();
 }
-void fileExpExit(){ webFmArm(); /*WEBFM_IDLE_V1*/ if(webPwEditing) webPwClose(); }   // WEBPW_EDIT_V1
+void fileExpExit(){ webFmArm(); /*WEBFM_IDLE_V1*/ webPwRevealUntil = 0; if(webPwEditing) webPwClose(); }   // WEBPW_EDIT_V1
 
 // FILEEXP_UI_V2: warna ubin menurut ekstensi
 static bool fxExtIn(const char* e, const char* csv) {   // csv "jpg,png,bmp"
@@ -10866,6 +11047,22 @@ static void fxDrawTile(LGFX_Sprite& s, int x, int y, int w, int h, bool isDir, c
     s.setTextSize(1); s.setTextColor(ink);
     s.setCursor(x + (w - s.textWidth(t)) / 2, y + (h - 8) / 2); s.print(t);
   }
+}
+
+// PWMASK_V1 -- baris "Login web": sandi disamarkan (********). Ketuk bagian sandi = tampil/sembunyi (otomatis sembunyi 10 dtk),
+// ketuk [ubah] = panel ganti sandi. Setelah reboot hanya hash yg tersimpan -> tampil "(tersimpan)"; ketuk = buka panel ganti.
+static bool webPwRevealed(){ return webPwRevealUntil && (int32_t)(millis() - webPwRevealUntil) < 0; }
+static void webPwLine(String& hl, int& ubahX){
+  const char* pw = webAuthPassword();
+  String p;
+  if(!pw[0]) p = "(tersimpan)";
+  else if(webPwRevealed()) p = pw;
+  else { for(size_t i = 0; i < strlen(pw); i++) p += '*'; }
+  int maxh = (SCR_W - 16) / 6;
+  String base = String("Login web: ") + webAuthUser() + " / " + p;
+  if((int)base.length() + 8 > maxh) base = String("Login: ") + webAuthUser() + " / " + p;
+  if((int)base.length() + 8 <= maxh){ hl = base + "  [ubah]"; ubahX = 8 + ((int)base.length() + 2) * 6; }
+  else { hl = base; if((int)hl.length() > maxh) hl = hl.substring(0, maxh - 2) + ".."; ubahX = SCR_W - 44; }
 }
 
 // WEBPW_EDIT_V1 -- panel ganti sandi (keyboard di bawah)
@@ -10912,9 +11109,9 @@ static void webPwTouch(int x, int y, bool isNew){
       if(i == 0){
         const char* err = webAuthSetPassword(webPwInput);
         if(err){ showToast(RPTR(err), 1800); needRedraw = true; return; }
-        webPwClose(); showToast(RPTR("Sandi web disimpan"), 1600);
+        webPwRevealUntil = 0; webPwClose(); showToast(RPTR("Sandi web disimpan"), 1600);
       } else if(i == 1){
-        webAuthResetRandom(); webPwClose(); showToast(RPTR("Sandi diacak ulang"), 1600);
+        webAuthResetRandom(); webPwRevealUntil = (millis() + 15000UL) | 1UL; webPwClose(); showToast(RPTR("Sandi diacak ulang"), 1600);
       } else webPwClose();
       return;
     }
@@ -10933,11 +11130,7 @@ void drawFileExplorer(LGFX_Sprite& s){
       String ipStr = "Web: " + WiFi.localIP().toString();
       s.print(ipStr.c_str());
       s.setTextColor(T().subtext); s.setCursor(8, 35);   // WEBAUTH_V1
-      { String hl = String("Login web: admin / ") + webAuthPassword();   // WEBPW_EDIT_V1
-        int maxh = (SCR_W - 16) / 6;
-        if((int)hl.length() + 8 <= maxh) hl += "  [ubah]";
-        else if((int)hl.length() > maxh) hl = hl.substring(0, maxh - 2) + "..";
-        s.print(hl.c_str()); }
+      { String hl; int ux; webPwLine(hl, ux); s.print(hl.c_str()); }   // PWMASK_V1
     } else {
       s.setTextColor(T().subtext);s.setCursor(120,26);
       s.print("Web: Off (No WiFi)");
@@ -11108,6 +11301,10 @@ void fileExpTouch(int x,int y,bool held,bool isNew){
     }
 
     if(expCwd == "/" && wifiConnected && webServerRunning && y >= 31 && y < 44){   // WEBPW_EDIT_V1: ketuk baris login
+      String hl; int ux; webPwLine(hl, ux);                    // PWMASK_V1
+      if(x < ux && webAuthPassword()[0]){                      // ketuk bagian sandi -> tampil / sembunyi
+        webPwRevealUntil = webPwRevealed() ? 0 : (millis() + 10000UL) | 1UL; needRedraw = true; return;
+      }
       webPwInput = ""; webPwEditing = true;
       kbTarget = &webPwInput; kbVisible = true; kbMode = KB_LOWER; needRedraw = true; return;
     }
@@ -12197,6 +12394,7 @@ bool updInstallFromURLOnce(const String& url){
           updShowResult(false, "Header bukan image ESP32-S3 yg valid. Dibatalkan, firmware lama aman.");
           return false;
         }
+        otaShaFeed(buf, (size_t)n);   // OTA_SIG_V1
         if(Update.write(buf, n) != (size_t)n){
           Update.abort();
           http.end();
@@ -12223,6 +12421,9 @@ bool updInstallFromURLOnce(const String& url){
   }
   http.end();
   updDrawPhase(RPTR("Memverifikasi firmware..."));
+  if(written == (size_t)contentLen){   // OTA_SIG_V1: SHA-256 seluruh unduhan vs info.txt (sebelum Update.end memasang)
+    String shaWhy; if(!otaShaCheck(shaWhy)){ Update.abort(); updShowResult(false, shaWhy); return false; }
+  }
 
   if(!Update.end(true) || !Update.isFinished()){
     String why = Update.errorString();
@@ -17613,12 +17814,26 @@ String apodLoadNasaKey(){
   File f=SD_MMC.open(path,FILE_READ);
   if(!f) return "DEMO_KEY";
   String key="DEMO_KEY";
+  bool migrate=false;                                // KEYENC_V1
   while(f.available()){
     String line=f.readStringUntil('\n');
     line = sanitizeKeyLine(line); // reuse fungsi yg sama dgn Gemini key (buang BOM/kutip/spasi)
-    if(line.length() && line.charAt(0)!='#'){ key=line; break; }
+    if(line.length() && line.charAt(0)!='#'){
+      String dec; int kd = keyDecode(line, dec);
+      if(kd==1) key=dec;
+      else if(kd==0){ key=line; migrate=(line!="DEMO_KEY"); }
+      break;                                         // kd==-1: tak bisa dibuka -> tetap DEMO_KEY
+    }
   }
   f.close();
+  if(migrate){                                       // tulis ulang terenkripsi
+    File w=SD_MMC.open(path,FILE_WRITE);
+    if(w){
+      w.print("# NASA API KEY -- disimpan terenkripsi (enc1:...) & hanya terbaca di perangkat ini.\r\n");
+      w.print("# Mau ganti? Hapus baris di bawah, tempel key baru (teks biasa) -- otomatis dienkripsi lagi.\r\n");
+      w.print(keyEncode(key)); w.print("\r\n"); w.close();
+    }
+  }
   return key;
 }
 

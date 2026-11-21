@@ -337,6 +337,8 @@ jobs:
           cp firmware/phone/backup_renphone.ino build_sketch/
           cp firmware/phone/backup_core.h build_sketch/
           cp firmware/phone/backup_crypto.h build_sketch/
+          cp firmware/phone/sec_core.h build_sketch/        # SEC_V1: hash sandi web, API key terenkripsi, kunci OTA
+          cp firmware/phone/ota_pubkey.h build_sketch/      # OTA_SIG_V1: kunci publik tanda tangan OTA (kosong = mati)
           cp firmware/phone/backup_cloud.h build_sketch/
           cp firmware/phone/backup_sync_renphone.ino build_sketch/
           cp firmware/phone/gutendex_core.h build_sketch/
@@ -478,6 +480,8 @@ jobs:
 
       - name: Siapkan firmware.bin untuk OTA
         if: github.event_name != 'pull_request'
+        env:
+          OTA_SIGNING_KEY: ${{ secrets.OTA_SIGNING_KEY }}   # OTA_SIG_V1: PEM kunci privat ECDSA P-256 (tools/ota_keygen.sh); kosong = info.txt tidak ditandatangani
         run: |
           test -f build/build_sketch.ino.bin || (echo "::error::build_sketch.ino.bin tidak ada" && ls build && exit 1)
           cp build/build_sketch.ino.bin firmware.bin
@@ -489,6 +493,7 @@ jobs:
           echo "MERGED=$MERGED" >> "$GITHUB_ENV"
           VER=dev; [ -f VERSION ] && VER="$(tr -d ' \r\n' < VERSION)"; [ -n "$VER" ] || VER=dev
           MD5="$(md5sum firmware.bin | cut -d' ' -f1)"
+          SHA256="$(sha256sum firmware.bin | cut -d' ' -f1)"
           SIZE="$(stat -c%s firmware.bin)"
           {
             echo "branch=${RP_BRANCH}"
@@ -497,9 +502,16 @@ jobs:
             echo "base=${RP_BASE_REV}"
             echo "size=${SIZE}"
             echo "md5=${MD5}"
+            echo "sha256=${SHA256}"
             echo "sha=${{ github.sha }}"
             echo "display=${VARIANT}"
           } > info.txt
+          # OTA_SIG_V1: tanda tangan ECDSA atas seluruh isi info.txt (baris "sig=" ditambahkan di akhir)
+          if [ -n "${OTA_SIGNING_KEY:-}" ]; then
+            bash tools/ota_sign.sh info.txt
+          else
+            echo "::warning::secret OTA_SIGNING_KEY belum diisi -> info.txt TIDAK ditandatangani (HP dgn kunci aktif akan menolak update ini)"
+          fi
           cat info.txt
           # changelog Inggris untuk layar Update di HP: ambil bagian versi ini dari CHANGELOG.md
           # (kalau tidak ada bagian utk versi ini -> bagian pertama). ASCII saja, maks ~1400 byte.

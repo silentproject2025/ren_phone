@@ -35,6 +35,9 @@
 // =====================================================================
 #include <Preferences.h>
 #include <esp_ota_ops.h>
+#include "mbedtls/pk.h"
+#include "sec_core.h"
+#include "ota_pubkey.h"
 
 #ifndef RP_BUILD_NUM
 #define RP_BUILD_NUM 0          // build lokal / non-CI
@@ -67,6 +70,37 @@ static int    otaStateVal  = 0;        // 1 sudah terbaru, 2 ada update/pindah b
 static String otaExpUrl = "";
 static String otaExpMd5 = "";
 static int    otaExpSize = 0;
+
+// OTA_SIG_V1 -- info.txt bertanda tangan (ECDSA P-256 + SHA-256) & SHA-256 firmware diperiksa selagi unduh.
+// Kunci publik di ota_pubkey.h. Kosong = mati (perilaku lama: ukuran + MD5). Terisi = WAJIB: info.txt tanpa/salah
+// tanda tangan ditolak, jalur rilis lama & URL manual ditolak. Pembuatan kunci: tools/ota_keygen.sh.
+#define OTA_SIG_REQUIRED (sizeof(OTA_PUBKEY_PEM) > 1)
+static bool    otaSigOk      = false;    // info.txt utk otaExpUrl lolos verifikasi tanda tangan
+static uint8_t otaExpSha[32];            // SHA-256 firmware yg diharapkan (dari info.txt)
+static bool    otaExpShaSet  = false;
+static BkSha   otaShaCtx;                // hash berjalan selama unduhan
+static bool    otaShaOn      = false;
+
+static bool otaVerifySig(const uint8_t* hash32, const uint8_t* sig, size_t sl) {
+  mbedtls_pk_context pk; mbedtls_pk_init(&pk);
+  bool ok = false;
+  if (mbedtls_pk_parse_public_key(&pk, (const unsigned char*)OTA_PUBKEY_PEM, sizeof(OTA_PUBKEY_PEM)) == 0)   // PEM wajib diakhiri NUL (ikut dihitung)
+    ok = (mbedtls_pk_verify(&pk, MBEDTLS_MD_SHA256, hash32, 32, sig, sl) == 0);
+  mbedtls_pk_free(&pk);
+  return ok;
+}
+// true = tanda tangan sah. signedOut = bagian badan yg ditandatangani (hanya ini yg boleh dipercaya & di-parse).
+static bool otaVerifyInfo(const String& body, String& signedOut, const char*& why) {
+  size_t sl; const char* sx; size_t xl;
+  if (!secInfoSplit(body.c_str(), body.length(), &sl, &sx, &xl)) { why = "Info channel tidak bertanda tangan. Dibatalkan"; return false; }
+  uint8_t sig[80];
+  int n = secUnhex(sx, xl, sig, sizeof(sig));
+  if (n < 8) { why = "Tanda tangan info channel rusak. Dibatalkan"; return false; }
+  uint8_t h[32]; bkSha256((const uint8_t*)body.c_str(), sl, h);
+  if (!otaVerifySig(h, sig, (size_t)n)) { why = "Tanda tangan info channel TIDAK valid. Dibatalkan"; return false; }
+  signedOut = body.substring(0, sl);
+  return true;
+}
 
 // ---- changelog (English) untuk update yg ditemukan "Cek update" ----
 // Dibaca dari  releases/download/channel-<branch>/changelog.txt  (dibuat workflow dari CHANGELOG.md).
@@ -158,6 +192,7 @@ static int otaChanIndexOf(const String& name) {
 static void otaResetCheck() {
   otaCheckedOk = false; otaStateVal = 0; otaLatestNum = -1;
   otaExpUrl = ""; otaExpMd5 = ""; otaExpSize = 0;
+  otaSigOk = false; otaExpShaSet = false; otaShaOn = false;
   otaNotes = ""; otaNotesHead = ""; otaNotesShow = false;
 }
 
@@ -336,6 +371,10 @@ String otaWifiLabel() {
 // jalur lama: dipakai HANYA utk channel bawaan "remote-control" selama channel-nya belum
 // pernah dipublikasikan (rilis "build-N" biasa = non-prerelease terakhir).
 static void otaCheckLegacy() {
+  if (OTA_SIG_REQUIRED) {                       // jalur lama tidak punya info.txt -> tidak bisa diverifikasi
+    showToast(RPTR("Jalur rilis lama tidak bertanda tangan. Dibatalkan"), 3500);
+    otaResetCheck(); return;
+  }
   updBusy = true;
   updDrawBusy(RPTR("Memeriksa rilis GitHub..."));
 
@@ -384,6 +423,7 @@ static void otaCheckLegacy() {
   otaLatestNum = num;
   otaCheckedOk = true;
   otaExpUrl = ""; otaExpMd5 = ""; otaExpSize = 0;   // jalur lama: tanpa info md5/size
+  otaSigOk = false; otaExpShaSet = false;
   if (num > (int)RP_BUILD_NUM) {
     otaStateVal = 2;
     updUrl = String("https://github.com/") + OTA_REPO + "/releases/download/" + tag + "/firmware.bin";
@@ -419,6 +459,11 @@ void otaCheckAndFill() {
     return;
   }
 
+  if (OTA_SIG_REQUIRED) {                       // OTA_SIG_V1: hanya isi yg DITANDATANGANI yg dipercaya
+    String sb; const char* why = nullptr;
+    if (!otaVerifyInfo(body, sb, why)) { showToast(RPTR(why), 3800); otaResetCheck(); return; }
+    body = sb;
+  }
   String bi  = otaKv(body, "branch");
   int build  = otaKv(body, "build").toInt();
   int baseRv = otaKv(body, "base").toInt();
@@ -428,6 +473,13 @@ void otaCheckAndFill() {
   if (build <= 0 || size < 100000 || md5.length() != 32 || bi != ch) {
     showToast(RPTR("Info channel rusak / tidak valid"), 2500);
     return;
+  }
+  uint8_t shaBin[32];                           // OTA_SIG_V1: SHA-256 firmware (opsional; wajib kalau tanda tangan wajib)
+  String sh256 = otaKv(body, "sha256"); sh256.toLowerCase();
+  bool shaOk = (sh256.length() == 64 && secUnhex(sh256.c_str(), 64, shaBin, sizeof(shaBin)) == 32);
+  if (OTA_SIG_REQUIRED && !shaOk) {
+    showToast(RPTR("Info channel tanpa sha256. Dibatalkan"), 3000);
+    otaResetCheck(); return;
   }
   // Firmware beda LAYAR (ILI9341 vs ST7796) tidak boleh saling timpa -> layar bisa gelap total,
   // KECUALI user sengaja menyalakan opsi "layar lain" (otaCrossDisp): lalu yang dicocokkan adalah layar TARGET.
@@ -456,6 +508,8 @@ void otaCheckAndFill() {
     otaStateVal = 2;
     updUrl = base + "firmware.bin";
     otaExpUrl = updUrl; otaExpMd5 = md5; otaExpSize = size;
+    otaExpShaSet = shaOk; if (shaOk) memcpy(otaExpSha, shaBin, sizeof(otaExpSha));
+    otaSigOk = OTA_SIG_REQUIRED;                // lolos verifikasi di atas
     {   // changelog (opsional) -- judul: versi + build + channel
       String ver = otaKv(body, "version"); ver.trim();
       String head = (ver.length() ? String("v") + ver + " " : String("")) + "b" + String(build) + " [" + ch + "]";
@@ -521,6 +575,10 @@ bool otaHdrFeed(const uint8_t* b, size_t n, size_t off) {
 
 // sebelum Update.begin: ukuran harus cocok dgn info.txt (kalau URL berasal dari "Cek update")
 bool otaPreInstall(const String& url, int contentLen, String& why) {
+  if (OTA_SIG_REQUIRED && !(otaSigOk && otaExpUrl.length() && url == otaExpUrl)) {
+    why = String(RPTR("URL tidak terverifikasi. Kunci tanda tangan OTA aktif: pakai 'Cek update' (channel bertanda tangan)."));
+    return false;
+  }
   if (otaExpUrl.length() && url == otaExpUrl && otaExpSize > 0 && contentLen != otaExpSize) {
     char wb[144];
     snprintf(wb, sizeof(wb), RPTR("Ukuran file (%d) tidak cocok dgn info channel (%d). Dibatalkan, firmware lama aman."), contentLen, otaExpSize);
@@ -535,6 +593,23 @@ void otaApplyExpect(const String& url) {
   if (otaExpUrl.length() && url == otaExpUrl && otaExpMd5.length() == 32) {
     Update.setMD5(otaExpMd5.c_str());
   }
+  otaShaOn = false;                             // OTA_SIG_V1: mulai hitung SHA-256 selama unduhan
+  if (otaExpUrl.length() && url == otaExpUrl && otaExpShaSet) { bkShaInit(otaShaCtx); otaShaOn = true; }
+}
+void otaShaFeed(const uint8_t* b, size_t n) { if (otaShaOn) bkShaUpdate(otaShaCtx, b, n); }
+// dipanggil SEBELUM Update.end(): hash seluruh unduhan harus sama dgn info.txt. false = batalkan (firmware lama aman).
+bool otaShaCheck(String& why) {
+  if (!otaShaOn) {
+    if (OTA_SIG_REQUIRED) { why = String(RPTR("Verifikasi SHA-256 tidak aktif. Dibatalkan, firmware lama aman.")); return false; }
+    return true;
+  }
+  otaShaOn = false;
+  uint8_t h[32]; bkShaFinal(otaShaCtx, h);
+  if (!bkCtEq(h, otaExpSha, 32)) {
+    why = String(RPTR("SHA-256 firmware tidak cocok dgn info channel. Dibatalkan, firmware lama aman."));
+    return false;
+  }
+  return true;
 }
 
 // =====================================================================

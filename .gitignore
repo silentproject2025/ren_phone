@@ -28,3 +28,5 @@ diag/
 .DS_Store
 *.bak_*
 sysmem_bundle.zip
+ota_private.pem
+tests/security/extracted_blocks.inc

@@ -66,3 +66,6 @@ Three tests fail to compile **in the original flat layout as well**, so this is 
 - `tests/ebook/run_ui_test.py`
 
 They include the real `.ino` files, which now use the `RPTR()` translation macro (and `delay()`), and the Arduino mocks in these folders do not define them yet. Adding the missing mock definitions should fix them.
+
+## security
+`./tests/security/run.sh` — PC tests for `sec_core.h` (password hash, encrypted API keys, escalating lockout, signed `info.txt`) and for the real Web File Manager login block extracted from `phone.ino` (mock Arduino, including a reboot simulation). `./tests/security/ota_sign_check.sh` — keygen → sign → verify the way the firmware does. Needs `g++`, `openssl`, and `pip install cryptography` for the cross-checks.
