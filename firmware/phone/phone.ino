@@ -465,6 +465,14 @@ struct HomeRect{ int x,y,w,h; }; // harus paling atas: prototype otomatis Arduin
 #include <time.h>
 #include "FS.h"
 #include "SD_MMC.h"
+#if RP_SD_SPI
+// AETHER: kartu SD lewat SPI (berbagi bus dgn layar). Seluruh kode memakai objek `SD_MMC`;
+// di sini diarahkan ke library SD (API sama: open/exists/remove/mkdir/rename/rmdir/totalBytes/usedBytes/end).
+#include <SPI.h>
+#include <SD.h>
+static SPIClass rpSdSpi(FSPI);   // SPI2 = host yg sama dgn layar (LGFX spi_host=SPI2_HOST), bus_shared=true
+#define SD_MMC SD
+#endif
 #include <FFat.h> // v47: fallback penyimpanan wallpaper (flash internal) pas SD Card gak kedetek
 #include "esp_heap_caps.h"
 #include "sysmem_fw.h"   // SYSMEM_V1: API manajer memori firmware (tipe sysmem:: harus terbaca sebelum prototipe otomatis)
@@ -1364,12 +1372,12 @@ public:
       cfg.freq_write=DISPLAY_SPI_FREQ_EXPERIMENTAL; cfg.freq_read=16000000;
       cfg.spi_3wire=false; cfg.use_lock=true;
       cfg.dma_channel=SPI_DMA_CH_AUTO;
-      cfg.pin_sclk=12; cfg.pin_mosi=11;
-      cfg.pin_miso=13; cfg.pin_dc=2;
+      cfg.pin_sclk=RP_PIN_SCLK; cfg.pin_mosi=RP_PIN_MOSI;
+      cfg.pin_miso=RP_PIN_MISO; cfg.pin_dc=RP_PIN_TFT_DC;
       _bus_instance.config(cfg);
       _panel_instance.setBus(&_bus_instance); }
     { auto cfg = _panel_instance.config();
-      cfg.pin_cs=10; cfg.pin_rst=14; cfg.pin_busy=-1;
+      cfg.pin_cs=RP_PIN_TFT_CS; cfg.pin_rst=RP_PIN_TFT_RST; cfg.pin_busy=-1;
       cfg.memory_width=RP_DISP_NATIVE_W; cfg.memory_height=RP_DISP_NATIVE_H;
       cfg.panel_width=RP_DISP_NATIVE_W;  cfg.panel_height=RP_DISP_NATIVE_H;
       cfg.offset_x=0; cfg.offset_y=0; cfg.offset_rotation=0;
@@ -1381,10 +1389,10 @@ public:
       cfg.invert=false; cfg.rgb_order=false;
 #endif
       cfg.dlen_16bit=false;
-      cfg.bus_shared=false;
+      cfg.bus_shared=(RP_SD_SPI!=0);   // Aether: SD berbagi bus SPI dgn layar
       _panel_instance.config(cfg); }
     { auto cfg = _light_instance.config();
-      cfg.pin_bl=21; cfg.invert=false;
+      cfg.pin_bl=RP_PIN_TFT_BL; cfg.invert=false;
       cfg.freq=44100; cfg.pwm_channel=7;
       _light_instance.config(cfg);
       _panel_instance.setLight(&_light_instance); }
@@ -1898,8 +1906,17 @@ String geminiApiKey = "";
 
 void initSD(){
   if(sdReady) return; // PREFS_SD_V1: bisa dipanggil lebih awal oleh SdPrefs; jangan mount dua kali
+#if RP_SD_SPI
+  // Pastikan CS layar & CS SD sama-sama HIGH sebelum bus dipakai (initSD bisa jalan sebelum display.init()).
+  pinMode(RP_PIN_TFT_CS,OUTPUT); digitalWrite(RP_PIN_TFT_CS,HIGH);
+  pinMode(RP_PIN_SD_CS,OUTPUT);  digitalWrite(RP_PIN_SD_CS,HIGH);
+  rpSdSpi.begin(RP_PIN_SCLK,RP_PIN_MISO,RP_PIN_MOSI,RP_PIN_SD_CS);
+  sdReady=SD.begin(RP_PIN_SD_CS,rpSdSpi,RP_SD_FREQ,"/sdcard",8,false);
+  Serial.printf("[sd] SPI CS=%d %lu Hz -> %s\n",(int)RP_PIN_SD_CS,(unsigned long)RP_SD_FREQ,sdReady?"OK":"GAGAL");
+#else
   SD_MMC.setPins(SD_PIN_CLK,SD_PIN_CMD,SD_PIN_D0);
   sdReady=SD_MMC.begin("/sdcard",true);
+#endif
 }
 
 // v47: FFat dipakai HANYA sbg fallback wallpaper pas SD Card gak
@@ -21564,6 +21581,8 @@ void loop(){
         // "lepas" pas jari diangkat -- lihat doomTouch() di doom_renphone.ino.
         apps[idx].touch(tx,ty,held,newT);
       } else if(curScreen()==SCR_NYX){
+        // FIX Nyx Apps: nyxAppTouch() meluncurkan app saat JARI DILEPAS (held=false,isNew=false) dan app native
+        // butuh event lepas utk nyxTouchRel. Dispatch generik tidak mengirimnya -> daftar app tidak bisa diketuk.
         if(newT) apps[idx].touch(tx,ty,false,true);
         else if(touched && held) apps[idx].touch(tx,ty,true,false);
         else if(!touched && wasTouched) apps[idx].touch(tx,ty,false,false);

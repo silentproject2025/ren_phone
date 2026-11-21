@@ -11,13 +11,67 @@
 //
 // Semua nilai di bawah bisa ditimpa lewat -D... tanpa mengedit file ini.
 
+// =====================================================================
+// AETHER BOARD  (-DRP_BOARD_AETHER)
+// ESP32-S3 + layar SPI + sentuh kapasitif FT6336U (I2C 0x38, register sama dgn FT6236)
+// + kartu SD lewat SPI yg BERBAGI bus dgn layar (SCK/MOSI/MISO sama, CS beda).
+// Dianggap panel ST7796 480x320 (jalur kode kapasitif/ST7796 dipakai ulang).
+// Semua nilai bisa ditimpa lewat -D... tanpa mengedit file ini.
+// =====================================================================
+#if defined(RP_BOARD_AETHER)
+  #ifndef RP_DISPLAY_ST7796
+  #define RP_DISPLAY_ST7796
+  #endif
+  #define RP_DISP_ID          "aether"
+  #define RP_DISP_NAME        "Aether Board: ST7796 480x320, sentuh FT6336U"
+  #define RP_CH_SUFFIX        "-aether"
+  #define RP_PIN_SCLK         12
+  #define RP_PIN_MOSI         11
+  #define RP_PIN_MISO         13
+  #define RP_PIN_TFT_CS       10
+  #define RP_PIN_TFT_DC       7
+  #define RP_PIN_TFT_RST      4
+  #define RP_PIN_TFT_BL       3
+  #define RP_SD_SPI           1      // SD lewat SPI (bukan SDMMC) -> SD_MMC dialihkan ke library SD (lihat phone.ino)
+  #define RP_PIN_SD_CS        14
+  #define RP_SD_FREQ          20000000
+  #define RP_TOUCH_SDA        8
+  #define RP_TOUCH_SCL        9
+  #define RP_TOUCH_RST        5
+  #define RP_TOUCH_INT        6      // tidak dipakai (sentuh di-polling), hanya dicatat
+  // Bus sensor (MPU6050/INA219, Wire1): default ST7796 (5/4) bentrok dgn RST sentuh/RST layar -> pindah.
+  #define RP_SENS_SDA         1
+  #define RP_SENS_SCL         2
+  #ifndef RP_ST7796_INVERT
+  #define RP_ST7796_INVERT    1
+  #endif
+#endif
+
+// Pin default (= nilai LAMA yg dulu tertulis langsung di phone.ino -> build non-Aether tidak berubah)
+#ifndef RP_PIN_SCLK
+#define RP_PIN_SCLK         12
+#define RP_PIN_MOSI         11
+#define RP_PIN_MISO         13
+#define RP_PIN_TFT_CS       10
+#define RP_PIN_TFT_DC       2
+#define RP_PIN_TFT_RST      14
+#define RP_PIN_TFT_BL       21
+#endif
+#ifndef RP_SD_SPI
+#define RP_SD_SPI           0
+#endif
+
 #if defined(RP_DISPLAY_ST7796)
+  #ifndef RP_DISP_ID
   #define RP_DISP_ID          "st7796"
   #define RP_DISP_NAME        "ST7796 480x320, sentuh FT6236"
+  #endif
   #define RP_DISP_NATIVE_W    320          // lebar panel pada rotasi 0 (portrait)
   #define RP_DISP_NATIVE_H    480
   #define RP_TOUCH_CAPACITIVE 1            // FT6236: tidak perlu wizard kalibrasi
+  #ifndef RP_CH_SUFFIX
   #define RP_CH_SUFFIX        "-st7796"    // channel OTA terpisah: channel-<branch>-st7796
+  #endif
 
   // ST7796_DIFFPUSH_V1: push() hanya kirim pita baris yg berubah (lihat apply_st7796_diffpush.py).
   // 0 = push penuh seperti dulu. Layar korup/ada sisa gambar -> coba -DRP_PUSH_DIFF=0 dulu.

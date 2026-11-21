@@ -40,12 +40,13 @@ jobs:
     # Dua varian dari kode yang SAMA, masing-masing job & rilis terpisah:
     #   ili9341 = layar lama 320x240 + XPT2046 (perilaku/nama rilis TIDAK berubah)
     #   st7796  = layar 3,5" ST7796 480x320 + FT6236 (-DRP_DISPLAY_ST7796)
+    #   aether  = Aether Board: ST7796 + FT6336U + SD lewat SPI berbagi bus (-DRP_BOARD_AETHER)
     name: Build (${{ matrix.variant }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        variant: [ ili9341, st7796 ]
+        variant: [ ili9341, st7796, aether ]
     env:
       VARIANT: ${{ matrix.variant }}
 
@@ -214,6 +215,7 @@ jobs:
           fi
           # varian layar lain = channel OTA sendiri (HP ILI9341 tidak pernah menarik firmware ST7796)
           if [ "$VARIANT" = "st7796" ]; then RP_BRANCH="${RP_BRANCH}-st7796"; fi
+          if [ "$VARIANT" = "aether" ]; then RP_BRANCH="${RP_BRANCH}-aether"; fi
           echo "RP_BRANCH=$RP_BRANCH" >> "$GITHUB_ENV"
           echo "RP_BASE_REV=$MY_BASE" >> "$GITHUB_ENV"
 
@@ -388,6 +390,7 @@ jobs:
           echo "Opsi board tambahan: '${LOOP_OPT}' (kosong = bawaan)"
           DISP_FLAG=""
           [ "$VARIANT" = "st7796" ] && DISP_FLAG="-DRP_DISPLAY_ST7796"
+          [ "$VARIANT" = "aether" ] && DISP_FLAG="-DRP_BOARD_AETHER"
           echo "Varian layar: $VARIANT ${DISP_FLAG}"
           arduino-cli compile --fqbn esp32:esp32:esp32s3 \
             --board-options "FlashSize=16M,PSRAM=opi,PartitionScheme=app3M_fat9M_16MB${LOOP_OPT}" \
@@ -438,6 +441,7 @@ jobs:
           arduino-cli lib list >> diag/versions.txt 2>&1 || true
           DISP_FLAG=""
           [ "$VARIANT" = "st7796" ] && DISP_FLAG="-DRP_DISPLAY_ST7796"
+          [ "$VARIANT" = "aether" ] && DISP_FLAG="-DRP_BOARD_AETHER"
           arduino-cli compile --fqbn esp32:esp32:esp32s3 \
             --board-options "FlashSize=16M,PSRAM=opi,PartitionScheme=app3M_fat9M_16MB" \
             --build-property "compiler.cpp.extra_flags=${DISP_FLAG} -I${NOF_INCLUDE}" \
@@ -468,6 +472,7 @@ jobs:
           test -f build/build_sketch.ino.merged.bin || (echo "::error::build_sketch.ino.merged.bin tidak ada" && ls build && exit 1)
           MERGED=ren_phone_s3_merged.bin
           [ "$VARIANT" = "st7796" ] && MERGED=ren_phone_s3_st7796_merged.bin
+          [ "$VARIANT" = "aether" ] && MERGED=ren_phone_s3_aether_merged.bin
           cp build/build_sketch.ino.merged.bin "$MERGED"
           echo "MERGED=$MERGED" >> "$GITHUB_ENV"
           VER=dev; [ -f VERSION ] && VER="$(tr -d ' \r\n' < VERSION)"; [ -n "$VER" ] || VER=dev
@@ -520,6 +525,13 @@ jobs:
             PRE="--prerelease"
             cp firmware.bin firmware-st7796.bin
             FILES="firmware-st7796.bin $MERGED"
+          fi
+          if [ "$VARIANT" = "aether" ]; then
+            TAG="aether-${{ github.run_number }}"
+            TITLE="Firmware v${VER} Aether Board (build ${{ github.run_number }})"
+            PRE="--prerelease"
+            cp firmware.bin firmware-aether.bin
+            FILES="firmware-aether.bin $MERGED"
           fi
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" $FILES --clobber

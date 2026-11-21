@@ -21,7 +21,7 @@
 #include "esp_sleep.h"
 
 #define PWR_WAKE_GPIO   GPIO_NUM_0     // tombol BOOT di board ESP32-S3 (aktif LOW)
-#define PWR_BL_PIN      21
+#define PWR_BL_PIN      RP_PIN_TFT_BL
 #define PWR_VIB_PIN     VIB_PIN
 #define PWR_NPX_PIN     NEOPIXEL_PIN
 
