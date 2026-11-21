@@ -169,7 +169,7 @@ struct Backend {
 
 struct Host {
   Backend be; MemMgr* mm; int memId;
-  uint32_t perms; char dataDir[64];
+  uint32_t perms; char dataDir[NYX_PATH_MAX];
   int fh[NYX_MAX_FILES];
   int httpId; void* httpBuf; size_t httpCap; bool httpCopied;
   uint32_t tlsNeed;                       // blok kontigu internal untuk HTTPS (TLS Gate)

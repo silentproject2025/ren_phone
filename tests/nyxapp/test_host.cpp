@@ -10,6 +10,9 @@
 #include <string>
 #include <vector>
 
+// Direktori sementara: ikut $TMPDIR (Termux tidak punya /tmp), fallback /tmp. Sama dengan $OUT di run.sh.
+static std::string tmpDir() { const char* t = getenv("TMPDIR"); return (t && *t) ? t : "/tmp"; }
+
 using namespace nyx;
 static int g_fail = 0, g_ok = 0;
 #define CHECK(c) do { if (c) g_ok++; else { g_fail++; printf("  GAGAL %s:%d  %s\n", __FILE__, __LINE__, #c); } } while (0)
@@ -109,7 +112,7 @@ static RunOut runApp(Rig& rig, MemMgr& mm, const std::string& app, const std::st
   system(("mkdir -p '" + dataDir + "'").c_str());
   int id = mm.launch(mf.name, mf.memKb * 1024); if (id < 0) return out;
   static Host host; hostInit(&host, mkBackend(&rig), &mm, id, mf, dataDir.c_str()); nyxHostCur() = &host;
-  void* so = dlopen(("/tmp/" + app + ".so").c_str(), RTLD_NOW); if (!so) { printf("dlopen: %s\n", dlerror()); mm.release(id); return out; }
+  void* so = dlopen((tmpDir() + "/" + app + ".so").c_str(), RTLD_NOW); if (!so) { printf("dlopen: %s\n", dlerror()); mm.release(id); return out; }
   out.loaded = true;
   typedef int (*MainFn)(int, char**); MainFn mainFn = (MainFn)dlsym(so, "main");
   char* argv0 = (char*)(void*)&host.api; char* argv[2] = {argv0, nullptr};
@@ -164,11 +167,12 @@ static void testSandbox() {
 }
 
 static void testApps() {
-  char tmpl[] = "/tmp/nyxtestXXXXXX"; Rig rig; rig.root = mkdtemp(tmpl);
+  std::string tmplS = tmpDir() + "/nyxtestXXXXXX"; std::vector<char> tmpl(tmplS.begin(), tmplS.end()); tmpl.push_back(0);
+  Rig rig; { char* d = mkdtemp(tmpl.data()); if (!d) { perror("mkdtemp"); exit(2); } rig.root = d; }
   MemMgr mm; mm.init(mkMem(&rig));
   // ---- hello ----
   { rig.logs.clear(); std::vector<TouchStep> ts; for (int f = 1; f < 10; f++) ts.push_back({f, NYX_TOUCH_DOWN, 100, 100});
-    RunOut o = runApp(rig, mm, "hello", loadManifest("hello"), 10, ts, "/tmp/nyx_hello.ppm");
+    RunOut o = runApp(rig, mm, "hello", loadManifest("hello"), 10, ts, (tmpDir() + "/nyx_hello.ppm"));
     CHECK(o.loaded && o.entryOk && o.enterRc == 0);
     CHECK(hasLog(rig, "hello: enter")); CHECK(hasLog(rig, "hello: frame 3")); CHECK(hasLog(rig, "hello: leave"));
     CHECK(rig.fb[(size_t)100 * VW + 100] == nyxRgb565(255, 70, 70));                  // lingkaran merah di titik sentuh
@@ -176,7 +180,7 @@ static void testApps() {
     CHECK(o.leak.leakBlocks == 0 && !o.leak.corrupted && o.badFree == 0); }
   // ---- bounce (tilt aktif lalu mati) ----
   { for (int tilt = 1; tilt >= 0; tilt--) { rig.tiltOn = tilt; rig.logs.clear();
-      RunOut o = runApp(rig, mm, "bounce", loadManifest("bounce"), 300, {}, tilt ? "/tmp/nyx_bounce.ppm" : "");
+      RunOut o = runApp(rig, mm, "bounce", loadManifest("bounce"), 300, {}, tilt ? (tmpDir() + "/nyx_bounce.ppm") : "");
       CHECK(o.loaded && o.entryOk && o.enterRc == 0); CHECK(o.leak.leakBlocks == 0 && !o.leak.corrupted);
       int colored = 0; uint16_t bg = nyxRgb565(6, 6, 16); for (uint16_t p : rig.fb) if (p != bg) colored++;
       CHECK(colored > 200);                                                              // bola tergambar di dalam viewport
@@ -185,7 +189,7 @@ static void testApps() {
   { std::string mf = loadManifest("bounce"); size_t p = mf.find("perms=tilt"); mf.replace(p, 10, "perms=");
     RunOut o = runApp(rig, mm, "bounce", mf, 20, {}); CHECK(o.entryOk && o.denied == 20); }
   // ---- memhog: quota ditegakkan, arena terpakai ulang ----
-  { rig.logs.clear(); RunOut o = runApp(rig, mm, "memhog", loadManifest("memhog"), 3, {}, "/tmp/nyx_memhog.ppm");
+  { rig.logs.clear(); RunOut o = runApp(rig, mm, "memhog", loadManifest("memhog"), 3, {}, (tmpDir() + "/nyx_memhog.ppm"));
     CHECK(o.entryOk && hasLog(rig, "memhog ok")); CHECK(o.leak.leakBlocks == 0 && !o.leak.corrupted);
     CHECK(o.leak.nFail >= 2);                                                            // penolakan: akhir pengisian + permintaan 2x quota
     CHECK(o.leak.peakBytes > 40000 && o.leak.peakBytes <= 64 * 1024); }
@@ -194,7 +198,7 @@ static void testApps() {
       CHECK(o.entryOk); CHECK(hasLog(rig, "notes: sandbox ok")); CHECK(o.leak.leakBlocks == 0);
       CHECK(readFile(rig.root + "/apps/notes/data/count.txt") == std::to_string(run)); }
     CHECK(!exists(rig.root + "/apps/notes/escape.txt")); CHECK(!exists(rig.root + "/apps/escape.txt")); CHECK(!exists(rig.root + "/escape.txt"));
-    CHECK(!exists("/tmp/escape.txt")); }
+    CHECK(!exists(tmpDir() + "/escape.txt")); }
   // ---- notes TANPA izin fs: semua akses file ditolak, tidak ada berkas dibuat ----
   { std::string mf = loadManifest("notes"); size_t p = mf.find("perms=fs,notify"); mf.replace(p, 15, "perms=notify");
     rig.logs.clear(); RunOut o = runApp(rig, mm, "notes", mf, 1, {}); CHECK(o.entryOk && o.denied >= 5);
@@ -208,7 +212,8 @@ static void testApps() {
 }
 
 static void testApiDirect() {
-  char tmpl[] = "/tmp/nyxtestXXXXXX"; Rig rig; rig.root = mkdtemp(tmpl);
+  std::string tmplS = tmpDir() + "/nyxtestXXXXXX"; std::vector<char> tmpl(tmplS.begin(), tmplS.end()); tmpl.push_back(0);
+  Rig rig; { char* d = mkdtemp(tmpl.data()); if (!d) { perror("mkdtemp"); exit(2); } rig.root = d; }
   MemMgr mm; mm.init(mkMem(&rig));
   Manifest mf; const char* txt = "name=T\nperms=fs,net,notify\nmem_kb=64\n"; parseManifest(txt, strlen(txt), &mf);
   std::string dd = rig.root + "/d"; system(("mkdir -p '" + dd + "'").c_str());

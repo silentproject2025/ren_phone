@@ -24,6 +24,7 @@ inline uint32_t ulTaskNotifyTake(int, TickType_t) { return 0; }
 inline BaseType_t xTaskNotifyGive(TaskHandle_t) { return 1; }
 inline TaskHandle_t xTaskGetCurrentTaskHandle() { return nullptr; }
 inline void vTaskDelete(TaskHandle_t) {}
+inline BaseType_t xTaskCreatePinnedToCore(TaskFunction_t, const char*, uint32_t, void*, UBaseType_t, TaskHandle_t*, BaseType_t) { return pdPASS; }
 inline void vTaskDelay(TickType_t) {}
 inline void* heap_caps_malloc(size_t n, uint32_t) { return malloc(n); }
 inline void heap_caps_free(void* p) { free(p); }
@@ -39,7 +40,9 @@ class File {
   File openNextFile() { return File(); } void close() {} size_t read(uint8_t*, size_t) { return 0; } size_t write(const uint8_t*, size_t) { return 0; }
   bool seek(uint32_t) { return true; } size_t size() { return 0; }
 };
-struct SDT { File open(const char*, const char* = "r") { return File(); } bool exists(const char*) { return false; } bool remove(const char*) { return true; } bool mkdir(const char*) { return true; } } static SD_MMC;
+namespace fs { class FS { public: File open(const char*, const char* = "r", bool = false) { return File(); } bool exists(const char*) { return false; } bool remove(const char*) { return true; } bool mkdir(const char*) { return true; } }; }
+struct SDT : fs::FS {} static SD_MMC;
+struct FFatT : fs::FS {} static FFat;
 struct WiFiT { int status() { return 0; } } static WiFi;
 struct WiFiClient { int available() { return 0; } int readBytes(uint8_t*, size_t) { return 0; } void setTimeout(int) {} };
 struct WiFiClientSecure : WiFiClient { void setInsecure() {} };
@@ -53,7 +56,7 @@ struct LGFX_Sprite : lgfx::LGFXBase {
 };
 struct Theme { uint16_t bg, surface2, text, subtext, accent; }; inline Theme& T() { static Theme t; return t; }
 enum Screen { SCR_HOME, SCR_NYX };
-extern bool sdReady, needRedraw; extern int SCR_W; extern float mpuAx, mpuAy, mpuAz;
+extern bool sdReady, ffatReady, needRedraw; extern int SCR_W; extern float mpuAx, mpuAy, mpuAz;
 #define STATUS_H 22
 int backY(); bool mpuReadRaw(); Screen curScreen(); void showToast(const char*, int = 1400); void navBack(); bool isBack(int, int);
 void iosTitle(LGFX_Sprite&, int, int, const char*); void iosBackdrop(LGFX_Sprite&); void drawStatusBar(LGFX_Sprite&); void drawBack(LGFX_Sprite&); void drawToast(LGFX_Sprite&);
