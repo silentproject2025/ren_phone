@@ -114,6 +114,8 @@ static bool  hpCurDirty = true;       // gambar halaman SEKARANG sudah basi (wid
 static unsigned long hpImgAt[3] = { 0, 0, 0 };   // kapan slot dibuat (utk penyegaran tetangga yang tua)
 #define HP_VGAIN 0.0f   /* HP_NO_VFLIP_V1: 0 = geser vertikal tidak membalik halaman; 2.4f = perilaku lama */ //                // geser vertikal: 1 px jari = 2.4 px sumbu halaman (~200 px jari = 1 halaman)
 static unsigned long hpSampleMs = 0;
+static float hpCatch = 0.0f;   // SMOOTH_START_V1: jarak (px) yang belum dikejar halaman saat geser mendatar baru terkunci
+#define HP_SLOP_H 7           // SMOOTH_START_V1: ambang kunci geser MENDATAR yang jelas (ketuk tetap 10 px)
 static int   hpStartPage = 0, hpLock = 0;     // hpLock: 0 belum, 1 horizontal (ikut jari), 2 vertikal (balik halaman)
 static bool  hpDragging = false, hpSpringing = false, hpPending = false, hpWasOn = false;
 static bool  hpOwn = false;                // SENTUH-MILIK-HOME: true hanya utk sentuhan yg TOUCH-DOWN-nya terjadi saat pager Home aktif (sentuhan yg mulai di dalam app lalu "terbawa" ke Home = bukan geseran Home)
@@ -481,7 +483,7 @@ void hpTouchHeld(bool isNew, int tx, int ty){
     const bool caught = hpMotionNow();            // jari menangkap halaman yang masih bergerak
     hpSpringing = false; hpDragging = false; hpVel = 0.0f;
     hpDragRaw = hpX; hpAccum = 0.0f; hpSampleMs = now;
-    hpFx = hpFxLast = (float)tx; hpFy = hpFyLast = (float)ty; hpLock = 0;
+    hpFx = hpFxLast = (float)tx; hpFy = hpFyLast = (float)ty; hpLock = 0; hpCatch = 0.0f;
     hpStartPage = hpNearestPage(hpSc, hpN, homeScrollY);
     if(caught){ hpStartPage = (int)((hpX + (float)hpW() * 0.5f) / (float)hpW()); if(hpStartPage < 0) hpStartPage = 0; if(hpStartPage > hpN - 1) hpStartPage = hpN - 1; }
     homeScrollVel = 0.0f; homeScrollSpringing = false; homeSpringMode = false;
@@ -497,16 +499,22 @@ void hpTouchHeld(bool isNew, int tx, int ty){
   }
   if(!isSwiping){
     const int dx = tx - touchStartX, dy = ty - touchStartY;
-    if(abs(dx) > HOME_DRAG_SLOP || abs(dy) > HOME_DRAG_SLOP){
+    const bool horizClear = abs(dx) > HP_SLOP_H && abs(dx) >= abs(dy) * 2;   // SMOOTH_START_V1: geser mendatar jelas -> mulai lebih awal
+    if(horizClear || abs(dx) > HOME_DRAG_SLOP || abs(dy) > HOME_DRAG_SLOP){
       isSwiping = true; homePressedIdx = -1; homePressAnimIdx = -1; homePressAnim = 0.0f;
       hpLock = (abs(dx) >= abs(dy)) ? 1 : 2;
       hpFxLast = (float)touchStartX; hpFyLast = (float)touchStartY;
+      if(hpLock == 1){ hpCatch = hpFxLast - hpFx; hpFxLast = hpFx; }   // SMOOTH_START_V1: jarak ambang dikejar bertahap (bukan loncat 1 frame)
       hpDragging = true;
     }
   }
   if(isSwiping && hpLock != 0){
-    const float raw = (hpLock == 1) ? (hpFxLast - hpFx)                      // jari ke kiri -> konten maju
-                                    : (hpFyLast - hpFy) * HP_VGAIN;          // jari ke atas -> konten maju (kebiasaan lama: tarik ke atas)
+    float raw = (hpLock == 1) ? (hpFxLast - hpFx)                            // jari ke kiri -> konten maju
+                              : (hpFyLast - hpFy) * HP_VGAIN;                // jari ke atas -> konten maju (kebiasaan lama: tarik ke atas)
+    if(hpLock == 1 && hpCatch != 0.0f){                                      // SMOOTH_START_V1: kejar jarak ambang ~40% per frame
+      float st = hpCatch * 0.4f; if(fabsf(hpCatch) < 1.0f) st = hpCatch;
+      hpCatch -= st; raw += st;
+    }
     hpDragRaw += raw; hpAccum += raw;
     const float sampleDt = (float)(now - hpSampleMs);
     if(sampleDt >= 12.0f){ hpVel = hpVel * 0.5f + (hpAccum / sampleDt) * 0.5f; hpAccum = 0.0f; hpSampleMs = now; }
