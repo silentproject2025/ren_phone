@@ -8,11 +8,13 @@ nyxapps_release.py -- susun hasil build CI app contoh Nyx menjadi paket siap und
 Masukan : <elfs>/<id>/nyxapp.app.elf  (satu folder per app, hasil `idf.py elf`)
 Keluaran: <out>/<id>.zip   berisi apps/<id>/{app.elf,manifest.txt,data/}
                            -> salin isi zip ke akar SD, atau upload lewat Web File Manager
-          <out>/nyxapps.json   indeks (nama, ikon, izin, ukuran, SHA-256) untuk halaman web flasher
+          <out>/<id>.elf, <out>/<id>.manifest.txt   berkas mentah yang diunduh Nyx Store di HP
+                           (HP tidak membuka zip; ia memverifikasi SHA-256 dari indeks)
+          <out>/nyxapps.json   indeks (nama, ikon, izin, ukuran, SHA-256) untuk web flasher DAN Nyx Store
 
 Validasi (ELF, ukuran <= 1 MB, manifest punya name=) dikerjakan tools/pack_app.py.
 """
-import argparse, hashlib, json, os, re, subprocess, sys, tempfile, zipfile
+import argparse, hashlib, json, os, re, shutil, subprocess, sys, tempfile, zipfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 # app uji internal (sengaja bocor / menghabiskan memori): tetap dipublikasikan tapi diberi label "uji"
@@ -70,6 +72,8 @@ def main():
                         z.writestr(rel + "/", "")            # folder kosong (data/)
                     for fn in sorted(files):
                         z.write(os.path.join(root, fn), rel + "/" + fn)
+        shutil.copyfile(elf, os.path.join(a.out, aid + ".elf"))
+        shutil.copyfile(mfp, os.path.join(a.out, aid + ".manifest.txt"))
         mf = parse_manifest(open(mfp, encoding="utf-8").read())
         perms = [p for p in re.split(r"[,\s]+", mf.get("perms", "")) if p]
         apps.append({
@@ -77,7 +81,7 @@ def main():
             "color": mf.get("color", "808080"), "perms": perms,
             "mem_kb": int(mf.get("mem_kb", "0") or 0), "stack_kb": int(mf.get("stack_kb", "8") or 8),
             "elf_size": os.path.getsize(elf), "sha256": sha256_file(elf),
-            "zip": aid + ".zip", "kind": "uji" if aid in TEST_ONLY else "contoh",
+            "zip": aid + ".zip", "elf": aid + ".elf", "manifest": aid + ".manifest.txt", "kind": "uji" if aid in TEST_ONLY else "contoh",
         })
         print("OK %-10s elf=%d B  zip=%d B" % (aid, os.path.getsize(elf), os.path.getsize(zpath)))
     # contoh dulu, app uji di belakang

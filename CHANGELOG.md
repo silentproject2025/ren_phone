@@ -1,5 +1,8 @@
 # Changelog
 
+## Unreleased
+- New: Nyx Store — browse, install, update and remove Nyx Apps from your phone (open it with the Store button in Nyx Apps; needs WiFi)
+
 ## 1.0.2
 - New: NES can now load ROMs from internal flash (FFat) when no SD card is detected
 - Fixed: NES dropped straight back to Home after picking a ROM

@@ -40,13 +40,16 @@ class File {
   File openNextFile() { return File(); } void close() {} size_t read(uint8_t*, size_t) { return 0; } size_t write(const uint8_t*, size_t) { return 0; }
   bool seek(uint32_t) { return true; } size_t size() { return 0; }
 };
-namespace fs { class FS { public: File open(const char*, const char* = "r", bool = false) { return File(); } bool exists(const char*) { return false; } bool remove(const char*) { return true; } bool mkdir(const char*) { return true; } }; }
-struct SDT : fs::FS {} static SD_MMC;
-struct FFatT : fs::FS {} static FFat;
+namespace fs { class FS { public: File open(const char*, const char* = "r", bool = false) { return File(); } bool exists(const char*) { return false; } bool remove(const char*) { return true; } bool mkdir(const char*) { return true; } bool rename(const char*, const char*) { return true; } bool rmdir(const char*) { return true; } }; }
+struct SDT : fs::FS { uint64_t totalBytes() { return 0; } uint64_t usedBytes() { return 0; } } static SD_MMC;
+struct FFatT : fs::FS { uint64_t totalBytes() { return 0; } uint64_t usedBytes() { return 0; } uint64_t freeBytes() { return 0; } } static FFat;
 struct WiFiT { int status() { return 0; } } static WiFi;
 struct WiFiClient { int available() { return 0; } int readBytes(uint8_t*, size_t) { return 0; } void setTimeout(int) {} };
+#define HTTP_CODE_OK 200
+#define HTTPC_STRICT_FOLLOW_REDIRECTS 1
+struct String { String() {} String(const char*) {} unsigned length() const { return 0; } const char* c_str() const { return ""; } };
 struct WiFiClientSecure : WiFiClient { void setInsecure() {} };
-struct HTTPClient { bool begin(WiFiClient&, const char*) { return false; } void setTimeout(int) {} int GET() { return -1; } WiFiClient* getStreamPtr() { return nullptr; } bool connected() { return false; } void end() {} };
+struct HTTPClient { bool begin(WiFiClient&, const char*) { return false; } void setTimeout(int) {} int GET() { return -1; } WiFiClient* getStreamPtr() { return nullptr; } bool connected() { return false; } void end() {} void setConnectTimeout(int) {} void setUserAgent(const char*) {} void setFollowRedirects(int) {} int getSize() { return 0; } String getString() { return String(); } };
 namespace lgfx { struct LGFXBase {}; }
 struct LGFX_Sprite : lgfx::LGFXBase {
   void fillRect(int, int, int, int, uint32_t) {} void drawRect(int, int, int, int, uint32_t) {} void fillRoundRect(int, int, int, int, int, uint32_t) {}
@@ -66,3 +69,9 @@ struct AppDef { const char* name; char sym; uint16_t color; void (*onEnter)(); v
 extern AppDef apps[]; extern unsigned long appLastUsedMs[]; int appFindLruBackgroundVictim(Screen);
 BaseType_t createTaskPsramStack(TaskFunction_t, const char*, uint32_t, void*, StackType_t**, StaticTask_t*, TaskHandle_t*, BaseType_t);
 BaseType_t createTaskPsramStackPrio(TaskFunction_t, const char*, uint32_t, void*, StackType_t**, StaticTask_t*, TaskHandle_t*, BaseType_t, UBaseType_t);
+
+// --- Nyx Store (nyxstore_renphone.ino) ---
+#define RPTR(x) (x)
+extern bool wifiConnected;
+inline size_t nasaWaitForHeap(size_t = 20000, unsigned long = 1500) { return 0; }
+inline int mbedtls_sha256(const unsigned char*, size_t, unsigned char*, int) { return 0; }

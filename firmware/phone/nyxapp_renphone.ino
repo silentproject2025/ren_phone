@@ -46,7 +46,11 @@
 #define NYXAPP_HTTP_BUF   (128 * 1024)
 #define NYXAPP_ROW_H      52
 
-enum { NYX_ST_LIST = 0, NYX_ST_RUN = 1, NYX_ST_ERR = 2 };
+enum { NYX_ST_LIST = 0, NYX_ST_RUN = 1, NYX_ST_ERR = 2, NYX_ST_STORE = 3 };   // NYXSTORE_V1: 3 = Nyx Store (nyxstore_renphone.ino)
+
+// NYXSTORE_V1: Nyx Store (nyxstore_renphone.ino) -- tanda tangan hanya tipe primitif / LGFX_Sprite&
+void nyxStoreOpen(); void nyxStoreReset(); void nyxStoreTick(); bool nyxStoreBusy(); bool nyxStoreBack();
+void nyxStoreDraw(LGFX_Sprite&); void nyxStoreTouch(int, int, bool, bool);
 enum { NYXC_NONE = 0, NYXC_START = 1, NYXC_FRAME = 2, NYXC_STOP = 3 };
 
 // ---------------------------- state global ----------------------------
@@ -450,16 +454,18 @@ static void nyxLaunch(int idx) {
 // ------------------------------ hook UI -------------------------------
 void nyxAppEnter() {
   nyxStop();
+  nyxStoreReset();                                                    // NYXSTORE_V1
   nyxState = NYX_ST_LIST; nyxErr[0] = 0; nyxDrag = false;
   nyxScan();
 }
 
 void nyxAppExit() {
   nyxStop();
+  nyxStoreReset();                                                    // NYXSTORE_V1
   nyxState = NYX_ST_LIST;
 }
 
-bool nyxWantsRedraw() { return nyxState == NYX_ST_RUN; }
+bool nyxWantsRedraw() { return nyxState == NYX_ST_RUN || (nyxState == NYX_ST_STORE && nyxStoreBusy()); }   // NYXSTORE_V1: bilah kemajuan
 
 static void nyxDrawLetter(LGFX_Sprite& s, int cx, int cy, int r, char sym, uint16_t col) {
   nyxAaCircle(s, cx, cy, r, col);
@@ -469,8 +475,20 @@ static void nyxDrawLetter(LGFX_Sprite& s, int cx, int cy, int r, char sym, uint1
   s.setTextSize(1);
 }
 
+// NYXSTORE_V1: tombol "Store" di kanan-atas daftar (hit-test di nyxAppTouch memakai konstanta yang sama)
+#define NYX_STORE_PILL_W 62
+#define NYX_STORE_PILL_Y 22
+#define NYX_STORE_PILL_H 24
+static void nyxDrawStorePill(LGFX_Sprite& s) {
+  int x = SCR_W - 8 - NYX_STORE_PILL_W;
+  nyxAaRR(s, x, NYX_STORE_PILL_Y, NYX_STORE_PILL_W, NYX_STORE_PILL_H, NYX_STORE_PILL_H / 2, T().accent);
+  s.setTextSize(1); s.setTextColor(0xFFFF);
+  int tw = s.textWidth("Store"); s.setCursor(x + (NYX_STORE_PILL_W - tw) / 2, NYX_STORE_PILL_Y + (NYX_STORE_PILL_H - 8) / 2); s.print("Store");
+}
+
 static void nyxDrawList(LGFX_Sprite& s) {
   iosTitle(s, 8, 26, "Nyx Apps");
+  nyxDrawStorePill(s);                                                // NYXSTORE_V1
   int top = 26 + 22, bot = backY() - 4;
 #if !NYXAPP_HAVE_ELF
   nyxAaRR(s, 8, top, SCR_W - 16, 30, 8, blend565(T().bg, 0xFD20, 70));
@@ -484,6 +502,7 @@ static void nyxDrawList(LGFX_Sprite& s) {
     s.setCursor(12, top + 10); s.print("Belum ada app.");
     s.setCursor(12, top + 24); s.print(nyxFsFlash ? "Taruh di FFat: /apps/<id>/" : "Taruh di SD:  /apps/<id>/");
     s.setCursor(12, top + 36); s.print("  manifest.txt  +  app.elf");
+    s.setCursor(12, top + 52); s.print(RPTR("Atau pasang lewat Store (kanan atas)."));   // NYXSTORE_V1
     return;
   }
   s.setClipRect(0, top, SCR_W, bot - top);
@@ -515,7 +534,9 @@ static void nyxDrawErr(LGFX_Sprite& s) {
 void drawNyxApp(LGFX_Sprite& s) {
   iosBackdrop(s);
   drawStatusBar(s);
+  if (nyxState == NYX_ST_STORE) nyxStoreTick();                       // NYXSTORE_V1: bisa pindah state (mis. keluar ke daftar)
   if (nyxState == NYX_ST_LIST) nyxDrawList(s);
+  else if (nyxState == NYX_ST_STORE) nyxStoreDraw(s);                 // NYXSTORE_V1
   else if (nyxState == NYX_ST_ERR) nyxDrawErr(s);
   else {
     nyxVX = 0; nyxVY = STATUS_H; nyxVW = SCR_W; nyxVH = backY() - STATUS_H - 2;
@@ -537,7 +558,11 @@ void drawNyxApp(LGFX_Sprite& s) {
 }
 
 void nyxAppTouch(int x, int y, bool held, bool isNew) {
-  if (isNew && isBack(x, y)) { navBack(); return; }
+  if (isNew && isBack(x, y)) {
+    if (nyxState == NYX_ST_STORE && nyxStoreBack()) { needRedraw = true; return; }   // NYXSTORE_V1: Kembali dulu keluar dari Store
+    navBack(); return;
+  }
+  if (nyxState == NYX_ST_STORE) { nyxStoreTouch(x, y, held, isNew); return; }       // NYXSTORE_V1
   if (nyxState == NYX_ST_ERR) { if (isNew) { nyxState = NYX_ST_LIST; nyxErr[0] = 0; nyxScan(); needRedraw = true; } return; }
   if (nyxState == NYX_ST_RUN) {
     nyxTouchX = x; nyxTouchY = y;
@@ -547,6 +572,9 @@ void nyxAppTouch(int x, int y, bool held, bool isNew) {
   }
   // ---- daftar: seret untuk menggulir, ketuk untuk membuka ----
   int top = 26 + 22, bot = backY() - 4;
+  if (isNew && x >= SCR_W - 8 - NYX_STORE_PILL_W && x < SCR_W - 8 && y >= NYX_STORE_PILL_Y && y < NYX_STORE_PILL_Y + NYX_STORE_PILL_H) {   // NYXSTORE_V1: tombol Store
+    nyxState = NYX_ST_STORE; nyxDrag = false; nyxStoreOpen(); needRedraw = true; return;
+  }
   if (isNew) { nyxDrag = (y >= top && y <= bot); nyxLastY = y; nyxDownY = y; nyxMoved = false; return; }
   if (!held) {
     if (nyxDrag && !nyxMoved) {

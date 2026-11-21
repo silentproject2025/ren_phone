@@ -19,6 +19,8 @@ An app is a folder on the SD card (or on internal flash, see [Storage](#storage-
 | Firmware glue (`nyxapp_renphone.ino`), `phone.ino` patch | **Syntax-checked only** (with stubs) plus a CI build; the patch fits and is idempotent on this repo's `phone.ino`. **Never run on a phone.** |
 | ELF loader on Xtensa/PSRAM, task + watchdog, HTTP worker, tilt | **Not tested on hardware.** The biggest risk areas: see "Enabling the ELF loader" and "Things to check on the phone". |
 | SD / internal flash (FFat) storage choice and the FFat worker task | **Not tested on hardware.** |
+| Nyx Store: catalogue parser, validation, install-state logic (`nyxstore_core.h`) | **Tested on a PC**: 85 checks, fuzzing, ASan + UBSan, mutation checks |
+| Nyx Store: UI, download task, SHA-256, write/rename/remove (`nyxstore_renphone.ino`) | **Syntax-checked only** (with stubs). **Never run on a phone, never run against the real GitHub release.** |
 
 PC tests: `cd tests/nyxapp && ./run.sh` (needs `g++` and `gcc`).
 
@@ -84,6 +86,24 @@ The **Build Nyx Apps (ELF)** workflow (`.github/workflows/build-nyxapps.yml`) co
 * The ESP-IDF image is an input of the manual run (default `espressif/idf:v5.5.5`); keep it equal to the IDF version of the core libraries.
 * Packaging logic: `tools/nyxapps_release.py` (uses `tools/pack_app.py` for validation).
 * **Not tested on hardware**, and the `idf.py elf` build itself has only been written, not run, in CI yet.
+
+## Nyx Store (install apps from the phone)
+
+Open **Nyx Apps** and tap **Store** (top right). The Store downloads the catalogue `nyxapps.json` from the rolling pre-release `nyxapps` of this repository (the same release the web flasher reads) and lists every app in it. Tap an app for its size, arena memory and permissions, then **Install**, **Update** or **Remove**. It needs WiFi; nothing else changes about how apps run.
+
+How an install works:
+
+1. Download `<id>.manifest.txt`, parse it with the same parser the launcher uses, and check that its `perms=` equal the permissions the catalogue advertised (a mismatch aborts the install).
+2. Download `<id>.elf` (exact size from the catalogue, at most 1 MB) into a PSRAM buffer on a network task, then compare its **SHA-256** with the catalogue.
+3. Write it to `/apps/<id>/app.elf.tmp` in small per-frame slices (so the progress bar keeps moving on slow flash), then rename it to `app.elf`. `manifest.txt` is written **last**, so a half-installed app never shows up in the Nyx Apps list. A small `store.txt` (`sha256=...`) records what was installed; a differing hash in a later catalogue shows **Update**. Apps copied by hand (no `store.txt`) show *Installed manually* and can be reinstalled from the Store.
+
+Where it installs follows the rule in [Storage](#storage-sd-card-or-internal-flash) (SD card if it holds `/apps`, else internal flash, ...). Removing an app deletes `/apps/<id>/` including its `data/` folder, after a confirmation. Back cancels a running download.
+
+Publishing an app to the Store = adding `examples/native/<id>/{app.c,manifest.txt}`: CI builds it and `tools/nyxapps_release.py` adds it to the catalogue. Catalogue entries with an unsafe `id` or file name (`/`, `..`), a malformed SHA-256 or a size outside 64 B - 1 MB are ignored.
+
+**Security, honestly.** The connection uses `setInsecure()` (like the OTA updater), so the SHA-256 protects against corrupted or truncated downloads, **not** against someone who controls your network and can rewrite both the catalogue and the file. Native apps are not sandboxed (see the trust model above). Install only apps from a source you trust.
+
+Tests: `tests/nyxapp/test_store.cpp` (catalogue parser, validation, fuzzing, install-state logic; run by `tests/nyxapp/run.sh`). The UI and the download/install glue (`nyxstore_renphone.ino`) are **syntax-checked only and have never run on a phone**.
 
 ## Storage: SD card or internal flash
 

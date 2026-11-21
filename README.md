@@ -90,7 +90,7 @@ Status markers used throughout the documentation:
 | **System** | [Battery (INA219), per-channel OTA with release notes, HWmonitor, crash log](./docs/features/system-tools.md) | `OK` (per-app energy and crash log `BETA`) |
 | | [Settings Backup & Restore](./docs/features/system-tools.md#settings-backup-and-restore-beta) | `OK` (Cloud) / `BETA` (SD Card) |
 | | [Device registry](./docs/security.md) (anonymous id, optional public username, public dashboard) | `BETA` |
-| | [Nyx Apps](./docs/features/native-apps.md): native ELF apps loaded from the SD card, or from internal flash when no SD card is inserted. Example apps are compiled by CI and downloadable from the web flasher | `EXP` |
+| | [Nyx Apps](./docs/features/native-apps.md): native ELF apps loaded from the SD card, or from internal flash when no SD card is inserted. Example apps are compiled by CI and downloadable from the web flasher, or installable on the phone itself through the **Nyx Store** | `EXP` |
 | | [SysMem](./docs/sysmem.md): per-feature memory accounting, budgets, reserve floor and one reclaim path for the main firmware | `BETA` |
 | **Games** | [Inferno, NES, DOOM, Maze, classics, PPU demo](./docs/features/games.md) | `OK` |
 | **Experimental** | [SPI overclock (`HW`), NyxPPU pixel engine (`EXP`)](./docs/features/experimental.md) | — |
@@ -149,7 +149,7 @@ Every push triggers the **Build Firmware Binaries** workflow, which publishes a 
 | `ren_phone_s3_merged.bin` | Complete ESP32-S3 image (bootloader, partitions, app) for a first flash. |
 | `firmware.bin` | App-only image used by OTA updates. |
 | `cam_merged.bin` | Complete ESP32-CAM image (from the **Build CAM BT Co-Processor** workflow). |
-| `<id>.zip`, `nyxapps.json` | Example Nyx Apps, in the rolling pre-release `nyxapps` (from the **Build Nyx Apps (ELF)** workflow, `main`/`master` only). Each zip holds `apps/<id>/{app.elf,manifest.txt}`. |
+| `<id>.zip`, `<id>.elf`, `<id>.manifest.txt`, `nyxapps.json` | Example Nyx Apps, in the rolling pre-release `nyxapps` (from the **Build Nyx Apps (ELF)** workflow, `main`/`master` only). Each zip holds `apps/<id>/{app.elf,manifest.txt}`; the raw `.elf`/`.manifest.txt` files and the `nyxapps.json` index (with SHA-256) are what the on-phone **Nyx Store** downloads. |
 
 The file names above are the ILI9341 build. The 3.5″ ST7796 build publishes `firmware-st7796.bin` and `ren_phone_s3_st7796_merged.bin` in `st7796-N` prereleases, and the Aether Board build publishes `firmware-aether.bin` and `ren_phone_s3_aether_merged.bin` in `aether-N` prereleases. Pick the one that matches your display: the phone refuses OTA firmware built for a different display (see [docs/hardware.md](./docs/hardware.md)).
 
