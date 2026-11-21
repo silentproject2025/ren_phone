@@ -467,6 +467,7 @@ struct HomeRect{ int x,y,w,h; }; // harus paling atas: prototype otomatis Arduin
 #include "SD_MMC.h"
 #include <FFat.h> // v47: fallback penyimpanan wallpaper (flash internal) pas SD Card gak kedetek
 #include "esp_heap_caps.h"
+#include "nyxhost.h"   // NYXAPP_V1: tipe nyx:: harus terbaca sebelum prototipe otomatis arduino-cli
 #include <Update.h>   // OTA: flashing firmware baru (dari SD lokal atau WiFi)
 #include <esp_ota_ops.h> // OTA guard/rollback (ota_check_renphone.ino): tipe esp_partition_t dipakai di prototype
 #include <math.h>     // dipakai boot sequence (cosf/sinf utk animasi logo) + sensor 3D
@@ -647,7 +648,9 @@ enum Screen { SCR_HOME, SCR_CLOCK, SCR_CALC, SCR_SENSOR,
               // Backup & Restore pengaturan -- lihat backup_renphone.ino + backup_core.h
               SCR_BACKUP,
               // Catur online (MQTT) -- lihat chess_renphone.ino
-              SCR_CHESS };
+              SCR_CHESS,
+              // Nyx Apps: app native (ELF) dari SD -- lihat nyxapp_renphone.ino  // NYXAPP_V1
+              SCR_NYX };
 enum Orientation { ORIENT_LANDSCAPE = 0, ORIENT_PORTRAIT = 1 };
 
 // Dipindah ke atas — alasan sama dengan AiLine & Vec3f: arduino-cli men-generate
@@ -6028,6 +6031,14 @@ void drawAppIcon(LGFX_Sprite& s, char sym, int cx, int cy, int r, uint16_t bgCir
       s.fillRect(cx-rr*2/3,cy+rr*2/3,rr*4/3,max(2,rr/6),ic);
       break;
     }
+    case 'n': { // Nyx Apps: chip dengan kaki  // NYXAPP_V1
+      int rr=max(8,r-6); int q=rr*3/4;
+      nyxAaRRRing(s, cx-q,cy-q,q*2,q*2,max(2,q/4),ic); nyxAaRRRing(s, cx-q+1,cy-q+1,q*2-2,q*2-2,max(2,q/4),ic);
+      for(int k=-1;k<=1;k++){ s.fillRect(cx+k*q*2/3-1,cy-q-max(2,rr/5),2,max(2,rr/5),ic); s.fillRect(cx+k*q*2/3-1,cy+q,2,max(2,rr/5),ic);
+                              s.fillRect(cx-q-max(2,rr/5),cy+k*q*2/3-1,max(2,rr/5),2,ic); s.fillRect(cx+q,cy+k*q*2/3-1,max(2,rr/5),2,ic); }
+      s.fillRect(cx-q/3,cy-q/3,q*2/3+1,q*2/3+1,ic);
+      break;
+    }
     case 'i': { // About Phone
       int rr=max(8,r-6);
       nyxAaCircleRing(s, cx,cy,rr,ic); nyxAaCircleRing(s, cx,cy,rr-1,ic);
@@ -6117,6 +6128,7 @@ void otaHdrReset(); bool otaHdrFeed(const uint8_t*,size_t,size_t); bool otaPreIn
 void chatEnter(); void chatExit(); void drawChat(LGFX_Sprite&); void chatTouch(int,int,bool,bool); void chatLoopPoll();
 // ---- Catur online MQTT: forward declarations (chess_renphone.ino) ----
 void chessEnter(); void chessExit(); void drawChess(LGFX_Sprite&); void chessTouch(int,int,bool,bool); void chessLoopPoll();
+void nyxAppEnter(); void nyxAppExit(); void drawNyxApp(LGFX_Sprite&); void nyxAppTouch(int,int,bool,bool); bool nyxWantsRedraw(); // NYXAPP_V1
 // ---- Telepon SIP/LAN: forward declarations (call_renphone.ino) ----
 void callEnter(); void callExit(); void drawCall(LGFX_Sprite&); void callTouch(int,int,bool,bool); void callLoopPoll();
 bool callOverlayActive(); void drawCallOverlay(LGFX_Sprite&); void callOverlayTouch(bool,int,int);
@@ -6236,7 +6248,7 @@ void remoteEnter(); void remoteExit(); void drawRemote(LGFX_Sprite&); void remot
 void remotePointerTick(bool,bool,int,int);
 void rcLoopPoll(); void rcRegisterRoutes(); bool rcApIsUp(); bool rcInputPoll(int*,int*); void rcFrameMark();
 
-AppDef apps[45] = {
+AppDef apps[46] = {
   { "Jam",        'J', 0, clockEnter,    clockExit,    drawClock,        clockTouch,    SCR_CLOCK },
   { "Kalkulator", '+', 0, calcEnter,     calcExit,     drawCalc,         calcTouch,     SCR_CALC },
   { "Orientasi3D", '3', 0, sensorEnter,   sensorExit,   drawSensor,       sensorTouch,   SCR_SENSOR },
@@ -6303,8 +6315,10 @@ AppDef apps[45] = {
   { "Backup",  'z', 0x357C, backupEnter, backupExit, drawBackup, backupTouch, SCR_BACKUP },
   // ---- Catur: catur online antar HP lewat broker MQTT (permintaan user) ----
   { "Catur",   'q', 0, chessEnter,  chessExit,  drawChess,  chessTouch,  SCR_CHESS  },
+  // ---- Nyx Apps: jalankan app native (ELF) dari SD ----  // NYXAPP_V1
+  { "Nyx Apps", 'n', 0, nyxAppEnter, nyxAppExit, drawNyxApp, nyxAppTouch, SCR_NYX },
 };
-#define APP_COUNT 45
+#define APP_COUNT 46
 
 // =============================================
 // NOTIFIKASI BADGE (BARU) -- angka kecil merah di pojok ikon app, mirip
@@ -21566,6 +21580,7 @@ void loop(){
     ownerLoopPoll(); // Profil: tutup Galeri setelah foto profil dipilih
     backupAutoPoll(); // simpan salinan otomatis seluruh NVS ke SD kalau ada yang berubah (tiap 10 mnt)
     if(curScreen()==SCR_ABOUT) aboutLoopPoll();
+    if(curScreen()==SCR_NYX && nyxWantsRedraw() && millis()-lastSen>33){ needRedraw=true; lastSen=millis(); } // NYXAPP_V1: app native jalan ~30 fps
     // v58 FIX bug "Labirin gak bisa digerakin sama sekali": SCR_MAZE lupa
     // didaftarin di sini pas game-nya dibikin (v56/v57). Tanpa ini,
     // drawMaze() -- tempat mazePlayerTick()/mazeGhostTick() dipanggil --

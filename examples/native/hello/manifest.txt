@@ -1,0 +1,6 @@
+name=Hello Native
+sym=H
+color=3060d0
+perms=notify
+mem_kb=64
+stack_kb=8

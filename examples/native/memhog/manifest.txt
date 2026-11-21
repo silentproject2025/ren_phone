@@ -1,0 +1,4 @@
+name=Memhog
+sym=M
+color=c04040
+mem_kb=64

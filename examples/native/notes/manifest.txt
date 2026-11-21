@@ -1,0 +1,5 @@
+name=Notes Counter
+sym=N
+color=e0a020
+perms=fs,notify
+mem_kb=64

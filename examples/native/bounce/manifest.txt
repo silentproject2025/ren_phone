@@ -1,0 +1,6 @@
+name=Bounce
+sym=B
+color=20b070
+perms=tilt
+mem_kb=64
+stack_kb=8

@@ -1,0 +1,4 @@
+name=Leaky
+sym=L
+color=a02020
+mem_kb=64
