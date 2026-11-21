@@ -3,7 +3,7 @@
 | Game | Description |
 |---|---|
 | **Inferno** | A gothic-themed FPS *raycaster*: animated enemies (melee, ranged, fast), bosses, 3 weapon tiers, limited ammo with *pickups*, joystick control plus touch *look* or tilt. |
-| **NES** | An emulator (Nofrendo core) on a separate task; `.nes` ROMs go in the SD card root. |
+| **NES** | An emulator (Nofrendo core) on a separate task; `.nes` ROMs go in the SD card root. If the SD card cannot be read, the ROM list comes from the **FFat** root instead (upload over the web file manager, choose *Flash internal (FFat)*) and the picker shows `[FFat]`. The ROM is read into PSRAM before the emulator starts. |
 | **DOOM** | Based on doomgeneric, without sound. The `doom1.wad` file is provided by the user. |
 | **Maze** | A chase through a maze with touch and tilt controls. |
 | **Chess** | Online chess between phones over MQTT, or vs. AI (5 levels, including an AI that imitates the owner's style and the experimental Nyx level) `BETA`. See [Chess](./chess.md). |
