@@ -1,0 +1,13 @@
+name: sysmem-tests
+on:
+  push:
+    paths: ['firmware/phone/sysmem*', 'tests/sysmem/**', 'apply_sysmem_patch.py']
+  pull_request:
+    paths: ['firmware/phone/sysmem*', 'tests/sysmem/**', 'apply_sysmem_patch.py']
+jobs:
+  pc-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tes PC SysMem (akuntansi, anggaran, cadangan, reclaim, gate, fuzz + ASan/UBSan, cek-sintaks glue, patch)
+        run: ./tests/sysmem/run.sh

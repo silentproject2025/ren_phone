@@ -467,6 +467,7 @@ struct HomeRect{ int x,y,w,h; }; // harus paling atas: prototype otomatis Arduin
 #include "SD_MMC.h"
 #include <FFat.h> // v47: fallback penyimpanan wallpaper (flash internal) pas SD Card gak kedetek
 #include "esp_heap_caps.h"
+#include "sysmem_fw.h"   // SYSMEM_V1: API manajer memori firmware (tipe sysmem:: harus terbaca sebelum prototipe otomatis)
 #include "nyxhost.h"   // NYXAPP_V1: tipe nyx:: harus terbaca sebelum prototipe otomatis arduino-cli
 #include <Update.h>   // OTA: flashing firmware baru (dari SD lokal atau WiFi)
 #include <esp_ota_ops.h> // OTA guard/rollback (ota_check_renphone.ino): tipe esp_partition_t dipakai di prototype
@@ -21018,6 +21019,7 @@ void loop(){
   mjpegThumbPoll(); // Daftar video: bikin thumbnail yg belum ada, 1 per putaran -- no-op di luar app MJPEG
   featuresLoopPoll(); // Stopwatch/Timer tick, screenshot, Voice Memo, cuaca (features_renphone.ino)
   nyxExtrasLoopPoll(); // NYX-EXTRAS-V1: log crash, energi per app, perintah suara, thumbnail SS
+  smTick(); // SYSMEM_V1: reclaim berbasis blok kontigu + log per-owner saat RAM kritis (sysmem_renphone.ino)
   appMemGuardTick(); // v92: "batas aman RAM" -- kill cache RAM app astronomi paling lama nganggur kalau RAM internal mepet, lihat definisinya dekat appOnEnter/appOnExit
   diUpdate();              // v14: urus animasi/auto-collapse Dynamic Island
   triviaPeriodicUpdate();  // v14: urus spinner loading & auto-lanjut soal Trivia
