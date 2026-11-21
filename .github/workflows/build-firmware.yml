@@ -26,6 +26,11 @@ on:
         type: choice
         options: [ "O3", "O2" ]
         default: "O3"
+      push_diff:
+        description: "RP_PUSH_DIFF (varian st7796 & aether): kirim hanya baris layar yg berubah -> sentuh/animasi lebih responsif. default = bawaan profil (0); 1 = aktif (EKSPERIMEN, layar korup/ada sisa gambar -> pilih 0); 0 = paksa mati. Varian ili9341 diabaikan"
+        type: choice
+        options: [ "default", "0", "1" ]
+        default: "default"
       nyx_nn:
         description: "Level Nyx memakai evaluasi jaringan saraf (NN, -DCHS_NN_NYX=1)? EKSPERIMEN; hanya dengan ini SIMD PIE terpakai. Core ke-2 (Lazy SMP) otomatis tidak dipakai saat NN aktif"
         type: choice
@@ -250,6 +255,7 @@ jobs:
           SIMD_PIE_IN: ${{ inputs.simd_pie }}
           NYX_NN_IN: ${{ inputs.nyx_nn }}
           CHESS_OPT_IN: ${{ inputs.chess_opt }}
+          PUSH_DIFF_IN: ${{ inputs.push_diff }}
         run: |
           set -o pipefail  # NYX-ERRSUM
           # Pencocokan di shell (persis), BUKAN ekspresi Actions: di ekspresi, '' == '0' bernilai
@@ -391,10 +397,14 @@ jobs:
           DISP_FLAG=""
           [ "$VARIANT" = "st7796" ] && DISP_FLAG="-DRP_DISPLAY_ST7796"
           [ "$VARIANT" = "aether" ] && DISP_FLAG="-DRP_BOARD_AETHER"
-          echo "Varian layar: $VARIANT ${DISP_FLAG}"
+          PD_FLAG=""
+          case "$PUSH_DIFF_IN" in
+            0|1) if [ "$VARIANT" != "ili9341" ]; then PD_FLAG=" -DRP_PUSH_DIFF=$PUSH_DIFF_IN"; fi ;;
+          esac
+          echo "Varian layar: $VARIANT ${DISP_FLAG}${PD_FLAG} (push_diff input: '${PUSH_DIFF_IN:-default}')"
           arduino-cli compile --fqbn esp32:esp32:esp32s3 \
             --board-options "FlashSize=16M,PSRAM=opi,PartitionScheme=app3M_fat9M_16MB${LOOP_OPT}" \
-            --build-property "compiler.cpp.extra_flags=-DRP_BUILD_NUM=${{ github.run_number }} -DRP_BRANCH=${RP_BRANCH} -DRP_VERSION=${RP_VERSION} ${DISP_FLAG}${CHS_FLAGS} -I${NOF_INCLUDE}" \
+            --build-property "compiler.cpp.extra_flags=-DRP_BUILD_NUM=${{ github.run_number }} -DRP_BRANCH=${RP_BRANCH} -DRP_VERSION=${RP_VERSION} ${DISP_FLAG}${PD_FLAG}${CHS_FLAGS} -I${NOF_INCLUDE}" \
             --build-property "compiler.c.extra_flags=-I${NOF_INCLUDE}" \
             build_sketch --output-dir build 2>&1 | tee compile.log
 
