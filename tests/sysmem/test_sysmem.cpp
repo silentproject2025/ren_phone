@@ -3,7 +3,7 @@
 #include <stdlib.h>
 #include <assert.h>
 #include <vector>
-#include <unordered_set>
+#include <set>
 using namespace sysmem;
 
 static int nChecks = 0, nFail = 0;
@@ -13,7 +13,7 @@ static int nChecks = 0, nFail = 0;
 struct Fake {
   size_t cap[NREG], used[NREG], frag[NREG];
   uint32_t now; bool quarantine; std::vector<void*> held;
-  int allocs[NREG]; std::unordered_set<void*> live;
+  int allocs[NREG]; std::set<void*> live;
   void reset(size_t ci, size_t cp) {
     for (void* q : live) free(q);
     live.clear(); for (void* q : held) free(q); cap[0] = ci; cap[1] = cp; used[0] = used[1] = frag[0] = frag[1] = 0; now = 1; quarantine = false; held.clear(); allocs[0] = allocs[1] = 0; }
