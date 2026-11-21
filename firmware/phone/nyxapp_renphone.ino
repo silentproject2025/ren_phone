@@ -550,7 +550,8 @@ void nyxAppTouch(int x, int y, bool held, bool isNew) {
   if (isNew) { nyxDrag = (y >= top && y <= bot); nyxLastY = y; nyxDownY = y; nyxMoved = false; return; }
   if (!held) {
     if (nyxDrag && !nyxMoved) {
-      int row = (int)((y - top + (int)nyxScroll) / NYXAPP_ROW_H);
+      int ry = (y > 0) ? y : nyxLastY;
+      int row = (int)((ry - top + (int)nyxScroll) / NYXAPP_ROW_H);
       if (row >= 0 && row < nyxN) { nyxLaunch(row); needRedraw = true; }
     }
     nyxDrag = false; return;
