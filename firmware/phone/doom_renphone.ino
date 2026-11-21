@@ -352,6 +352,13 @@ void doomEnter(){
   Serial.printf("[doom] PSRAM kontigu: %uKB -> %uKB (bersih lv%d) | total bebas %uKB | butuh %uKB | gambar NASA %uKB\n",
                 (unsigned)(doomBlk0/1024), (unsigned)(freeBlock/1024), doomCleanLv,
                 (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM)/1024), (unsigned)(doomNeedBlk/1024), (unsigned)doomNasaKB);
+  // DOOM_ZONE_DIAG_V1: zone penuh = 6 MiB + cadangan 256 KB. Kalau blok lebih kecil, engine memilih zone 5/4 MiB
+  // (level besar bisa Z_Malloc failed -> reboot). Cetak peta blok PSRAM sekali supaya kelihatan siapa yg memecah PSRAM.
+  if(freeBlock < (size_t)6*1024*1024 + 256*1024){
+    Serial.printf("[doom] PERINGATAN: blok kontigu %uKB < %uKB (6MiB+cadangan) -> zone akan dikecilkan; dump PSRAM:\n",
+                  (unsigned)(freeBlock/1024), (unsigned)((6*1024*1024 + 256*1024)/1024));
+    heap_caps_dump(MALLOC_CAP_SPIRAM);
+  }
   if(freeBlock < doomNeedBlk){
     doomErrorMsg = "PSRAM kontigu tidak cukup utk DOOM\n(butuh ~4.5MB, tersedia " + String(freeBlock/1024) +
                    "KB;\nsebelum dibersihkan " + String(doomBlk0/1024) + "KB, total bebas " +
