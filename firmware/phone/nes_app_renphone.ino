@@ -35,6 +35,26 @@ static int    nesListPage  = 0;
 static bool   nesShowingPicker = true;
 static const int NES_ITEMS_PER_PAGE = 5;
 
+// FALLBACK STORAGE: ROM dibaca dari SD card kalau kedetek (sdReady), kalau
+// nggak ya dari flash internal (FFat, ffatReady) -- file ROM .nes di-upload
+// ke root FFat lewat web uploader (pilih "Flash internal (FFat)").
+// nesUseFfat dipakai juga oleh osd_getromdata() di nes_osd_renphone.ino
+// (satu translation unit, jadi gak perlu extern).
+bool nesUseFfat = false;
+
+// Pilih storage aktif. Return false kalau dua-duanya gak tersedia.
+static bool nesPickStorage(){
+  if (sdReady)   { nesUseFfat = false; return true; }
+  if (ffatReady) { nesUseFfat = true;  return true; }
+  return false;
+}
+
+// Referensi ke filesystem aktif (SD_MMC atau FFat -- dua2nya turunan fs::FS).
+fs::FS& nesFS(){
+  if (nesUseFfat) return FFat;
+  return SD_MMC;
+}
+
 // Dicek tiap frame di osd_getinput() (nes_input_renphone.ino) -- itu
 // yg beneran manggil nes_poweroff() supaya loop emulasi berhenti aman
 // (dari THREAD/TASK yg sama dgn emulator, bukan dari luar -- penting
@@ -48,8 +68,8 @@ volatile bool nesExitRequested = false;
 // gak perlu prefix mountpoint lagi).
 static void nesScanRoms(){
   nesRomCount = 0;
-  if(!sdReady) return;
-  File root = SD_MMC.open("/");
+  if(!nesPickStorage()) return;
+  File root = nesFS().open("/");
   if(!root || !root.isDirectory()){ if(root) root.close(); return; }
   File f = root.openNextFile();
   while(f && nesRomCount < NES_MAX_ROMS){
@@ -139,10 +159,10 @@ void nesEnter() {
   // Efek sampingnya, CPU juga sekalian naik ke 240MHz spt game lain.
   enterGameMode();
 
-  if (!sdReady) {
+  if (!nesPickStorage()) {
     nesRomError = true;
     nesShowingPicker = false;
-    nesRomErrorMsg = "SD card belum siap/gak kedetek.";
+    nesRomErrorMsg = "SD card gak kedetek dan flash internal (FFat) juga gak tersedia.";
     return;
   }
 
@@ -150,9 +170,16 @@ void nesEnter() {
   if (nesRomCount == 0) {
     nesRomError = true;
     nesShowingPicker = false;
-    nesRomErrorMsg = "Gak ada file .nes ditemukan di root SD card.\n\n"
-                      "Copy ROM .nes ke root SD card (bukan di dalam "
-                      "folder), terus buka lagi app NES ini.";
+    if (nesUseFfat) {
+      nesRomErrorMsg = "SD card gak kedetek, dan gak ada file .nes di flash internal (FFat).\n\n"
+                        "Upload ROM .nes ke root FFat lewat web uploader "
+                        "(pilih Flash internal), atau pasang SD card, terus "
+                        "buka lagi app NES ini.";
+    } else {
+      nesRomErrorMsg = "Gak ada file .nes ditemukan di root SD card.\n\n"
+                        "Copy ROM .nes ke root SD card (bukan di dalam "
+                        "folder), terus buka lagi app NES ini.";
+    }
     return;
   }
   // nesShowingPicker tetap true -> layar list ROM digambar di drawNes(),
@@ -215,6 +242,7 @@ void drawNes(LGFX_Sprite& s) {
   if (nesShowingPicker) {
     s.setTextColor(T().accent); s.setTextSize(1);
     s.setCursor(8, 26); s.print(RPTR("Pilih ROM NES"));
+    if (nesUseFfat) { s.setTextColor(TFT_YELLOW); s.setCursor(SCR_W - 70, 26); s.print("[FFat]"); s.setTextColor(T().accent); }
 
     int listY = 44, itemH = 26;
     int startIdx = nesListPage * NES_ITEMS_PER_PAGE;

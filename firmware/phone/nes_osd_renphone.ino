@@ -2,7 +2,7 @@
 // nes_osd_renphone.ino
 // Fungsi-fungsi "wajib ada" yang diminta core nofrendo (osd.h), yang
 // nilainya sepele/gak butuh hardware khusus Ren Phone -- termasuk juga
-// loader ROM dari SD_MMC (karena fork nofrendo ini baca ROM lewat SATU
+// loader ROM dari SD_MMC / FFat sbg fallback (karena fork nofrendo ini baca ROM lewat SATU
 // pointer buffer penuh, bukan fopen/fread per-bank, lihat komentar di
 // osd_getromdata() di bawah).
 //
@@ -93,12 +93,14 @@ extern "C" const char *osd_getromdata(const char *name) {
   // name di sini sebenarnya path yg sama dgn nesRomPath (diteruskan
   // apa adanya oleh rom_load), tapi kita pakai nesRomPath langsung
   // biar konsisten sama yg di-set nesEnter().
-  if (!sdReady) {                       // 'sdReady' sudah ada di .ino utama kamu
-    log_printf("NES: SD belum siap\n");
+  // Storage aktif (SD atau FFat) udah dipilih di nesEnter() lewat
+  // nesPickStorage(); cek lagi di sini buat jaga2.
+  if (!sdReady && !ffatReady) {
+    log_printf("NES: SD & FFat belum siap\n");
     return nullptr;
   }
 
-  File f = SD_MMC.open(nesRomPath, FILE_READ);
+  File f = nesFS().open(nesRomPath, FILE_READ);
   if (!f) {
     log_printf("NES: gagal buka ROM %s\n", nesRomPath);
     return nullptr;
