@@ -110,7 +110,7 @@ void nesInput_touch2(int tx, int ty, bool held, bool newT) { nesInput_slot(1, tx
 // keyboard.c referensi -- bandingin state lama vs baru, kirim event
 // MAKE/BREAK cuma pas ada PERUBAHAN (bukan tiap frame tombol ditekan).
 // -----------------------------------------------------------------
-extern volatile bool nesExitRequested; // dari nes_app_renphone.ino
+extern volatile int nesExitRequested; // dari nes_app_renphone.ino
 extern volatile uint8_t rcPadMask;     // gamepad_renphone.ino: tombol dari HP lain (bit sama dgn NB_*)
 
 extern "C" void osd_getinput(void) {

@@ -59,7 +59,11 @@ fs::FS& nesFS(){
 // yg beneran manggil nes_poweroff() supaya loop emulasi berhenti aman
 // (dari THREAD/TASK yg sama dgn emulator, bukan dari luar -- penting
 // biar gak race condition).
-volatile bool nesExitRequested = false;
+// FIX: HARUS int (bukan bool). Patch CI di nofrendo.c (bahasa C) mendeklarasikan
+// `extern volatile bool nesExitRequested`, tapi di C `bool` = enum 4 byte, sedangkan
+// bool C++ cuma 1 byte -> C membaca 4 byte (termasuk variabel tetangga yg bernilai true)
+// -> loop main_loop() dikira diminta keluar -> nofrendo_main() langsung return tanpa buka ROM.
+volatile int nesExitRequested = 0;
 
 // Scan ROOT SD card (bukan subfolder) cari semua file *.nes.
 // Pola SAMA PERSIS kayak scanSdFiles() punya File Explorer kamu, biar
@@ -198,7 +202,7 @@ void nesExit() {
   // "quit" dari dalam game itu sendiri, bukan di-interupsi dari luar
   // dgn aman. Flag nesExitRequested ini dicek lewat patch 1-baris di
   // nofrendo.c (sudah otomatis diterapkan CI build, lihat workflow).
-  extern volatile bool nesExitRequested;
+  extern volatile int nesExitRequested;
   Serial.printf("[NES] nesExit() dipanggil: taskRunning=%d everStarted=%d picker=%d err=%d\n",
                 (int)nesTaskRunning, (int)nesTaskEverStarted, (int)nesShowingPicker, (int)nesRomError);
   nesExitRequested = true;
