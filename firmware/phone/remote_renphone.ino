@@ -189,6 +189,7 @@ static bool rcStaUp() { return wifiConnected && WiFi.status() == WL_CONNECTED; }
 static bool rcViewerActive() {
   return rcLastViewMs != 0 && (millis() - rcLastViewMs) < RC_VIEW_TTL_MS;
 }
+bool rcViewerIsActive() { return rcViewerActive(); }   // HW_RC_VIEWER_V1: ada penonton Remote Control (poll < RC_VIEW_TTL_MS)
 
 static void rcFreeBuffers() {
   if (rcRef) heap_caps_free(rcRef);

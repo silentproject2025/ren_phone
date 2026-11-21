@@ -177,7 +177,8 @@ static bool hpAllowed(){
   return true;
 }
 // Boleh pakai hardware scroll (selain itu: gambar disusun ke canvas lalu push biasa).
-static bool hpHwOk(){ return hwlModeLoad() != 0 && !rcApIsUp() && !gameModeActive; }
+bool rcViewerIsActive();   // HW_RC_VIEWER_V1 (remote_renphone.ino)
+static bool hpHwOk(){ return hwlModeLoad() != 0 && !rcViewerIsActive() && !gameModeActive; }   // HW_RC_VIEWER_V1: dulu !rcApIsUp()
 
 static const char* hpWhyNot(){
   if(hwlModeLoad() == 0) return "mode Mati";
@@ -259,7 +260,7 @@ static bool hpImgAlloc(LGFX_Sprite& sp){
   if(sp.getBuffer() && sp.width() == SCR_W && sp.height() == SCR_H) return true;
   if(sp.getBuffer()) sp.deleteSprite();
   const size_t bytes = (size_t)SCR_W * (size_t)SCR_H * 2;
-  if(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) < bytes + 1500000UL) return false;   // sisakan utk Doom/NES/dll
+  if(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) < bytes + 600000UL) return false;   // sisakan utk Doom/NES/dll (HP_DI_FAST_V1: dulu 1500000UL)
   sp.setColorDepth(16); sp.setPsram(true);
   return sp.createSprite(SCR_W, SCR_H);
 }
@@ -429,12 +430,47 @@ bool hpFrame(){
 }
 
 // ---------------- hook: push() frame penuh ----------------
+// ---- HP_DI_FAST_V1 ----
+// Halaman diam + canvas hanya beda di pita atas (status bar + DI) -> tulis pita itu saja ke ring panel.
+#define HP_TOPBAND_H 44
+static bool hpTopBandOnly(bool wasDirty){
+  if(wasDirty || hpMotionNow() || hpInternal) return false;
+  const int W = hpW(), H = SCR_H, bh = HP_TOPBAND_H;
+  if(H <= bh || !hpEng.active) return false;
+  if((int)lroundf(hpX) != hpCur * W || hpEng.px != hpCur * W) return false;
+  LGFX_Sprite* im = hpImgGet(hpCur, false);
+  if(!im || !im->getBuffer() || !canvas.getBuffer()) return false;
+  if(im->width() != SCR_W || im->height() != SCR_H || canvas.width() != SCR_W || canvas.height() != SCR_H) return false;
+  uint8_t* ib = (uint8_t*)im->getBuffer();
+  const uint8_t* cb = (const uint8_t*)canvas.getBuffer();
+  const size_t off = (size_t)W * (size_t)bh * 2;
+  if(memcmp(ib + off, cb + off, (size_t)W * (size_t)(H - bh) * 2) != 0) return false;   // beda di luar pita -> jalur lama
+  const int kk = hpEng.k();
+  hpSink.begin();
+  for(int i = 0; i < W; ){
+    const int m = (i + kk) % W;
+    int run = W - i; if(run > W - m) run = W - m;
+    display.setClipRect(m, 0, run, bh);
+    canvas.pushSprite(&display, m - i, 0);
+    display.clearClipRect();
+    i += run;
+  }
+  hpSink.end();
+  memcpy(ib, cb, off);          // gambar halaman ikut terbarui (swipe berikutnya tidak membawa DI basi)
+  hpCurDirty = false; hpCanvasStale = false; hpCanvasPg = hpCur;
+  hpEng.nSlow++;
+  return true;
+}
+// ---- /HP_DI_FAST_V1 ----
+
 bool hpPushHook(){
+  const bool hpWasDirty = hpCurDirty;   // HP_DI_FAST_V1
   if(!hpInternal && !hpMotionNow()){ hpCurDirty = true; hpCanvasPg = (hpOn() && !hpMotionNow() && (int)lroundf(hpX) == hpCur * hpW()) ? hpCur : -2; }
   if(!hpEng.active) return false;
   if(!hwsOnLoop()){ hpForeign = true; return false; }
   const char* why = hpWhyNot();
   if(why){ hpLeave(why, 0); return false; }
+  if(hpTopBandOnly(hpWasDirty)) return true;   // HP_DI_FAST_V1
   const int px = (int)lroundf(hpX);
   if(hpMotionNow()){ if(!hpCompose(px)) return false; }       // frame lambat di tengah gerakan: canvas disusun ulang dari gambar halaman
   hpEng.slow(hpSink, px, false, false);
@@ -566,7 +602,8 @@ void hpDrawDots(LGFX_Sprite& s){
 static unsigned long hpIdleSince = 0;
 static void hpPrewarm(){
   const unsigned long now = millis();
-  if(needRedraw || hpMotionNow() || hpPending || wasTouched || homePressedIdx >= 0 || homePressAnimIdx >= 0 || toastVisibleNow()
+  const bool diBusy = diPulse || (diState != diTargetState);   // HP_DI_FAST_V1: redraw milik DI tidak memblokir pemanasan
+  if((needRedraw && !diBusy) || hpMotionNow() || hpPending || wasTouched || homePressedIdx >= 0 || homePressAnimIdx >= 0 || toastVisibleNow()
      || hpWhyNot() != nullptr || !homeBandReady){ hpIdleSince = 0; return; }
   if((int32_t)(hpBlockUntil - now) > 0) return;
   if(hpIdleSince == 0){ hpIdleSince = now; return; }

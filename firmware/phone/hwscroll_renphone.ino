@@ -282,6 +282,7 @@ struct HwsEngine {
 
 #define HWS_RW 8   // lebar strip rail (px) di tepi kanan
 
+bool rcViewerIsActive();   // HW_RC_VIEWER_V1 (remote_renphone.ino)
 static HwsEngine hwsEng;
 static HwsGeom   hwsGeomCur;                // diisi hwsGeomNow()
 static int       hwsModeV = -1;             // -1 = belum dimuat dari NVS
@@ -353,7 +354,7 @@ static const char* hwsWhyNot(){
   if(callOverlayActive()) return "layar panggilan";
   if(wallpaperReady) return "wallpaper aktif";
   if(gameModeActive) return "mode game";
-  if(rcApIsUp()) return "Remote Control aktif (butuh canvas)";
+  if(rcViewerIsActive()) return "Remote Control aktif (butuh canvas)";   // HW_RC_VIEWER_V1
   if(!hwsGeomNow()) return "geometri layar tak cocok";
   if(hwsEng.active && (hwsGeomCur.B0 != hwsEng.g.B0 || hwsGeomCur.H != hwsEng.g.H || hwsGeomCur.D != hwsEng.g.D || hwsGeomCur.flip != hwsEng.g.flip))
     return "geometri/mode berubah";
@@ -478,7 +479,7 @@ static const char* hwsGenWhyNot(){
   if(diMenuOpen) return "menu Dynamic Island";
   if(powerMenuOpen) return "menu Daya";
   if(callOverlayActive()) return "layar panggilan";
-  if(rcApIsUp()) return "Remote Control aktif (butuh canvas)";
+  if(rcViewerIsActive()) return "Remote Control aktif (butuh canvas)";   // HW_RC_VIEWER_V1
   if(SCR_W != RP_DISP_NATIVE_W || SCR_H != RP_DISP_NATIVE_H) return "geometri layar tak cocok";
   if(!canvas.getBuffer() || canvas.width() != SCR_W || canvas.height() != SCR_H) return "canvas tak cocok";
   if(hwsGen.active && hwsGen.g.flip != (hwsModeGet() == 2)) return "mode berubah";
