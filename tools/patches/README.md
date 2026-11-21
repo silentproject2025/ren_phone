@@ -17,5 +17,8 @@ python3 tools/patches/apply_nyxapp_patch.py           # apply (keeps a .bak_* ba
 | `apply_home_cover_boot_patch.py` | `HP_COVER_BOOT_V1` | History |
 | `apply_leave_rewrite_patch.py` | `HWS_LEAVE_REWRITE_V1` | History |
 | `apply_no_vertical_flip_patch.py` | `HP_NO_VFLIP_V1` | History |
+| `apply_hws_flatbg.py` | `HWS_FLATBG_V1` | History (flat backdrop on screens that use generic hardware scroll) |
+| `apply_pager_di_fast.py` | `HP_DI_FAST_V1`, `HW_RC_VIEWER_V1` | History (Dynamic Island no longer blocks the hardware-scroll warm-up; only a Remote Control viewer blocks it) |
+| `apply_wx_anim_hw.py` | `WX_ANIM_HW_V1` | History (weather icon animation off while hardware scroll is on) |
 
 Older scripts (written for the former flat layout) are archived in [`../legacy-patches/`](../legacy-patches/).

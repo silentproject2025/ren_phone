@@ -31,7 +31,7 @@
 - **OpenDML AVI (> 1 GB)** is not supported for seek and resume. VBR MP3 may drift slightly after a long jump.
 - **NyxPPU** is not yet used in Inferno or the Home/Lock Screen.
 - **Nyx Apps:** experimental. The ELF loader is only present when the custom core libraries are built with the `elf_loader` option; the loader, the launcher and its SD/FFat storage choice have not been tested on a device. CI compiles the example apps and the web flasher offers them, but they have never run on a phone. Apps stored on internal flash share the roughly 9 MB FFat partition, and app file access there is slower than on the SD card. Apps are not sandboxed against a malicious app: install only apps you trust. See [Nyx Apps](./features/native-apps.md).
-- **Home pages and hardware scroll:** ST7796 builds only. They fall back to full-frame drawing while Remote Control is active, in game mode and when PSRAM is low (see [System UI](./features/system-ui.md#home-pages-and-hardware-scroll-st7796)).
+- **Hardware scroll and row-diff push:** ST7796 and Aether builds only. Vertical scrolling in landscape cannot use hardware scroll (the panel scrolls only along its 480-pixel axis). In portrait, hardware scroll falls back to full-frame drawing while someone views Remote Control, in game mode, when PSRAM is low, while an overlay is open and, on Home, when a wallpaper is set. Hardware scroll on screens other than Home is `BETA` (see [System UI](./features/system-ui.md#home-pages-and-hardware-scroll-st7796)).
 - **DOOM from FFat:** the WAD must fit in PSRAM and save games are not stored; use the SD card for large WADs or if you want to save games.
 
 ## Build and release

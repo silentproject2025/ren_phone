@@ -32,24 +32,29 @@ NyxOS delivers a modern-phone experience on a small screen (320×240, or 480×32
 
 ## Home pages and hardware scroll (ST7796)
 
-`OK` on the 3.5″ ST7796 build. The ILI9341 build has none of this and keeps the normal scrolling.
+`OK` for Home on the 3.5″ ST7796 build (and the Aether Board, which is also an ST7796 panel); `BETA` for the other screens below. The ILI9341 build has none of this and keeps the normal scrolling.
 
-The ST7796 panel can scroll its own memory, so a scroll only sends the few rows that newly appear instead of redrawing the whole frame over SPI. NyxOS uses this in two places:
+The ST7796 panel can scroll its own memory, so a scroll only sends the few rows that newly appear instead of redrawing the whole frame over SPI. NyxOS uses this in three places:
 
-- **Portrait:** the Home app grid scrolls with the panel's hardware vertical scroll.
-- **Landscape:** Home is split into **pages** you swipe left and right. With widgets enabled, the first page holds only the widgets; the next pages hold the apps (the first app page also shows the title and category chips). Rows are never cut in half. The page follows your finger, with a rubber-band effect at the ends, and snaps to the nearest page when you let go. A vertical swipe also flips the page, as the older Home did. Page dots show where you are.
+- **Portrait Home:** the app grid scrolls with the panel's hardware vertical scroll.
+- **Landscape Home:** Home is split into **pages** you swipe left and right. With widgets enabled, the first page holds only the widgets; the next pages hold the apps (the first app page also shows the title and category chips). Rows are never cut in half. The page follows your finger, with a rubber-band effect at the ends, and snaps to the nearest page when you let go. A vertical swipe also flips the page, as the older Home did. Page dots show where you are. The pages exist because the panel can only scroll along its long (480-pixel) axis, which is the horizontal axis in landscape; vertical scrolling in landscape cannot use hardware scroll.
+- **Other portrait screens** (`BETA`): Settings, Notepad, AI Chat, Files, Trivia, the NASA screens (APOD, NeoWs, EPIC, image library), Home editor, Remote Control, Chat, Books, Backup & Restore, About, and the Gallery album and grid (not the photo viewer). These have no cache; the firmware compares the rows of each new frame with what the panel shows, detects a vertical shift, scrolls the panel and rewrites only the rows that differ. To make the rows match after a shift, these screens use a **flat background** while this mode is possible, so the aurora glow is not drawn there (set Scroll Hardware to Off to get the glow back).
 
 **Setting.** *Settings → Performance → Scroll Hardware* has three modes: Off (the old cache-based scrolling), Auto (the default) and Auto + Flip (reverses the scroll direction for panels that mount the other way round). Portrait and landscape keep their own mode.
 
-**When it falls back.** Hardware scroll steps aside, and the screen is drawn and pushed in full, while Remote Control is active, in game mode, when PSRAM is low, and while an overlay is open (Control Center, Notification Shade, App Switcher, search, keyboard, jiggle/edit mode and similar). The pages are prepared once Home has been still for a moment, so swiping right after opening Home or coming back from an app can feel less smooth for the first second. When a fallback happens, the reason is printed to the serial log as `[hp] fallback: ...`.
+**When it falls back.** Hardware scroll steps aside, and the screen is drawn and pushed in full, while someone is viewing Remote Control (a browser that polled the screen in the last 4 seconds; the Remote Control access point being on is not enough), in game mode, when PSRAM is low, while an overlay is open (Control Center, Notification Shade, App Switcher, Dynamic Island menu, power menu, call screen, lock screen, AOD, search, keyboard, jiggle/edit mode and similar) and, on portrait Home, while a wallpaper is set. The pages and the Home cache are prepared once Home has been still for about 250 ms, so swiping right after opening Home or coming back from an app can feel less smooth for the first second. Screens in the generic mode enter hardware scroll when a vertical shift is detected between two frames, and leave it again if most rows keep changing from frame to frame (an animation rather than a scroll). The reason for a fallback is printed to the serial log: `[hws] fallback jalur cache: ...` in portrait and `[hp] fallback: ...` for landscape pages; entering and leaving are logged as `[hws] masuk ...` and `[hws] keluar ...`.
+
+**Weather icon.** The animated weather icon on Home (about 6 frames per second) runs only while Scroll Hardware is Off, and it pauses while a finger is on the screen or a scroll is still gliding. With hardware scroll on, the icon stays still: a redraw every 160 ms would rebuild the Home cache and keep the screen from entering hardware scroll.
+
+**Row-diff push.** On ST7796 and Aether builds `push()` sends only the band of rows that changed since the last frame (`RP_PUSH_DIFF`, on by default; `BETA`). If the screen shows leftovers or corruption, build with `-DRP_PUSH_DIFF=0` or run the workflow with `push_diff=0` (see [Building](../building.md)). The ILI9341 build always pushes full frames.
 
 ## The "Nyx Modern" look
 
 - **Squircle icons** (rounded squares) with soft shadows and edge highlights; neon icon colors are softened automatically.
-- **Aurora background**: two soft radial glows in the theme's accent color on pages such as Settings.
+- **Aurora background**: two soft radial glows in the theme's accent color on pages such as Settings (replaced by a flat background on screens that use hardware scroll in portrait, see above).
 - **Settings** with colored icon chips on each row, **bento-style Home widgets** (clock, battery, music, weather) and a **flat keyboard** with a press effect.
 - **App transitions**: a Home icon grows into the app screen when opened and shrinks back to its icon when closed. Toasts and the Dynamic Island appear with smoother animations.
-- **Home widget animations**: clock digits change smoothly, the battery ring fills when Home opens, and the weather icon moves gently.
+- **Home widget animations**: clock digits change smoothly, the battery ring fills when Home opens, and the weather icon moves gently (only while Scroll Hardware is Off, see above).
 
 ## Charging animation `OK`
 

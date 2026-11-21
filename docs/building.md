@@ -40,7 +40,7 @@ Every *push* triggers the **Build Firmware Binaries** workflow, which publishes 
 
 During the build, the workflow copies the section that matches `VERSION` (or the first section if none matches) into `changelog.txt`, keeps ASCII characters only and trims it to about 1,400 bytes. It is uploaded next to `info.txt`. If the file is missing or empty, updates still work, the phone just shows no release notes. Write plain English and avoid emoji or accented letters: the phone font cannot draw them.
 
-Tag naming: `build-<number>` for the S3, `cam-<number>` for the CAM, and `channel-<branch>` for per-branch OTA channels. The `main`, `master` and `remote-control` branches are published as regular releases; every other branch is always a *prerelease*. The 3.5″ ST7796 build has its own tags and channels, see [Hardware → ST7796 variant](./hardware.md#35-st7796-display-variant).
+Tag naming: `build-<number>` for the S3, `cam-<number>` for the CAM, and `channel-<branch>` for per-branch OTA channels. The `main`, `master` and `remote-control` branches are published as regular releases; every other branch is always a *prerelease*. The 3.5″ ST7796 build and the Aether Board build have their own tags and channels, see [Hardware → ST7796 variant](./hardware.md#35-st7796-display-variant) and [Aether Board variant](./hardware.md#aether-board-variant).
 
 When run manually (*Run workflow*), the workflow offers these inputs:
 
@@ -50,6 +50,7 @@ When run manually (*Run workflow*), the workflow offers these inputs:
 | `loop_core` | `default`, `0`, `1` | Core on which `loop()`/UI runs (A/B test of game performance). |
 | `simd_pie` | `on` (default) / `off` | `off` = scalar path (`-DCHS_NN_NO_PIE`) for A/B tests. SIMD PIE (ESP32-S3 vector instructions) only accelerates neural-network evaluation, so it only matters when `nyx_nn=on`. |
 | `nyx_nn` | `off` (default) / `on` | `on` = `-DCHS_NN_NYX=1`; the Nyx chess level uses neural-network evaluation. Experimental; when the NN is active, the second core (Lazy SMP) is automatically unused. |
+| `push_diff` | `default` / `0` / `1` | Row-diff screen push (`RP_PUSH_DIFF`) for the `st7796` and `aether` builds; `ili9341` ignores it. `default` uses the profile setting in `display_conf.h` (on); `0` forces it off (try this if the screen shows leftovers or corruption); `1` forces it on. |
 | `chess_opt` | `O3` (default) / `O2` | Optimisation level of the chess engine; `O2` gives smaller code (for A/B tests or when the 3 MB app partition is full). |
 
 Builds triggered by a push use the default values.

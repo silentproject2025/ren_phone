@@ -21,7 +21,7 @@ NyxOS is neither Android nor Linux. The launcher, notification center, network s
 |---|---|
 | **Microcontroller** | ESP32-S3, 16 MB flash, 8 MB OPI PSRAM |
 | **Built-in apps** | 46 |
-| **Code size** | ~62,000 lines of main firmware + ~1,500 lines of coprocessor firmware (third-party code and generated data tables excluded) |
+| **Code size** | ~63,000 lines of main firmware + ~1,500 lines of coprocessor firmware (third-party code and generated data tables excluded) |
 | **UI language** | English (default) and Indonesian, switchable in *Settings → Language* |
 | **Version** | 1.0.2 (see [`VERSION`](./VERSION)) |
 | **License** | AGPL-3.0 |
@@ -35,6 +35,7 @@ NyxOS is neither Android nor Linux. The launcher, notification center, network s
 > - **SysMem** (the central memory manager for the main firmware) is `BETA`: its core logic is tested on a PC, its firmware glue is only syntax-checked.
 > - **Device registry** (anonymous, one-time registration with a public dashboard) is `BETA`; see the [security notice](#security-notice).
 > - **Backup & Restore**: the **Cloud** tab (back up and restore) is tested on a device; the **SD Card** tab is `BETA` (tested on a PC, not yet on a device). **Chess** (online and vs. AI) is `BETA`: the logic is tested on a PC but not yet on a device.
+> - **ST7796 display tricks beyond Home** are `BETA`: hardware scroll on other portrait screens (Settings, Files, Chat, Books and more) and row-diff screen push (`RP_PUSH_DIFF`, on by default in ST7796 and Aether builds). If the screen shows leftovers or corruption, build with `push_diff=0`. The **Aether Board** profile is `BETA` too.
 >
 > Each feature is described in full in the [feature documentation](./docs/features/).
 
@@ -71,7 +72,9 @@ Status markers used throughout the documentation:
 |---|---|---|
 | **System UI** | Home, Lock Screen, Control Center, themes, squircle icons, bento widgets, app open/close animations — [details](./docs/features/system-ui.md) | `OK` |
 | | Charging animation on the lock screen | `OK` |
-| | Landscape Home with swipeable pages (widgets first, then apps) and ST7796 hardware scroll (portrait grid scrolling, landscape page swipes) — [details](./docs/features/system-ui.md#home-pages-and-hardware-scroll-st7796) | `OK` (ST7796 builds) |
+| | Landscape Home with swipeable pages (widgets first, then apps) and ST7796 hardware scroll (portrait Home grid, landscape page swipes) — [details](./docs/features/system-ui.md#home-pages-and-hardware-scroll-st7796) | `OK` (ST7796 builds) |
+| | Hardware scroll on other portrait screens (Settings, Files, Notepad, AI Chat, Chat, Books, Backup, About, Gallery grid and more) — [details](./docs/features/system-ui.md#home-pages-and-hardware-scroll-st7796) | `BETA` (ST7796 builds) |
+| | Row-diff screen push (`RP_PUSH_DIFF`): only the rows that changed are sent to the panel | `BETA` (ST7796 and Aether, on by default) |
 | | New gestures (pull-to-refresh, edge swipe-back, finger-following panels) | `BETA` |
 | | Grouped notifications, swipe-to-dismiss, quick actions, App Switcher previews | `BETA` |
 | | Color emoji (built-in set and full set from SD) | `BETA` |
@@ -123,9 +126,9 @@ Key design consequences:
 | Part | Specification |
 |---|---|
 | Brain | ESP32-S3, 16 MB flash, 8 MB OPI PSRAM |
-| Display | ILI9341 320×240 (SPI), or the 3.5″ ST7796 480×320 variant with FT6236 capacitive touch |
-| Touch | XPT2046 (ILI9341) or FT6236 (ST7796) |
-| Storage | microSD (SDIO 1-bit); internal FFat (about 9 MB) as fallback for wallpaper, DOOM WADs, crash log and Nyx Apps |
+| Display | ILI9341 320×240 (SPI), the 3.5″ ST7796 480×320 variant with FT6236 capacitive touch, or the Aether Board (ST7796 480×320 with FT6336U touch) |
+| Touch | XPT2046 (ILI9341), FT6236 (ST7796) or FT6336U (Aether Board) |
+| Storage | microSD (SDIO 1-bit; on the Aether Board over SPI, sharing the display bus); internal FFat (about 9 MB) as fallback for wallpaper, DOOM WADs, crash log and Nyx Apps |
 | Sensors | MPU6050 (tilt, shake, auto-rotation), INA219 (voltage, current, power) |
 | Microphone | INMP441 (I2S) |
 | Audio output | **Bluetooth (A2DP) only**, via the ESP32-CAM coprocessor |
@@ -133,7 +136,7 @@ Key design consequences:
 | Extras | Vibration motor, Neopixel |
 | Partition scheme | `app3M_fat9M_16MB` |
 
-Pin maps, assembly notes and the ST7796 variant are in [docs/hardware.md](./docs/hardware.md).
+Pin maps, assembly notes and the ST7796 and Aether Board variants are in [docs/hardware.md](./docs/hardware.md).
 
 ## Quick start
 
@@ -148,13 +151,15 @@ Every push triggers the **Build Firmware Binaries** workflow, which publishes a 
 | `cam_merged.bin` | Complete ESP32-CAM image (from the **Build CAM BT Co-Processor** workflow). |
 | `<id>.zip`, `nyxapps.json` | Example Nyx Apps, in the rolling pre-release `nyxapps` (from the **Build Nyx Apps (ELF)** workflow, `main`/`master` only). Each zip holds `apps/<id>/{app.elf,manifest.txt}`. |
 
+The file names above are the ILI9341 build. The 3.5″ ST7796 build publishes `firmware-st7796.bin` and `ren_phone_s3_st7796_merged.bin` in `st7796-N` prereleases, and the Aether Board build publishes `firmware-aether.bin` and `ren_phone_s3_aether_merged.bin` in `aether-N` prereleases. Pick the one that matches your display: the phone refuses OTA firmware built for a different display (see [docs/hardware.md](./docs/hardware.md)).
+
 Flash through the browser-based web flasher published on GitHub Pages (its **Nyx Apps** tab also lets you download the example apps), or with `esptool`:
 
 ```bash
 esptool.py --chip esp32s3 --baud 921600 write_flash 0x0 ren_phone_s3_merged.bin
 ```
 
-On first boot, follow the on-screen **touch calibration** (resistive ILI9341 builds only; the capacitive ST7796 build has no calibration wizard).
+On first boot, follow the on-screen **touch calibration** (resistive ILI9341 builds only; the capacitive ST7796 and Aether builds have no calibration wizard).
 
 ### Option B — build from source
 
@@ -165,6 +170,8 @@ arduino-cli compile --fqbn esp32:esp32:esp32s3 \
   --board-options "FlashSize=16M,PSRAM=opi,PartitionScheme=app3M_fat9M_16MB" \
   <assembled-sketch-dir>
 ```
+
+The 3.5″ ST7796 display and the Aether Board are selected with the `-DRP_DISPLAY_ST7796` and `-DRP_BOARD_AETHER` compiler flags (all settings live in `firmware/phone/display_conf.h`); CI builds each variant in its own job.
 
 The firmware is assembled from `firmware/phone/` and `third_party/` by the CI workflow. Step-by-step instructions (CI, manual build, the ESP32-CAM firmware, custom core libraries) are in [docs/building.md](./docs/building.md).
 
@@ -216,7 +223,7 @@ Without an SD card, upload `manifest.txt` and `app.elf` through the phone's Web 
 ├── tools/                    Generators and helpers (emoji, fonts, dictionaries, i18n, Nyx App packaging)
 │   ├── pack_app.py           Lay out one app as <sd>/apps/<id>/{app.elf,manifest.txt,data/}
 │   ├── nyxapps_release.py    Zip built ELFs + build the nyxapps.json index for the web flasher
-│   ├── patches/              Idempotent patch scripts for phone.ino that are still checked by CI (Nyx Apps, SysMem, Home pager)
+│   ├── patches/              Idempotent patch scripts for phone.ino; the Nyx Apps and SysMem ones are still checked by CI, the rest are kept as history
 │   ├── ci/                   Helper scripts used by the CI workflows
 │   └── legacy-patches/       Archived one-shot patch scripts, including elf_loader.patch (see its README)
 ├── CHANGELOG.md              Release notes; the matching section is shown on the phone during an OTA update
@@ -233,7 +240,7 @@ The folder name `firmware/phone/` matches `phone.ino` so the sketch can also be 
 
 | Workflow | What it does |
 |---|---|
-| **Build Firmware Binaries** (`build-firmware.yml`) | Every push: compiles the S3 firmware (ILI9341 and ST7796 variants), publishes a Release and the OTA channel, then calls the web flasher. |
+| **Build Firmware Binaries** (`build-firmware.yml`) | Every push: compiles the S3 firmware (ILI9341, ST7796 and Aether Board variants), publishes a Release and the OTA channel, then calls the web flasher. |
 | **Build CAM BT Co-Processor** (`build-cam-coprocessor.yml`) | Compiles the ESP32-CAM coprocessor firmware. |
 | **Build Arduino Libs** (`build-arduino-libs.yml`) | Manual: builds the custom core libraries (mbedTLS in PSRAM, cache sizes, WiFi/lwIP in PSRAM, optional `elf_loader` 2.0.0). Re-run only when the core version or the options change. |
 | **Build Nyx Apps (ELF)** (`build-nyxapps.yml`) | Compiles each `examples/native/<id>/` with ESP-IDF to an ELF, checks it (magic, Xtensa, ≤ 1 MB), and on `main`/`master` publishes zips to the `nyxapps` pre-release and refreshes the web flasher. Pushes and pull requests only prove the apps still compile. |
@@ -266,6 +273,7 @@ A short list; the full list is in [docs/limitations.md](./docs/limitations.md).
 
 - Internal RAM is tight. `HTTP -1` errors usually indicate memory fragmentation rather than a network problem.
 - Audio works only through Bluetooth. Without the ESP32-CAM and earbuds, no app produces sound.
+- Hardware scroll and row-diff push exist only on ST7796 and Aether builds. Vertical scrolling in landscape cannot use hardware scroll, because the panel can only scroll along its long (480-pixel) axis; landscape Home uses swipeable pages instead. Hardware scroll also steps aside while someone views Remote Control, in game mode, while an overlay is open and, on portrait Home, when a wallpaper is set (see [System UI](./docs/features/system-ui.md#home-pages-and-hardware-scroll-st7796)).
 - Phone calls: partially tested; no ICE; TURN over UDP only; no PSTN numbers through free services.
 - TLS certificates are not verified (see the security notice).
 - Nyx Apps need the ELF loader, which is only in custom core libraries built with `elf_loader` enabled; none of this has run on a device yet. App files on internal flash share the roughly 9 MB FFat partition. See [Nyx Apps](./docs/features/native-apps.md).
