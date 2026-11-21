@@ -26,3 +26,5 @@ diag/
 .vscode/
 .idea/
 .DS_Store
+*.bak_*
+sysmem_bundle.zip
