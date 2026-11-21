@@ -55,6 +55,10 @@ on:
         type: choice
         options: [ "default", "24", "16", "12" ]
         default: "16"
+      elf_loader:
+        description: "NYX-ELF: sertakan espressif/elf_loader 2.0.0 (esp_elf.h) + CONFIG_ELF_LOADER & ELF_LOADER_LOAD_PSRAM supaya Nyx Apps (app.elf native) bisa jalan. Belum teruji di HP"
+        type: boolean
+        default: true
 
 permissions:
   contents: write
@@ -134,6 +138,30 @@ jobs:
           echo "=== baris skrip yang menyebut URL/token ==="
           grep -rnE "AR_REPO|AR_SOURCE|arduino-esp32|GITHUB_TOKEN|git clone" tools/*.sh build.sh || true
 
+      # NYX-ELF: component manager IDF mengunduh espressif/elf_loader saat CMake configure.
+      # Pin 2.0.0: API esp_elf_relocate(elf, data, size) 3 argumen = yang dipakai nyxapp_renphone.ino
+      # (seri 1.x memakai 2 argumen -> tidak cocok). Sengaja bukan 2.1.0 (baru rilis).
+      - name: Tambah dependensi elf_loader
+        if: ${{ inputs.elf_loader }}
+        run: |
+          cd "$HOME/lib-builder"
+          echo "=== manifest idf_component.yml yang ada ==="
+          find . -maxdepth 3 -name idf_component.yml -not -path './esp-idf/*' -not -path './managed_components/*' | head
+          M=main/idf_component.yml
+          mkdir -p main
+          if [ ! -f "$M" ]; then
+            printf 'dependencies:\n' > "$M"
+          fi
+          if grep -q 'espressif/elf_loader' "$M"; then
+            echo "elf_loader sudah ada di $M"
+          elif grep -q '^dependencies:' "$M"; then
+            sed -i '/^dependencies:/a\  espressif/elf_loader: "2.0.0"' "$M"
+          else
+            printf '\ndependencies:\n  espressif/elf_loader: "2.0.0"\n' >> "$M"
+          fi
+          echo "=== $M ==="; cat "$M"
+          grep -q 'espressif/elf_loader' "$M" || (echo "::error::gagal menambah elf_loader ke $M" && exit 1)
+
       - name: Tambah opsi sdkconfig (mbedTLS ke PSRAM)
         run: |
           cd "$HOME/lib-builder"  # NYX-V33-ORDER
@@ -204,6 +232,11 @@ jobs:
                 echo "CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=${{ inputs.wifi_dyn_buf }}"
                 echo "CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM=${{ inputs.wifi_dyn_buf }}" ;;
             esac
+            # NYX-ELF
+            if [ "${{ inputs.elf_loader }}" = "true" ]; then
+              echo 'CONFIG_ELF_LOADER=y'
+              echo 'CONFIG_ELF_LOADER_LOAD_PSRAM=y'
+            fi
             if [ "$W" != "0" ]; then
               echo "CONFIG_LWIP_TCP_WND_DEFAULT=$W"
               echo "CONFIG_LWIP_TCP_SND_BUF_DEFAULT=$W"
@@ -261,6 +294,17 @@ jobs:
             grep -q '^CONFIG_FREERTOS_PLACE_FUNCTIONS_INTO_FLASH=y' "$OUT/sdkconfig" && echo "OK   FREERTOS_PLACE_FUNCTIONS_INTO_FLASH=y" || echo "::warning::FREERTOS_PLACE_FUNCTIONS_INTO_FLASH tidak aktif di sdkconfig hasil"
           fi
           grep -E '^CONFIG_ESP_WIFI_(DYNAMIC_(RX|TX)_BUFFER_NUM|STATIC_RX_BUFFER_NUM|RX_BA_WIN)=' "$OUT/sdkconfig" || echo "::warning::opsi buffer WiFi tidak ditemukan di sdkconfig hasil"
+          echo "=== NYX-ELF: elf_loader di hasil build ==="
+          if [ "${{ inputs.elf_loader }}" = "true" ]; then
+            for OPT in CONFIG_ELF_LOADER CONFIG_ELF_LOADER_LOAD_PSRAM; do
+              if grep -q "^$OPT=y" "$OUT/sdkconfig"; then echo "OK   $OPT=y"; else echo "::warning::$OPT tidak aktif di sdkconfig hasil build (Kconfig elf_loader tidak terbaca?)"; fi
+            done
+            ELFA=$(find "$OUT/lib" -name 'libelf_loader.a' | head -n1)
+            ELFH=$(find "$OUT" -name 'esp_elf.h' | head -n1)
+            if [ -n "$ELFA" ]; then echo "OK   $ELFA"; else echo "::warning::libelf_loader.a TIDAK ada di hasil -> komponen tidak ikut terhubung; Nyx Apps tetap 'tanpa loader'"; fi
+            if [ -n "$ELFH" ]; then echo "OK   $ELFH"; else echo "::warning::esp_elf.h TIDAK ada di hasil -> NYXAPP_HAVE_ELF akan 0"; fi
+            find "$OUT" -name 'esp_elf.h' -o -name 'libelf_loader.a' | head
+          fi
           echo "=== batas malloc internal (SPIRAM_MALLOC_ALWAYSINTERNAL) ==="
           grep -E '^CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=' "$OUT/sdkconfig" || echo "::warning::ALWAYSINTERNAL tidak ditemukan di sdkconfig hasil (pakai bawaan 16384)"
           echo "=== window TCP lwIP di sdkconfig hasil ==="

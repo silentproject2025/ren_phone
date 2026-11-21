@@ -107,6 +107,10 @@ Without an ELF loader the build still succeeds: Nyx Apps opens and explains that
 
 Note from the repository history: building custom libraries has hit linker problems before, so do this on a separate branch. The glue uses the API `esp_elf_init / esp_elf_relocate(elf, data, size) / esp_elf_request / esp_elf_deinit` (2.x series); adjust it if your version differs. `esp_elf.h` is detected automatically through `__has_include`.
 
+### Enabling via CI (added)
+
+Run **Actions → Build Arduino Libs → Run workflow** with `elf_loader` = true (default). The workflow adds `espressif/elf_loader` **2.0.0** to the lib-builder `main/idf_component.yml`, sets `CONFIG_ELF_LOADER=y` and `CONFIG_ELF_LOADER_LOAD_PSRAM=y`, and after the build warns if `libelf_loader.a` or `esp_elf.h` is missing from the result. Then run **Build Firmware**: its "Verifikasi library kustom" step prints whether the loader is present (`NYXAPP_HAVE_ELF=1`). Pinned to 2.0.0 because the glue uses the 3-argument `esp_elf_relocate(elf, data, size)` (1.x has 2 arguments). Still untested on hardware.
+
 ## Things to check on the phone (suggested order)
 
 1. Build without the loader → open Nyx Apps → the app list shows and the "no loader" message is correct. Repeat with the SD card removed and an app on FFat.

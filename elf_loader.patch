@@ -1,0 +1,102 @@
+--- a/.github/workflows/build-arduino-libs.yml
++++ b/.github/workflows/build-arduino-libs.yml
+@@ -55,6 +55,10 @@
+         type: choice
+         options: [ "default", "24", "16", "12" ]
+         default: "16"
++      elf_loader:
++        description: "NYX-ELF: sertakan espressif/elf_loader 2.0.0 (esp_elf.h) + CONFIG_ELF_LOADER & ELF_LOADER_LOAD_PSRAM supaya Nyx Apps (app.elf native) bisa jalan. Belum teruji di HP"
++        type: boolean
++        default: true
+ 
+ permissions:
+   contents: write
+@@ -134,6 +138,30 @@
+           echo "=== baris skrip yang menyebut URL/token ==="
+           grep -rnE "AR_REPO|AR_SOURCE|arduino-esp32|GITHUB_TOKEN|git clone" tools/*.sh build.sh || true
+ 
++      # NYX-ELF: component manager IDF mengunduh espressif/elf_loader saat CMake configure.
++      # Pin 2.0.0: API esp_elf_relocate(elf, data, size) 3 argumen = yang dipakai nyxapp_renphone.ino
++      # (seri 1.x memakai 2 argumen -> tidak cocok). Sengaja bukan 2.1.0 (baru rilis).
++      - name: Tambah dependensi elf_loader
++        if: ${{ inputs.elf_loader }}
++        run: |
++          cd "$HOME/lib-builder"
++          echo "=== manifest idf_component.yml yang ada ==="
++          find . -maxdepth 3 -name idf_component.yml -not -path './esp-idf/*' -not -path './managed_components/*' | head
++          M=main/idf_component.yml
++          mkdir -p main
++          if [ ! -f "$M" ]; then
++            printf 'dependencies:\n' > "$M"
++          fi
++          if grep -q 'espressif/elf_loader' "$M"; then
++            echo "elf_loader sudah ada di $M"
++          elif grep -q '^dependencies:' "$M"; then
++            sed -i '/^dependencies:/a\  espressif/elf_loader: "2.0.0"' "$M"
++          else
++            printf '\ndependencies:\n  espressif/elf_loader: "2.0.0"\n' >> "$M"
++          fi
++          echo "=== $M ==="; cat "$M"
++          grep -q 'espressif/elf_loader' "$M" || (echo "::error::gagal menambah elf_loader ke $M" && exit 1)
++
+       - name: Tambah opsi sdkconfig (mbedTLS ke PSRAM)
+         run: |
+           cd "$HOME/lib-builder"  # NYX-V33-ORDER
+@@ -204,6 +232,11 @@
+                 echo "CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=${{ inputs.wifi_dyn_buf }}"
+                 echo "CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM=${{ inputs.wifi_dyn_buf }}" ;;
+             esac
++            # NYX-ELF
++            if [ "${{ inputs.elf_loader }}" = "true" ]; then
++              echo 'CONFIG_ELF_LOADER=y'
++              echo 'CONFIG_ELF_LOADER_LOAD_PSRAM=y'
++            fi
+             if [ "$W" != "0" ]; then
+               echo "CONFIG_LWIP_TCP_WND_DEFAULT=$W"
+               echo "CONFIG_LWIP_TCP_SND_BUF_DEFAULT=$W"
+@@ -261,6 +294,17 @@
+             grep -q '^CONFIG_FREERTOS_PLACE_FUNCTIONS_INTO_FLASH=y' "$OUT/sdkconfig" && echo "OK   FREERTOS_PLACE_FUNCTIONS_INTO_FLASH=y" || echo "::warning::FREERTOS_PLACE_FUNCTIONS_INTO_FLASH tidak aktif di sdkconfig hasil"
+           fi
+           grep -E '^CONFIG_ESP_WIFI_(DYNAMIC_(RX|TX)_BUFFER_NUM|STATIC_RX_BUFFER_NUM|RX_BA_WIN)=' "$OUT/sdkconfig" || echo "::warning::opsi buffer WiFi tidak ditemukan di sdkconfig hasil"
++          echo "=== NYX-ELF: elf_loader di hasil build ==="
++          if [ "${{ inputs.elf_loader }}" = "true" ]; then
++            for OPT in CONFIG_ELF_LOADER CONFIG_ELF_LOADER_LOAD_PSRAM; do
++              if grep -q "^$OPT=y" "$OUT/sdkconfig"; then echo "OK   $OPT=y"; else echo "::warning::$OPT tidak aktif di sdkconfig hasil build (Kconfig elf_loader tidak terbaca?)"; fi
++            done
++            ELFA=$(find "$OUT/lib" -name 'libelf_loader.a' | head -n1)
++            ELFH=$(find "$OUT" -name 'esp_elf.h' | head -n1)
++            if [ -n "$ELFA" ]; then echo "OK   $ELFA"; else echo "::warning::libelf_loader.a TIDAK ada di hasil -> komponen tidak ikut terhubung; Nyx Apps tetap 'tanpa loader'"; fi
++            if [ -n "$ELFH" ]; then echo "OK   $ELFH"; else echo "::warning::esp_elf.h TIDAK ada di hasil -> NYXAPP_HAVE_ELF akan 0"; fi
++            find "$OUT" -name 'esp_elf.h' -o -name 'libelf_loader.a' | head
++          fi
+           echo "=== batas malloc internal (SPIRAM_MALLOC_ALWAYSINTERNAL) ==="
+           grep -E '^CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=' "$OUT/sdkconfig" || echo "::warning::ALWAYSINTERNAL tidak ditemukan di sdkconfig hasil (pakai bawaan 16384)"
+           echo "=== window TCP lwIP di sdkconfig hasil ==="
+--- a/.github/workflows/build-firmware.yml
++++ b/.github/workflows/build-firmware.yml
+@@ -227,6 +227,12 @@
+           find "$DEST" -name sdkconfig.h | head -5 | while read f; do
+             echo "$f"; grep -nE "MBEDTLS_(EXTERNAL|INTERNAL)_MEM_ALLOC" "$f" || true
+           done
++          echo "=== NYX-ELF: elf_loader terpasang? (esp_elf.h + libelf_loader.a) ==="
++          if find "$DEST" -name esp_elf.h | grep -q . && find "$DEST" -name libelf_loader.a | grep -q .; then
++            echo "::notice::elf_loader ADA di library kustom -> NYXAPP_HAVE_ELF=1"
++          else
++            echo "::warning::elf_loader TIDAK ada di library terpasang -> Nyx Apps tanpa loader. Jalankan Build Arduino Libs dgn elf_loader=true"
++          fi
+           echo "=== sha256 libmbedtls.a: terpasang (atas) vs asli (bawah) ==="
+           (cd "$DEST" && find . -name libmbedtls.a | sort | xargs -r sha256sum)
+           echo "---"
+--- a/docs/features/native-apps.md
++++ b/docs/features/native-apps.md
+@@ -107,6 +107,10 @@
+ 
+ Note from the repository history: building custom libraries has hit linker problems before, so do this on a separate branch. The glue uses the API `esp_elf_init / esp_elf_relocate(elf, data, size) / esp_elf_request / esp_elf_deinit` (2.x series); adjust it if your version differs. `esp_elf.h` is detected automatically through `__has_include`.
+ 
++### Enabling via CI (added)
++
++Run **Actions → Build Arduino Libs → Run workflow** with `elf_loader` = true (default). The workflow adds `espressif/elf_loader` **2.0.0** to the lib-builder `main/idf_component.yml`, sets `CONFIG_ELF_LOADER=y` and `CONFIG_ELF_LOADER_LOAD_PSRAM=y`, and after the build warns if `libelf_loader.a` or `esp_elf.h` is missing from the result. Then run **Build Firmware**: its "Verifikasi library kustom" step prints whether the loader is present (`NYXAPP_HAVE_ELF=1`). Pinned to 2.0.0 because the glue uses the 3-argument `esp_elf_relocate(elf, data, size)` (1.x has 2 arguments). Still untested on hardware.
++
+ ## Things to check on the phone (suggested order)
+ 
+ 1. Build without the loader → open Nyx Apps → the app list shows and the "no loader" message is correct. Repeat with the SD card removed and an app on FFat.

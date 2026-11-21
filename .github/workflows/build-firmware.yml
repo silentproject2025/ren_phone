@@ -227,6 +227,12 @@ jobs:
           find "$DEST" -name sdkconfig.h | head -5 | while read f; do
             echo "$f"; grep -nE "MBEDTLS_(EXTERNAL|INTERNAL)_MEM_ALLOC" "$f" || true
           done
+          echo "=== NYX-ELF: elf_loader terpasang? (esp_elf.h + libelf_loader.a) ==="
+          if find "$DEST" -name esp_elf.h | grep -q . && find "$DEST" -name libelf_loader.a | grep -q .; then
+            echo "::notice::elf_loader ADA di library kustom -> NYXAPP_HAVE_ELF=1"
+          else
+            echo "::warning::elf_loader TIDAK ada di library terpasang -> Nyx Apps tanpa loader. Jalankan Build Arduino Libs dgn elf_loader=true"
+          fi
           echo "=== sha256 libmbedtls.a: terpasang (atas) vs asli (bawah) ==="
           (cd "$DEST" && find . -name libmbedtls.a | sort | xargs -r sha256sum)
           echo "---"
