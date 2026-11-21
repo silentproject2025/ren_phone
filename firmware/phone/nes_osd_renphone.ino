@@ -96,8 +96,8 @@ static uint8_t *nesRomBuffer = nullptr;
 // Baca file ROM penuh ke nesRomBuffer (PSRAM). Dipanggil dari nesPreloadRom() (task UI) --
 // ATAU sbg cadangan dari osd_getromdata() kalau belum dipreload.
 static const char *nesLoadRomFile() {
-  Serial.printf("[NES] osd_getromdata dipanggil: name=%s path=%s sd=%d ffat=%d\n",
-                name ? name : "(null)", nesRomPath, (int)sdReady, (int)ffatReady);
+  Serial.printf("[NES] baca ROM: path=%s sd=%d ffat=%d\n",
+                nesRomPath, (int)sdReady, (int)ffatReady);
   // name di sini sebenarnya path yg sama dgn nesRomPath (diteruskan
   // apa adanya oleh rom_load), tapi kita pakai nesRomPath langsung
   // biar konsisten sama yg di-set nesEnter().
