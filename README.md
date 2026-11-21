@@ -216,9 +216,9 @@ Without an SD card, upload `manifest.txt` and `app.elf` through the phone's Web 
 ├── tools/                    Generators and helpers (emoji, fonts, dictionaries, i18n, Nyx App packaging)
 │   ├── pack_app.py           Lay out one app as <sd>/apps/<id>/{app.elf,manifest.txt,data/}
 │   ├── nyxapps_release.py    Zip built ELFs + build the nyxapps.json index for the web flasher
+│   ├── patches/              Idempotent patch scripts for phone.ino that are still checked by CI (Nyx Apps, SysMem, Home pager)
 │   ├── ci/                   Helper scripts used by the CI workflows
-│   └── legacy-patches/       Archived one-shot patch scripts (see its README)
-├── apply_*.py, elf_loader.patch  One-shot patch scripts and the loader patch (idempotent; run with --check)
+│   └── legacy-patches/       Archived one-shot patch scripts, including elf_loader.patch (see its README)
 ├── CHANGELOG.md              Release notes; the matching section is shown on the phone during an OTA update
 ├── CONTRIBUTING.md
 ├── LICENSE                   AGPL-3.0

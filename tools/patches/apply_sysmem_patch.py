@@ -3,8 +3,8 @@
 apply_sysmem_patch.py -- pasang SysMem ("MMU software" firmware utama) ke firmware/phone/phone.ino
 
 Pakai (dari root repo):
-    python3 apply_sysmem_patch.py            # pasang
-    python3 apply_sysmem_patch.py --check    # hanya cek apakah anchor cocok
+    python3 tools/patches/apply_sysmem_patch.py            # pasang
+    python3 tools/patches/apply_sysmem_patch.py --check    # hanya cek apakah anchor cocok
 
 Idempoten & atomik: kalau SATU anchor tidak ketemu persis sekali, TIDAK ADA yang diubah.
 File baru (sysmem.h, sysmem_fw.h, sysmem_renphone.ino) harus sudah ada di firmware/phone/.

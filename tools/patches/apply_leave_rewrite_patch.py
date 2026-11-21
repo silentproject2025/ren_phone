@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # apply_leave_rewrite_patch.py -- HWS_LEAVE_REWRITE_V1
-# Jalankan dari root repo:  python apply_leave_rewrite_patch.py
+# Jalankan dari root repo:  python tools/patches/apply_leave_rewrite_patch.py
 #
 # Masalah: saat app dibuka (navPush -> hwsLeave("navPush", 1)) sementara hardware scroll
 # sedang bergeser (k != 0), mesin hanya mematikan scroll (VSCSAD=0) tanpa menulis ulang panel.

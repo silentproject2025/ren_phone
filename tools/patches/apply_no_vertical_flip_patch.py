@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # apply_no_vertical_flip_patch.py -- HP_NO_VFLIP_V1
-# Jalankan dari root repo:  python apply_no_vertical_flip_patch.py
+# Jalankan dari root repo:  python tools/patches/apply_no_vertical_flip_patch.py
 #
 # Masalah: di Home landscape berhalaman, geser vertikal (mis. dari bawah ke atas) ikut membalik
 # halaman ke kiri/kanan (kebiasaan lama dari scroll grid). Itu mengganggu.

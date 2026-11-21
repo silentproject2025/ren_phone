@@ -1,9 +1,9 @@
 name: sysmem-tests
 on:
   push:
-    paths: ['firmware/phone/sysmem*', 'tests/sysmem/**', 'apply_sysmem_patch.py']
+    paths: ['firmware/phone/sysmem*', 'tests/sysmem/**', 'tools/patches/apply_sysmem_patch.py']
   pull_request:
-    paths: ['firmware/phone/sysmem*', 'tests/sysmem/**', 'apply_sysmem_patch.py']
+    paths: ['firmware/phone/sysmem*', 'tests/sysmem/**', 'tools/patches/apply_sysmem_patch.py']
 jobs:
   pc-tests:
     runs-on: ubuntu-latest

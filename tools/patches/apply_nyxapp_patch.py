@@ -3,8 +3,8 @@
 apply_nyxapp_patch.py -- pasang "Nyx Apps" (app native dari SD) ke firmware/phone/phone.ino
 
 Pakai (dari root repo, mis. ~/ren_phone di Termux):
-    python3 apply_nyxapp_patch.py            # pasang
-    python3 apply_nyxapp_patch.py --check    # hanya cek apakah anchor cocok
+    python3 tools/patches/apply_nyxapp_patch.py            # pasang
+    python3 tools/patches/apply_nyxapp_patch.py --check    # hanya cek apakah anchor cocok
 
 Idempoten (aman dijalankan ulang) & atomik: kalau SATU anchor tidak ketemu persis sekali,
 TIDAK ADA yang diubah. File baru (nyx*.h, nyxapp_renphone.ino) harus sudah disalin ke

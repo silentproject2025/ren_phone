@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # apply_hint_bri_patch.py -- HP_HINT_V1 + BRI_NVS_V1
-# Jalankan dari root repo:  python apply_hint_bri_patch.py
+# Jalankan dari root repo:  python tools/patches/apply_hint_bri_patch.py
 #
 # 1) HP_HINT_V1 (pager_renphone.ino): kalau Home landscape digeser VERTIKAL, halaman "bergoyang"
 #    sedikit ke samping (~25 px lalu kembali) sebagai petunjuk bahwa arah geser itu ke samping.

@@ -1,9 +1,9 @@
 name: nyxapp-tests
 on:
   push:
-    paths: ['firmware/phone/nyx*', 'tests/nyxapp/**', 'examples/native/**', 'apply_nyxapp_patch.py']
+    paths: ['firmware/phone/nyx*', 'tests/nyxapp/**', 'examples/native/**', 'tools/patches/apply_nyxapp_patch.py']
   pull_request:
-    paths: ['firmware/phone/nyx*', 'tests/nyxapp/**', 'examples/native/**', 'apply_nyxapp_patch.py']
+    paths: ['firmware/phone/nyx*', 'tests/nyxapp/**', 'examples/native/**', 'tools/patches/apply_nyxapp_patch.py']
 jobs:
   pc-tests:
     runs-on: ubuntu-latest
@@ -13,4 +13,4 @@ jobs:
         run: ./tests/nyxapp/run.sh
       - name: Cek anchor patch phone.ino masih cocok
         run: |
-          if grep -q NYXAPP_V1 firmware/phone/phone.ino; then echo "sudah terpasang"; else python3 apply_nyxapp_patch.py --check; fi
+          if grep -q NYXAPP_V1 firmware/phone/phone.ino; then echo "sudah terpasang"; else python3 tools/patches/apply_nyxapp_patch.py --check; fi

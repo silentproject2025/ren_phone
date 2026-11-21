@@ -103,7 +103,7 @@ Notes:
 
 ## Installing into the firmware
 
-This repository already includes the integration: `nyx_app.h`, `nyxmem.h`, `nyxhost.h` and `nyxapp_renphone.ino` live in `firmware/phone/`, the CI workflow copies them into the sketch, and `phone.ino` has the `SCR_NYX` screen and the `apps[]` entry (46 apps in total). `apply_nyxapp_patch.py` in the repository root is the one-shot script that made the `phone.ino` changes (run with `--check` to see whether it would still change anything; it keeps a backup as `phone.ino.bak_nyxapp`).
+This repository already includes the integration: `nyx_app.h`, `nyxmem.h`, `nyxhost.h` and `nyxapp_renphone.ino` live in `firmware/phone/`, the CI workflow copies them into the sketch, and `phone.ino` has the `SCR_NYX` screen and the `apps[]` entry (46 apps in total). `tools/patches/apply_nyxapp_patch.py` is the one-shot script that made the `phone.ino` changes (run with `--check` to see whether it would still change anything; it keeps a backup as `phone.ino.bak_nyxapp`).
 
 Without an ELF loader the build still succeeds: Nyx Apps opens and explains that the loader is missing.
 

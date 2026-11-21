@@ -26,14 +26,14 @@ cadangan RAM internal, dan satu jalur reclaim untuk semua fitur. (Untuk Nyx Apps
 |---|---|
 | `sysmem.h` (logika inti) | **Teruji di PC**: ±77 ribu cek, fuzz 5 seed, ASan + UBSan, 7 tes mutasi |
 | `sysmem_renphone.ino` (glue) | **Cek sintaks saja** (stub). Belum dijalankan di HP |
-| `apply_sysmem_patch.py` | Anchor cocok & idempoten pada `phone.ino` repo ini |
+| `tools/patches/apply_sysmem_patch.py` | Anchor cocok & idempoten pada `phone.ino` repo ini |
 
 Tes: `./tests/sysmem/run.sh` (butuh `g++`).
 
 ## Memasang
 ```bash
-python3 apply_sysmem_patch.py --check   # cek anchor
-python3 apply_sysmem_patch.py           # pasang (cadangan: phone.ino.bak_sysmem)
+python3 tools/patches/apply_sysmem_patch.py --check   # cek anchor
+python3 tools/patches/apply_sysmem_patch.py           # pasang (cadangan: phone.ino.bak_sysmem)
 ```
 CI (`build-firmware.yml`) sudah menyalin `sysmem.h`, `sysmem_fw.h`, `sysmem_renphone.ino` ke sketch.
 
