@@ -6,6 +6,8 @@
 
 [![Build Firmware](https://github.com/silentproject2025/ren_phone/actions/workflows/build-firmware.yml/badge.svg)](https://github.com/silentproject2025/ren_phone/actions/workflows/build-firmware.yml)
 [![Build CAM](https://github.com/silentproject2025/ren_phone/actions/workflows/build-cam-coprocessor.yml/badge.svg)](https://github.com/silentproject2025/ren_phone/actions/workflows/build-cam-coprocessor.yml)
+[![Build Nyx Apps](https://github.com/silentproject2025/ren_phone/actions/workflows/build-nyxapps.yml/badge.svg)](https://github.com/silentproject2025/ren_phone/actions/workflows/build-nyxapps.yml)
+[![Nyx Apps tests](https://github.com/silentproject2025/ren_phone/actions/workflows/nyxapp-tests.yml/badge.svg)](https://github.com/silentproject2025/ren_phone/actions/workflows/nyxapp-tests.yml)
 ![Version](https://img.shields.io/badge/version-1.0.2-green)
 ![MCU](https://img.shields.io/badge/MCU-ESP32--S3-red)
 ![Framework](https://img.shields.io/badge/framework-Arduino-00979D)
@@ -29,7 +31,8 @@ NyxOS is neither Android nor Linux. The launcher, notification center, network s
 > - **Phone calls** are only partially verified: they work with a `sip2sip.info` account (SIP over TCP); other SIP providers, LAN mode and TURN are unconfirmed.
 > - **NyxPPU** is an experiment (phase 1) and **SPI overclock** depends on cable quality.
 > - **New system gestures** (pull-to-refresh, edge swipe-back, panels that follow the finger) are `BETA`.
-> - **Nyx Apps** (native ELF apps) is `EXP`: the launcher and its storage choice (SD card, or internal flash when no SD card is inserted) are not yet tested on a device, and the default build does not include the ELF loader, so apps cannot run until it is added.
+> - **Nyx Apps** (native ELF apps) is `EXP`. The memory manager and the host API are tested on a PC, and CI now compiles the example apps to real ELF files and offers them on the web flasher. But the launcher, its storage choice (SD card, or internal flash when no SD card is inserted) and the ELF loader itself are **not yet tested on a device**. The loader is only present when the custom core libraries are built with the `elf_loader` option (on by default in that workflow).
+> - **SysMem** (the central memory manager for the main firmware) is `BETA`: its core logic is tested on a PC, its firmware glue is only syntax-checked.
 > - **Device registry** (anonymous, one-time registration with a public dashboard) is `BETA`; see the [security notice](#security-notice).
 > - **Backup & Restore**: the **Cloud** tab (back up and restore) is tested on a device; the **SD Card** tab is `BETA` (tested on a PC, not yet on a device). **Chess** (online and vs. AI) is `BETA`: the logic is tested on a PC but not yet on a device.
 >
@@ -42,6 +45,7 @@ NyxOS is neither Android nor Linux. The launcher, notification center, network s
 - [Hardware](#hardware)
 - [Quick start](#quick-start)
 - [Repository layout](#repository-layout)
+- [Continuous integration](#continuous-integration)
 - [Documentation](#documentation)
 - [Known limitations](#known-limitations)
 - [Security notice](#security-notice)
@@ -83,10 +87,12 @@ Status markers used throughout the documentation:
 | **System** | [Battery (INA219), per-channel OTA with release notes, HWmonitor, crash log](./docs/features/system-tools.md) | `OK` (per-app energy and crash log `BETA`) |
 | | [Settings Backup & Restore](./docs/features/system-tools.md#settings-backup-and-restore-beta) | `OK` (Cloud) / `BETA` (SD Card) |
 | | [Device registry](./docs/security.md) (anonymous id, optional public username, public dashboard) | `BETA` |
-| | [Nyx Apps](./docs/features/native-apps.md): native ELF apps loaded from the SD card, or from internal flash when no SD card is inserted | `EXP` |
+| | [Nyx Apps](./docs/features/native-apps.md): native ELF apps loaded from the SD card, or from internal flash when no SD card is inserted. Example apps are compiled by CI and downloadable from the web flasher | `EXP` |
+| | [SysMem](./docs/sysmem.md): per-feature memory accounting, budgets, reserve floor and one reclaim path for the main firmware | `BETA` |
 | **Games** | [Inferno, NES, DOOM, Maze, classics, PPU demo](./docs/features/games.md) | `OK` |
 | **Experimental** | [SPI overclock (`HW`), NyxPPU pixel engine (`EXP`)](./docs/features/experimental.md) | — |
 | **Platform** | mbedTLS in PSRAM (custom core libraries), applied automatically by CI | `OK` |
+| | Web flasher on GitHub Pages: stable and test firmware, SHA-256 checksums, and a **Nyx Apps** tab with the example apps | `OK` (firmware) / `EXP` (Nyx Apps tab) |
 
 ## Architecture at a glance
 
@@ -110,6 +116,7 @@ Key design consequences:
 - **The device has no speaker.** All audio (music, video, calls, voice memos) goes through the ESP32-CAM to Bluetooth earbuds.
 - **The two firmwares must stay consistent.** `rplink.h` must be **identical** in `firmware/phone/` and `firmware/cam_bt_coprocessor/`.
 - **Memory is the scarcest resource.** Only ~162 KB of internal RAM is available; see [Architecture](./docs/architecture.md).
+- **Fragmentation is handled by design, not by compaction.** Memory is judged by the *largest contiguous block*, not by total free bytes. Each Nyx App gets one PSRAM arena (allocated once, freed once, so apps cannot fragment system PSRAM); inside it a best-fit allocator merges neighbouring free blocks on `free()`. Before an HTTPS handshake a **TLS gate** waits for, and reclaims memory until, a contiguous internal-RAM block is available. Blocks are never moved (native apps use real pointers), so a long-running app can still fragment its own arena. See [SysMem](./docs/sysmem.md) and [Nyx Apps](./docs/features/native-apps.md).
 
 ## Hardware
 
@@ -139,8 +146,9 @@ Every push triggers the **Build Firmware Binaries** workflow, which publishes a 
 | `ren_phone_s3_merged.bin` | Complete ESP32-S3 image (bootloader, partitions, app) for a first flash. |
 | `firmware.bin` | App-only image used by OTA updates. |
 | `cam_merged.bin` | Complete ESP32-CAM image (from the **Build CAM BT Co-Processor** workflow). |
+| `<id>.zip`, `nyxapps.json` | Example Nyx Apps, in the rolling pre-release `nyxapps` (from the **Build Nyx Apps (ELF)** workflow, `main`/`master` only). Each zip holds `apps/<id>/{app.elf,manifest.txt}`. |
 
-Flash through the browser-based web flasher published on GitHub Pages, or with `esptool`:
+Flash through the browser-based web flasher published on GitHub Pages (its **Nyx Apps** tab also lets you download the example apps), or with `esptool`:
 
 ```bash
 esptool.py --chip esp32s3 --baud 921600 write_flash 0x0 ren_phone_s3_merged.bin
@@ -162,11 +170,36 @@ The firmware is assembled from `firmware/phone/` and `third_party/` by the CI wo
 
 > To build in the cloud without a local toolchain, fork the repository, enable GitHub Actions and run **Build Firmware Binaries**. For OTA updates to download firmware without a login, the repository must be **public**.
 
+### Option C — run the host tests (PC or Termux)
+
+Most logic that does not need hardware is tested on a PC. For example, the Nyx Apps suite (memory arena, host API, example apps through `dlopen`, and a syntax check of the firmware glue):
+
+```bash
+cd tests/nyxapp && ./run.sh      # needs g++ and gcc
+```
+
+The scripts use `$TMPDIR` (falling back to `/tmp`), so they also run in **Termux**, which has no `/tmp`. All suites are listed in [tests/README.md](./tests/README.md).
+
+### Option D — build a Nyx App
+
+CI builds every folder in `examples/native/` for you. To build one yourself you need ESP-IDF (5.x) and the `idf_template` project:
+
+```bash
+cd examples/native/idf_template
+export NYX_SDK=$PWD/../../../firmware/phone
+cp ../hello/app.c main/app.c
+idf.py set-target esp32s3 && idf.py elf          # -> build/nyxapp.app.elf
+python3 ../../../tools/pack_app.py --id hello --elf build/nyxapp.app.elf \
+        --manifest ../hello/manifest.txt --sd /media/SDCARD
+```
+
+Without an SD card, upload `manifest.txt` and `app.elf` through the phone's Web File Manager (*Flash internal (FFat)*, target folder `/apps/<id>`). Details, limits and the trust model are in [docs/features/native-apps.md](./docs/features/native-apps.md).
+
 ## Repository layout
 
 ```text
 .
-├── .github/workflows/        CI: firmware build, CAM build, custom libs, web flasher
+├── .github/workflows/        CI: firmware, CAM, custom core libs, Nyx Apps (ELF), web flasher, PC tests
 ├── docs/                     Documentation (architecture, hardware, features, ...)
 ├── examples/
 │   └── native/               Example Nyx Apps (hello, bounce, memhog, notes, leaky) and an ESP-IDF template
@@ -179,10 +212,13 @@ The firmware is assembled from `firmware/phone/` and `third_party/` by the CI wo
 │   └── prebuilt/             Alternative prebuilt firmware (Bruce fork), separate from NyxOS
 ├── supabase/                 SQL, registration page and dashboard for the optional device registry
 ├── third_party/              Vendored third-party code (Nofrendo NES core, ESP-DOOM core)
-├── tests/                    Host-side (PC) tests: backup, chess, ebook, gutenberg, camera, dictionary, nyxapp
-├── tools/                    Generators and helpers (emoji, fonts, dictionaries, i18n)
+├── tests/                    Host-side (PC) tests: backup, chess, ebook, gutenberg, camera, dictionary, nyxapp, sysmem
+├── tools/                    Generators and helpers (emoji, fonts, dictionaries, i18n, Nyx App packaging)
+│   ├── pack_app.py           Lay out one app as <sd>/apps/<id>/{app.elf,manifest.txt,data/}
+│   ├── nyxapps_release.py    Zip built ELFs + build the nyxapps.json index for the web flasher
 │   ├── ci/                   Helper scripts used by the CI workflows
 │   └── legacy-patches/       Archived one-shot patch scripts (see its README)
+├── apply_*.py, elf_loader.patch  One-shot patch scripts and the loader patch (idempotent; run with --check)
 ├── CHANGELOG.md              Release notes; the matching section is shown on the phone during an OTA update
 ├── CONTRIBUTING.md
 ├── LICENSE                   AGPL-3.0
@@ -192,6 +228,19 @@ The firmware is assembled from `firmware/phone/` and `third_party/` by the CI wo
 The folder name `firmware/phone/` matches `phone.ino` so the sketch can also be opened directly in the Arduino IDE. See [firmware/README.md](./firmware/README.md) for how the sketch files are organised.
 
 > The repository and some old comments and variables are named `ren_phone`, which was the project's original name.
+
+## Continuous integration
+
+| Workflow | What it does |
+|---|---|
+| **Build Firmware Binaries** (`build-firmware.yml`) | Every push: compiles the S3 firmware (ILI9341 and ST7796 variants), publishes a Release and the OTA channel, then calls the web flasher. |
+| **Build CAM BT Co-Processor** (`build-cam-coprocessor.yml`) | Compiles the ESP32-CAM coprocessor firmware. |
+| **Build Arduino Libs** (`build-arduino-libs.yml`) | Manual: builds the custom core libraries (mbedTLS in PSRAM, cache sizes, WiFi/lwIP in PSRAM, optional `elf_loader` 2.0.0). Re-run only when the core version or the options change. |
+| **Build Nyx Apps (ELF)** (`build-nyxapps.yml`) | Compiles each `examples/native/<id>/` with ESP-IDF to an ELF, checks it (magic, Xtensa, ≤ 1 MB), and on `main`/`master` publishes zips to the `nyxapps` pre-release and refreshes the web flasher. Pushes and pull requests only prove the apps still compile. |
+| **Web Flasher (GitHub Pages)** (`flasher-pages.yml`) | Builds the flasher page: stable vs. test firmware, `.bin` downloads, SHA-256, and the Nyx Apps tab. |
+| **nyxapp-tests**, **sysmem-tests** | Run the PC test suites when the related files change. |
+
+The Nyx Apps workflow is new and has been checked only on a PC (packaging and page generation). The first real ESP-IDF run in GitHub Actions may need small fixes.
 
 ## Documentation
 
@@ -205,6 +254,8 @@ The folder name `firmware/phone/` matches `phone.ino` so the sketch can also be 
 | Feature guides | [docs/features/](./docs/features/) |
 | UI language system (English / Indonesian) | [docs/localization.md](./docs/localization.md) |
 | Security and privacy considerations | [docs/security.md](./docs/security.md) |
+| SysMem: central memory manager for the main firmware (Indonesian) | [docs/sysmem.md](./docs/sysmem.md) |
+| Nyx Apps: manifest, API, building, storage, CI builds | [docs/features/native-apps.md](./docs/features/native-apps.md) |
 | Known limitations | [docs/limitations.md](./docs/limitations.md) |
 | Troubleshooting | [docs/troubleshooting.md](./docs/troubleshooting.md) |
 | Host-side tests | [tests/README.md](./tests/README.md) |
@@ -217,8 +268,9 @@ A short list; the full list is in [docs/limitations.md](./docs/limitations.md).
 - Audio works only through Bluetooth. Without the ESP32-CAM and earbuds, no app produces sound.
 - Phone calls: partially tested; no ICE; TURN over UDP only; no PSTN numbers through free services.
 - TLS certificates are not verified (see the security notice).
-- Nyx Apps need an ELF loader that the default build does not include, and app files on internal flash share the roughly 9 MB FFat partition; see [Nyx Apps](./docs/features/native-apps.md).
-- CI does not pin tool versions, so upstream updates can break a build without any change in this repository.
+- Nyx Apps need the ELF loader, which is only in custom core libraries built with `elf_loader` enabled; none of this has run on a device yet. App files on internal flash share the roughly 9 MB FFat partition. See [Nyx Apps](./docs/features/native-apps.md).
+- There is no memory compaction: native apps use real pointers, so blocks are never moved. Fragmentation is limited (per-app arenas, block merging, the TLS gate), not removed.
+- Most CI steps do not pin tool versions, so upstream updates can break a build without any change in this repository. The Nyx Apps build pins its ESP-IDF image and `elf_loader` (2.0.0).
 
 ## Security notice
 

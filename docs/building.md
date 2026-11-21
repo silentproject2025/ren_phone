@@ -56,6 +56,10 @@ Builds triggered by a push use the default values.
 
 After a Release is created, the **Web Flasher (GitHub Pages)** workflow is called automatically and assembles a browser-based flasher page. The page distinguishes **stable** firmware (from `main`/`master`) from **test** firmware (from other branches) and provides `.bin` download buttons, SHA-256 checksums and a link to the repository.
 
+### Nyx Apps (ELF) build
+
+The **Build Nyx Apps (ELF)** workflow (`build-nyxapps.yml`) compiles every `examples/native/<id>/` that has an `app.c` and a `manifest.txt`, using the `espressif/idf` Docker image (default `espressif/idf:v5.5.5`, an input of the manual run; keep it equal to the IDF version of the core libraries) and `examples/native/idf_template`. It checks each ELF, and on `main`/`master` (or a manual run with `publish` on) it packs `<id>.zip` plus `nyxapps.json` with `tools/nyxapps_release.py` into the rolling pre-release `nyxapps`, then re-runs the web flasher, whose **Nyx Apps** tab links the downloads. A new example app is just a new folder. The workflow has not yet had a confirmed real run; see [Nyx Apps](./features/native-apps.md).
+
 You can also flash with `esptool`:
 
 ```bash
