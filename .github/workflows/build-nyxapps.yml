@@ -1,0 +1,166 @@
+name: Build Nyx Apps (ELF)
+
+# Compile app contoh di examples/native/* menjadi app.elf (ESP-IDF + espressif/elf_loader),
+# bungkus per app (apps/<id>/{app.elf,manifest.txt}) sebagai .zip, lalu terbitkan ke rilis bergerak
+# "nyxapps". Halaman web flasher (flasher-pages.yml) membaca rilis itu dan menampilkan tab "Nyx Apps"
+# dengan tombol unduh. Push/PR hanya MEMBUKTIKAN app masih bisa di-compile; publikasi hanya dari
+# main/master atau saat dijalankan manual.
+on:
+  push:
+    paths:
+      - 'examples/native/**'
+      - 'firmware/phone/nyx_app.h'
+      - 'tools/pack_app.py'
+      - 'tools/nyxapps_release.py'
+      - '.github/workflows/build-nyxapps.yml'
+  pull_request:
+    paths:
+      - 'examples/native/**'
+      - 'firmware/phone/nyx_app.h'
+      - 'tools/pack_app.py'
+      - 'tools/nyxapps_release.py'
+      - '.github/workflows/build-nyxapps.yml'
+  workflow_dispatch:
+    inputs:
+      idf_image:
+        description: "Image Docker ESP-IDF untuk compile app (samakan dengan versi IDF library core)"
+        type: string
+        default: "espressif/idf:v5.5.5"
+      publish:
+        description: "Terbitkan ke rilis 'nyxapps' + perbarui web flasher (hanya dari main/master)"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+env:
+  IDF_IMAGE: ${{ inputs.idf_image || 'espressif/idf:v5.5.5' }}
+
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    outputs:
+      apps: ${{ steps.list.outputs.apps }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: list
+        run: |
+          set -euo pipefail
+          apps=$(for d in examples/native/*/; do
+                   n=$(basename "$d")
+                   [ -f "$d/app.c" ] && [ -f "$d/manifest.txt" ] && echo "$n"
+                 done | jq -R . | jq -sc .)
+          echo "apps=$apps" >> "$GITHUB_OUTPUT"
+          echo "App yang dibangun: $apps"
+
+  build:
+    needs: discover
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        app: ${{ fromJson(needs.discover.outputs.apps) }}
+    container:
+      image: ${{ inputs.idf_image || 'espressif/idf:v5.5.5' }}
+    name: Compile (${{ matrix.app }})
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compile ${{ matrix.app }} -> app.elf
+        shell: bash
+        env:
+          APP: ${{ matrix.app }}
+        run: |
+          set -euo pipefail
+          git config --global --add safe.directory '*'
+          . "$IDF_PATH/export.sh" >/dev/null
+          export NYX_SDK="$GITHUB_WORKSPACE/firmware/phone"
+          rm -rf /tmp/proj && cp -r examples/native/idf_template /tmp/proj
+          cp "examples/native/$APP/app.c" /tmp/proj/main/app.c
+          cd /tmp/proj
+          idf.py set-target esp32s3
+          idf.py elf
+          ELF=$(find build -name '*.app.elf' | head -n1)
+          [ -n "$ELF" ] || { echo "::error::idf.py elf tidak menghasilkan *.app.elf"; ls -R build | head -50; exit 1; }
+          mkdir -p "$GITHUB_WORKSPACE/out/$APP"
+          cp "$ELF" "$GITHUB_WORKSPACE/out/$APP/nyxapp.app.elf"
+          head -c4 "$ELF" | od -c | head -1
+          ls -l "$ELF"
+
+      - name: Periksa ELF (magic, mesin Xtensa, batas 1 MB)
+        shell: bash
+        env:
+          APP: ${{ matrix.app }}
+        run: |
+          set -euo pipefail
+          F="out/$APP/nyxapp.app.elf"
+          [ "$(head -c4 "$F" | od -An -c | tr -d ' ')" = '177ELF' ] || { echo "::error::bukan ELF"; exit 1; }
+          SZ=$(stat -c %s "$F")
+          [ "$SZ" -le 1048576 ] || { echo "::error::ELF $SZ B > 1 MB (batas loader di firmware)"; exit 1; }
+          # e_machine di offset 18 (little-endian): 0x5E = Xtensa
+          MACH=$(od -An -t u2 -j18 -N2 "$F" | tr -d ' ')
+          [ "$MACH" = "94" ] || echo "::warning::e_machine=$MACH (bukan Xtensa 94)"
+          echo "OK $APP $SZ B"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nyxapp-${{ matrix.app }}
+          path: out/${{ matrix.app }}/nyxapp.app.elf
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    if: >-
+      github.event_name != 'pull_request' &&
+      (github.ref_name == 'main' || github.ref_name == 'master') &&
+      (github.event_name != 'workflow_dispatch' || inputs.publish)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: nyxapp-*
+          path: artifacts
+
+      - name: Rapikan nama folder (nyxapp-<id> -> <id>)
+        run: |
+          set -euo pipefail
+          for d in artifacts/nyxapp-*; do mv "$d" "artifacts/${d#artifacts/nyxapp-}"; done
+          ls -R artifacts
+
+      - name: Bungkus zip + indeks
+        run: |
+          python3 tools/nyxapps_release.py --elfs artifacts --examples examples/native --out dist \
+            --commit "${GITHUB_SHA}" --branch "${GITHUB_REF_NAME}" --idf "${IDF_IMAGE#espressif/idf:}"
+          ls -l dist
+
+      - name: Terbitkan rilis bergerak "nyxapps"
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          NOTES="App contoh Nyx (ELF Xtensa ESP32-S3) dari commit ${GITHUB_SHA::7} (${GITHUB_REF_NAME}). \
+          Isi zip: apps/<id>/app.elf + manifest.txt. Salin ke akar SD, atau upload lewat Web File Manager. \
+          Butuh firmware dengan espressif/elf_loader 2.0.0. BELUM diuji di HP."
+          if gh release view nyxapps >/dev/null 2>&1; then
+            # buang aset lama (app yang sudah dihapus dari repo) supaya tidak tertinggal
+            for n in $(gh release view nyxapps --json assets --jq '.assets[].name'); do
+              gh release delete-asset nyxapps "$n" -y
+            done
+            gh release upload nyxapps dist/* --clobber
+            gh release edit nyxapps --prerelease --notes "$NOTES"
+          else
+            gh release create nyxapps dist/* --prerelease --title "Nyx Apps (app contoh, build terbaru)" --notes "$NOTES"
+          fi
+
+  flasher:
+    needs: publish
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    uses: ./.github/workflows/flasher-pages.yml

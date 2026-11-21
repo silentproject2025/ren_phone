@@ -76,6 +76,15 @@ python3 ../../../tools/pack_app.py --id hello --elf build/nyxapp.app.elf \
 
 To try the app logic on a PC without hardware: `gcc -shared -fPIC -I firmware/phone app.c -o app.so` (used by `tests/nyxapp/test_host.cpp`).
 
+### Prebuilt example apps (CI + web flasher)
+
+The **Build Nyx Apps (ELF)** workflow (`.github/workflows/build-nyxapps.yml`) compiles every `examples/native/<id>/` (needs `app.c` + `manifest.txt`) with the `espressif/idf` Docker image using `examples/native/idf_template`, checks the ELF (magic, Xtensa, ≤ 1 MB) and, on `main`/`master`, publishes one `.zip` per app to the rolling pre-release `nyxapps`. The **Web Flasher** page then shows a **Nyx Apps** tab with download buttons (`.zip`, `app.elf`, `manifest.txt`). Each zip contains `apps/<id>/{app.elf,manifest.txt,data/}`: extract it to the SD root, or upload the two files through the Web File Manager (see Storage below).
+
+* New example app = new folder under `examples/native/`; CI picks it up automatically.
+* The ESP-IDF image is an input of the manual run (default `espressif/idf:v5.5.5`); keep it equal to the IDF version of the core libraries.
+* Packaging logic: `tools/nyxapps_release.py` (uses `tools/pack_app.py` for validation).
+* **Not tested on hardware**, and the `idf.py elf` build itself has only been written, not run, in CI yet.
+
 ## Storage: SD card or internal flash
 
 Nyx Apps works with or without an SD card. When the app list opens, the location of `/apps` is chosen like this:

@@ -29,7 +29,7 @@ jobs:
           REPO: ${{ github.repository }}
         run: |
           python3 - <<'PY'
-          import hashlib, html, json, os, re, shutil, subprocess, datetime
+          import hashlib, html, json, os, re, shutil, subprocess, datetime, zipfile
 
           repo = os.environ["REPO"]
           site = "site"
@@ -175,6 +175,70 @@ jobs:
                             '<div><h2>%s</h2><p>%s</p></div>%s</header>%s</section>' % (
                                 dev["key"], default, esc(dev["title"]), dev["sub"], seg, builds))
               tabs.append('<button type="button" role="tab" data-tab="p-%s">%s</button>' % (dev["key"], esc(dev["short"])))
+
+          # ---- Nyx Apps: app contoh (.elf) dari rilis bergerak "nyxapps" (dibuat build-nyxapps.yml) ----
+          # Tab ini hanya muncul bila rilisnya ada. Zip berisi apps/<id>/{app.elf,manifest.txt}.
+          try:
+              adl = os.path.join("dl", "nyxapps"); os.makedirs(adl, exist_ok=True)
+              ainfo = json.loads(gh("release", "view", "nyxapps", "--repo", repo, "--json", "url,publishedAt"))
+              gh("release", "download", "nyxapps", "--repo", repo, "--dir", adl, "--clobber")
+              aidx = json.load(open(os.path.join(adl, "nyxapps.json"), encoding="utf-8"))
+          except Exception as e:
+              print("Nyx Apps dilewati:", e)
+              aidx = None
+          if aidx and aidx.get("apps"):
+              os.makedirs(os.path.join(site, "apps"), exist_ok=True)
+              APP_TPL = """
+              <article class="build">
+                <div class="build-top">
+                  <span class="tag @@cls@@"><i></i>@@label@@</span>
+                  <span class="from">izin <b>@@perms@@</b></span>
+                </div>
+                <p class="note"><b>@@name@@</b> &middot; id <code>@@id@@</code> &middot; memori @@mem@@ KB</p>
+                <dl class="spec">
+                  <div><dt>ELF</dt><dd>@@size@@ KB</dd></div>
+                  <div><dt>arena</dt><dd>@@mem@@ KB</dd></div>
+                  <div><dt>stack</dt><dd>@@stack@@ KB</dd></div>
+                </dl>
+                <button type="button" class="hash" data-copy="@@sha@@" title="Klik untuk menyalin SHA-256 app.elf">
+                  <span>sha256</span><code>@@sha_short@@&hellip;</code><em>salin</em>
+                </button>
+                <div class="actions">
+                  <a class="btn primary" href="apps/@@zip@@" download="@@zip@@">Unduh .zip <small>@@zsize@@ KB</small></a>
+                  <a class="btn" href="apps/@@id@@/app.elf" download="app.elf">app.elf</a>
+                  <a class="btn" href="apps/@@id@@/manifest.txt" download="manifest.txt">manifest.txt</a>
+                </div>
+              </article>
+              """
+              cards = []
+              for ap in aidx["apps"]:
+                  zsrc = os.path.join(adl, ap["zip"])
+                  if not os.path.isfile(zsrc) or not re.fullmatch(r"[A-Za-z0-9_-]{1,23}", ap["id"]):
+                      continue
+                  shutil.copy(zsrc, os.path.join(site, "apps", ap["zip"]))
+                  adir = os.path.join(site, "apps", ap["id"]); os.makedirs(adir, exist_ok=True)
+                  with zipfile.ZipFile(zsrc) as z:
+                      for fn in ("app.elf", "manifest.txt"):
+                          open(os.path.join(adir, fn), "wb").write(z.read("apps/%s/%s" % (ap["id"], fn)))
+                  test = ap.get("kind") == "uji"
+                  cards.append(fill(APP_TPL, cls="warn" if test else "ok", label="UJI INTERNAL" if test else "CONTOH",
+                                    perms=esc(", ".join(ap.get("perms") or []) or "tanpa izin"), name=esc(ap["name"]),
+                                    id=esc(ap["id"]), mem=ap.get("mem_kb", 0), stack=ap.get("stack_kb", 8),
+                                    size="%.1f" % (ap["elf_size"] / 1024.0), sha=ap["sha256"], sha_short=ap["sha256"][:16],
+                                    zip=esc(ap["zip"]), zsize="%.1f" % (os.path.getsize(zsrc) / 1024.0)))
+              if cards:
+                  acommit = aidx.get("commit", "")
+                  ahead = ('Dibangun dari commit <a href="https://github.com/%s/commit/%s">%s</a> &middot; ESP-IDF %s &middot; elf_loader %s. '
+                           % (esc(repo), esc(acommit), esc(acommit[:7]), esc(aidx.get("idf", "?")), esc(aidx.get("elf_loader", "?")))) if acommit else ""
+                  ahow = ('<details class="manual"><summary>Cara memasang di HP</summary>'
+                          '<p><b>Dengan SD:</b> ekstrak .zip, salin folder <code>apps/</code> ke akar kartu SD, lalu buka <b>Nyx Apps</b> di HP.</p>'
+                          '<p><b>Tanpa SD:</b> di Web File Manager HP pilih <b>Flash internal (FFat)</b>, isi <b>Target folder</b> '
+                          '<code>/apps/&lt;id&gt;</code>, lalu upload <code>manifest.txt</code> dan <code>app.elf</code> satu per satu.</p>'
+                          '<p>Firmware harus memuat <b>espressif/elf_loader</b>. Fitur ini <b>belum diuji di HP</b>.</p></details>')
+                  panels.append('<section class="panel" id="p-apps"><header class="panel-head"><div><h2>Nyx Apps</h2>'
+                                '<p>App native (ELF) &middot; ESP32-S3</p></div></header>'
+                                '<p class="note">%s</p>%s%s</section>' % (ahead, "".join(cards), ahow))
+                  tabs.append('<button type="button" role="tab" data-tab="p-apps">Nyx Apps</button>')
 
           GH_ICON = ('<svg class="ghi" viewBox="0 0 16 16" width="18" height="18" aria-hidden="true" fill="currentColor">'
                      '<path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>')
