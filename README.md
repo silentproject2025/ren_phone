@@ -18,8 +18,8 @@ NyxOS is neither Android nor Linux. The launcher, notification center, network s
 | | |
 |---|---|
 | **Microcontroller** | ESP32-S3, 16 MB flash, 8 MB OPI PSRAM |
-| **Built-in apps** | 45 |
-| **Code size** | ~53,000 lines of main firmware + ~1,500 lines of coprocessor firmware (third-party code excluded) |
+| **Built-in apps** | 46 |
+| **Code size** | ~62,000 lines of main firmware + ~1,500 lines of coprocessor firmware (third-party code and generated data tables excluded) |
 | **UI language** | English (default) and Indonesian, switchable in *Settings → Language* |
 | **Version** | 1.0.2 (see [`VERSION`](./VERSION)) |
 | **License** | AGPL-3.0 |
@@ -29,7 +29,8 @@ NyxOS is neither Android nor Linux. The launcher, notification center, network s
 > - **Phone calls** are only partially verified: they work with a `sip2sip.info` account (SIP over TCP); other SIP providers, LAN mode and TURN are unconfirmed.
 > - **NyxPPU** is an experiment (phase 1) and **SPI overclock** depends on cable quality.
 > - **New system gestures** (pull-to-refresh, edge swipe-back, panels that follow the finger) are `BETA`.
-> - **Nyx Apps** (native ELF apps) is `EXP`: the launcher and its storage choice (SD card, or internal flash when no SD is inserted) are not yet tested on a device, and the default build does not include the ELF loader, so apps cannot run until it is added.
+> - **Nyx Apps** (native ELF apps) is `EXP`: the launcher and its storage choice (SD card, or internal flash when no SD card is inserted) are not yet tested on a device, and the default build does not include the ELF loader, so apps cannot run until it is added.
+> - **Device registry** (anonymous, one-time registration with a public dashboard) is `BETA`; see the [security notice](#security-notice).
 > - **Backup & Restore**: the **Cloud** tab (back up and restore) is tested on a device; the **SD Card** tab is `BETA` (tested on a PC, not yet on a device). **Chess** (online and vs. AI) is `BETA`: the logic is tested on a PC but not yet on a device.
 >
 > Each feature is described in full in the [feature documentation](./docs/features/).
@@ -66,6 +67,7 @@ Status markers used throughout the documentation:
 |---|---|---|
 | **System UI** | Home, Lock Screen, Control Center, themes, squircle icons, bento widgets, app open/close animations — [details](./docs/features/system-ui.md) | `OK` |
 | | Charging animation on the lock screen | `OK` |
+| | Landscape Home with swipeable pages (widgets first, then apps) and ST7796 hardware scroll (portrait grid scrolling, landscape page swipes) — [details](./docs/features/system-ui.md#home-pages-and-hardware-scroll-st7796) | `OK` (ST7796 builds) |
 | | New gestures (pull-to-refresh, edge swipe-back, finger-following panels) | `BETA` |
 | | Grouped notifications, swipe-to-dismiss, quick actions, App Switcher previews | `BETA` |
 | | Color emoji (built-in set and full set from SD) | `BETA` |
@@ -78,9 +80,10 @@ Status markers used throughout the documentation:
 | | [Camera (OV2640 on the ESP32-CAM)](./docs/features/camera.md) | `OK` |
 | | [Books (`.txt`, `.md`, `.epub`) and Project Gutenberg downloads](./docs/features/books.md) | `OK` |
 | **Voice and AI** | [Wake word "Hei Nyx", Gemini AI Chat, voice memo](./docs/features/voice-and-ai.md) | `OK` (voice commands `BETA`) |
-| **System** | [Battery (INA219), per-channel OTA, HWmonitor, crash log](./docs/features/system-tools.md) | `OK` (per-app energy and crash log `BETA`) |
+| **System** | [Battery (INA219), per-channel OTA with release notes, HWmonitor, crash log](./docs/features/system-tools.md) | `OK` (per-app energy and crash log `BETA`) |
 | | [Settings Backup & Restore](./docs/features/system-tools.md#settings-backup-and-restore-beta) | `OK` (Cloud) / `BETA` (SD Card) |
-| | [Nyx Apps (native ELF apps from SD or internal flash)](./docs/features/native-apps.md) | `EXP` |
+| | [Device registry](./docs/security.md) (anonymous id, optional public username, public dashboard) | `BETA` |
+| | [Nyx Apps](./docs/features/native-apps.md): native ELF apps loaded from the SD card, or from internal flash when no SD card is inserted | `EXP` |
 | **Games** | [Inferno, NES, DOOM, Maze, classics, PPU demo](./docs/features/games.md) | `OK` |
 | **Experimental** | [SPI overclock (`HW`), NyxPPU pixel engine (`EXP`)](./docs/features/experimental.md) | — |
 | **Platform** | mbedTLS in PSRAM (custom core libraries), applied automatically by CI | `OK` |
@@ -115,11 +118,11 @@ Key design consequences:
 | Brain | ESP32-S3, 16 MB flash, 8 MB OPI PSRAM |
 | Display | ILI9341 320×240 (SPI), or the 3.5″ ST7796 480×320 variant with FT6236 capacitive touch |
 | Touch | XPT2046 (ILI9341) or FT6236 (ST7796) |
-| Storage | microSD (SDIO 1-bit), internal FFat as fallback |
+| Storage | microSD (SDIO 1-bit); internal FFat (about 9 MB) as fallback for wallpaper, DOOM WADs, crash log and Nyx Apps |
 | Sensors | MPU6050 (tilt, shake, auto-rotation), INA219 (voltage, current, power) |
 | Microphone | INMP441 (I2S) |
 | Audio output | **Bluetooth (A2DP) only**, via the ESP32-CAM coprocessor |
-| Camera | OV2640 on an ESP32-CAM module (OV3660/OV5640 auto-detected) |
+| Camera | OV2640 on an ESP32-CAM module (OV3660, OV5640 and GC2145 auto-detected; GC2145 modules such as the RHYX M21-45 are limited to 800×600) |
 | Extras | Vibration motor, Neopixel |
 | Partition scheme | `app3M_fat9M_16MB` |
 
@@ -165,13 +168,18 @@ The firmware is assembled from `firmware/phone/` and `third_party/` by the CI wo
 .
 ├── .github/workflows/        CI: firmware build, CAM build, custom libs, web flasher
 ├── docs/                     Documentation (architecture, hardware, features, ...)
+├── examples/
+│   └── native/               Example Nyx Apps (hello, bounce, memhog, notes, leaky) and an ESP-IDF template
+├── experimental/
+│   └── nyxvm/                Early design of a sandboxed app VM (not wired into the build)
 ├── firmware/
 │   ├── phone/                NyxOS sketch for the ESP32-S3 (phone.ino + one .ino per feature)
 │   │   └── extras/           Sources the CI copies into the sketch's src/ folder
 │   ├── cam_bt_coprocessor/   ESP32-CAM coprocessor sketch (Bluetooth audio + camera)
 │   └── prebuilt/             Alternative prebuilt firmware (Bruce fork), separate from NyxOS
+├── supabase/                 SQL, registration page and dashboard for the optional device registry
 ├── third_party/              Vendored third-party code (Nofrendo NES core, ESP-DOOM core)
-├── tests/                    Host-side (PC) tests: backup, chess, ebook, gutenberg, camera, dictionary
+├── tests/                    Host-side (PC) tests: backup, chess, ebook, gutenberg, camera, dictionary, nyxapp
 ├── tools/                    Generators and helpers (emoji, fonts, dictionaries, i18n)
 │   ├── ci/                   Helper scripts used by the CI workflows
 │   └── legacy-patches/       Archived one-shot patch scripts (see its README)
@@ -209,6 +217,7 @@ A short list; the full list is in [docs/limitations.md](./docs/limitations.md).
 - Audio works only through Bluetooth. Without the ESP32-CAM and earbuds, no app produces sound.
 - Phone calls: partially tested; no ICE; TURN over UDP only; no PSTN numbers through free services.
 - TLS certificates are not verified (see the security notice).
+- Nyx Apps need an ELF loader that the default build does not include, and app files on internal flash share the roughly 9 MB FFat partition; see [Nyx Apps](./docs/features/native-apps.md).
 - CI does not pin tool versions, so upstream updates can break a build without any change in this repository.
 
 ## Security notice
@@ -219,6 +228,7 @@ This project is a personal, experimental device. Before using it with sensitive 
 - SIP signalling and RTP audio are **not encrypted**.
 - The Web File Manager has **no authentication**; enable it only on trusted networks.
 - API keys are stored as plain text on the SD card.
+- On the first WiFi connection the device registers itself once with an anonymous id (a hash of the chip MAC) and sends its firmware version, build, branch and display type. A public username is optional and shown on the dashboard only if you set one. Leave the username empty to stay off the public list; details are in [docs/security.md](./docs/security.md).
 
 ## Contributing
 

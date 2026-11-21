@@ -1,8 +1,9 @@
 # System UI `OK`
 
-NyxOS delivers a modern-phone experience on a small 320×240 screen.
+NyxOS delivers a modern-phone experience on a small screen (320×240, or 480×320 on the ST7796 variant).
 
 - [Components](#components)
+- [Home pages and hardware scroll (ST7796)](#home-pages-and-hardware-scroll-st7796)
 - [The "Nyx Modern" look](#the-nyx-modern-look)
 - [Charging animation](#charging-animation-ok)
 - [New system gestures](#new-system-gestures-beta)
@@ -28,6 +29,19 @@ NyxOS delivers a modern-phone experience on a small 320×240 screen.
 | **Power menu** | Shut down completely (deep sleep; wake with the BOOT or RST button) and Restart. Opened by long-pressing the Lock button, or via Settings → About → Power. |
 
 **Design decisions.** Vibration is deliberately minimal: only for important events, not on every tap. The frosted-glass effect is a lightweight imitation (it samples colors from already-drawn pixels and blends them with the theme tint), not a real blur, to keep CPU load low.
+
+## Home pages and hardware scroll (ST7796)
+
+`OK` on the 3.5″ ST7796 build. The ILI9341 build has none of this and keeps the normal scrolling.
+
+The ST7796 panel can scroll its own memory, so a scroll only sends the few rows that newly appear instead of redrawing the whole frame over SPI. NyxOS uses this in two places:
+
+- **Portrait:** the Home app grid scrolls with the panel's hardware vertical scroll.
+- **Landscape:** Home is split into **pages** you swipe left and right. With widgets enabled, the first page holds only the widgets; the next pages hold the apps (the first app page also shows the title and category chips). Rows are never cut in half. The page follows your finger, with a rubber-band effect at the ends, and snaps to the nearest page when you let go. A vertical swipe also flips the page, as the older Home did. Page dots show where you are.
+
+**Setting.** *Settings → Performance → Scroll Hardware* has three modes: Off (the old cache-based scrolling), Auto (the default) and Auto + Flip (reverses the scroll direction for panels that mount the other way round). Portrait and landscape keep their own mode.
+
+**When it falls back.** Hardware scroll steps aside, and the screen is drawn and pushed in full, while Remote Control is active, in game mode, when PSRAM is low, and while an overlay is open (Control Center, Notification Shade, App Switcher, search, keyboard, jiggle/edit mode and similar). The pages are prepared once Home has been still for a moment, so swiping right after opening Home or coming back from an app can feel less smooth for the first second. When a fallback happens, the reason is printed to the serial log as `[hp] fallback: ...`.
 
 ## The "Nyx Modern" look
 

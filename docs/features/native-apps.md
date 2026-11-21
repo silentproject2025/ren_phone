@@ -1,74 +1,69 @@
-# Nyx Apps — app native (ELF) dari kartu SD
+# Nyx Apps — native (ELF) apps from SD or internal flash `EXP`
 
-Jalankan app buatan sendiri **dengan kecepatan native** (kode mesin Xtensa) tanpa flash ulang firmware.
-App = folder di SD; dibuka dari ikon **Nyx Apps** di Home.
+Run your own apps **at native speed** (Xtensa machine code) without reflashing the firmware.
+An app is a folder on the SD card (or on internal flash, see [Storage](#storage-sd-card-or-internal-flash)); you open it from the **Nyx Apps** icon on Home.
 
 ```
-SD:/apps/<id>/
-    manifest.txt     nama, ikon, izin, quota memori
-    app.elf          hasil build ESP-IDF (idf.py elf)
-    data/            dibuat otomatis — SATU-SATUNYA folder yang boleh disentuh app
+/apps/<id>/
+    manifest.txt     name, icon, permissions, memory quota
+    app.elf          built with ESP-IDF (idf.py elf)
+    data/            created automatically — the ONLY folder the app may touch
 ```
 
-## Status verifikasi (baca ini dulu)
+## Verification status (read this first)
 
-| Bagian | Status |
+| Part | Status |
 |---|---|
-| Arena memori, quota, deteksi bocor/korupsi, tekanan, TLS Gate (`nyxmem.h`) | **Diuji di PC**: 189 cek, fuzz 5 seed, ASan+UBSan, uji mutasi |
-| Host: manifest, sandbox path, izin, handle file, HTTP async (`nyxhost.h`) | **Diuji di PC**: 158 cek, 5 app contoh dijalankan lewat `dlopen`, uji mutasi |
-| Glue firmware (`nyxapp_renphone.ino`), patch `phone.ino` | **Hanya cek-sintaks** dengan stub; patch terbukti cocok & idempoten pada `phone.ino` repo ini. **Belum pernah dijalankan di HP.** |
-| Loader ELF di Xtensa/PSRAM, task + watchdog, worker HTTP, tilt | **Belum diuji di hardware.** Titik risiko terbesar: lihat "Mengaktifkan ELF loader" dan "Hal yang harus dicek di HP". |
+| Memory arena, quota, leak/corruption detection, pressure handling, TLS Gate (`nyxmem.h`) | **Tested on a PC**: 189 checks, fuzzing with 5 seeds, ASan + UBSan, mutation tests |
+| Host: manifest, path sandbox, permissions, file handles, async HTTP (`nyxhost.h`) | **Tested on a PC**: 158 checks, 5 example apps run through `dlopen`, mutation tests |
+| Firmware glue (`nyxapp_renphone.ino`), `phone.ino` patch | **Syntax-checked only** (with stubs) plus a CI build; the patch fits and is idempotent on this repo's `phone.ino`. **Never run on a phone.** |
+| ELF loader on Xtensa/PSRAM, task + watchdog, HTTP worker, tilt | **Not tested on hardware.** The biggest risk areas: see "Enabling the ELF loader" and "Things to check on the phone". |
+| SD / internal flash (FFat) storage choice and the FFat worker task | **Not tested on hardware.** |
 
-Tes PC: `cd tests/nyxapp && ./run.sh` (butuh `g++` dan `gcc`).
+PC tests: `cd tests/nyxapp && ./run.sh` (needs `g++` and `gcc`).
 
-## Model kepercayaan (jujur)
+## Trust model (honest version)
 
-App native berbagi ruang alamat dengan firmware dan memakai pointer asli. ESP32-S3 tidak punya proteksi
-memori per-app yang bisa dipakai. Karena itu:
+A native app shares the address space with the firmware and uses real pointers. The ESP32-S3 has no usable per-app memory protection. Therefore:
 
-* **Terlindungi:** app yang *salah* — macet/loop tanpa henti (watchdog membunuh task), minta memori
-  kelewat quota (ditolak, bukan crash), lupa `free` (dibebaskan & dilaporkan saat keluar),
-  tulis lewat batas blok (canary terdeteksi), double-free/free pointer asing (dihitung & diabaikan),
-  buka file di luar `data/` lewat API (ditolak), pakai fitur tanpa izin (ditolak).
-* **Tidak terlindungi:** app yang *jahat* atau punya pointer liar. Ia bisa menimpa memori firmware,
-  atau memanggil fungsi libc/IDF langsung (mis. `fopen` ke path mana pun) — sandbox file hanya berlaku
-  untuk akses lewat `NyxApi`. **Pasang hanya app yang kamu percaya.**
-  Jika perlu sandbox sungguhan, lihat `experimental/nyxvm/` (belum selesai).
+* **Protected against:** apps that are *wrong* — hanging or looping forever (the watchdog kills the task), asking for more memory than the quota (refused, not a crash), forgetting to `free` (released and reported on exit), writing past a block (canary detected), double-free or freeing a foreign pointer (counted and ignored), opening files outside `data/` through the API (refused), using a feature without permission (refused).
+* **Not protected against:** apps that are *malicious* or have wild pointers. Such an app can overwrite firmware memory or call libc/IDF functions directly (for example `fopen` to any path); the file sandbox only applies to access through `NyxApi`. **Install only apps you trust.** If you need a real sandbox, see `experimental/nyxvm/` (unfinished).
 
 ## Manifest
 
 ```
-name=Hello Native      # wajib, <24 karakter
-sym=H                  # satu karakter untuk ikon
+name=Hello Native      # required, <24 characters
+sym=H                  # one character for the icon
 color=3060d0           # RRGGBB
 perms=fs,net,tilt,notify
-mem_kb=256             # quota arena PSRAM, 64..6144
-stack_kb=8             # stack task app, 4..32
+mem_kb=256             # PSRAM arena quota, 64..6144
+stack_kb=8             # app task stack, 4..32
 elf=app.elf
 ```
-Nilai di luar rentang / izin tak dikenal / `elf` berisi `/` atau `..` → manifest ditolak.
 
-## Menulis app
+A value outside its range, an unknown permission, or an `elf` value containing `/` or `..` makes the manifest rejected.
+
+## Writing an app
 
 ```c
 #include "nyx_app.h"
 NYX_APP_GLOBALS
-static int  app_enter(void) { return 0; }                 // sekali saat dibuka
+static int  app_enter(void) { return 0; }                 // once, when opened
 static void app_frame(void) { g_nyx->clear(g_nyx->rgb(0,0,0));
-                              g_nyx->text(8, 8, "Halo", 0xFFFF, 2); }   // tiap frame, HARUS cepat
-static void app_leave(void) {}                            // sekali saat ditutup
+                              g_nyx->text(8, 8, "Hello", 0xFFFF, 2); }   // every frame, MUST be fast
+static void app_leave(void) {}                            // once, when closed
 NYX_APP_MAIN(app_enter, app_frame, app_leave)
 ```
-* `main()` hanya mendaftarkan `enter/frame/leave` lalu kembali. Semua kerja di `frame()`.
-* Satu frame > **250 ms** → task dibunuh (watchdog). Target < 30 ms.
-* Memori: `mem_alloc/mem_calloc/mem_realloc/mem_free` (arena ber-quota). Jangan pakai `malloc` libc.
-* Gambar: koordinat relatif viewport (0,0 = kiri-atas area app, di bawah status bar). RGB565.
-* File: `fopen("catatan.txt", NYX_FOPEN_WRITE)` — path relatif ke `data/`, tanpa `..`, tanpa `/` di awal. Maks 4 handle.
-* Jaringan: `http_get` + polling `http_state` (satu permintaan pada satu waktu, buffer maks 128 KB).
-  HTTPS menunggu **TLS Gate** (blok kontigu RAM internal ≥ 32 KB, memicu reclaim `onLowMem` app lain).
-* Contoh lengkap: `examples/native/{hello,bounce,memhog,notes,leaky}`. Referensi API: `firmware/phone/nyx_app.h`.
 
-## Membangun app (ESP-IDF)
+* `main()` only registers `enter/frame/leave` and returns. All the work happens in `frame()`.
+* A frame longer than **250 ms** gets the task killed (watchdog). Aim for under 30 ms.
+* Memory: `mem_alloc/mem_calloc/mem_realloc/mem_free` (quota-limited arena). Do not use libc `malloc`.
+* Drawing: coordinates are relative to the viewport (0,0 = top-left of the app area, below the status bar). RGB565.
+* Files: `fopen("notes.txt", NYX_FOPEN_WRITE)` — the path is relative to `data/`, with no `..` and no leading `/`. At most 4 handles.
+* Network: `http_get` plus polling `http_state` (one request at a time, buffer up to 128 KB). HTTPS waits for the **TLS Gate** (a contiguous internal-RAM block of at least 32 KB, which triggers other apps' `onLowMem` reclaim).
+* Full examples: `examples/native/{hello,bounce,memhog,notes,leaky}`. API reference: `firmware/phone/nyx_app.h`.
+
+## Building an app (ESP-IDF)
 
 ```bash
 cd examples/native/idf_template
@@ -78,42 +73,54 @@ idf.py set-target esp32s3 && idf.py elf             # -> build/nyxapp.app.elf
 python3 ../../../tools/pack_app.py --id hello --elf build/nyxapp.app.elf \
         --manifest ../hello/manifest.txt --sd /media/SDCARD
 ```
-Untuk mencoba logika app di PC tanpa hardware: `gcc -shared -fPIC -I firmware/phone app.c -o app.so`
-(dipakai `tests/nyxapp/test_host.cpp`).
 
-## Memasang ke firmware
+To try the app logic on a PC without hardware: `gcc -shared -fPIC -I firmware/phone app.c -o app.so` (used by `tests/nyxapp/test_host.cpp`).
 
-1. Salin `firmware/phone/{nyx_app.h,nyxmem.h,nyxhost.h,nyxapp_renphone.ino}` ke folder sketch.
-2. Dari root repo: `python3 apply_nyxapp_patch.py` (atau `--check` dulu). Cadangan: `phone.ino.bak_nyxapp`.
-   Menambah `SCR_NYX`, entri `apps[]` (45→46), ikon chip, dan redraw ~30 fps saat app jalan.
-3. Tanpa ELF loader, build tetap sukses: Nyx Apps terbuka & menjelaskan bahwa loader belum ada.
+## Storage: SD card or internal flash
 
-## Mengaktifkan ELF loader (bagian yang belum kucoba)
+Nyx Apps works with or without an SD card. When the app list opens, the location of `/apps` is chosen like this:
 
-`espressif/elf_loader` adalah **komponen ESP-IDF** (diaktifkan lewat `CONFIG_ELF_LOADER`, dan
-`ELF_LOADER_LOAD_PSRAM` agar kode dimuat di PSRAM). Build Arduino-ESP32 memakai pustaka IDF yang sudah
-dikompilasi, jadi komponen ini harus ikut masuk ke sana:
-* lewat workflow **Build Arduino Libs** milikmu (tambahkan komponen + opsi sdkconfig, lalu pakai libs hasilnya), atau
-* lewat mode "Arduino sebagai komponen ESP-IDF".
+1. the SD card, if it is readable and contains `/apps`;
+2. internal flash (FFat), if it contains `/apps`;
+3. if neither has `/apps`: the SD card if readable, otherwise FFat.
 
-Catatan dari riwayat repo: build libs kustom pernah bermasalah di linker, jadi lakukan di cabang terpisah.
-Glue memakai API `esp_elf_init / esp_elf_relocate(elf, data, size) / esp_elf_request / esp_elf_deinit`
-(seri 2.x); sesuaikan bila versimu berbeda. `esp_elf.h` terdeteksi otomatis lewat `__has_include`.
+**Without an SD card**, upload the app through the phone's Web File Manager: choose **Flash internal (FFat)**, fill in the **Target folder** field (for example `/apps/hello`), then upload `manifest.txt` and `app.elf` one by one. Parent folders are created automatically. The same Target folder field also works for the SD card.
 
-## Hal yang harus dicek di HP (urutan saran)
+Notes:
 
-1. Build tanpa loader → buka Nyx Apps → daftar app tampil, pesan loader benar.
-2. Build dengan loader → `hello`: ELF termuat? **Cek simbol titik masuk**: glue memanggil
-   `esp_elf_request(&elf, 0, NYX_ENTRY_ARGC, argv)` dengan `argv[0]` = pointer `NyxApi`. Jika loader
-   memakai konvensi entry lain, hanya `nyxTaskFn` (cabang `NYXC_START`) yang perlu diubah.
-3. `memhog` → Serial harus menampilkan puncak ≈ quota & `bocor 0 blok`. `leaky` → toast "App merusak heap-nya sendiri".
-4. Watchdog: buat app dengan `while(1){}` di `frame()` → harus dibunuh < 0,5 s tanpa membekukan HP.
-5. HTTP: `http_get` ke URL biasa dulu, baru HTTPS. Task worker memakai `HTTPClient` di core 0.
-6. Pantau `[NyxApp]` di Serial dan `heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL)` sebelum/sesudah app.
+* The app task has its stack in PSRAM, and flash access with a PSRAM stack crashes the chip. So on FFat, an app's file operations run in a small worker task with an internal-RAM stack. The SD path is direct.
+* FFat is small (about 9 MB) and shared with the wallpaper, DOOM WADs and the crash log. Use the SD card for big apps or lots of data.
+* The ELF file is loaded completely into PSRAM before the app starts, so FFat read speed only affects the start-up time.
 
-## Batasan yang disengaja
-* Satu app pada satu waktu; tidak ada hibernate/resume (itu butuh VM; lihat `experimental/nyxvm/`).
-* Tidak ada syscall audio/kamera (izin `AUDIO`/`CAMERA` belum ada).
-* Ikon app tidak muncul di grid Home; semua lewat satu ikon **Nyx Apps** (grid Home bersifat statis dari `apps[]`).
-* Tidak terintegrasi ke App Switcher.
-* ELF maks 1 MB; quota arena 64 KB – 6 MB; `NYXAPP_FRAME_MS` = 250 ms (ubah di `nyxapp_renphone.ino`).
+## Installing into the firmware
+
+This repository already includes the integration: `nyx_app.h`, `nyxmem.h`, `nyxhost.h` and `nyxapp_renphone.ino` live in `firmware/phone/`, the CI workflow copies them into the sketch, and `phone.ino` has the `SCR_NYX` screen and the `apps[]` entry (46 apps in total). `apply_nyxapp_patch.py` in the repository root is the one-shot script that made the `phone.ino` changes (run with `--check` to see whether it would still change anything; it keeps a backup as `phone.ino.bak_nyxapp`).
+
+Without an ELF loader the build still succeeds: Nyx Apps opens and explains that the loader is missing.
+
+## Enabling the ELF loader (not yet tried)
+
+`espressif/elf_loader` is an **ESP-IDF component** (enabled with `CONFIG_ELF_LOADER`, and `ELF_LOADER_LOAD_PSRAM` so the code is loaded into PSRAM). The Arduino-ESP32 build uses precompiled IDF libraries, so this component has to get into them:
+
+* through your own **Build Arduino Libs** workflow (add the component and the sdkconfig options, then use the resulting libraries), or
+* through the "Arduino as an ESP-IDF component" mode.
+
+Note from the repository history: building custom libraries has hit linker problems before, so do this on a separate branch. The glue uses the API `esp_elf_init / esp_elf_relocate(elf, data, size) / esp_elf_request / esp_elf_deinit` (2.x series); adjust it if your version differs. `esp_elf.h` is detected automatically through `__has_include`.
+
+## Things to check on the phone (suggested order)
+
+1. Build without the loader → open Nyx Apps → the app list shows and the "no loader" message is correct. Repeat with the SD card removed and an app on FFat.
+2. Build with the loader → `hello`: does the ELF load? **Check the entry symbol:** the glue calls `esp_elf_request(&elf, 0, NYX_ENTRY_ARGC, argv)` with `argv[0]` = the `NyxApi` pointer. If the loader uses another entry convention, only `nyxTaskFn` (the `NYXC_START` branch) needs to change.
+3. `memhog` → Serial should show a peak ≈ the quota and `0 leaked blocks`. `leaky` → the toast "App damaged its own heap".
+4. Watchdog: make an app with `while(1){}` in `frame()` → it must be killed in under 0.5 s without freezing the phone.
+5. Files on FFat: have an app write and read back a file under `data/` — this goes through the worker task and must not reboot the phone.
+6. HTTP: try `http_get` on a plain URL first, then HTTPS. The worker task uses `HTTPClient` on core 0.
+7. Watch `[NyxApp]` in Serial, and `heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL)` before and after an app.
+
+## Deliberate limits
+
+* One app at a time; no hibernate/resume (that needs a VM; see `experimental/nyxvm/`).
+* No audio or camera syscalls (the `AUDIO` / `CAMERA` permissions do not exist yet).
+* App icons do not appear in the Home grid; everything goes through the single **Nyx Apps** icon (the Home grid is static, built from `apps[]`).
+* No App Switcher integration.
+* ELF at most 1 MB; arena quota 64 KB – 6 MB; `NYXAPP_FRAME_MS` = 250 ms (change it in `nyxapp_renphone.ino`).
