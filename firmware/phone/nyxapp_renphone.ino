@@ -1,5 +1,5 @@
 // =====================================================================
-// nyxapp_renphone.ino -- "Nyx Apps": jalankan app NATIVE (ELF) dari SD
+// nyxapp_renphone.ino -- "Nyx Apps": jalankan app NATIVE (ELF) dari SD atau FFat
 // =====================================================================
 // Setiap app = folder  /apps/<id>/  di SD berisi:
 //     manifest.txt   (nama, ikon, izin, quota memori)  -> lihat nyxhost.h
@@ -72,8 +72,81 @@ static LGFX_Sprite* nyxS = nullptr;
 static int nyxVX = 0, nyxVY = 0, nyxVW = 0, nyxVH = 0;
 static bool nyxTouchDown = false, nyxTouchNew = false, nyxTouchRel = false; static int nyxTouchX = 0, nyxTouchY = 0;
 
-static File nyxFiles[8];
+
 static volatile bool nyxInSd = false;
+
+// ---------------- NYXFS_DUAL_V1: penyimpanan app = SD ATAU FFat ----------------
+// Pilihan dibuat di nyxScan(): SD bila ada & berisi /apps; kalau tidak, FFat (flash internal)
+// bila berisi /apps; kalau dua-duanya kosong, SD bila terbaca, selain itu FFat.
+// CATATAN: task app berstack PSRAM, sedangkan akses FFat mematikan cache flash -> assert
+// esp_task_stack_is_sane_cache_disabled. Jadi operasi file app di FFat dijalankan oleh
+// WORKER ber-stack RAM internal (nyxFsWorker); jalur SD tetap langsung seperti semula.
+static fs::FS* nyxAppFs = nullptr;
+static bool    nyxFsFlash = false;
+
+enum { NYXF_OPEN = 1, NYXF_READ, NYXF_WRITE, NYXF_CLOSE, NYXF_SEEK, NYXF_EXISTS, NYXF_REMOVE };
+struct NyxFsReq { int op; int h; const char* path; int mode; void* buf; int n; int ret; };
+static NyxFsReq nyxFsReq;
+static TaskHandle_t nyxFsTask = nullptr;
+static volatile TaskHandle_t nyxFsWaiter = nullptr;
+static File nyxFiles[8];
+
+static void nyxPickFs() {
+  if (sdReady && SD_MMC.exists("/apps"))        { nyxAppFs = &SD_MMC; nyxFsFlash = false; return; }
+  if (ffatReady && FFat.exists("/apps"))        { nyxAppFs = &FFat;   nyxFsFlash = true;  return; }
+  if (sdReady)                                  { nyxAppFs = &SD_MMC; nyxFsFlash = false; return; }
+  if (ffatReady)                                { nyxAppFs = &FFat;   nyxFsFlash = true;  return; }
+  nyxAppFs = nullptr; nyxFsFlash = false;
+}
+
+static void nyxFsExec(NyxFsReq* r) {
+  fs::FS& F = *nyxAppFs;
+  switch (r->op) {
+    case NYXF_OPEN: {
+      int slot = -1; for (int i = 0; i < 8; i++) if (!nyxFiles[i]) { slot = i; break; }
+      if (slot < 0) { r->ret = -1; break; }
+      nyxFiles[slot] = F.open(r->path, r->mode == 0 ? FILE_READ : (r->mode == 1 ? FILE_WRITE : FILE_APPEND));
+      r->ret = nyxFiles[slot] ? slot : -1; break; }
+    case NYXF_READ:   r->ret = (int)nyxFiles[r->h].read((uint8_t*)r->buf, (size_t)r->n); break;
+    case NYXF_WRITE:  r->ret = (int)nyxFiles[r->h].write((const uint8_t*)r->buf, (size_t)r->n); break;
+    case NYXF_CLOSE:  if (nyxFiles[r->h]) nyxFiles[r->h].close(); r->ret = 0; break;
+    case NYXF_SEEK:   r->ret = nyxFiles[r->h].seek((uint32_t)r->n) ? 0 : -1; break;
+    case NYXF_EXISTS: r->ret = F.exists(r->path) ? 1 : 0; break;
+    case NYXF_REMOVE: r->ret = F.remove(r->path) ? 0 : -1; break;
+    default: r->ret = -1;
+  }
+}
+
+static void nyxFsWorker(void*) {
+  for (;;) {
+    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+    nyxFsExec(&nyxFsReq);
+    TaskHandle_t w = nyxFsWaiter;
+    if (w) xTaskNotifyGive(w);
+  }
+}
+
+// jalankan satu operasi file di backend yang aktif. Dipanggil dari task app.
+static int nyxFsDo(int op, int h, const char* path, int mode, void* buf, int n) {
+  if (!nyxAppFs) return -1;
+  NyxFsReq r = { op, h, path, mode, buf, n, -1 };
+  nyxInSd = true;
+  if (!nyxFsFlash) {
+    nyxFsExec(&r);
+  } else {
+    if (!nyxFsTask) xTaskCreatePinnedToCore(nyxFsWorker, "nyxfs", 4096, nullptr, 2, &nyxFsTask, 1);   // stack RAM internal
+    if (!nyxFsTask) { nyxInSd = false; return -1; }
+    nyxFsReq = r;
+    nyxFsWaiter = xTaskGetCurrentTaskHandle();
+    ulTaskNotifyTake(pdTRUE, 0);
+    xTaskNotifyGive(nyxFsTask);
+    if (ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(8000)) == 0) { nyxFsWaiter = nullptr; nyxInSd = false; return -1; }
+    r = nyxFsReq;
+    nyxFsWaiter = nullptr;
+  }
+  nyxInSd = false;
+  return r.ret;
+}
 
 // task app
 static volatile int  nyxCmd = NYXC_NONE; static volatile int nyxCmdRc = 0;
@@ -115,23 +188,15 @@ static uint32_t nyxB_rand(void*) { return (uint32_t)esp_random(); }
 static void nyxB_log(void*, const char* str) { Serial.printf("[app:%s] %s\n", nyxMf.name, str); }
 static void nyxB_toast(void*, const char* str) { showToast(str, 1800); }
 
-// --------------------------- backend: file SD -------------------------
-static int nyxB_fopen(void*, const char* path, int mode) {
-  int slot = -1; for (int i = 0; i < 8; i++) if (!nyxFiles[i]) { slot = i; break; }
-  if (slot < 0) return -1;
-  nyxInSd = true;
-  nyxFiles[slot] = SD_MMC.open(path, mode == 0 ? FILE_READ : (mode == 1 ? FILE_WRITE : FILE_APPEND));
-  nyxInSd = false;
-  if (!nyxFiles[slot]) return -1;
-  return slot;
-}
-static int nyxB_fread(void*, int h, void* buf, int n) { nyxInSd = true; int r = (int)nyxFiles[h].read((uint8_t*)buf, (size_t)n); nyxInSd = false; return r; }
-static int nyxB_fwrite(void*, int h, const void* buf, int n) { nyxInSd = true; int r = (int)nyxFiles[h].write((const uint8_t*)buf, (size_t)n); nyxInSd = false; return r; }
-static void nyxB_fclose(void*, int h) { nyxInSd = true; if (nyxFiles[h]) nyxFiles[h].close(); nyxInSd = false; }
-static int nyxB_fseek(void*, int h, int pos) { nyxInSd = true; bool ok = nyxFiles[h].seek((uint32_t)pos); nyxInSd = false; return ok ? 0 : -1; }
+// ----------------------- backend: file (SD atau FFat) -----------------
+static int nyxB_fopen(void*, const char* path, int mode) { return nyxFsDo(NYXF_OPEN, 0, path, mode, nullptr, 0); }
+static int nyxB_fread(void*, int h, void* buf, int n)  { return nyxFsDo(NYXF_READ, h, nullptr, 0, buf, n); }
+static int nyxB_fwrite(void*, int h, const void* buf, int n) { return nyxFsDo(NYXF_WRITE, h, nullptr, 0, (void*)buf, n); }
+static void nyxB_fclose(void*, int h) { nyxFsDo(NYXF_CLOSE, h, nullptr, 0, nullptr, 0); }
+static int nyxB_fseek(void*, int h, int pos) { return nyxFsDo(NYXF_SEEK, h, nullptr, 0, nullptr, pos); }
 static int nyxB_fsize(void*, int h) { return (int)nyxFiles[h].size(); }
-static int nyxB_fexists(void*, const char* path) { nyxInSd = true; int r = SD_MMC.exists(path) ? 1 : 0; nyxInSd = false; return r; }
-static int nyxB_fremove(void*, const char* path) { nyxInSd = true; int r = SD_MMC.remove(path) ? 0 : -1; nyxInSd = false; return r; }
+static int nyxB_fexists(void*, const char* path) { return nyxFsDo(NYXF_EXISTS, 0, path, 0, nullptr, 0); }
+static int nyxB_fremove(void*, const char* path) { return nyxFsDo(NYXF_REMOVE, 0, path, 0, nullptr, 0); }
 
 // ------------------------ backend: HTTP (worker) ----------------------
 static void nyxHttpWorker(void*) {
@@ -223,7 +288,8 @@ static bool nyxIdOk(const char* id) {
 // baca manifest /apps/<id>/manifest.txt ke nyxMf. true bila valid.
 static bool nyxReadManifest(const char* id) {
   char path[64]; snprintf(path, sizeof(path), "/apps/%s/manifest.txt", id);
-  File f = SD_MMC.open(path, FILE_READ); if (!f) return false;
+  if (!nyxAppFs) return false;
+  File f = nyxAppFs->open(path, FILE_READ); if (!f) return false;
   char buf[512]; size_t n = f.read((uint8_t*)buf, sizeof(buf) - 1); f.close(); buf[n] = 0;
   nyx::parseManifest(buf, n, &nyxMf);
   return nyxMf.valid;
@@ -231,8 +297,9 @@ static bool nyxReadManifest(const char* id) {
 
 static void nyxScan() {
   nyxN = 0; nyxScroll = 0;
-  if (!sdReady) return;
-  File root = SD_MMC.open("/apps");
+  nyxPickFs();
+  if (!nyxAppFs) return;
+  File root = nyxAppFs->open("/apps");
   if (!root) return;
   if (!root.isDirectory()) { root.close(); return; }
   File e = root.openNextFile();
@@ -290,7 +357,7 @@ static int nyxCall(int cmd, uint32_t ms) {
   }
 }
 
-static void nyxKillTask() { if (nyxTask) { TaskHandle_t t = nyxTask; nyxTask = nullptr; vTaskDelete(t); } }
+static void nyxKillTask() { nyxFsWaiter = nullptr; if (nyxTask) { TaskHandle_t t = nyxTask; nyxTask = nullptr; vTaskDelete(t); } }
 
 static void nyxFail(const char* msg) {
   strncpy(nyxErr, msg, sizeof(nyxErr) - 1); nyxErr[sizeof(nyxErr) - 1] = 0;
@@ -328,7 +395,7 @@ static void nyxLaunch(int idx) {
   nyxFail("Build firmware ini belum menyertakan ELF loader (lihat docs/features/native-apps.md)");
   return;
 #else
-  if (!sdReady) { nyxFail("SD tidak terbaca"); return; }
+  if (!nyxAppFs) { nyxFail("Tidak ada SD maupun FFat"); return; }
   if (!nyxReadManifest(nyxIds[idx])) { nyxFail("manifest.txt tidak valid"); return; }
   if (!nyxMMInit) { nyxInitBackends(); nyxMM.init(nyxMemBE); nyxMM.addReclaim(nyxReclaimCb, nullptr, 50); nyxMMInit = true; }
   nyxCurIdx = idx;
@@ -341,9 +408,9 @@ static void nyxLaunch(int idx) {
 
   // 2) folder data + berkas ELF -> PSRAM
   char dataDir[64]; snprintf(dataDir, sizeof(dataDir), "/apps/%s/data", nyxIds[idx]);
-  SD_MMC.mkdir(dataDir);
+  nyxAppFs->mkdir(dataDir);
   char elfPath[96]; snprintf(elfPath, sizeof(elfPath), "/apps/%s/%s", nyxIds[idx], nyxMf.elf);
-  File f = SD_MMC.open(elfPath, FILE_READ);
+  File f = nyxAppFs->open(elfPath, FILE_READ);
   if (!f) { nyxStop(); nyxFail("app.elf tidak ditemukan"); return; }
   size_t sz = f.size();
   if (sz < 64 || sz > NYXAPP_ELF_MAX) { f.close(); nyxStop(); nyxFail("ukuran ELF tidak wajar"); return; }
@@ -410,11 +477,11 @@ static void nyxDrawList(LGFX_Sprite& s) {
   s.setTextColor(T().subtext); s.setCursor(16, top + 18); s.print("Lihat docs/features/native-apps.md");
   top += 36;
 #endif
-  if (!sdReady) { s.setTextColor(T().subtext); s.setCursor(12, top + 10); s.print("SD tidak terbaca."); return; }
+  if (!nyxAppFs) { s.setTextColor(T().subtext); s.setCursor(12, top + 10); s.print("SD & FFat tidak terbaca."); return; }
   if (nyxN == 0) {
     s.setTextColor(T().subtext); s.setTextSize(1);
     s.setCursor(12, top + 10); s.print("Belum ada app.");
-    s.setCursor(12, top + 24); s.print("Taruh di SD:  /apps/<id>/");
+    s.setCursor(12, top + 24); s.print(nyxFsFlash ? "Taruh di FFat: /apps/<id>/" : "Taruh di SD:  /apps/<id>/");
     s.setCursor(12, top + 36); s.print("  manifest.txt  +  app.elf");
     return;
   }

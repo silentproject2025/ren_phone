@@ -2138,11 +2138,12 @@ void handleWebRoot() {
   html += "</head><body><h2>ESP32 Web File Manager</h2>";
   
   html += "<div class='card'><h3>Upload File ke ESP32</h3>";   // FFAT_UPLOAD_V1
-  html += "<form method='POST' action='/upload' enctype='multipart/form-data' onsubmit=\"var t=document.getElementById('fsT');this.action='/upload?fs='+(t?t.value:'sd');\">";
+  html += "<form method='POST' action='/upload' enctype='multipart/form-data' onsubmit=\"var t=document.getElementById('fsT'),d=document.getElementById('dirT');this.action='/upload?fs='+(t?t.value:'sd')+'&dir='+encodeURIComponent(d?d.value:'');\">";
   html += "<select id='fsT' style='margin-bottom:10px;padding:8px;background:#2a2a2a;color:#fff;border:1px solid #444;border-radius:6px;'>";
   if (sdReady) html += String("<option value='sd'") + (sdReady ? " selected" : "") + ">SD Card</option>";
   if (ffatReady) html += String("<option value='ffat'") + (!sdReady ? " selected" : "") + ">Flash internal (FFat) &mdash; sisa " + String((unsigned long)(FFat.totalBytes()-FFat.usedBytes())/1024) + " KB</option>";
   html += "</select><br>";
+  html += "<input id='dirT' type='text' placeholder='Folder tujuan (opsional), mis. /apps/hello' style='margin-bottom:10px;padding:8px;width:90%;background:#2a2a2a;color:#fff;border:1px solid #444;border-radius:6px;'><br>";   // NYXFS_DUAL_V1
   html += "<input type='file' name='upload' required style='margin-bottom:10px;'><br>";
   html += "<input type='submit' class='btn' value='Upload File'>";
   html += "</form></div>";
@@ -2319,12 +2320,26 @@ void handleUploadStream() {
   if (upload.status == UPLOAD_FILE_START) {
     String filename = upload.filename;
     if (!filename.startsWith("/")) filename = "/" + filename;
+    // NYXFS_DUAL_V1: folder tujuan opsional (?dir=/apps/<id>) -- harus diawali '/', tanpa '..'
+    String upDir = webServer.arg("dir"); upDir.trim();
+    bool dirOk = upDir.length() > 1 && upDir.startsWith("/") && upDir.indexOf("..") < 0 && upDir.indexOf("//") < 0 && upDir.length() < 48;
+    if (dirOk) {
+      if (upDir.endsWith("/")) upDir.remove(upDir.length() - 1);
+      int sl = filename.lastIndexOf('/'); String bn = filename.substring(sl + 1);
+      filename = upDir + "/" + bn;
+    }
     // v47: kalau yg diupload PERSIS wallpaper.jpg DAN SD Card gak kedetek,
     // tulis ke FFat (flash internal) sbg fallback -- selain itu (semua
     // file lain, atau wallpaper.jpg pas SD ADA) tetap ke SD_MMC spt biasa.
     ffatUpFail = false;
     ffatUpName = filename;
     ffatUpToFfat = ffatReady && (webServer.arg("fs") == "ffat" || (!sdReady && filename == WALLPAPER_FILE));   // FFAT_UPLOAD_V1
+    if (filename.lastIndexOf('/') > 0) {   // NYXFS_DUAL_V1: buat folder induk (mkdir -p)
+      String dp = filename.substring(0, filename.lastIndexOf('/'));
+      for (int i = 1; i <= (int)dp.length(); i++) {
+        if (i == (int)dp.length() || dp[i] == '/') { String sub = dp.substring(0, i); if (ffatUpToFfat) FFat.mkdir(sub); else if (sdReady) SD_MMC.mkdir(sub); }
+      }
+    }
     if (ffatUpToFfat) {
       uploadFile = FFat.open(filename, FILE_WRITE);
     } else {
