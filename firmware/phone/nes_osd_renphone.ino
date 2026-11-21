@@ -30,10 +30,13 @@ char nesRomPath[160] = "/sdcard/roms/game.nes"; // <- GANTI/atur dari File Explo
 // ini NES).
 // -----------------------------------------------------------------
 extern "C" int osd_main(int argc, char *argv[]) {
-  return main_loop(nesRomPath, system_nes);
+  Serial.printf("[NES] osd_main: mulai main_loop path=%s\n", nesRomPath);
+  int r = main_loop(nesRomPath, system_nes);
+  Serial.printf("[NES] osd_main: main_loop return=%d\n", r);
+  return r;
 }
 
-extern "C" int osd_init(void)     { return 0; }
+extern "C" int osd_init(void)     { Serial.println("[NES] osd_init dipanggil"); return 0; }
 extern "C" void osd_shutdown(void) { }
 extern "C" void osd_getmouse(int *x, int *y, int *button) { }
 
@@ -90,6 +93,8 @@ extern "C" int osd_makesnapname(char *filename, int len) {
 static uint8_t *nesRomBuffer = nullptr;
 
 extern "C" const char *osd_getromdata(const char *name) {
+  Serial.printf("[NES] osd_getromdata dipanggil: name=%s path=%s sd=%d ffat=%d\n",
+                name ? name : "(null)", nesRomPath, (int)sdReady, (int)ffatReady);
   // name di sini sebenarnya path yg sama dgn nesRomPath (diteruskan
   // apa adanya oleh rom_load), tapi kita pakai nesRomPath langsung
   // biar konsisten sama yg di-set nesEnter().
