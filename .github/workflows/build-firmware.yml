@@ -288,6 +288,10 @@ jobs:
           cp firmware/phone/kamus_data.h build_sketch/
           cp firmware/phone/call_renphone.ino build_sketch/
           cp firmware/phone/nyxextras_renphone.ino build_sketch/
+          cp firmware/phone/nyxhost.h build_sketch/
+          cp firmware/phone/nyx_app.h build_sketch/
+          cp firmware/phone/nyxmem.h build_sketch/
+          cp firmware/phone/nyxapp_renphone.ino build_sketch/
           cp firmware/phone/gamepad_renphone.ino build_sketch/
           cp firmware/phone/ina219_renphone.ino build_sketch/
           cp firmware/phone/ota_check_renphone.ino build_sketch/
