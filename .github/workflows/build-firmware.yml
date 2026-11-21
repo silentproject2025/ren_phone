@@ -27,7 +27,7 @@ on:
         options: [ "O3", "O2" ]
         default: "O3"
       push_diff:
-        description: "RP_PUSH_DIFF (varian st7796 & aether): kirim hanya baris layar yg berubah -> sentuh/animasi lebih responsif. default = bawaan profil (0); 1 = aktif (EKSPERIMEN, layar korup/ada sisa gambar -> pilih 0); 0 = paksa mati. Varian ili9341 diabaikan"
+        description: "RP_PUSH_DIFF (varian st7796 & aether): kirim hanya baris layar yg berubah -> sentuh/animasi lebih responsif. default = bawaan profil (1 = aktif; kalau layar korup/ada sisa gambar -> pilih 0); 1 = paksa aktif; 0 = paksa mati. Varian ili9341 diabaikan"
         type: choice
         options: [ "default", "0", "1" ]
         default: "default"
