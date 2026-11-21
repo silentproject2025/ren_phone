@@ -64,6 +64,7 @@ extern bool sdReady, ffatReady, needRedraw; extern int SCR_W; extern float mpuAx
 int backY(); bool mpuReadRaw(); Screen curScreen(); void showToast(const char*, int = 1400); void navBack(); bool isBack(int, int);
 void iosTitle(LGFX_Sprite&, int, int, const char*); void iosBackdrop(LGFX_Sprite&); void drawStatusBar(LGFX_Sprite&); void drawBack(LGFX_Sprite&); void drawToast(LGFX_Sprite&);
 void drawGlassPanel(LGFX_Sprite&, int, int, int, int, int, uint16_t, uint8_t); uint16_t blend565(uint16_t, uint16_t, uint8_t);
+void modernIconBase(LGFX_Sprite&, int, int, int, uint16_t); uint16_t appIconInk(uint16_t);   // NYXSTORE_UI_V2 / NYXAPPS_UI_V2
 void nyxAaCircle(lgfx::LGFXBase&, int, int, int, uint16_t); void nyxAaRR(lgfx::LGFXBase&, int, int, int, int, int, uint16_t);
 struct AppDef { const char* name; char sym; uint16_t color; void (*onEnter)(); void (*onExit)(); void (*draw)(LGFX_Sprite&); void (*touch)(int, int, bool, bool); Screen screen; void (*onLowMem)() = nullptr; };
 extern AppDef apps[]; extern unsigned long appLastUsedMs[]; int appFindLruBackgroundVictim(Screen);
