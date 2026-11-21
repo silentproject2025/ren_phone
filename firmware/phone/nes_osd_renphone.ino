@@ -93,7 +93,9 @@ extern "C" int osd_makesnapname(char *filename, int len) {
 // -----------------------------------------------------------------
 static uint8_t *nesRomBuffer = nullptr;
 
-extern "C" const char *osd_getromdata(const char *name) {
+// Baca file ROM penuh ke nesRomBuffer (PSRAM). Dipanggil dari nesPreloadRom() (task UI) --
+// ATAU sbg cadangan dari osd_getromdata() kalau belum dipreload.
+static const char *nesLoadRomFile() {
   Serial.printf("[NES] osd_getromdata dipanggil: name=%s path=%s sd=%d ffat=%d\n",
                 name ? name : "(null)", nesRomPath, (int)sdReady, (int)ffatReady);
   // name di sini sebenarnya path yg sama dgn nesRomPath (diteruskan
@@ -134,6 +136,26 @@ extern "C" const char *osd_getromdata(const char *name) {
   Serial.printf("[NES] osd_getromdata: %s, ukuran=%u terbaca=%u header=%02X %02X %02X %02X\n", nesRomPath,
                 (unsigned)sz, (unsigned)got, nesRomBuffer[0], nesRomBuffer[1], nesRomBuffer[2], nesRomBuffer[3]);
   return (const char*)nesRomBuffer;
+}
+
+// FIX crash "assert failed: spi_flash_disable_interrupts_caches_and_other_cpu ...
+// esp_task_stack_is_sane_cache_disabled()": FFat itu partisi FLASH internal, jadi tiap baca/tulis
+// mematikan cache flash dulu. Task emulator stack-nya di PSRAM (lihat NES_TASK_STACK_BYTES di
+// nes_app) -> stack PSRAM tidak bisa diakses saat cache mati -> assert -> reboot. SD card gak
+// kena krn bukan lewat flash internal. Solusi: ROM dibaca SEKALI di task UI (stack internal)
+// SEBELUM task emulator dibuat, lalu osd_getromdata() cuma mengembalikan buffer yg sudah siap.
+bool nesPreloadRom() {
+  if (nesRomBuffer) { free(nesRomBuffer); nesRomBuffer = nullptr; }
+  if (!sdReady && !ffatReady) return false;
+  return nesLoadRomFile() != nullptr;
+}
+
+extern "C" const char *osd_getromdata(const char *name) {
+  if (nesRomBuffer) {
+    Serial.printf("[NES] osd_getromdata: pakai ROM yg sudah dipreload (%s)\n", nesRomPath);
+    return (const char*)nesRomBuffer;
+  }
+  return nesLoadRomFile();   // cadangan (mis. SD & belum dipreload)
 }
 
 extern "C" void osd_unloadromdata() {

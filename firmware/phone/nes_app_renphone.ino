@@ -119,7 +119,18 @@ static StackType_t *nesTaskStack = nullptr;
 static StaticTask_t nesTaskTCB;
 
 // Nyalain task emulator utk ROM yg SUDAH dipilih & diisi ke nesRomPath.
+bool nesPreloadRom();   // nes_osd_renphone.ino
+
 static void nesStartGame(){
+  // FIX crash FFat: baca ROM di sini (task UI, stack internal), BUKAN di dalam task emulator
+  // (stack di PSRAM -> assert cache_utils.c saat akses flash). Lihat nesPreloadRom().
+  if (!nesPreloadRom()) {
+    nesRomError = true;
+    nesShowingPicker = false;
+    nesRomErrorMsg = "Gagal membaca file ROM (cek file/ruang RAM).";
+    needRedraw = true;
+    return;
+  }
   nesVideo_begin();  // buka transaksi SPI + bersihkan layar
   nesVideoActive = true;
   nesFpsReset(); // v89: FPS meter mulai ngitung dari nol tiap ROM baru dinyalain
@@ -222,6 +233,7 @@ void nesExit() {
   nesTaskEverStarted = false;
   nesShowingPicker = true; // balik lagi ke layar list kalau masuk NES lagi
 
+  if (!nesTaskRunning) osd_unloadromdata();   // buang ROM yg sudah dipreload tapi belum dipakai
   exitGameMode(); // FIX: pasangan enterGameMode() di nesEnter() -- balikin CPU & polling normal
 }
 
