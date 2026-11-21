@@ -121,8 +121,11 @@ private:
 
 static RenPhoneDoomDisplay doomDisplay;
 #if RP_SD_SPI
-extern "C" void DG_SdBusRelease(void){ doomDisplay.busRelease(); }   // dipanggil w_file_esp32.cpp sebelum baca SD
-extern "C" void DG_SdBusAcquire(void){ doomDisplay.busAcquire(); }   // ...dan sesudahnya
+// Function pointer (bukan fungsi) supaya tidak kena prototipe C++ otomatis Arduino. Didefinisikan di w_file_esp32.cpp.
+extern "C" void (*DG_SdBusRelease)(void);
+extern "C" void (*DG_SdBusAcquire)(void);
+static void doomSdBusRel(void){ doomDisplay.busRelease(); }   // dipanggil w_file_esp32.cpp sebelum baca SD
+static void doomSdBusAcq(void){ doomDisplay.busAcquire(); }   // ...dan sesudahnya
 #endif
 static RenPhoneDoomInput   doomInput;
 
@@ -316,6 +319,9 @@ static void doomPsramClean(int level){
 
 void doomEnter(){
   doomErrorMsg = "";
+#if RP_SD_SPI
+  DG_SdBusRelease = doomSdBusRel; DG_SdBusAcquire = doomSdBusAcq;   // AETHER_SD_FIX_V1
+#endif
   homeCacheFree();   // DOOM_FREECACHE_V1: lepas cache scroll Home (PSRAM) sebelum cek blok kontigu
   hpFreeImages();    // HOME-FIX: gambar halaman pager juga
 

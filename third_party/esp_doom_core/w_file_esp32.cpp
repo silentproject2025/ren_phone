@@ -208,8 +208,7 @@ static size_t W_ESP32_ReadRaw(
 
 // AETHER_SD_FIX_V1: hook opsional (weak). Di board SD-SPI, layar menahan transaksi SPI sepanjang sesi DOOM;
 // baca SD di bus yg sama saat itu = tabrakan -> hang/reboot. Hook melepas & mengambil lagi transaksi layar.
-extern "C" void DG_SdBusRelease(void) __attribute__((weak));
-extern "C" void DG_SdBusAcquire(void) __attribute__((weak));
+extern "C" { void (*DG_SdBusRelease)(void) = nullptr; void (*DG_SdBusAcquire)(void) = nullptr; }
 
 static size_t W_ESP32_Read(wad_file_t* wad, unsigned int offset, void* buffer, size_t len)
 {
