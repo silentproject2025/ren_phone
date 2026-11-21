@@ -6,7 +6,7 @@
 
 [![Build Firmware](https://github.com/silentproject2025/ren_phone/actions/workflows/build-firmware.yml/badge.svg)](https://github.com/silentproject2025/ren_phone/actions/workflows/build-firmware.yml)
 [![Build CAM](https://github.com/silentproject2025/ren_phone/actions/workflows/build-cam-coprocessor.yml/badge.svg)](https://github.com/silentproject2025/ren_phone/actions/workflows/build-cam-coprocessor.yml)
-![Version](https://img.shields.io/badge/version-1.0.0-green)
+![Version](https://img.shields.io/badge/version-1.0.2-green)
 ![MCU](https://img.shields.io/badge/MCU-ESP32--S3-red)
 ![Framework](https://img.shields.io/badge/framework-Arduino-00979D)
 [![License: AGPL v3](https://img.shields.io/badge/license-AGPL--3.0-blue)](./LICENSE)
@@ -21,7 +21,7 @@ NyxOS is neither Android nor Linux. The launcher, notification center, network s
 | **Built-in apps** | 45 |
 | **Code size** | ~53,000 lines of main firmware + ~1,500 lines of coprocessor firmware (third-party code excluded) |
 | **UI language** | English (default) and Indonesian, switchable in *Settings → Language* |
-| **Version** | 1.0.0 (see [`VERSION`](./VERSION)) |
+| **Version** | 1.0.2 (see [`VERSION`](./VERSION)) |
 | **License** | AGPL-3.0 |
 
 > **A note on testing status.** Most features were tested by the maintainer on physical hardware. Please be aware of these exceptions up front:
@@ -29,6 +29,7 @@ NyxOS is neither Android nor Linux. The launcher, notification center, network s
 > - **Phone calls** are only partially verified: they work with a `sip2sip.info` account (SIP over TCP); other SIP providers, LAN mode and TURN are unconfirmed.
 > - **NyxPPU** is an experiment (phase 1) and **SPI overclock** depends on cable quality.
 > - **New system gestures** (pull-to-refresh, edge swipe-back, panels that follow the finger) are `BETA`.
+> - **Nyx Apps** (native ELF apps) is `EXP`: the launcher and its storage choice (SD card, or internal flash when no SD is inserted) are not yet tested on a device, and the default build does not include the ELF loader, so apps cannot run until it is added.
 > - **Backup & Restore**: the **Cloud** tab (back up and restore) is tested on a device; the **SD Card** tab is `BETA` (tested on a PC, not yet on a device). **Chess** (online and vs. AI) is `BETA`: the logic is tested on a PC but not yet on a device.
 >
 > Each feature is described in full in the [feature documentation](./docs/features/).
@@ -79,6 +80,7 @@ Status markers used throughout the documentation:
 | **Voice and AI** | [Wake word "Hei Nyx", Gemini AI Chat, voice memo](./docs/features/voice-and-ai.md) | `OK` (voice commands `BETA`) |
 | **System** | [Battery (INA219), per-channel OTA, HWmonitor, crash log](./docs/features/system-tools.md) | `OK` (per-app energy and crash log `BETA`) |
 | | [Settings Backup & Restore](./docs/features/system-tools.md#settings-backup-and-restore-beta) | `OK` (Cloud) / `BETA` (SD Card) |
+| | [Nyx Apps (native ELF apps from SD or internal flash)](./docs/features/native-apps.md) | `EXP` |
 | **Games** | [Inferno, NES, DOOM, Maze, classics, PPU demo](./docs/features/games.md) | `OK` |
 | **Experimental** | [SPI overclock (`HW`), NyxPPU pixel engine (`EXP`)](./docs/features/experimental.md) | — |
 | **Platform** | mbedTLS in PSRAM (custom core libraries), applied automatically by CI | `OK` |
