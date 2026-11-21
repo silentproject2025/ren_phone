@@ -2209,8 +2209,24 @@ static bool webCsrfOk() {                                      // tolak perminta
   if (o.length()) { String h = webServer.header("Host"); return h.length() && o.indexOf(h) >= 0; }
   return true;
 }
+// WEBFM_IDLE_V1 -- File Manager web aktif hanya selama File Explorer terbuka + 10 menit sesudahnya
+#include "esp_timer.h"
+Screen curScreen();
+#define WEBFM_IDLE_MS 600000ULL
+static uint64_t webFmUntilMs = 0;                                 // esp_timer 64-bit (tidak wrap); 0 = belum pernah dibuka
+static uint64_t webFmNowMs() { return (uint64_t)(esp_timer_get_time() / 1000); }
+void webFmArm() { webFmUntilMs = webFmNowMs() + WEBFM_IDLE_MS; }
+static bool webFmActive() {
+  if (curScreen() == SCR_FILEEXPLORER) return true;
+  return webFmUntilMs && webFmNowMs() < webFmUntilMs;
+}
 static bool webGuard(bool write) {
+  if (!webFmActive()) {
+    webServer.send(403, "text/plain", "Web File Manager nonaktif. Buka File Explorer di HP untuk mengaktifkannya.");
+    return false;
+  }
   if (!webAuthOk()) return false;
+  webFmArm();                                                     // aktivitas -> perpanjang 10 menit
   if (write && !webCsrfOk()) { webServer.send(403, "text/plain", "Forbidden (cross-site)"); return false; }
   return true;
 }
@@ -2407,7 +2423,7 @@ static bool   ffatUpFail   = false;
 static String ffatUpName;
 void handleUploadStream() {
   HTTPUpload& upload = webServer.upload();
-  if (upload.status == UPLOAD_FILE_START) webUpAuthed = webCheckCred() && webCsrfOk();   // WEBAUTH_V1
+  if (upload.status == UPLOAD_FILE_START) webUpAuthed = webFmActive() && webCheckCred() && webCsrfOk();   // WEBAUTH_V1
   if (!webUpAuthed) return;
   if (upload.status == UPLOAD_FILE_START) {
     String filename = upload.filename;
@@ -10811,7 +10827,7 @@ void fileExpEnter(){
   scanSdFiles();
   expClampScroll();
 }
-void fileExpExit(){ if(webPwEditing) webPwClose(); }   // WEBPW_EDIT_V1
+void fileExpExit(){ webFmArm(); /*WEBFM_IDLE_V1*/ if(webPwEditing) webPwClose(); }   // WEBPW_EDIT_V1
 
 // FILEEXP_UI_V2: warna ubin menurut ekstensi
 static bool fxExtIn(const char* e, const char* csv) {   // csv "jpg,png,bmp"
