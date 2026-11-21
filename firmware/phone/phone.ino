@@ -2146,7 +2146,43 @@ bool looksLikeText(const String& content){
   return suspicious < (checkLen/20);    // toleransi < 5% karakter aneh
 }
 
+// WEBAUTH_V1 -- login untuk Web File Manager (lihat apply_security_patch.py)
+static char webPwBuf[12] = "";
+static bool webUpAuthed = false;
+static const char* webPw() {
+  if (webPwBuf[0]) return webPwBuf;
+  Preferences p; p.begin("webauth", false);
+  String sv = p.getString("pw", "");
+  if (sv.length() < 8) {
+    static const char A[] = "abcdefghjkmnpqrstuvwxyz23456789";   // tanpa i,l,o,0,1 (mudah salah baca)
+    char g[9]; for (int i = 0; i < 8; i++) g[i] = A[esp_random() % (sizeof(A) - 1)];
+    g[8] = 0; sv = String(g); p.putString("pw", sv);
+  }
+  p.end();
+  sv.toCharArray(webPwBuf, sizeof(webPwBuf));
+  return webPwBuf;
+}
+const char* webAuthPassword() { return webPw(); }              // dipakai File Explorer utk menampilkan sandi di layar
+static bool webAuthOk() {
+  if (webServer.authenticate("admin", webPw())) return true;
+  webServer.requestAuthentication(BASIC_AUTH, "Accretion Phone");
+  return false;
+}
+static bool webCsrfOk() {                                      // tolak permintaan lintas-situs
+  String sf = webServer.header("Sec-Fetch-Site");
+  if (sf.length()) return sf == "same-origin" || sf == "none";
+  String o = webServer.header("Origin");
+  if (o.length()) { String h = webServer.header("Host"); return h.length() && o.indexOf(h) >= 0; }
+  return true;
+}
+static bool webGuard(bool write) {
+  if (!webAuthOk()) return false;
+  if (write && !webCsrfOk()) { webServer.send(403, "text/plain", "Forbidden (cross-site)"); return false; }
+  return true;
+}
+
 void handleWebRoot() {
+  if (!webGuard(false)) return;   // WEBAUTH_V1
   String html = "<!DOCTYPE html><html><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width, initial-scale=1'>";
   html += "<title>ESP32 File Manager</title>";
   html += "<style>body{font-family:sans-serif;background:#121212;color:#fff;padding:15px;max-width:650px;margin:auto;}";
@@ -2253,6 +2289,7 @@ void handleWebRoot() {
 }
 
 void handleWebEditGet() {
+  if (!webGuard(false)) return;   // WEBAUTH_V1
   if (!webServer.hasArg("file")) {
     webServer.send(400, "text/plain", "Missing file parameter");
     return;
@@ -2311,6 +2348,7 @@ void handleWebEditGet() {
 }
 
 void handleWebEditPost() {
+  if (!webGuard(true)) return;    // WEBAUTH_V1
   if (webServer.hasArg("file") && webServer.hasArg("content")) {
     String fname = webServer.arg("file");
     String content = webServer.arg("content");
@@ -2335,6 +2373,8 @@ static bool   ffatUpFail   = false;
 static String ffatUpName;
 void handleUploadStream() {
   HTTPUpload& upload = webServer.upload();
+  if (upload.status == UPLOAD_FILE_START) webUpAuthed = webServer.authenticate("admin", webPw()) && webCsrfOk();   // WEBAUTH_V1
+  if (!webUpAuthed) return;
   if (upload.status == UPLOAD_FILE_START) {
     String filename = upload.filename;
     if (!filename.startsWith("/")) filename = "/" + filename;
@@ -2380,6 +2420,7 @@ void handleUploadStream() {
 }
 
 void handleWebDelete() {
+  if (!webGuard(true)) return;    // WEBAUTH_V1
   if (webServer.hasArg("file")) {
     String path = webServer.arg("file");
     if (webServer.arg("fs") == "ffat" && ffatReady && FFat.exists(path)) {   // FFAT_UPLOAD_V1
@@ -2406,6 +2447,7 @@ void handleWebDelete() {
 }
 
 void handleWebDownload() {
+  if (!webGuard(false)) return;   // WEBAUTH_V1
   if (webServer.hasArg("file")) {
     String path = webServer.arg("file");
     if (webServer.arg("fs") == "ffat" && ffatReady && FFat.exists(path)) {   // FFAT_UPLOAD_V1
@@ -2431,6 +2473,7 @@ void handleWebDownload() {
 // sdReady. Halaman ini tetep jalan walau SD ada, cuma prioritas kepake pas
 // SD gak kedetek.
 void handleApiKeyGet() {
+  if (!webGuard(false)) return;   // WEBAUTH_V1
   String preview = "(belum di-set)";
   if (geminiApiKey.length() > 8) {
     preview = geminiApiKey.substring(0,4) + "..." + geminiApiKey.substring(geminiApiKey.length()-4);
@@ -2463,6 +2506,7 @@ void handleApiKeyGet() {
 }
 
 void handleApiKeySavePost() {
+  if (!webGuard(true)) return;    // WEBAUTH_V1
   if (webServer.hasArg("key")) {
     String k = webServer.arg("key");
     k.trim();
@@ -2482,6 +2526,7 @@ void startWebServer(){
   webServer.on("/edit", HTTP_GET, handleWebEditGet);
   webServer.on("/save", HTTP_POST, handleWebEditPost);
   webServer.on("/upload", HTTP_POST, [](){
+    if (!webGuard(true)) return;   // WEBAUTH_V1
     webServer.sendHeader("Location", "/");
     webServer.send(303);
   }, handleUploadStream);
@@ -2490,6 +2535,8 @@ void startWebServer(){
   webServer.on("/apikey", HTTP_GET, handleApiKeyGet);
   webServer.on("/apikey_save", HTTP_POST, handleApiKeySavePost);
   rcRegisterRoutes(); // Remote Control: /remote, /rc/*
+  { static const char* hk[] = { "Sec-Fetch-Site", "Origin", "Host" }; webServer.collectHeaders(hk, 3); }   // WEBAUTH_V1
+  Serial.printf("[Web] login File Manager: admin / %s\n", webPw());
   webServer.begin();
   webServerRunning = true;
 }
@@ -10773,6 +10820,8 @@ void drawFileExplorer(LGFX_Sprite& s){
       s.setTextColor(T().good);s.setCursor(110,26);
       String ipStr = "Web: " + WiFi.localIP().toString();
       s.print(ipStr.c_str());
+      s.setTextColor(T().subtext); s.setCursor(8, 35);   // WEBAUTH_V1
+      s.print("Login web: admin / "); s.print(webAuthPassword());
     } else {
       s.setTextColor(T().subtext);s.setCursor(120,26);
       s.print("Web: Off (No WiFi)");

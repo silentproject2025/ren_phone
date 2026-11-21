@@ -173,9 +173,10 @@ static void rcLoadCfg() {
   if (rcCfg.quality > 1) rcCfg.quality = 0;
   if (rcCfg.channel < 1 || rcCfg.channel > 11) rcCfg.channel = 6;
   if (strlen(rcCfg.ssid) < 1) strcpy(rcCfg.ssid, "Accretion-Phone");
-  if (!had || strlen(rcCfg.pass) < 8) {       // pertama kali: sandi acak 8 karakter
-    strcpy(rcCfg.pass, RC_DEFAULT_PASS);
+  if (!had || strlen(rcCfg.pass) < 8 || strcmp(rcCfg.pass, RC_DEFAULT_PASS) == 0) {   // RCPASS_V1: sandi default publik -> ganti acak
+    rcGenPass(rcCfg.pass, 8);
     rcSaveCfg();
+    Serial.printf("[RC] sandi AP baru: %s\n", rcCfg.pass);
   }
 }
 
