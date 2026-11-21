@@ -92,7 +92,14 @@ static void nesScanRoms(){
 // dari loop() utama (nanti seluruh UI Ren Phone kebekukan total).
 static void nesTaskFn(void *param) {
   nesTaskRunning = true;
+  Serial.printf("[NES] task mulai: rom=%s fs=%s free=%u largest=%u psram=%u\n", nesRomPath,
+                nesUseFfat ? "FFat" : "SD", (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
+                (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
   nofrendo_main(0, nullptr);  // blocking sampai game keluar
+  Serial.printf("[NES] nofrendo_main SELESAI (exit=%d) free=%u largest=%u\n", (int)nesExitRequested,
+                (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
   nesTaskRunning = false;
   vTaskDelete(nullptr);
 }

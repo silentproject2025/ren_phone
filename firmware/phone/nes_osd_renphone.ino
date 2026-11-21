@@ -93,16 +93,16 @@ extern "C" const char *osd_getromdata(const char *name) {
   // name di sini sebenarnya path yg sama dgn nesRomPath (diteruskan
   // apa adanya oleh rom_load), tapi kita pakai nesRomPath langsung
   // biar konsisten sama yg di-set nesEnter().
-  // Storage aktif (SD atau FFat) udah dipilih di nesEnter() lewat
+  // Storage aktif (SD atau FFat) sudah dipilih di nesEnter() lewat
   // nesPickStorage(); cek lagi di sini buat jaga2.
   if (!sdReady && !ffatReady) {
-    log_printf("NES: SD & FFat belum siap\n");
+    Serial.println("[NES] osd_getromdata: SD & FFat belum siap");
     return nullptr;
   }
 
   File f = nesFS().open(nesRomPath, FILE_READ);
   if (!f) {
-    log_printf("NES: gagal buka ROM %s\n", nesRomPath);
+    Serial.printf("[NES] osd_getromdata: gagal buka ROM %s\n", nesRomPath);
     return nullptr;
   }
 
@@ -118,13 +118,15 @@ extern "C" const char *osd_getromdata(const char *name) {
   }
 
   if (!nesRomBuffer) {
-    log_printf("NES: RAM kurang buat ROM %u byte\n", (unsigned)sz);
+    Serial.printf("[NES] osd_getromdata: RAM kurang buat ROM %u byte\n", (unsigned)sz);
     f.close();
     return nullptr;
   }
 
-  f.read(nesRomBuffer, sz);
+  size_t got = f.read(nesRomBuffer, sz);
   f.close();
+  Serial.printf("[NES] osd_getromdata: %s, ukuran=%u terbaca=%u header=%02X %02X %02X %02X\n", nesRomPath,
+                (unsigned)sz, (unsigned)got, nesRomBuffer[0], nesRomBuffer[1], nesRomBuffer[2], nesRomBuffer[3]);
   return (const char*)nesRomBuffer;
 }
 
