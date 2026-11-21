@@ -199,6 +199,8 @@ void nesExit() {
   // dgn aman. Flag nesExitRequested ini dicek lewat patch 1-baris di
   // nofrendo.c (sudah otomatis diterapkan CI build, lihat workflow).
   extern volatile bool nesExitRequested;
+  Serial.printf("[NES] nesExit() dipanggil: taskRunning=%d everStarted=%d picker=%d err=%d\n",
+                (int)nesTaskRunning, (int)nesTaskEverStarted, (int)nesShowingPicker, (int)nesRomError);
   nesExitRequested = true;
 
   // Tunggu task-nya beneran selesai sebelum lanjut (max ~2 detik),
@@ -226,6 +228,7 @@ void nesExit() {
 void nesWatchdogTick() {
   if (nesTaskEverStarted && !nesTaskRunning) {
     nesTaskEverStarted = false; // biar cuma trigger sekali
+    Serial.println("[NES] watchdog: task emulator mati -> balik ke Home");
     navGoHome(); // appOnExit(SCR_NES) di dalamnya bakal manggil nesExit()
   }
 }

@@ -30,7 +30,8 @@ char nesRomPath[160] = "/sdcard/roms/game.nes"; // <- GANTI/atur dari File Explo
 // ini NES).
 // -----------------------------------------------------------------
 extern "C" int osd_main(int argc, char *argv[]) {
-  Serial.printf("[NES] osd_main: mulai main_loop path=%s\n", nesRomPath);
+  extern volatile bool nesExitRequested;
+  Serial.printf("[NES] osd_main: mulai main_loop path=%s exitFlag=%d\n", nesRomPath, (int)nesExitRequested);
   int r = main_loop(nesRomPath, system_nes);
   Serial.printf("[NES] osd_main: main_loop return=%d\n", r);
   return r;
