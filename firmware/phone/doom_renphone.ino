@@ -70,6 +70,9 @@ public:
   void flushDMA() override { display.waitDMA(); }
   void endFrame() override { /* sengaja kosong: transaksi tetap terbuka (lihat beginFrame) */ }
   void close() { if(txOpen){ display.waitDMA(); display.endWrite(); txOpen=false; } }
+  // AETHER_SD_FIX_V1: SD lewat SPI berbagi bus dgn layar -> transaksi layar HARUS dilepas selama baca SD
+  void busRelease() { if(txOpen){ display.waitDMA(); display.endWrite(); } }
+  void busAcquire() { if(txOpen){ display.startWrite(); } }
   int width()  const override { return DOOM_PANEL_W; }
   int height() const override { return DOOM_PANEL_H; }
 private:
@@ -117,6 +120,10 @@ private:
 };
 
 static RenPhoneDoomDisplay doomDisplay;
+#if RP_SD_SPI
+extern "C" void DG_SdBusRelease(void){ doomDisplay.busRelease(); }   // dipanggil w_file_esp32.cpp sebelum baca SD
+extern "C" void DG_SdBusAcquire(void){ doomDisplay.busAcquire(); }   // ...dan sesudahnya
+#endif
 static RenPhoneDoomInput   doomInput;
 
 // -----------------------------------------------------------------

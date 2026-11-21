@@ -150,7 +150,7 @@ static void W_ESP32_CloseFile(wad_file_t* wad)
     if (wadBounce) { heap_caps_free(wadBounce); wadBounce = nullptr; }
 }
 
-static size_t W_ESP32_Read(
+static size_t W_ESP32_ReadRaw(
     wad_file_t* wad,
     unsigned int offset,
     void* buffer,
@@ -204,6 +204,21 @@ static size_t W_ESP32_Read(
     }
 
     return total;
+}
+
+// AETHER_SD_FIX_V1: hook opsional (weak). Di board SD-SPI, layar menahan transaksi SPI sepanjang sesi DOOM;
+// baca SD di bus yg sama saat itu = tabrakan -> hang/reboot. Hook melepas & mengambil lagi transaksi layar.
+extern "C" void DG_SdBusRelease(void) __attribute__((weak));
+extern "C" void DG_SdBusAcquire(void) __attribute__((weak));
+
+static size_t W_ESP32_Read(wad_file_t* wad, unsigned int offset, void* buffer, size_t len)
+{
+    esp32_wad_file_t* f = (esp32_wad_file_t*)wad;
+    if (f->mem) return W_ESP32_ReadRaw(wad, offset, buffer, len);   // dari PSRAM: bus SPI tidak dipakai
+    if (DG_SdBusRelease) DG_SdBusRelease();
+    size_t r = W_ESP32_ReadRaw(wad, offset, buffer, len);
+    if (DG_SdBusAcquire) DG_SdBusAcquire();
+    return r;
 }
 
 extern "C"

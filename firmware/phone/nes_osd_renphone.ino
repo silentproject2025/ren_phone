@@ -131,7 +131,26 @@ static const char *nesLoadRomFile() {
     return nullptr;
   }
 
-  size_t got = f.read(nesRomBuffer, sz);
+  // AETHER_SD_FIX_V1: baca SD-SPI langsung ke PSRAM menghasilkan data NOL (ROM kosong -> layar blank).
+  // Baca lewat bounce buffer RAM internal (DMA-capable), lalu salin ke PSRAM. Sama dgn pola di WAD DOOM.
+  size_t got = 0;
+  {
+    const size_t CH = 4096;
+    uint8_t* bounce = (uint8_t*)heap_caps_malloc(CH, MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA | MALLOC_CAP_8BIT);
+    if (!bounce) {
+      got = f.read(nesRomBuffer, sz);   // cadangan: perilaku lama
+    } else {
+      while (got < sz) {
+        size_t want = sz - got; if (want > CH) want = CH;
+        size_t r = f.read(bounce, want);
+        if (r == 0) break;
+        memcpy(nesRomBuffer + got, bounce, r);
+        got += r;
+        if ((got & 0xFFFF) == 0) yield();
+      }
+      heap_caps_free(bounce);
+    }
+  }
   f.close();
   Serial.printf("[NES] osd_getromdata: %s, ukuran=%u terbaca=%u header=%02X %02X %02X %02X\n", nesRomPath,
                 (unsigned)sz, (unsigned)got, nesRomBuffer[0], nesRomBuffer[1], nesRomBuffer[2], nesRomBuffer[3]);
