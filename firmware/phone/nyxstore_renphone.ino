@@ -1,4 +1,5 @@
 // =====================================================================
+// NYXSTORE_UI_V2 (tampilan baru: squircle, kartu hero, tile info)
 // nyxstore_renphone.ino -- "Nyx Store": katalog app native (ELF) yang bisa dipasang dari HP
 // =====================================================================
 // Dibuka dari tombol "Store" di layar Nyx Apps (nyxapp_renphone.ino). Alur:
@@ -29,7 +30,8 @@
 
 #define NYXSTORE_BASE      "https://github.com/silentproject2025/ren_phone/releases/download/nyxapps/"
 #define NYXSTORE_INDEX     "nyxapps.json"
-#define NYXSTORE_ROW_H     56
+#define NYXSTORE_ROW_H     64          // NYXSTORE_UI_V2 (dulu 56)
+#define NYXSTORE_TOP       62          // NYXSTORE_UI_V2: awal konten, di bawah judul + subjudul
 #define NYXSTORE_CHUNK     4096
 #define NYXSTORE_SLICE_MS  20
 #define NYXSTORE_MARGIN    (32u * 1024u)    // sisa ruang minimal setelah ELF ditulis
@@ -383,39 +385,56 @@ static const char* nsLabelFor(int st) {
   }
 }
 
+// NYXSTORE_UI_V2 -- tanda tangan hanya tipe primitif (aturan prototipe arduino-cli)
+static void nsIcon(LGFX_Sprite& s, int cx, int cy, int r, char sym, uint16_t col) {
+  modernIconBase(s, cx, cy, r, col);
+  s.setTextColor(appIconInk(col));
+  int sz = (r >= 24) ? 3 : 2; s.setTextSize(sz);
+  char t[2] = { sym, 0 };
+  s.setCursor(cx - s.textWidth(t) / 2, cy - (sz * 8) / 2); s.print(t);
+  s.setTextSize(1);
+}
+
 static void nsDrawHeader(LGFX_Sprite& s) {
   iosTitle(s, 8, 26, "Nyx Store");
   if (nyxAppFs) {
     const char* w = nyxFsFlash ? "Flash" : "SD";
-    s.setTextSize(1); s.setTextColor(T().subtext);
-    s.setCursor(SCR_W - 8 - s.textWidth(w), 30); s.print(w);
+    nsPill(s, SCR_W - 8 - 46, 28, 46, 18, w, blend565(T().surface2, T().text, 40), T().subtext);
+  }
+  if ((nsSub == NS_LIST || nsSub == NS_DETAIL || nsSub == NS_CONFIRM_RM || nsSub == NS_WORK) && nsN > 0) {
+    int upd = 0; for (int i = 0; i < nsN; i++) if (nsAppState[i] == nyxstore::ST_UPDATE) upd++;
+    char sb[40];
+    if (upd > 0) snprintf(sb, sizeof(sb), "%d app  \xC2\xB7  %d update", nsN, upd);
+    else         snprintf(sb, sizeof(sb), "%d app", nsN);
+    s.setTextSize(1); s.setTextColor(upd > 0 ? (uint16_t)0xFD20 : (uint16_t)T().subtext);
+    s.setCursor(12, 49); s.print(sb);
   }
 }
 
 static void nsDrawList(LGFX_Sprite& s) {
   nsDrawHeader(s);
-  int top = 26 + 22, bot = backY() - 4;
+  int top = NYXSTORE_TOP, bot = backY() - 4;
   if (nsN == 0) {
     s.setTextColor(T().subtext); s.setTextSize(1); s.setCursor(12, top + 10); s.print(RPTR("Katalog kosong"));
     return;
   }
   s.setClipRect(0, top, SCR_W, bot - top);
-  const int pillW = 66;
+  const int pillW = 68;
   for (int i = 0; i < nsN; i++) {
     int ry = top + i * NYXSTORE_ROW_H - (int)nsScroll;
     if (ry + NYXSTORE_ROW_H < top || ry > bot) continue;
     const nyxstore::Entry& e = nsApps[i];
-    drawGlassPanel(s, 8, ry + 2, SCR_W - 16, NYXSTORE_ROW_H - 6, 10, T().surface2, 170);
-    nyxDrawLetter(s, 8 + 10 + 16, ry + NYXSTORE_ROW_H / 2 - 1, 16, e.sym, e.color);
-    int tx = 8 + 10 + 40, avail = SCR_W - 8 - 8 - pillW - tx - 6;
-    nsFitText(s, tx, ry + 8, e.name, T().text, avail);
-    char sz[16], sub[40]; nyxstore::fmtSize(e.elfSize, sz, sizeof(sz));
-    snprintf(sub, sizeof(sub), "%s%s%s", sz, e.perms[0] ? ", " : "", e.perms);
-    if (e.test) { size_t l = strlen(sub); snprintf(sub + l, sizeof(sub) - l, ", %s", RPTR("UJI")); }
-    s.setTextSize(1); s.setTextColor(T().subtext); s.setCursor(tx, ry + 30); s.print(sub);
     int st = nsAppState[i]; bool act = (st == nyxstore::ST_NOT_INSTALLED || st == nyxstore::ST_UPDATE);
+    drawGlassPanel(s, 8, ry + 3, SCR_W - 16, NYXSTORE_ROW_H - 7, 14, T().surface2, 170);
+    nsIcon(s, 8 + 12 + 20, ry + NYXSTORE_ROW_H / 2, 20, e.sym, e.color);
+    int tx = 8 + 12 + 48, avail = SCR_W - 8 - 10 - pillW - tx - 6;
+    nsFitText(s, tx, ry + 11, e.name, T().text, avail);
+    char sz[16], sub[40]; nyxstore::fmtSize(e.elfSize, sz, sizeof(sz));
+    snprintf(sub, sizeof(sub), "%s%s%s", sz, e.perms[0] ? "  \xC2\xB7  " : "", e.perms);
+    if (e.test) { size_t l = strlen(sub); snprintf(sub + l, sizeof(sub) - l, "  \xC2\xB7  %s", RPTR("UJI")); }
+    s.setTextSize(1); s.setTextColor(T().subtext); s.setCursor(tx, ry + 36); s.print(sub);
     uint16_t bg = (st == nyxstore::ST_UPDATE) ? 0xFD20 : (act ? (uint16_t)T().accent : blend565(T().surface2, T().text, 40));
-    nsPill(s, SCR_W - 8 - 8 - pillW, ry + NYXSTORE_ROW_H / 2 - 12, pillW, 22, nsLabelFor(st), bg, act ? 0xFFFF : T().subtext);
+    nsPill(s, SCR_W - 8 - 10 - pillW, ry + NYXSTORE_ROW_H / 2 - 12, pillW, 24, nsLabelFor(st), bg, act ? 0xFFFF : T().subtext);
   }
   s.clearClipRect();
 }
@@ -445,31 +464,43 @@ static void nsDrawDetail(LGFX_Sprite& s) {
   nsDrawHeader(s);
   const nyxstore::Entry& e = nsApps[nsSel];
   int st = nsAppState[nsSel];
-  int top = 26 + 22, bot = backY() - 4;
-  drawGlassPanel(s, 8, top, SCR_W - 16, bot - top, 12, T().surface2, 180);
-  nyxDrawLetter(s, 8 + 10 + 18, top + 26, 18, e.sym, e.color);
-  nsFitText(s, 8 + 10 + 44, top + 8, e.name, T().text, SCR_W - 16 - 54 - 8);
-  s.setTextSize(1); s.setTextColor(T().subtext); s.setCursor(8 + 10 + 44, top + 30); s.print(e.id);
+  int top = NYXSTORE_TOP, W = SCR_W;
   nsLayoutDetail();
 
+  // ---- kartu hero ----
+  drawGlassPanel(s, 8, top, W - 16, 70, 14, T().surface2, 180);
+  nsIcon(s, 8 + 14 + 26, top + 35, 26, e.sym, e.color);
+  int tx = 8 + 14 + 60;
+  nsFitText(s, tx, top + 10, e.name, T().text, W - 8 - 10 - tx);
+  s.setTextSize(1); s.setTextColor(T().subtext); s.setCursor(tx, top + 34); s.print(e.id);
+  const char* msg = (st == nyxstore::ST_UPDATE) ? RPTR("Ada versi baru")
+                  : (st == nyxstore::ST_UP_TO_DATE) ? RPTR("Sudah versi terbaru")
+                  : (st == nyxstore::ST_UNKNOWN) ? RPTR("Terpasang manual (bukan dari Store)") : "";
+  if (*msg) { s.setTextColor(st == nyxstore::ST_UPDATE ? (uint16_t)0xFD20 : (uint16_t)T().accent); s.setCursor(tx, top + 49); s.print(msg); }
+
+  int y = top + 78;
   if (nsSub == NS_CONFIRM_RM) {
-    s.setTextColor(T().text); s.setCursor(16, top + 56); s.print(RPTR("Hapus app ini?"));
-    s.setTextColor(T().subtext); s.setCursor(16, top + 72); s.print(RPTR("Semua datanya ikut terhapus."));
+    drawGlassPanel(s, 8, y, W - 16, 60, 12, blend565(T().surface2, 0xF800, 50), 190);
+    s.setTextSize(1); s.setTextColor(T().text); s.setCursor(18, y + 16); s.print(RPTR("Hapus app ini?"));
+    s.setTextColor(T().subtext); s.setCursor(18, y + 34); s.print(RPTR("Semua datanya ikut terhapus."));
   } else {
-    char b[48], sz[16]; int y = top + 52;
-    s.setTextColor(T().subtext);
-    nyxstore::fmtSize(e.elfSize, sz, sizeof(sz));
-    s.setCursor(16, y); s.print(RPTR("Ukuran")); s.setTextColor(T().text); s.setCursor(96, y); s.print(sz); y += 13;
-    s.setTextColor(T().subtext); snprintf(b, sizeof(b), "%u KB", (unsigned)e.memKb);
-    s.setCursor(16, y); s.print(RPTR("Memori")); s.setTextColor(T().text); s.setCursor(96, y); s.print(b); y += 13;
-    s.setTextColor(T().subtext); s.setCursor(16, y); s.print(RPTR("Izin")); s.setTextColor(T().text); s.setCursor(96, y); s.print(e.perms[0] ? e.perms : "-"); y += 16;
-    const char* msg = (st == nyxstore::ST_UPDATE) ? RPTR("Ada versi baru")
-                    : (st == nyxstore::ST_UP_TO_DATE) ? RPTR("Sudah versi terbaru")
-                    : (st == nyxstore::ST_UNKNOWN) ? RPTR("Terpasang manual (bukan dari Store)") : "";
-    if (*msg) { s.setTextColor(st == nyxstore::ST_UPDATE ? (uint16_t)0xFD20 : (uint16_t)T().accent); s.setCursor(16, y); s.print(msg); y += 14; }
-    s.setTextColor(T().subtext);
-    s.setCursor(16, y); s.print(RPTR("App native tidak di-sandbox.")); y += 11;
-    s.setCursor(16, y); s.print(RPTR("Pasang hanya yang kamu percaya."));
+    // ---- 3 tile info ----
+    int gap = 8, tw = (W - 16 - 2 * gap) / 3, th = 40;
+    char v0[16], v1[16]; nyxstore::fmtSize(e.elfSize, v0, sizeof(v0)); snprintf(v1, sizeof(v1), "%u KB", (unsigned)e.memKb);
+    const char* lab[3] = { RPTR("Ukuran"), RPTR("Memori"), RPTR("Izin") };
+    const char* val[3] = { v0, v1, e.perms[0] ? e.perms : "-" };
+    for (int i = 0; i < 3; i++) {
+      int x = 8 + i * (tw + gap);
+      drawGlassPanel(s, x, y, tw, th, 10, T().surface2, 170);
+      s.setTextSize(1); s.setTextColor(T().subtext); s.setCursor(x + 8, y + 7); s.print(lab[i]);
+      nsFitText(s, x + 8, y + 19, val[i], T().text, tw - 14);
+    }
+    // ---- kotak peringatan ----
+    int y2 = y + th + 8;
+    drawGlassPanel(s, 8, y2, W - 16, 44, 10, blend565(T().surface2, 0xFD20, 50), 170);
+    s.setTextSize(1); s.setTextColor(T().subtext);
+    s.setCursor(18, y2 + 10); s.print(RPTR("App native tidak di-sandbox."));
+    s.setCursor(18, y2 + 24); s.print(RPTR("Pasang hanya yang kamu percaya."));
   }
   for (int i = 0; i < nsBtnN; i++) {
     const NsBtnRect& r = nsBtns[i]; const char* lb = ""; uint16_t bg = blend565(T().surface2, T().text, 50), fg = T().text;
@@ -482,28 +513,31 @@ static void nsDrawDetail(LGFX_Sprite& s) {
 
 static void nsDrawWork(LGFX_Sprite& s) {
   nsDrawHeader(s);
-  int top = 26 + 22;
+  int top = NYXSTORE_TOP, W = SCR_W;
   const nyxstore::Entry& e = nsApps[nsSel];
-  drawGlassPanel(s, 8, top, SCR_W - 16, 84, 12, T().surface2, 180);
-  nyxDrawLetter(s, 8 + 10 + 18, top + 26, 18, e.sym, e.color);
-  nsFitText(s, 8 + 10 + 44, top + 8, e.name, T().text, SCR_W - 16 - 54 - 8);
-  s.setTextSize(1); s.setTextColor(T().subtext); s.setCursor(16, top + 52); s.print(nsStatus);
-  // bilah kemajuan: manifest 0-5 %, unduh 5-60 %, tulis 60-100 %
+  drawGlassPanel(s, 8, top, W - 16, 100, 14, T().surface2, 180);
+  nsIcon(s, 8 + 14 + 26, top + 36, 26, e.sym, e.color);
+  // progres: manifest 0-5 %, unduh 5-60 %, tulis 60-100 %
   uint32_t got = nsGot, tot = nsTotal ? nsTotal : 1; int pct = 0;
   if (nsPhase == NSP_MANIFEST) pct = 2;
   else if (nsPhase == NSP_ELF) pct = 5 + (int)((uint64_t)got * 55 / tot);
   else { uint32_t wt = nsBufLen ? nsBufLen : 1; pct = 60 + (int)((uint64_t)nsWritten * 40 / wt); }
   if (pct > 100) pct = 100;
-  int bx = 16, by = top + 66, bw = SCR_W - 32;
-  nyxAaRR(s, bx, by, bw, 8, 4, blend565(T().surface2, T().text, 40));
-  int fw = bw * pct / 100; if (fw > 8) nyxAaRR(s, bx, by, fw, 8, 4, T().accent);
+  int tx = 8 + 14 + 60;
   char pc[8]; snprintf(pc, sizeof(pc), "%d%%", pct);
-  s.setTextColor(T().subtext); s.setCursor(SCR_W - 16 - s.textWidth(pc), top + 52); s.print(pc);
+  s.setTextSize(2); int pw = s.textWidth(pc);
+  s.setTextColor(T().accent); s.setCursor(W - 8 - 14 - pw, top + 12); s.print(pc);
+  s.setTextSize(1);
+  nsFitText(s, tx, top + 12, e.name, T().text, W - 8 - 14 - pw - 8 - tx);
+  s.setTextColor(T().subtext); s.setCursor(tx, top + 40); s.print(nsStatus);
+  int bx = 8 + 14, by = top + 74, bw = W - 16 - 28;
+  nyxAaRR(s, bx, by, bw, 10, 5, blend565(T().surface2, T().text, 40));
+  int fw = bw * pct / 100; if (fw > 10) nyxAaRR(s, bx, by, fw, 10, 5, T().accent);
 }
 
 static void nsDrawFetch(LGFX_Sprite& s) {
   nsDrawHeader(s);
-  s.setTextSize(1); s.setTextColor(T().subtext); s.setCursor(12, 26 + 22 + 10); s.print(RPTR("Memuat katalog..."));
+  s.setTextSize(1); s.setTextColor(T().subtext); s.setCursor(12, 56); s.print(RPTR("Memuat katalog..."));
 }
 
 static void nsDrawErr(LGFX_Sprite& s) {
@@ -558,7 +592,7 @@ void nyxStoreTouch(int x, int y, bool held, bool isNew) {
   }
 
   // ---- daftar: seret untuk menggulir, ketuk untuk membuka rincian ----
-  int top = 26 + 22, bot = backY() - 4;
+  int top = NYXSTORE_TOP, bot = backY() - 4;
   if (isNew) { nsDrag = (y >= top && y <= bot); nsPrevY = y; return; }
   if (!held) {
     if (nsDrag && !nsMoved) {
