@@ -10,6 +10,10 @@
 // (sudah dilakukan otomatis oleh job "st7796" di .github/workflows/build-firmware.yml).
 //
 // Semua nilai di bawah bisa ditimpa lewat -D... tanpa mengedit file ini.
+//
+// NAMA BOARD (RP_BOARD_NAME, dibaca About Phone): ILI9341 = "Accretion v1", ST7796 = "Accretion v2",
+// Aether Board = "Aether Board". Hanya nama tampilan: RP_DISP_ID / RP_CH_SUFFIX (channel OTA,
+// pencocokan display= di info.txt) TIDAK berubah. Bisa ditimpa: -DRP_BOARD_NAME='"Nama Lain"'.
 
 // =====================================================================
 // AETHER BOARD  (-DRP_BOARD_AETHER)
@@ -24,6 +28,9 @@
   #endif
   #define RP_DISP_ID          "aether"
   #define RP_DISP_NAME        "Aether Board: ST7796 480x320, sentuh FT6336U"
+  #ifndef RP_BOARD_NAME
+  #define RP_BOARD_NAME       "Aether Board"
+  #endif
   #define RP_CH_SUFFIX        "-aether"
   #define RP_PIN_SCLK         12
   #define RP_PIN_MOSI         11
@@ -65,6 +72,9 @@
   #ifndef RP_DISP_ID
   #define RP_DISP_ID          "st7796"
   #define RP_DISP_NAME        "ST7796 480x320, sentuh FT6236"
+  #endif
+  #ifndef RP_BOARD_NAME
+  #define RP_BOARD_NAME       "Accretion v2"
   #endif
   #define RP_DISP_NATIVE_W    320          // lebar panel pada rotasi 0 (portrait)
   #define RP_DISP_NATIVE_H    480
@@ -153,6 +163,9 @@
 #else
   #define RP_DISP_ID          "ili9341"
   #define RP_DISP_NAME        "ILI9341 320x240, sentuh XPT2046"
+  #ifndef RP_BOARD_NAME
+  #define RP_BOARD_NAME       "Accretion v1"
+  #endif
   #define RP_DISP_NATIVE_W    240
   #define RP_DISP_NATIVE_H    320
   #define RP_TOUCH_CAPACITIVE 0

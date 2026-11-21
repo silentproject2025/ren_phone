@@ -139,7 +139,7 @@ Key design consequences:
 | Extras | Vibration motor, Neopixel |
 | Partition scheme | `app3M_fat9M_16MB` |
 
-Pin maps, assembly notes and the ST7796 and Aether Board variants are in [docs/hardware.md](./docs/hardware.md).
+The ILI9341 build is named **Accretion v1** and the 3.5″ ST7796 build **Accretion v2**; *About Phone* shows the board it is running on. Pin maps, assembly notes and the ST7796 and Aether Board variants are in [docs/hardware.md](./docs/hardware.md).
 
 ## Quick start
 

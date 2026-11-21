@@ -27,7 +27,8 @@
 #define ABOUT_DEVICE_NAME  "Accretion Phone"
 #define ABOUT_OS_NAME      "NyxOS"
 #define ABOUT_FW_VERSION   "v119"      // samakan dengan nomor versi terakhir di komentar phone.ino
-#define ABOUT_BOARD_NAME   "ESP32-S3 + ILI9341"
+// Nama papan TIDAK ditulis di sini: diambil dari profil build (RP_BOARD_NAME di display_conf.h),
+// jadi build ILI9341 = "Accretion v1", ST7796 = "Accretion v2", Aether = "Aether Board".
 
 #define ABOUT_MAX_ROWS     32
 #define ABOUT_KEY_LEN      18
@@ -84,7 +85,7 @@ static void aboutRefresh() {
   aboutAdd("Versi firmware", a);
   snprintf(a, sizeof(a), "%s %s", __DATE__, __TIME__);
   aboutAdd(RPTR("Waktu build"), a);
-  aboutAdd("Papan", ABOUT_BOARD_NAME);
+  aboutAdd("Papan", RP_BOARD_NAME);
 
   // ---- chip & CPU ----
   snprintf(a, sizeof(a), "%s rev %d, %d core", ESP.getChipModel(), (int)ESP.getChipRevision(), (int)ESP.getChipCores());

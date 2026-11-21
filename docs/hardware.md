@@ -8,6 +8,8 @@
 
 ## Components
 
+**Board names.** The ILI9341 build (320×240, XPT2046 touch) is **Accretion v1** and the 3.5″ ST7796 build (480×320, FT6236 touch) is **Accretion v2**. The Aether Board keeps its own name. The name is chosen by the build profile in `firmware/phone/display_conf.h` (`RP_BOARD_NAME`) and shown in *About Phone → Papan*. The technical ids (`ili9341`, `st7796`, the `-st7796` OTA channel suffix, file names) are unchanged.
+
 | Part | Specification |
 |---|---|
 | Brain | ESP32-S3, 16 MB flash, 8 MB OPI PSRAM |

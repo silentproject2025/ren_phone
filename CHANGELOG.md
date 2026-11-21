@@ -8,6 +8,7 @@
 - New: Gemini and NASA API keys are stored encrypted. Plain-text keys are encrypted on the next load, and an SD card moved to another device cannot read them
 - New: the Remote Control WiFi password is now random (the old default is replaced automatically); see it in the Remote app
 - New: optional signed OTA updates (ECDSA P-256 + SHA-256), off until a public key is added (see docs/security.md)
+- Changed: the ILI9341 and ST7796 builds are now named Accretion v1 and Accretion v2; About Phone shows the board and screen of the device it runs on
 - Not changed: TLS certificates are still not verified (setInsecure) in Chat, chess, Gutenberg and the OTA download
 
 ## 1.0.2
