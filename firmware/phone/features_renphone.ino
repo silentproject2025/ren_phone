@@ -1023,7 +1023,7 @@ void drawWeatherWidget(LGFX_Sprite& s, int x, int y, int w, int h) {
 void featuresLoopPoll() {
 #if WX_ANIM_MS > 0
   { static unsigned long wxAnimMs = 0; unsigned long nA = millis();     // v130: home anim -- redraw terbatas utk ikon cuaca
-    if (wxValid && !locked && !aodActive && curScreen() == SCR_HOME && nA - wxAnimMs >= WX_ANIM_MS) { wxAnimMs = nA; needRedraw = true; } }
+    if (wxValid && !locked && !aodActive && curScreen() == SCR_HOME && hwsModeGet() == 0 && (homeWMask & 0x08) && nA - wxAnimMs >= WX_ANIM_MS) {   /* WX_ANIM_HW_V1 */ wxAnimMs = nA; needRedraw = true; } }
 #endif
   swTick();
   screenshotPoll();
