@@ -903,7 +903,7 @@ void uiBoostKick(); // fwd-decl (CI)
 // atas enum Screen). Sudah dibenerin dgn mindahin blok tipe itu ke
 // SEBELUM fungsi ini -- fungsi ini sendiri TIDAK perlu dipindah lagi,
 // cukup dipastikan tidak ada lagi tipe custom yg didefinisikan SETELAHNYA.
-size_t nasaWaitForHeap(size_t minBlock=20000, unsigned long maxWaitMs=1500){
+size_t nasaWaitForHeap(size_t minBlock=12000, unsigned long maxWaitMs=500){   // NET_ADAPTIF_V1
   size_t lb = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
   unsigned long waitStart=millis();
   while(lb<minBlock && millis()-waitStart<maxWaitMs){
@@ -967,14 +967,32 @@ bool rpHeapEnsure(size_t need, unsigned long maxMs){
   Serial.printf("[RAM] rpHeapEnsure(%u) -> %s, blok terbesar kini %u B\n", (unsigned)need, ok?"OK":"GAGAL", (unsigned)lb);
   return lb >= need;
 }
-bool nasaHeapReadyForTask(size_t minBlock=20000){
+bool nasaHeapReadyForTask(size_t minBlock=12000){   // NET_ADAPTIF_V1: ambang 12000 (sama dgn Gemini), TIDAK menolak
   size_t lb = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
   if(lb<minBlock){ rpHeapEnsure(minBlock, 1500); lb = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL); }   // RAM_V5
   for(int i=0;i<3 && lb<minBlock;i++){
     delay(150);
     lb = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
   }
-  return lb>=minBlock;
+  if(lb<minBlock) Serial.printf("[NET] blok %u < %u B -> tetap dicoba (retry otomatis)\n",(unsigned)lb,(unsigned)minBlock);
+  return true;   // tetap dicoba; kalau TLS benar2 kekurangan RAM, GET balik -1 lalu rpHttpGetRetry() mengulang
+}
+// NET_ADAPTIF_V1: GET dgn retry (pola sendGeminiRequest). Hanya mengulang kegagalan koneksi (code<=0),
+// bukan status HTTP. Sengaja TANPA argumen default (prototipe otomatis arduino-cli).
+int rpHttpGetRetry(HTTPClient& http, WiFiClient& client, const String& url, uint32_t toMs, bool followRedir){
+  int code = http.GET();
+  for(int t=2; t<=3 && code<=0 && WiFi.status()==WL_CONNECTED; t++){
+    Serial.printf("[NET] GET gagal (%d), percobaan %d, blok terbesar %u\n", code, t,
+                  (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+    http.end(); client.stop();
+    smHoldRelease();            // lepas cadangan kontigu supaya TLS bisa memakainya
+    delay(400*t);
+    if(!http.begin(client,url)) break;
+    http.setTimeout(toMs); http.setConnectTimeout(toMs);
+    if(followRedir) http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+    code = http.GET();
+  }
+  return code;
 }
 
 // (struct SearchBarState & VibStep: definisi lengkap ada PALING ATAS
@@ -6859,7 +6877,7 @@ void appOnExit(Screen s){  int i=appIndexForScreen(s); if(i>=0 && apps[i].onExit
 // reload" -- lihat apodLoadFromCacheOrFetch/neoEnter/epicEnter/
 // imgLibEnter) otomatis jatuh ke jalur baca-ulang dr SD (BUKAN fetch API
 // baru), jadi tetap kerasa cepat & tanpa buang kuota API pas dibuka lagi.
-#define APP_MEM_GUARD_MIN_FREE_BYTES (24*1024) // v92: dilonggarin dari 40KB -- cukup dikit di ATAS 20KB yg dibutuhkan nasaHeapReadyForTask(), jadi app astronomi background gak gampang "dikill" & tetap kerasa instan lebih lama, cuma kena kalau RAM beneran udah mepet
+#define APP_MEM_GUARD_MIN_FREE_BYTES (16*1024) // v92: dilonggarin dari 40KB -- cukup dikit di ATAS 20KB yg dibutuhkan nasaHeapReadyForTask(), jadi app astronomi background gak gampang "dikill" & tetap kerasa instan lebih lama, cuma kena kalau RAM beneran udah mepet
 #define APP_MEM_GUARD_CHECK_MS 3000            // jgn dicek tiap frame, cukup tiap sekian detik
 unsigned long appLastUsedMs[APP_COUNT] = {0};
 unsigned long appMemGuardLastCheckMs = 0;
@@ -14299,7 +14317,7 @@ void triviaFetchQuestions(){
     triviaErrorMsg="Gagal inisialisasi koneksi ke server soal.";
     triviaPage=TRV_ERROR; needRedrawNow(); return;
   }
-  int httpCode = http.GET();
+  int httpCode = rpHttpGetRetry(http,client,url,12000,false);   // NET_ADAPTIF_V1
   if(httpCode!=HTTP_CODE_OK){
     triviaErrorMsg = "Gagal mengambil soal (HTTP "+String(httpCode)+"). Cek koneksi internet."+nasaHttpErrHint(httpCode);
     http.end(); triviaPage=TRV_ERROR; needRedrawNow(); return;
@@ -17720,7 +17738,7 @@ bool nasaDownloadImageToPsram(const String& imgUrl){
   if(!beginOk) return false;
   http.setTimeout(15000); http.setConnectTimeout(15000);
 
-  int code = http.GET();
+  int code = rpHttpGetRetry(http,(isHttps?(WiFiClient&)secureClient:(WiFiClient&)plainClient),String(imgUrl),15000,false);   // NET_ADAPTIF_V1
   if(code!=HTTP_CODE_OK){ http.end(); return false; }
   int len = http.getSize();
   if(len<=0){ http.end(); return false; }
@@ -18165,7 +18183,7 @@ bool apodTranslateChunk(const String& text, String& outTranslated){
   HTTPClient http; http.setTimeout(12000); http.setConnectTimeout(12000);
   String url = "https://api.mymemory.translated.net/get?q="+apodUrlEncode(text)+"&langpair=en|id";
   if(!http.begin(client,url)) return false;
-  int code = http.GET();
+  int code = rpHttpGetRetry(http,client,url,12000,false);   // NET_ADAPTIF_V1
   if(code!=HTTP_CODE_OK){ http.end(); return false; }
   String body = http.getString();
   http.end();
@@ -18334,7 +18352,7 @@ bool apodDownloadImage(const String& imgUrl,const String& destPath){
   http.setTimeout(15000); http.setConnectTimeout(15000);
   http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS); // v117: ikuti redirect (http->https / pindah server), dulu langsung dianggap gagal
 
-  int code = http.GET();
+  int code = rpHttpGetRetry(http,(isHttps?(WiFiClient&)secureClient:(WiFiClient&)plainClient),String(imgUrl),15000,true);   // NET_ADAPTIF_V1
   if(code!=HTTP_CODE_OK){ http.end(); return false; }
   int len = http.getSize();
   if(len==0){ http.end(); return false; }
@@ -18535,7 +18553,16 @@ void apodFetchAndProcess(String dateParam){
       apodErrorMsg="Gagal inisialisasi koneksi ke server NASA.";
       apodPage=APOD_ERROR; needRedrawNow(); return;
     }
-    int code = http.GET();
+    int code = http.GET();   // NET_ADAPTIF_V1: retry maks 3x, header dipasang ulang
+    for(int t=2; t<=3 && code<=0 && WiFi.status()==WL_CONNECTED; t++){
+      http.end(); client.stop(); smHoldRelease(); delay(400*t);
+      if(!http.begin(client,url)) break;
+      http.setTimeout(15000); http.setConnectTimeout(15000);
+      http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+      http.setUserAgent("Mozilla/5.0 (compatible; RenPhone-ESP32S3)");
+      http.addHeader("Accept","application/json");
+      code = http.GET();
+    }
     body = http.getString();
     http.end();
     if(code!=HTTP_CODE_OK){
@@ -19116,7 +19143,7 @@ void neoFetchAndProcess(String dateParam){
     neoErrorMsg="Gagal inisialisasi koneksi ke server NASA.";
     neoPage=NEO_ERROR; vibError(); needRedrawNow(); return;
   }
-  int code=http.GET();
+  int code=rpHttpGetRetry(http,client,url,15000,false);   // NET_ADAPTIF_V1
   String body=http.getString();
   http.end();
   if(code!=HTTP_CODE_OK){
@@ -19529,7 +19556,7 @@ void epicFetchAndProcess(String dateParam){
     epicErrorMsg="Gagal inisialisasi koneksi ke server EPIC.";
     epicPage=EPIC_ERROR; vibError(); needRedrawNow(); return;
   }
-  int code=http.GET();
+  int code=rpHttpGetRetry(http,client,url,15000,false);   // NET_ADAPTIF_V1
   String body=http.getString();
   http.end();
   if(code!=HTTP_CODE_OK){
@@ -19909,7 +19936,7 @@ void imgLibFetchAndProcess(String query){
     imgLibErrorMsg="Gagal inisialisasi koneksi ke server NASA.";
     imgLibPage=ILIB_ERROR; vibError(); needRedrawNow(); return;
   }
-  int code=http.GET();
+  int code=rpHttpGetRetry(http,client,url,15000,false);   // NET_ADAPTIF_V1
   String body=http.getString();
   http.end();
   if(code!=HTTP_CODE_OK){
