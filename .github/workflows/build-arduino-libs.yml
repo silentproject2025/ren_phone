@@ -55,6 +55,10 @@ on:
         type: choice
         options: [ "default", "24", "16", "12" ]
         default: "16"
+      wifi_dynamic_alloc:
+        description: "RAM_V6: WiFi RX+TX buffer SEPENUHNYA dinamis (bukan pool statis di RAM internal). Bebaskan ~10-16 KB RAM internal permanen (bantu Gemini/TLS). WiFi bisa sedikit turun throughput-nya"
+        type: boolean
+        default: true
       elf_loader:
         description: "NYX-ELF: sertakan espressif/elf_loader 2.0.0 (esp_elf.h) + CONFIG_ELF_LOADER & ELF_LOADER_LOAD_PSRAM supaya Nyx Apps (app.elf native) bisa jalan. Belum teruji di HP"
         type: boolean
@@ -232,6 +236,15 @@ jobs:
                 echo "CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=${{ inputs.wifi_dyn_buf }}"
                 echo "CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM=${{ inputs.wifi_dyn_buf }}" ;;
             esac
+            # RAM_V6: buffer WiFi dinamis penuh (pool statis RX/TX di RAM internal dihilangkan)
+            if [ "${{ inputs.wifi_dynamic_alloc }}" = "true" ]; then
+              echo 'CONFIG_ESP_WIFI_STATIC_RX_BUFFER=n'
+              echo 'CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER=y'
+              echo 'CONFIG_ESP_WIFI_RX_BUFFER_TYPE=1'
+              echo 'CONFIG_ESP_WIFI_STATIC_TX_BUFFER=n'
+              echo 'CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER=y'
+              echo 'CONFIG_ESP_WIFI_TX_BUFFER_TYPE=1'
+            fi
             # NYX-ELF
             if [ "${{ inputs.elf_loader }}" = "true" ]; then
               echo 'CONFIG_ELF_LOADER=y'
@@ -292,6 +305,11 @@ jobs:
               if grep -q "^$OPT=y" "$OUT/sdkconfig"; then echo "::warning::$OPT masih y (tidak berhasil dimatikan)"; else echo "OK   $OPT mati"; fi
             done
             grep -q '^CONFIG_FREERTOS_PLACE_FUNCTIONS_INTO_FLASH=y' "$OUT/sdkconfig" && echo "OK   FREERTOS_PLACE_FUNCTIONS_INTO_FLASH=y" || echo "::warning::FREERTOS_PLACE_FUNCTIONS_INTO_FLASH tidak aktif di sdkconfig hasil"
+          fi
+          if [ "${{ inputs.wifi_dynamic_alloc }}" = "true" ]; then
+            for OPT in CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER; do
+              if grep -q "^$OPT=y" "$OUT/sdkconfig"; then echo "OK   $OPT=y"; else echo "::warning::$OPT tidak aktif di sdkconfig hasil build (RAM_V6 tidak masuk)"; fi
+            done
           fi
           grep -E '^CONFIG_ESP_WIFI_(DYNAMIC_(RX|TX)_BUFFER_NUM|STATIC_RX_BUFFER_NUM|RX_BA_WIN)=' "$OUT/sdkconfig" || echo "::warning::opsi buffer WiFi tidak ditemukan di sdkconfig hasil"
           echo "=== NYX-ELF: elf_loader di hasil build ==="

@@ -3140,7 +3140,7 @@ bool doGeminiHttpRequest(const String& promptText, String& outResponse) {
   // bakal nge-log error alokasi yg SPESIFIK (bukan tebakan kita lagi),
   // kelihatan di baris "[Gemini] httpCode=... err=..." bawah, atau
   // pesan "E (...) esp-tls-mbedtls: ..."/"mbedtls_ssl_..." di Serial.
-  const size_t MIN_BLOCK_FOR_TLS = 12000; // diturunkan dr 20000: mbedTLS sudah di PSRAM (lib kustom)
+  const size_t MIN_BLOCK_FOR_TLS = 10000; // 12000->10000 (RAM_V6): mbedTLS sudah di PSRAM (lib kustom)
   size_t lb = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
   if (lb < MIN_BLOCK_FOR_TLS) {
     char eb[200];
@@ -3383,7 +3383,7 @@ void triggerGeminiAI() {
   // kesempatan ke lwIP buat rilis blok TLS lama tanpa ada overhead stack
   // task yg motong. Retry ringan (maks 3x, jeda 150ms = 450ms total,
   // sengaja singkat drpd bikin UI kerasa nge-freeze pas ketuk kirim).
-  const size_t MIN_BLOCK_TO_START = 12000; // diturunkan dr 20000 (lihat catatan di atas)
+  const size_t MIN_BLOCK_TO_START = 10000; // 12000->10000 (RAM_V6; lihat catatan di atas)
   for (int i = 0; i < 3 && largestBlock < MIN_BLOCK_TO_START; i++) {
     delay(150);
     largestBlock = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
