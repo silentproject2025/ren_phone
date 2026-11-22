@@ -20819,10 +20819,16 @@ void drawHwmon(LGFX_Sprite& s){
   // Blok Terbesar-nya msh di bawah 20KB krn fragmented -- makanya app
   // NASA/transkrip msh bisa gagal HTTP -1 walau "RAM Internal" keliatan
   // masih longgar.
-  bool lbLow = hwmonHeapLargestBlock < 20000;
+  // RAM_V2: cadangan kontigu (smHoldBytes) sengaja dipegang sysmem dan dilepas otomatis saat ada yg butuh
+  // blok besar (TLS dll), jadi blok yg benar-benar bisa didapat = max(blok bebas, cadangan).
+  uint32_t lbHold = smHoldBytes();
+  size_t lbEff = hwmonHeapLargestBlock > lbHold ? hwmonHeapLargestBlock : lbHold;
+  bool lbLow = lbEff < 20000;
   s.setTextColor(T().text); s.setCursor(14, top);
   s.print(RPTR("Blok Terbesar"));
-  char lbBuf[32]; sprintf(lbBuf,"%u KB", (unsigned)(hwmonHeapLargestBlock/1024));
+  char lbBuf[32];
+  if(lbHold) sprintf(lbBuf,"%u KB (+%uK)", (unsigned)(hwmonHeapLargestBlock/1024), (unsigned)(lbHold/1024));
+  else       sprintf(lbBuf,"%u KB", (unsigned)(hwmonHeapLargestBlock/1024));
   int lbw=s.textWidth(lbBuf);
   s.setTextColor(lbLow?T().danger:T().good); s.setCursor(SCR_W-14-lbw, top);
   s.print(lbBuf);
