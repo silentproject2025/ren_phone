@@ -209,11 +209,11 @@ jobs:
           if [ -z "$MY_BASE" ]; then
             echo "::error::RP_BASE_REV tidak ditemukan di firmware/phone/ota_check_renphone.ino"; exit 1
           fi
-          if [ "$RP_BRANCH" != "remote-control" ]; then
-            if git fetch --depth=1 origin remote-control 2>/dev/null; then
+          if [ "$RP_BRANCH" != "main" ]; then
+            if git fetch --depth=1 origin main 2>/dev/null; then
               REF_BASE="$( { git show FETCH_HEAD:firmware/phone/ota_check_renphone.ino 2>/dev/null || git show FETCH_HEAD:ota_check_renphone.ino 2>/dev/null; } | grep -E '^#define RP_BASE_REV[[:space:]]+[0-9]+' | grep -oE '[0-9]+' | head -1)"
               if [ -n "$REF_BASE" ] && [ "$REF_BASE" != "$MY_BASE" ]; then
-                echo "::error::Basis kode branch '$RP_BRANCH' (RP_BASE_REV=$MY_BASE) BEDA dgn remote-control ($REF_BASE). Firmware-nya tidak boleh dipertukarkan -> build dibatalkan. Samakan RP_BASE_REV."
+                echo "::error::Basis kode branch '$RP_BRANCH' (RP_BASE_REV=$MY_BASE) BEDA dgn main ($REF_BASE). Firmware-nya tidak boleh dipertukarkan -> build dibatalkan. Samakan RP_BASE_REV."
                 exit 1
               fi
             fi

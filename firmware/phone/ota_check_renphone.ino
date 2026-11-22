@@ -57,7 +57,7 @@
 #define RP_BASE_REV 1
 
 #define OTA_REPO "silentproject2025/ren_phone"
-#define OTA_DEFAULT_CHANNEL "remote-control"
+#define OTA_DEFAULT_CHANNEL "main"
 #define OTA_GUARD_MAX_TRIES 3          // boot ke-4 yg belum sehat -> rollback
 #define OTA_GUARD_OK_MS     30000UL    // loop() hidup selama ini = firmware dianggap sehat
 #define OTA_CUSTOM_MAX      6
@@ -112,7 +112,7 @@ static bool   otaNotesShow = false;  // true = layar changelog sedang terbuka di
 // =====================================================================
 // CHANNEL (branch) -- daftar, pilihan, tambah
 // =====================================================================
-static const char* const OTA_BUILTIN[] = { "remote-control", "chat" };
+static const char* const OTA_BUILTIN[] = { "main", "chat" };
 #define OTA_BUILTIN_N 2
 
 static String otaSel = "";             // channel terpilih (sudah bersih)
@@ -145,6 +145,7 @@ static void otaChanLoad() {
     otaSel = OTA_DEFAULT_CHANNEL;
   }
   otaSel = otaSanitize(otaSel);
+  if (otaSel == "remote-control") otaSel = OTA_DEFAULT_CHANNEL;
   if (!otaSel.length()) otaSel = OTA_DEFAULT_CHANNEL;
   otaChanLoaded = true;
 }
