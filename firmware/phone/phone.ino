@@ -3140,15 +3140,17 @@ bool doGeminiHttpRequest(const String& promptText, String& outResponse) {
   // bakal nge-log error alokasi yg SPESIFIK (bukan tebakan kita lagi),
   // kelihatan di baris "[Gemini] httpCode=... err=..." bawah, atau
   // pesan "E (...) esp-tls-mbedtls: ..."/"mbedtls_ssl_..." di Serial.
-  const size_t MIN_BLOCK_FOR_TLS = 12000; // diturunkan dr 20000: mbedTLS sudah di PSRAM (lib kustom)
+  // ADAPTIF_V1: TIDAK ada penolakan di sini lagi. Blok kecil tetap DICOBA; kalau TLS beneran kekurangan RAM,
+  // http.POST() mengembalikan -1 & loop retry di sendGeminiRequest() mengulang (maks 3x). Kalau blok di bawah
+  // 12000, cadangan kontigu sysmem dilepas dulu (smHoldRelease aman dipanggil dari task; pembersihan cache app
+  // background sudah dilakukan di triggerGeminiAI() sebelum task dibuat karena menyentuh state UI).
+  const size_t MIN_BLOCK_FOR_TLS = 12000;
   size_t lb = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
   if (lb < MIN_BLOCK_FOR_TLS) {
-    char eb[200];
-    snprintf(eb, sizeof(eb), "Error: RAM internal terlalu terfragmentasi/rendah utk TLS (blok %u KB, bebas %u KB, perlu %u KB). Tutup app lain / restart perangkat.",
-             (unsigned)(lb/1024), (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL)/1024), (unsigned)(MIN_BLOCK_FOR_TLS/1024));
-    outResponse = eb;
-    aiClientPtr = nullptr;
-    return false;
+    smHoldRelease();
+    Serial.printf("[Gemini] blok %u < %u B -> tetap dicoba (cadangan kontigu dilepas, kini %u B)\n",
+                  (unsigned)lb, (unsigned)MIN_BLOCK_FOR_TLS,
+                  (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
   }
 
   if (!http.begin(client, url)) {
@@ -3237,7 +3239,7 @@ bool doGeminiHttpRequest(const String& promptText, String& outResponse) {
       outResponse = "HTTP Error " + String(httpCode) + ": " + errBody.substring(0, 150);
     }
   } else if (httpCode == -1) {
-    outResponse = "HTTP Error -1: TLS/koneksi gagal (biasanya RAM/DNS sesaat). Dicoba ulang otomatis...";
+    outResponse = "HTTP Error -1: TLS/koneksi gagal (RAM internal kurang atau DNS sesaat). Sudah dicoba beberapa kali; coba lagi sebentar atau tutup app lain.";
   } else {
     outResponse = "HTTP Connection Error: " + http.errorToString(httpCode) + " (" + String(httpCode) + ")";
   }
@@ -3300,6 +3302,7 @@ void sendGeminiRequest(String promptText) {
       Serial.printf("[Gemini] Percobaan %d gagal, retry ke-%d...\n", attempt - 1, attempt);
       delay(400 * attempt);
       if (WiFi.status() != WL_CONNECTED) break;
+      smHoldRelease();   // ADAPTIF_V1: beri TLS kesempatan memakai cadangan kontigu sebelum mengulang
     }
     ok = doGeminiHttpRequest(fullPrompt, resp);
     if (ok) break;
@@ -3396,15 +3399,8 @@ void triggerGeminiAI() {
   Serial.printf("[Gemini] Sebelum bikin task -> freeInternal=%u largestBlock=%u freePsram=%u\n",
                 freeInternal, largestBlock, ESP.getFreePsram());
 
-  if (largestBlock < MIN_BLOCK_TO_START) {
-    {
-      char eb[200];
-      snprintf(eb, sizeof(eb), "Error: RAM internal kritis rendah (blok %u KB, bebas %u KB, perlu %u KB). Tutup app lain / restart perangkat.",
-               (unsigned)(largestBlock/1024), (unsigned)(freeInternal/1024), (unsigned)(MIN_BLOCK_TO_START/1024));
-      aiResponse = eb;
-    }
-    needRedrawNow();
-    return;
+  if (largestBlock < MIN_BLOCK_TO_START) {   // ADAPTIF_V1: tidak menolak; tetap dicoba, retry ditangani sendGeminiRequest()
+    Serial.printf("[Gemini] blok %u < %u B -> tetap dicoba\n", (unsigned)largestBlock, (unsigned)MIN_BLOCK_TO_START);
   }
 
   aiLoading = true;
