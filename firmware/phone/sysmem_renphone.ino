@@ -53,20 +53,9 @@ static sysmem::Mgr& smMgr() {
     b.totalBytes = smB_total; b.nowMs = smB_now; b.delayMs = smB_delay;
     smM.init(b);
 #ifndef RP_CONTIG_HOLD_KB
-#define RP_CONTIG_HOLD_KB 16     // 0 = matikan cadangan kontigu. Bisa ditimpa: -DRP_CONTIG_HOLD_KB=32
+#define RP_CONTIG_HOLD_KB 24     // 0 = matikan cadangan kontigu. Bisa ditimpa: -DRP_CONTIG_HOLD_KB=32
 #endif
-    // RAM_V4 (EKSPERIMEN): syarat ambil lama (free >= 64 KB, blok terbesar >= hold+12 KB) tidak pernah
-    // terpenuhi di unit nyata (free ~40 KB, blok terbesar 18-26 KB) -> cadangan tidak pernah aktif.
-    // Nilai lama: HOLD 24, FREEMIN 64, MARGIN 12. Kembalikan nilai itu kalau ada app yg mulai gagal alokasi.
-#ifndef RP_CONTIG_FREEMIN_KB
-#define RP_CONTIG_FREEMIN_KB 40
-#endif
-#ifndef RP_CONTIG_MARGIN_KB
-#define RP_CONTIG_MARGIN_KB 2
-#endif
-    smM.cfg.holdContig  = (uint32_t)RP_CONTIG_HOLD_KB * 1024u;
-    smM.cfg.holdFreeMin = (uint32_t)RP_CONTIG_FREEMIN_KB * 1024u;
-    smM.cfg.holdMargin  = (uint32_t)RP_CONTIG_MARGIN_KB * 1024u;
+    smM.cfg.holdContig = (uint32_t)RP_CONTIG_HOLD_KB * 1024u;
     //            id          nama        budget int  budget psram  priv
     smM.setOwner(SM_O_SYSTEM, "system",   0,          0,            true);
     smM.setOwner(SM_O_UI,     "ui",       0,          0);
