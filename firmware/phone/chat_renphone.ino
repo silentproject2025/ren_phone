@@ -47,7 +47,7 @@
 #define CHAT_TZ_SEC    (7*3600)      // WIB (UTC+7); ubah kalau beda zona waktu
 #define CHAT_TOP       (STATUS_H+22)
 #define CHAT_PORT      8883
-#define CHAT_MIN_BLOCK ((size_t)tlsMin())          // CHAT_RAM_FIX_V1: blok kontigu RAM internal minimum utk TLS (dulu 30000)
+#define CHAT_MIN_BLOCK 22000          // CHAT_RAM_FIX_V1: blok kontigu RAM internal minimum utk TLS (dulu 30000)
 #define CHAT_TOPIC_BASE "renphone/chat/m/"
 #define CHAT_TOPIC_TYPING "renphone/chat/t"
 #define CHAT_TYPE_SHOW_MS  4500UL     // indikator mengetik bertahan segini sejak paket terakhir

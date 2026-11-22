@@ -39,8 +39,8 @@ on:
       spiram_always_internal:
         description: "Alokasi malloc <= batas ini (byte) tetap di RAM internal; lebih besar -> PSRAM. Bawaan IDF 16384. 4096 = lebih banyak ke PSRAM, RAM internal lebih lega (sedikit lebih lambat)"
         type: choice
-        options: [ "default", "4096", "2048", "1024", "512", "256" ]
-        default: "512"
+        options: [ "default", "4096", "2048" ]
+        default: "2048"
       tcp_window_kb:
         description: "EKSPERIMEN: window TCP lwIP (KB) utk unduhan lebih cepat di jaringan latensi tinggi. default = bawaan IDF (~5,6 KB). Makin besar makin boros RAM"
         type: choice
@@ -55,11 +55,6 @@ on:
         type: choice
         options: [ "default", "24", "16", "12" ]
         default: "16"
-      wifi_static_rx:
-        description: "RAM_V6: jumlah buffer RX STATIS WiFi di RAM internal (bawaan 8, ~1,6 KB/buah). 4 = hemat ~6 KB RAM internal, throughput WiFi turun sedikit"
-        type: choice
-        options: [ "default", "6", "4" ]
-        default: "4"
       elf_loader:
         description: "NYX-ELF: sertakan espressif/elf_loader 2.0.0 (esp_elf.h) + CONFIG_ELF_LOADER & ELF_LOADER_LOAD_PSRAM supaya Nyx Apps (app.elf native) bisa jalan. Belum teruji di HP"
         type: boolean
@@ -193,7 +188,7 @@ jobs:
           #  - SPIRAM_TRY_ALLOCATE_WIFI_LWIP: buffer WiFi/lwIP diutamakan di PSRAM (RAM
           #    internal lebih lega). Bisa dimatikan lewat input wifi_lwip_psram=false.
           case "${{ inputs.spiram_always_internal }}" in
-            256|512|1024|2048|4096) AI="${{ inputs.spiram_always_internal }}" ;;
+            2048|4096) AI="${{ inputs.spiram_always_internal }}" ;;
             *) AI="" ;;
           esac
           {
@@ -236,12 +231,6 @@ jobs:
               24|16|12)
                 echo "CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=${{ inputs.wifi_dyn_buf }}"
                 echo "CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM=${{ inputs.wifi_dyn_buf }}" ;;
-            esac
-            # RAM_V6: kurangi buffer RX statis WiFi (dialokasi di RAM internal, ~1,6 KB/buah)
-            case "${{ inputs.wifi_static_rx }}" in
-              4|6)
-                echo "CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=${{ inputs.wifi_static_rx }}"
-                echo "CONFIG_ESP_WIFI_RX_BA_WIN=$(( ${{ inputs.wifi_static_rx }} * 2 ))" ;;
             esac
             # NYX-ELF
             if [ "${{ inputs.elf_loader }}" = "true" ]; then
