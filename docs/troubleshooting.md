@@ -6,7 +6,8 @@ Find your symptom in the table. For memory-related problems, the **HWmonitor** a
 
 | Symptom | Likely cause | Action |
 |---|---|---|
-| HTTPS features (Gemini, NASA, Trivia) return `HTTP -1` | Internal RAM fragmentation, or the Remote AP is active | Turn off the Remote AP; check the *largest free block* in HWmonitor; retry. |
+| HTTPS features (Gemini, NASA, Trivia) return `HTTP -1` | Internal RAM fragmentation, or the Remote AP is active | Turn off the Remote AP; check the *largest free block* in HWmonitor; retry. These apps already retry 3 times by themselves (Serial log: `[NET] GET gagal ...`). |
+| Free internal RAM drops sharply after playing music, and HTTPS apps then fail | Older firmware: after the speaker decoder was built, the malloc threshold was restored to 16384 instead of the build's value, so allocations of 2 to 16 KB went to internal RAM | Update the firmware. Compare HWmonitor before and after one song; the free RAM and largest block should return close to the starting values. |
 | No sound from any app | TWS not connected, the ESP32-CAM not fitted, or the SD card in the CAM module not removed | Connect the TWS in the Music app; check the CAM wiring and firmware. |
 | Video plays without sound | TWS not connected, or the audio is not 44.1 kHz MP3 | Re-convert with the `ffmpeg` command in [Media](./features/media.md#avi--mjpeg-player). |
 | The device restarts by itself right after the boot screen after changing the custom SDK libraries | The new cache settings (especially `psram_cache_line_64b`) do not suit; the boot safeguard restores the old firmware after several failures | Rebuild the libraries with the 64 B line off, `dcache_kb=32`, `icache_kb=16`; check Settings → About (last reset) and `/crashlog.txt` on the SD card. See the safety note in [Chess](./features/chess.md#nyx-max-chess-strength-up-to-the-hardware-limit). |

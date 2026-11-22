@@ -2,7 +2,7 @@
 
 ## Memory and network
 
-- Internal RAM is tight. `HTTP -1` often signals memory fragmentation rather than a network problem. Wait-and-retry mechanisms exist, but they cannot completely eliminate the problem at the sketch level.
+- Internal RAM is tight. `HTTP -1` often signals memory fragmentation rather than a network problem. Wait-and-retry mechanisms exist (Gemini, Trivia and the NASA apps start below the old 20 KB threshold and retry a failed connection up to 3 times), but they cannot completely eliminate the problem at the sketch level.
 - TLS certificates are not verified (see [Security](./security.md)).
 
 ## Audio

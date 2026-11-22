@@ -303,7 +303,7 @@ More detail, including the install conditions and the log lines to look for, is 
 
 A short list; the full list is in [docs/limitations.md](./docs/limitations.md).
 
-- Internal RAM is tight. `HTTP -1` errors usually indicate memory fragmentation rather than a network problem.
+- Internal RAM is tight. `HTTP -1` errors usually indicate memory fragmentation rather than a network problem. Gemini, Trivia and the NASA apps now try even when the largest free block is below 12 KB and retry a failed connection up to 3 times, but they cannot work when almost no internal RAM is left.
 - Audio goes through Bluetooth by default. Without the ESP32-CAM and earbuds, sound needs the optional MAX98357A speaker (Music and calls only, `BETA`); AVI video sound and everything else stay silent. DOOM has no sound at all.
 - DOOM needs a contiguous block of about 6.25 MB of PSRAM for its full 6 MiB zone; with less it runs with a 5 or 4 MiB zone and big levels may fail. A WAD on FFat is streamed by a helper task and no longer has to fit in PSRAM (see [Games](./docs/features/games.md#doom-wad-files)).
 - Hardware scroll and row-diff push exist only on ST7796 and Aether builds. Vertical scrolling in landscape cannot use hardware scroll, because the panel can only scroll along its long (480-pixel) axis; landscape Home uses swipeable pages instead. Hardware scroll also steps aside while someone views Remote Control, in game mode, while an overlay is open and, on portrait Home, when a wallpaper is set (see [System UI](./docs/features/system-ui.md#home-pages-and-hardware-scroll-st7796)).

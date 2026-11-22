@@ -1,6 +1,9 @@
 # Changelog
 
 ## Unreleased
+- Confirmed: the ELF feature (Nyx Apps) was tested again on a real phone and works
+- Improved: Trivia, Astronomy (APOD), NEO, EPIC, the NASA image library, translation and image downloads no longer refuse to start when internal RAM is low. The start threshold drops from 20 KB to 12 KB (same as Gemini), the attempt is made anyway, and a failed connection (`HTTP -1`) is retried up to 3 times. Background apps are now only closed for memory when less than 16 KB is free (was 24 KB)
+- Fixed: free internal RAM dropped sharply after the Music app had played a song. After building the decoder, the music code set the "allocate in PSRAM above this size" threshold back to a fixed 16384 instead of the value of the build (`CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL`), so every allocation of 2 to 16 KB landed in internal RAM from then on. It is now restored to the build's own value
 - Confirmed: Nyx Apps now run on a real phone. The ELF loader and the hello example work (text, frame counter, touch, Back). The Nyx Store, the SD/internal flash choice and the other example apps are still unconfirmed
 - Docs: README and docs rewritten. New section "What the automatic build does and does not do": a push build only installs the custom core libraries (PSRAM mbedTLS, ELF loader), it never builds them. Run Build Arduino Libs first, then rebuild the firmware. Manual inputs (nyx_nn, loop_core, ...) do not apply to pushes
 - Docs: audio sections now describe the optional MAX98357A speaker (Music, calls); Nyx Apps is marked PARTIAL instead of EXP
