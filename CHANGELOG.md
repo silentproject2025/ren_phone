@@ -1,6 +1,8 @@
 # Changelog
 
 ## Unreleased
+- New: Music app can play through a MAX98357A speaker (Find TWS page, button Output: BT/SPK). Needs the `arduino-libhelix` library; decoder runs on the S3 with its memory in PSRAM. Untested on hardware. AVI sound still uses Bluetooth
+- New: phone calls also play through the MAX98357A speaker when the output is set to SPK (8 kHz mono over I2S, no earbuds needed). No echo cancellation, so keep the speaker away from the mic. Untested on hardware
 - New: optional MAX98357A speaker support is back. HWmonitor has a "Test Speaker" button that plays a 1 kHz tone (default pins BCLK 16, LRC 17, DIN 8 or 15; see docs/hardware.md)
 
 ## 1.0.3

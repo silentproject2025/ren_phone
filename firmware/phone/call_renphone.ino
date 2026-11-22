@@ -16,7 +16,9 @@
 //   lawan --RTP--> G.711 -> PCM16 8 kHz -> header WAV + PCM lewat jalur
 //   audio-eksternal musExt* (yg dipakai pemutar AVI) -> UART -> ESP32-CAM
 //   (mode WAV: resample ke 44,1 kHz) -> A2DP -> TWS.
-//   => TELEPON BUTUH TWS TERSAMBUNG (Musik > cari TWS). Tanpa TWS tidak ada
+//   OPSIONAL: kalau output Musik = "SPK" (Musik > cari TWS > Output: SPK), suara lawan
+//   langsung ke speaker MAX98357A lewat I2S (8 kHz mono, tanpa CAM/TWS; lihat musspk.h).
+//   => TELEPON BUTUH TWS TERSAMBUNG (Musik > cari TWS) kecuali output = SPK. Tanpa keduanya tidak ada
 //   suara masuk (mic tetap jalan).
 //
 // ARSITEKTUR
@@ -537,6 +539,7 @@ static struct {
 
 // media
 static bool     aoOn = false, aoDrop = false, micOn = false, mediaOn = false;
+static bool     aoSpk = false;          // true = audio keluar lewat speaker MAX98357A (bukan CAM/TWS)
 static uint32_t aoSent = 0;
 static uint8_t  toneMode = 0;           // 0 diam, 1 ringback, 2 dering masuk
 static uint32_t toneT = 0, toneLastMs = 0;
@@ -561,6 +564,11 @@ static uint32_t lastCfgGenSeen = 0;
 void wakeYieldMic(uint32_t holdMs);
 void musExtPrepare();
 bool musExtLinkUp();
+// speaker MAX98357A (definisi di musicbt_renphone.ino): dipakai kalau output Musik = "SPK"
+bool callSpkSelected();
+bool callSpkBegin();
+void callSpkWrite(const int16_t* pcm, int n);
+void callSpkEnd();
 
 // ---------------------------------------------------------------------
 // AUDIO KELUAR -> CAM -> TWS (jalur musExt* milik pemutar AVI)
@@ -573,12 +581,18 @@ static const char* callAudioErr(int rc) {
     case 4: return "RAM kurang utk audio";
     case 5: return RPTR("Audio belum siap (buka Telepon dulu)");
     case 9: return "Audio dipakai pemutar lain";
+    case 10: return "Speaker gagal dibuka (cek wiring)";
     default: return RPTR("Audio keluar gagal");
   }
 }
 
 static int callAudioStart() {
   if (aoOn) return 0;
+  if (callSpkSelected()) {                           // output = speaker: tanpa CAM/TWS, langsung I2S 8 kHz mono
+    if (!callSpkBegin()) return 10;
+    aoOn = true; aoSpk = true; aoDrop = false; aoSent = 0; callAudioOut = true; callBacklogMs = 0;
+    return 0;
+  }
   if (musExtActive()) return 9;                      // pemutar AVI sedang memakai jalur ini
   if (!musExtLinkUp()) return 5;                     // link CAM belum menyala: jangan inisialisasi dari callTask
   callMarkT(50);
@@ -598,6 +612,7 @@ static int callAudioStart() {
 
 static void callAudioStop() {
   if (!aoOn) return;
+  if (aoSpk) { aoSpk = false; aoOn = false; callAudioOut = false; callSpkEnd(); return; }
   aoOn = false; callAudioOut = false;
   musExtEnd();
   uint8_t pf[2] = { 0, 0 };                          // 0 = kembali ke prefill bawaan CAM
@@ -607,6 +622,7 @@ static void callAudioStop() {
 // kirim n sampel PCM16 mono 8 kHz
 static void callPcmOut(const int16_t* pcm, int n) {
   if (!aoOn || n <= 0) return;
+  if (aoSpk) { callSpkWrite(pcm, n); aoSent += (uint32_t)n; return; }
   if (!musExtActive()) { aoOn = false; callAudioOut = false; callDirty = true; return; }   // CAM restart / stream putus
   uint32_t w = musExtWrite((const uint8_t*)pcm, (uint32_t)n * 2u);
   aoSent += w / 2u;
@@ -614,7 +630,7 @@ static void callPcmOut(const int16_t* pcm, int n) {
 
 // pantau antrean suara di CAM (ms) -> buang paket kalau menumpuk (jaga latensi)
 static void callBacklogCheck() {
-  if (!aoOn) return;
+  if (!aoOn || aoSpk) return;                        // jalur speaker: kelebihan sampel dibuang di spkLiveWrite
   uint32_t played = musExtClockMs();
   if (played == 0) return;                           // belum mulai diputar
   int backlog = (int)(aoSent / 8u) - (int)played;
@@ -2883,7 +2899,7 @@ static void callDrawInCall(LGFX_Sprite& s) {
     callCenter(s, 0, SCR_W, cy + 52, st);
   }
   s.setTextColor(callAudioOut ? (uint16_t)T().subtext : (uint16_t)T().danger);
-  callCenter(s, 0, SCR_W, cy + 78, callAudioOut ? "Audio: TWS" : RPTR("Tanpa audio keluar (TWS?)"));
+  callCenter(s, 0, SCR_W, cy + 78, callAudioOut ? (aoSpk ? "Audio: Speaker" : "Audio: TWS") : RPTR("Tanpa audio keluar (TWS?)"));
   if (ph == CPH_ACTIVE) {                                      // meter mic kecil
     int bw = SCR_W - 80, bx = 40, by = cy + 94;
     nyxAaRRRing(s, bx, by, bw, 6, 3, T().subtext);

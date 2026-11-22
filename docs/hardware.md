@@ -18,7 +18,7 @@
 | Storage | microSD (SDIO 1-bit; over SPI on the Aether Board), with internal FFat as a fallback |
 | Sensors | MPU6050 (tilt, shake, auto-rotation) and INA219 (voltage, current, power) |
 | Microphone | INMP441 (I2S) |
-| Audio output | **Bluetooth (A2DP)** via the ESP32-CAM coprocessor. Optional: a **MAX98357A** I2S amp + speaker for the HWmonitor "Test Speaker" tone |
+| Audio output | **Bluetooth (A2DP)** via the ESP32-CAM coprocessor. Optional: a **MAX98357A** I2S amp + speaker for the HWmonitor "Test Speaker" tone and the Music app's *Output: SPK* mode |
 | Camera | OV2640 on an ESP32-CAM module (OV3660/OV5640 are detected automatically) |
 | Extras | Vibration motor and Neopixel |
 | Partition scheme | `app3M_fat9M_16MB` |

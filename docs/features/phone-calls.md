@@ -43,11 +43,13 @@ remote party ──RTP──▶ G.711 ──▶ 8 kHz PCM ──▶ external aud
                                               ──UART──▶ ESP32-CAM ──A2DP──▶ TWS
 ```
 
-Because the device has **no speaker**, the remote party can only be heard through **Bluetooth TWS** earbuds. Without connected earbuds the microphone still transmits, but you will not hear anything.
+By default the device has **no speaker**, so the remote party is heard through **Bluetooth TWS** earbuds. Without connected earbuds the microphone still transmits, but you will not hear anything.
+
+**Optional speaker.** With a MAX98357A module wired (see [Hardware](../hardware.md)), set the Music app output to **SPK** (Music > Find TWS > *Output: BT / SPK*). Calls then play straight to the speaker over I2S (8 kHz mono, no CAM or earbuds needed), and the call screen shows *Audio: Speaker*. Starting a call stops any music playing on the speaker. Keep the speaker away from the INMP441 microphone: there is no echo cancellation, so the other person may hear themselves. This path has not been tested on hardware yet.
 
 ## How to use
 
-1. Connect the TWS earbuds first, through the **Music** app.
+1. Connect the TWS earbuds first, through the **Music** app (or switch the output to **SPK** if you have the speaker module).
 2. **SIP mode**
    - Create a free account. Verified: <https://www.sip2sip.info> (set Server to `sip2sip.info`). An account at <https://subscribe.linphone.org> (Server `sip.linphone.org`) was tried and only works as a receiver, so it is not recommended.
    - Open the Phone app, choose *Set*, and fill in Server, username, password and name. Alternatively, place `/sip.cfg` on the SD card (see [Configuration](../configuration.md)).

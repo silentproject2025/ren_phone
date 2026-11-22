@@ -115,6 +115,8 @@ jobs:
           arduino-cli lib install "PubSubClient"
           arduino-cli lib install "ESP32-audioI2S-master@3.4.6" || \
             arduino-cli lib install --git-url https://github.com/schreibfaul1/ESP32-audioI2S.git
+          arduino-cli lib install "arduino-libhelix" || \
+            arduino-cli lib install --git-url https://github.com/pschatzmann/arduino-libhelix.git   # decoder MP3 utk pemutar speaker (musspk.h)
 
       - name: Pasang library core kustom (mbedTLS di PSRAM) - opsional
         if: ${{ inputs.use_custom_libs != false }}
@@ -283,6 +285,7 @@ jobs:
           cp firmware/phone/wakeword_renphone.ino build_sketch/
           cp firmware/phone/power_renphone.ino build_sketch/
           cp firmware/phone/musicbt_renphone.ino build_sketch/
+          cp firmware/phone/musspk.h build_sketch/              # pemutar MP3/WAV lokal -> MAX98357A
           cp firmware/phone/avi_renphone.ino build_sketch/
           cp firmware/phone/features_renphone.ino build_sketch/
           cp firmware/phone/gallery_renphone.ino build_sketch/

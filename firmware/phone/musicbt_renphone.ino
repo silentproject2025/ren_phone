@@ -28,6 +28,7 @@
 #include <freertos/semphr.h>
 #include <esp_heap_caps.h>
 #include <math.h>
+#include "musspk.h"   // pemutar lokal: SD -> Helix -> I2S -> MAX98357A (output "SPK")
 
 #define MUS_UART_RX     42
 #define MUS_UART_TX     41
@@ -107,6 +108,7 @@ static volatile bool musPaused = false;
 static volatile int  musVol = 80;
 static volatile int  musRepeat = 0;          // 0 mati, 1 semua, 2 satu
 static volatile int  musShufMode = 0;       // 0 mati, 1 acak, 2 AI (RYNE v2)
+static volatile bool musOutSpk = false;     // true = output ke speaker MAX98357A (bukan Bluetooth/CAM); disimpan di NVS "spk"
 
 // ---- RYNE v2 (engine di ryne_engine.h) ----
 static RyneEngine*   ryne = nullptr;        // dialokasi di PSRAM, hanya disentuh task musik
@@ -498,8 +500,8 @@ static bool musLoadCover(const char* path) {
 static bool musStartTrack(int idx, int prevHow) {
   int n = (int)musList.size();
   if (n == 0) { musToast("Tidak ada MP3 di /music"); return false; }
-  if (!musCamAlive) { musToast("Modul BT tidak terdeteksi"); return false; }
-  if (!musBtConn)   { musToast("TWS belum terhubung"); return false; }
+  if (!musOutSpk && !musCamAlive) { musToast("Modul BT tidak terdeteksi"); return false; }
+  if (!musOutSpk && !musBtConn)   { musToast("TWS belum terhubung"); return false; }
   if (idx < 0) idx = n - 1;
   if (idx >= n) idx = 0;
 
@@ -516,7 +518,7 @@ static bool musStartTrack(int idx, int prevHow) {
   uint64_t body = (musFile.size() > off) ? (musFile.size() - off) : musFile.size();
   musDurMs = kbps ? (uint32_t)((body * 8ULL) / kbps) : 0;   // bytes*8 / kbps = ms
   musKbps = kbps; musSr = sr;
-  if (sr != 44100) musToast("MP3 bukan 44.1kHz, nada bergeser");
+  if (sr != 44100 && !musOutSpk) musToast("MP3 bukan 44.1kHz, nada bergeser");
   // JANGAN kirim tag ID3 ke CAM: cover JPEG ratusan KB di dalamnya penuh pola 0xFF yg mirip sync-word MP3 ->
   // decoder Helix memproses sampah, beban CPU/stack melonjak (khas file kbps tinggi yg bawa cover besar).
   if (off > 0 && off < (uint32_t)musFile.size()) musFile.seek(off); else musFile.seek(0);
@@ -526,10 +528,16 @@ static bool musStartTrack(int idx, int prevHow) {
   musSeq++;
   uint8_t sq = musSeq;
   musCredit = 0; musSentSince = 0;
-  rpSend(Serial1, RP_BEGIN, &sq, 1);
+  if (musOutSpk) {                              // output speaker: decode di S3 (spkTask), tanpa CAM
+    char pth[128]; strncpy(pth, musList[idx].c_str(), sizeof(pth) - 1); pth[sizeof(pth) - 1] = 0;
+    musFile.close();                            // spkTask membuka file-nya sendiri
+    if (!spkPlay(pth, false, off)) { musToast("Speaker gagal dimulai"); return false; }
+  } else {
+    rpSend(Serial1, RP_BEGIN, &sq, 1);
+  }
 
   musCur = idx; musLoaded = true; musPaused = false; musEnded = false;
-  musPlayedMs = 0; musStreaming = true; musFileDone = false;
+  musPlayedMs = 0; musStreaming = !musOutSpk; musFileDone = false;
   musPrefsDirty = true; musPrefsMs = millis();
   musCoverReady = false;                         // cover lama jangan tampil utk lagu baru
   strncpy(musCoverPath, musList[idx].c_str(), sizeof(musCoverPath) - 1);
@@ -564,6 +572,7 @@ static int musNextIdx(int dir, bool autoNext) {
 }
 
 static void musSendPause(bool pause) {
+  if (musOutSpk) { spkSetPause(pause); return; }
   uint8_t v = pause ? 0 : 1;
   rpSend(Serial1, RP_PAUSE, &v, 1);
 }
@@ -572,8 +581,8 @@ static void musSendPause(bool pause) {
 // WAV dikirim UTUH ke CAM; CAM mengenali "RIFF" lalu melewati decoder Helix
 // dan me-resample ke 44,1 kHz stereo. Tidak menyentuh playlist/RYNE.
 static void musPlayWav(const char* path) {
-  if (!musCamAlive) { musToast("Modul BT tidak terdeteksi"); return; }
-  if (!musBtConn)   { musToast("TWS belum terhubung"); return; }
+  if (!musOutSpk && !musCamAlive) { musToast("Modul BT tidak terdeteksi"); return; }
+  if (!musOutSpk && !musBtConn)   { musToast("TWS belum terhubung"); return; }
   if (musFile) musFile.close();
   musFile = SD_MMC.open(path, FILE_READ);
   if (!musFile) { musToast("Gagal membuka memo"); return; }
@@ -585,9 +594,14 @@ static void musPlayWav(const char* path) {
   musSeq++;
   uint8_t sq = musSeq;
   musCredit = 0; musSentSince = 0;
-  rpSend(Serial1, RP_BEGIN, &sq, 1);
+  if (musOutSpk) {
+    musFile.close();
+    if (!spkPlay(path, true, 0)) { musToast("Speaker gagal dimulai"); musWavMode = false; return; }
+  } else {
+    rpSend(Serial1, RP_BEGIN, &sq, 1);
+  }
   musLoaded = true; musPaused = false; musEnded = false;
-  musPlayedMs = 0; musStreaming = true; musFileDone = false;
+  musPlayedMs = 0; musStreaming = !musOutSpk; musFileDone = false;
   musDurMs = (uint32_t)(((uint64_t)(sz - 44) * 1000ULL) / 32000ULL);
   musKbps = 256; musSr = 16000;
   musCoverReady = false; musCoverWant = false;
@@ -612,6 +626,7 @@ static void musHandleReq(uint8_t t, int32_t a, const char* s) {
     case 'v': {
       int v = (int)a; if (v < 0) v = 0; if (v > 127) v = 127;
       uint8_t b = (uint8_t)v;
+      spkSetVolume(v);
       rpSend(Serial1, RP_VOLUME, &b, 1);
       break;
     }
@@ -622,6 +637,7 @@ static void musHandleReq(uint8_t t, int32_t a, const char* s) {
       musLoaded = false; musStreaming = false;
       musCoverReady = false; musCoverWant = false;
       if (musFile) musFile.close();
+      spkStopPlay();
       rpSend(Serial1, RP_STOP, nullptr, 0);
       break;
     case 'a':
@@ -643,6 +659,7 @@ static void musHandleReq(uint8_t t, int32_t a, const char* s) {
     case 'r': musScanPlaylist(); break;
     case 'E': {                                   // mulai stream audio dari AVI (lihat musExtBegin)
       if (musFile) musFile.close();
+      spkStopPlay();                              // audio AVI selalu lewat CAM/Bluetooth; hentikan lagu speaker kalau ada
       musEndCurrent(3);
       musWavMode = false;
       musSeq++;
@@ -868,7 +885,7 @@ static void musTask(void* arg) {
     prevAlive = musCamAlive;
 
     // ---- 3. TWS putus -> jeda otomatis, lanjut otomatis pas nyambung lagi ----
-    if (prevBt && !musBtConn && musLoaded && !musPaused) {
+    if (!musOutSpk && prevBt && !musBtConn && musLoaded && !musPaused) {
       musPaused = true; musSendPause(true); musResumeOnBt = true;
     }
     if (!prevBt && musBtConn && musResumeOnBt) {
@@ -881,6 +898,12 @@ static void musTask(void* arg) {
     MusReq rq;
     while (xQueueReceive(musQ, &rq, 0) == pdTRUE) musHandleReq(rq.t, rq.a, rq.s);
 
+    if (musOutSpk && musLoaded && !musExt) {      // output speaker: waktu putar & habis/gagal datang dari spkTask
+      musPlayedMs = spkPlayedMs();
+      if (spkTakePreempt()) { musLoaded = false; musStreaming = false; musWavMode = false; musToast("Musik dihentikan (telepon)"); }
+      else if (spkTakeFail()) { musLoaded = false; musStreaming = false; musWavMode = false; musToast("Speaker gagal dimulai"); }
+      else if (spkTakeEnded()) musEnded = true;
+    }
     if (musEnded && musWavMode) {                 // memo selesai: berhenti, JANGAN lanjut ke playlist
       musEnded = false; musWavMode = false; musLoaded = false; musStreaming = false;
       if (musFile) musFile.close();
@@ -991,8 +1014,10 @@ static void musBegin() {
     musRepeat = p.getInt("rep", 0);
     musShufMode = p.getInt("smode", p.getBool("shuf", false) ? 1 : 0);
     musCur = p.getInt("cur", 0);
+    musOutSpk = p.getBool("spk", false);
     p.end();
   }
+  spkSetVolume(musVol);
   Serial1.setRxBufferSize(CAM_UART_RXBUF);   // 6144 (didefinisikan di camera_renphone.ino); 2048 terlalu kecil utk video di 2-3 Mbaud
   Serial1.begin(RP_BAUD, SERIAL_8N1, MUS_UART_RX, MUS_UART_TX);
 
@@ -1191,6 +1216,7 @@ void musicLoopPoll() {
     Preferences p; p.begin("music", false);
     p.putInt("vol", musVol); p.putInt("rep", musRepeat);
     p.putInt("smode", musShufMode); p.putInt("cur", musCur);
+    p.putBool("spk", musOutSpk);
     p.end();
   }
 }
@@ -1400,7 +1426,8 @@ static void musDrawChips(LGFX_Sprite& s) {
   { int cx, cw; if (ryvChipRect(&cx, &cw)) { musPanel(s, cx, mHdrY, cw, mChipH, 9, T().surface2, 210); s.setTextColor(T().accent); s.setCursor(cx + (cw - 24) / 2, mHdrY + 5); s.print("RYNE"); s.setTextColor(T().text); } }
 
   const char* st; uint16_t col;
-  if (!musCamAlive)        { st = "Modul BT mati";     col = T().danger; }
+  if (musOutSpk)           { st = "Speaker";           col = T().good; }
+  else if (!musCamAlive)   { st = "Modul BT mati";     col = T().danger; }
   else if (musBtConn)      { st = "TWS terhubung";     col = T().good; }
   else if (musConnecting)  { st = "Menghubungkan...";  col = T().accent2; }
   else                     { st = "TWS putus";         col = T().subtext; }
@@ -1463,7 +1490,7 @@ static void musDrawPlayer(LGFX_Sprite& s) {
   s.setCursor(mLand ? mTitX : mTitX + (mTitW - sw) / 2, mSubY); s.print(sub);
   musDrawHeart(s, mTitX + mTitW - 8, mSubY + 4, musLiked ? 0xF9A6 : blend565(T().bg, T().text, 70));
 
-  if (!musCamAlive) {                                  // diagnosa: apa yg masuk dari CAM?
+  if (!musOutSpk && !musCamAlive) {                    // diagnosa: apa yg masuk dari CAM?
     char dg[56];
     // muat 1 baris layar: f=frame sah, e=frame rusak, RAM = heap bebas/blok terbesar CAM pada status TERAKHIR sebelum diam, mati = detik sejak status terakhir
     snprintf(dg, sizeof(dg), "f%u e%u RAM%uK/%uK mati %us", (unsigned)musRxFrames, (unsigned)musRxErr,
@@ -1619,11 +1646,13 @@ static void musDrawScan(LGFX_Sprite& s) {
     char rs[8]; snprintf(rs, sizeof(rs), "%d", (int)musScanRssi[r]);
     s.setTextColor(T().subtext); s.setCursor(SCR_W - 20 - s.textWidth(rs), y + 10); s.print(rs);
   }
-  int bw2 = (SCR_W - 24 - 6) / 2;
-  musPanel(s, 12, mBotY, bw2, mBotH, 10, T().surface2, 210);
-  musDrawLabel(s, RPTR("Pindai ulang"), 12, mBotY, bw2, mBotH, T().text);
-  iosRR(s,12 + bw2 + 6, mBotY, bw2, mBotH, 10, T().accent);
-  musDrawLabel(s, RPTR("Pemutar"), 12 + bw2 + 6, mBotY, bw2, mBotH, T().bg);
+  int bw3s = (SCR_W - 24 - 12) / 3;
+  musPanel(s, 12, mBotY, bw3s, mBotH, 10, T().surface2, 210);
+  musDrawLabel(s, RPTR("Pindai"), 12, mBotY, bw3s, mBotH, T().text);
+  musPanel(s, 12 + bw3s + 6, mBotY, bw3s, mBotH, 10, musOutSpk ? T().good : T().surface2, 210);
+  musDrawLabel(s, musOutSpk ? RPTR("Output: SPK") : RPTR("Output: BT"), 12 + bw3s + 6, mBotY, bw3s, mBotH, musOutSpk ? T().bg : T().text);
+  iosRR(s,12 + (bw3s + 6) * 2, mBotY, bw3s, mBotH, 10, T().accent);
+  musDrawLabel(s, RPTR("Pemutar"), 12 + (bw3s + 6) * 2, mBotY, bw3s, mBotH, T().bg);
 }
 
 // =====================================================================
@@ -1897,9 +1926,15 @@ void musicTouch(int x, int y, bool held, bool isNew) {
         showToast(RPTR("Menghubungkan...")); musPage = 0; vibTap(); needRedraw = true; return;
       }
     }
-    int bw2 = (SCR_W - 24 - 6) / 2;
-    if (musHit(x, y, 12, mBotY, bw2, mBotH)) { musPost('a', 0, nullptr); vibTap(); needRedraw = true; return; }
-    if (musHit(x, y, 12 + bw2 + 6, mBotY, bw2, mBotH)) { musPage = 0; vibTap(); needRedraw = true; return; }
+    int bw3s = (SCR_W - 24 - 12) / 3;
+    if (musHit(x, y, 12, mBotY, bw3s, mBotH)) { musPost('a', 0, nullptr); vibTap(); needRedraw = true; return; }
+    if (musHit(x, y, 12 + bw3s + 6, mBotY, bw3s, mBotH)) {         // ganti output BT <-> speaker
+      musPost('s', 0, nullptr);                                     // hentikan lagu yg sedang jalan di output lama
+      musOutSpk = !musOutSpk; musPrefsDirty = true; musPrefsMs = millis(); vibTap();
+      showToast(musOutSpk ? RPTR("Output: speaker") : RPTR("Output: Bluetooth"));
+      needRedraw = true; return;
+    }
+    if (musHit(x, y, 12 + (bw3s + 6) * 2, mBotY, bw3s, mBotH)) { musPage = 0; vibTap(); needRedraw = true; return; }
     return;
   }
 
@@ -1939,4 +1974,10 @@ void memoPlayFile(const char* path) { musBegin(); musPost('w', 0, path); }
 void memoStopPlay() { if (musWavMode && musQ) musPost('s', 0, nullptr); }
 bool memoPlayActive() { return musWavMode && musLoaded; }
 uint32_t memoPlayPosMs() { return musPlayedMs; }
-bool memoBtReady() { return musCamAlive && musBtConn; }
+bool memoBtReady() { return musOutSpk || (musCamAlive && musBtConn); }
+
+// ---- jembatan ke call_renphone.ino (telepon lewat speaker; deklarasi maju ada di file itu) ----
+bool callSpkSelected()                     { return musOutSpk; }
+bool callSpkBegin()                        { return spkLiveBegin(8000); }
+void callSpkWrite(const int16_t* pcm, int n) { spkLiveWrite(pcm, n); }
+void callSpkEnd()                          { spkLiveEnd(); }
