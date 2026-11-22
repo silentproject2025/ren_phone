@@ -37,7 +37,7 @@ using namespace libhelix;
  #ifdef CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL
   #define MUS_SPK_HEAP_THRESHOLD CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL
  #else
-  #define MUS_SPK_HEAP_THRESHOLD 2048
+  #define MUS_SPK_HEAP_THRESHOLD 512
  #endif
 #endif
 #define SPK_IN_CHUNK    2048          // byte file dibaca per putaran
