@@ -119,7 +119,7 @@ The device is built from two microcontrollers connected over UART. The ESP32-S3 
 
 Key design consequences:
 
-- **The device has no speaker.** All audio (music, video, calls, voice memos) goes through the ESP32-CAM to Bluetooth earbuds.
+- **Audio goes to Bluetooth earbuds.** Music, video, calls and voice memos go through the ESP32-CAM. An optional MAX98357A speaker module is supported only for the HWmonitor "Test Speaker" tone (see [Hardware](./docs/hardware.md)).
 - **The two firmwares must stay consistent.** `rplink.h` must be **identical** in `firmware/phone/` and `firmware/cam_bt_coprocessor/`.
 - **Memory is the scarcest resource.** Only ~162 KB of internal RAM is available; see [Architecture](./docs/architecture.md).
 - **Fragmentation is handled by design, not by compaction.** Memory is judged by the *largest contiguous block*, not by total free bytes. Each Nyx App gets one PSRAM arena (allocated once, freed once, so apps cannot fragment system PSRAM); inside it a best-fit allocator merges neighbouring free blocks on `free()`. Before an HTTPS handshake a **TLS gate** waits for, and reclaims memory until, a contiguous internal-RAM block is available. Blocks are never moved (native apps use real pointers), so a long-running app can still fragment its own arena. See [SysMem](./docs/sysmem.md) and [Nyx Apps](./docs/features/native-apps.md).

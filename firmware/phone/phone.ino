@@ -1896,15 +1896,29 @@ void npxStep(){
 #define SD_PIN_CLK 39
 #define SD_PIN_CMD 38
 #define SD_PIN_D0  40
-// v100 FIX (permintaan user: proyek ini mau HILANGKAN fitur speaker sama
-// sekali) -- pin fisik speaker MAX98357A (dipakai dulu bareng MP3
-// Player/AVI Player yg sudah dicabut di v64, lalu belakangan cuma dipakai
-// app HWmonitor buat "Tes Speaker") dicabut total: AUDIO_I2S_BCLK/LRC/
-// DOUT, objek testToneI2S + hwmonPlayTestTone(), tombol "Tes Speaker" di
-// drawHwmon()/hwmonTouch(). Modul fisiknya (kalau masih kesolder di
-// board) jadi gak dipakai firmware sama sekali lagi.
+// Speaker MAX98357A (I2S DAC + amp class-D) -- DIPASANG KEMBALI (opsional).
+// Dulu dicabut di v100; sekarang cuma dipakai app HWmonitor ("Tes Speaker").
+// Kalau modul TIDAK terpasang, firmware tetap jalan normal (I2S cuma dibuka
+// sebentar saat tombol ditekan). Semua pin bisa ditimpa lewat -DAUDIO_I2S_...
+// Default dipilih dari GPIO yg bebas di semua varian board:
+//   BCLK 16 | LRC (WS) 17 | DIN (DOUT dari S3) 8 (ILI9341) / 15 (ST7796 & Aether)
+// Wiring: VIN->5V, GND->GND, BCLK/LRC/DIN->pin di atas. SD/GAIN dibiarkan
+// (SD floating = mono (L+R)/2, GAIN floating = 9 dB).
+#ifndef AUDIO_I2S_BCLK
+#define AUDIO_I2S_BCLK 16
+#endif
+#ifndef AUDIO_I2S_LRC
+#define AUDIO_I2S_LRC  17
+#endif
+#ifndef AUDIO_I2S_DOUT
+  #if defined(RP_DISPLAY_ST7796) || defined(RP_BOARD_AETHER)
+  #define AUDIO_I2S_DOUT 15
+  #else
+  #define AUDIO_I2S_DOUT 8
+  #endif
+#endif
 // v27: pin I2S mic INMP441 -- FISIK & PERIPHERAL I2S TERPISAH dr speaker
-// yg udah dicabut di atas (I2SClass beda instance, gak ada sangkut paut).
+// MAX98357A di atas (I2SClass beda instance, gak ada sangkut paut).
 // TETAP DIPERTAHANKAN krn masih dipakai dictation mic AI Chat & VU meter.
 #define MIC_I2S_SCK 47
 #define MIC_I2S_WS  46
@@ -20692,9 +20706,40 @@ void hwmonResetStats(){
   memset(hwmonHist1,0,sizeof(hwmonHist1));
 }
 
-// v100: hwmonPlayTestTone() + testToneI2S (nada uji speaker MAX98357A)
-// DIHAPUS -- lihat catatan v100 di deklarasi pin, fitur speaker dicabut
-// total dari proyek ini.
+// Nada uji speaker MAX98357A (dipasang kembali). I2S dibuka HANYA selama
+// nada main lalu ditutup lagi, jadi tidak bentrok dgn micI2S (dictation/VU).
+// 1 kHz sinus, 16-bit stereo 16 kHz, volume rendah + fade in/out (anti "pop").
+I2SClass testToneI2S;
+bool hwmonPlayTestTone(){
+  const uint32_t SR = 16000;
+  const int FREQ = 1000;
+  const int MS = 600;
+  const int AMP = 6000;          // ~18% skala penuh -- aman buat speaker kecil
+  const int N = (int)(SR * MS / 1000);
+  const int FADE = (int)(SR * 20 / 1000);
+  const int CH = 256;            // frame per tulisan
+  testToneI2S.setPins(AUDIO_I2S_BCLK, AUDIO_I2S_LRC, AUDIO_I2S_DOUT, -1, -1);
+  if(!testToneI2S.begin(I2S_MODE_STD, SR, I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO)) return false;
+  int16_t buf[CH*2];
+  const float w = 2.0f * (float)PI * FREQ / (float)SR;
+  for(int i=0; i<N; i+=CH){
+    int n = (N-i < CH) ? (N-i) : CH;
+    for(int k=0; k<n; k++){
+      int idx = i+k;
+      float env = 1.0f;
+      if(idx < FADE)        env = (float)idx / FADE;
+      else if(idx > N-FADE) env = (float)(N-idx) / FADE;
+      int16_t v = (int16_t)(sinf(w*idx) * AMP * env);
+      buf[2*k] = v; buf[2*k+1] = v;
+    }
+    testToneI2S.write((uint8_t*)buf, n*4);
+  }
+  memset(buf, 0, sizeof(buf));   // diam sebentar biar buffer DMA kosong sebelum ditutup
+  testToneI2S.write((uint8_t*)buf, sizeof(buf));
+  delay(30);
+  testToneI2S.end();
+  return true;
+}
 
 void hwmonEnter(){
   hwmonIdleHits0=0; hwmonIdleHits1=0;
@@ -20793,7 +20838,8 @@ void drawHwmon(LGFX_Sprite& s){
   iosRR(s,SCR_W-84,24,78,18,4,T().surface2);
   s.setTextColor(T().accent); s.setCursor(SCR_W-78,29); s.print("Reset Min/Max");
 
-  // v100: tombol "Tes Speaker" DIHAPUS -- fitur speaker dicabut total dr proyek ini
+  iosRR(s,SCR_W-168,24,78,18,4,T().surface2);
+  s.setTextColor(T().accent); s.setCursor(SCR_W-162,29); s.print(RPTR("Tes Speaker"));
 
   bool wide = (SCR_W >= 300); // landscape: 2 kolom berdampingan; portrait: numpuk vertikal
   int top = 50;
@@ -20900,7 +20946,12 @@ void hwmonTouch(int x,int y,bool held,bool isNew){
     needRedraw=true;
     return;
   }
-  // v100: tombol "Tes Speaker" & hwmonPlayTestTone() DIHAPUS -- fitur speaker dicabut total dr proyek ini
+  if(x>=SCR_W-168 && x<=SCR_W-90 && y>=24 && y<=42){
+    bool ok = hwmonPlayTestTone();
+    showToast(ok ? RPTR("Nada uji selesai") : RPTR("Speaker gagal dibuka"));
+    needRedraw=true;
+    return;
+  }
 }
 
 // =============================================

@@ -1,5 +1,8 @@
 # Changelog
 
+## Unreleased
+- New: optional MAX98357A speaker support is back. HWmonitor has a "Test Speaker" button that plays a 1 kHz tone (default pins BCLK 16, LRC 17, DIN 8 or 15; see docs/hardware.md)
+
 ## 1.0.3
 - New: Nyx Store - browse, install, update and remove Nyx Apps from your phone (Store button in Nyx Apps; needs WiFi)
 - Improved: new look for Nyx Store, the Nyx Apps list and File Explorer (squircle icons, glass rows, file tiles colored by type)

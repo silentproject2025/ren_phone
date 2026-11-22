@@ -18,7 +18,7 @@
 | Storage | microSD (SDIO 1-bit; over SPI on the Aether Board), with internal FFat as a fallback |
 | Sensors | MPU6050 (tilt, shake, auto-rotation) and INA219 (voltage, current, power) |
 | Microphone | INMP441 (I2S) |
-| Audio output | **Bluetooth (A2DP) only**, via the ESP32-CAM coprocessor; there is no speaker |
+| Audio output | **Bluetooth (A2DP)** via the ESP32-CAM coprocessor. Optional: a **MAX98357A** I2S amp + speaker for the HWmonitor "Test Speaker" tone |
 | Camera | OV2640 on an ESP32-CAM module (OV3660/OV5640 are detected automatically) |
 | Extras | Vibration motor and Neopixel |
 | Partition scheme | `app3M_fat9M_16MB` |
@@ -33,6 +33,7 @@
 | Microphone | SCK 47 · WS 46 · SD 45 |
 | Link to CAM | S3 TX 41 → CAM RX 13 · S3 RX 42 ← CAM TX 14 · common GND |
 | MPU6050 and INA219 | ILI9341: SDA 15 · SCL 7 (`Wire`) · ST7796: SDA 5 · SCL 4 (`Wire1`, its own bus) |
+| Speaker (optional, MAX98357A) | BCLK 16 · LRC 17 · DIN 8 (ILI9341) or 15 (ST7796 / Aether). Override with `-DAUDIO_I2S_BCLK / AUDIO_I2S_LRC / AUDIO_I2S_DOUT`. Power VIN from 5V |
 | Other | Vibration motor 18 · Neopixel 48 |
 
 The display and sensor pin definitions live in [`firmware/phone/display_conf.h`](../firmware/phone/display_conf.h) and [`firmware/phone/hw_conf.h`](../firmware/phone/hw_conf.h).

@@ -87,6 +87,8 @@ At boot, NyxOS reads the last reset reason. For an abnormal reset (panic, watchd
 
 Live monitoring on the device: per-core load, internal RAM, PSRAM and the *largest free block*. The main tool for diagnosing memory problems.
 
+The **Test Speaker** button plays a short 1 kHz tone through an optional MAX98357A module (wiring in [Hardware](../hardware.md)). Without the module nothing happens, and the rest of the phone is unaffected.
+
 ## Other utility apps
 
 Screenshot (BMP to `/screenshot`), Stopwatch and Timer (keep running in the background), Pomodoro, Neopixel, Mic Level, 3D Orient (MPU6050), Notepad, Canvas, scientific Calculator, Clock, Files and the Web File Manager.
