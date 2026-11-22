@@ -1261,6 +1261,29 @@ void loadTheme(){
   if(themeIdx<0||themeIdx>=THEME_COUNT) themeIdx=0;
 }
 
+// ---- TLS_MIN_V1: ambang blok RAM internal utk koneksi TLS, bisa dipilih di layar HWmonitor (tombol "TLS") ----
+// Dipakai Gemini (phone.ino), Chat (chat_renphone.ino) & Gutenberg. Tersimpan di NVS (namespace "ui", kunci "tlsmin").
+static const uint32_t TLS_MIN_OPTS[] = { 4000, 6000, 8000, 10000, 12000, 16000, 20000 };
+static const int TLS_MIN_N = sizeof(TLS_MIN_OPTS)/sizeof(TLS_MIN_OPTS[0]);
+static uint32_t tlsMinVal = 0;                       // 0 = belum dimuat dari NVS
+uint32_t tlsMin(){
+  if(tlsMinVal==0){
+    Preferences p; p.begin("ui",false);
+    uint32_t v = p.getUInt("tlsmin", 10000);
+    p.end();
+    if(v<2000 || v>40000) v = 10000;
+    tlsMinVal = v;
+  }
+  return tlsMinVal;
+}
+void tlsMinCycle(){
+  uint32_t cur = tlsMin();
+  int idx = -1;
+  for(int i=0;i<TLS_MIN_N;i++) if(TLS_MIN_OPTS[i]==cur){ idx=i; break; }
+  tlsMinVal = TLS_MIN_OPTS[(idx+1) % TLS_MIN_N];
+  Preferences p; p.begin("ui",false); p.putUInt("tlsmin", tlsMinVal); p.end();
+}
+
 // =============================================
 // PILIHAN FONT (v66, diperluas v67) -- disimpan di NVS namespace "ui" spy
 // 1 grup sama theme/orientasi. uiFontIdx dipakai SATU tempat pusat:
@@ -3140,7 +3163,7 @@ bool doGeminiHttpRequest(const String& promptText, String& outResponse) {
   // bakal nge-log error alokasi yg SPESIFIK (bukan tebakan kita lagi),
   // kelihatan di baris "[Gemini] httpCode=... err=..." bawah, atau
   // pesan "E (...) esp-tls-mbedtls: ..."/"mbedtls_ssl_..." di Serial.
-  const size_t MIN_BLOCK_FOR_TLS = 8000; // 12000->10000 (RAM_V6): mbedTLS sudah di PSRAM (lib kustom)
+  const size_t MIN_BLOCK_FOR_TLS = tlsMin(); // TLS_MIN_V1: bisa dipilih di HWmonitor (tombol TLS)
   size_t lb = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
   if (lb < MIN_BLOCK_FOR_TLS) {
     char eb[200];
@@ -3383,7 +3406,7 @@ void triggerGeminiAI() {
   // kesempatan ke lwIP buat rilis blok TLS lama tanpa ada overhead stack
   // task yg motong. Retry ringan (maks 3x, jeda 150ms = 450ms total,
   // sengaja singkat drpd bikin UI kerasa nge-freeze pas ketuk kirim).
-  const size_t MIN_BLOCK_TO_START = 8000; // 12000->10000 (RAM_V6; lihat catatan di atas)
+  const size_t MIN_BLOCK_TO_START = tlsMin(); // TLS_MIN_V1: bisa dipilih di HWmonitor (tombol TLS)
   for (int i = 0; i < 3 && largestBlock < MIN_BLOCK_TO_START; i++) {
     delay(150);
     largestBlock = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
@@ -20841,6 +20864,12 @@ void drawHwmon(LGFX_Sprite& s){
   iosRR(s,SCR_W-168,24,78,18,4,T().surface2);
   s.setTextColor(T().accent); s.setCursor(SCR_W-162,29); s.print(RPTR("Tes Speaker"));
 
+  if(SCR_W>=330){   // TLS_MIN_V1: tombol ambang TLS (ketuk utk ganti: 4K..20K)
+    iosRR(s,SCR_W-252,24,78,18,4,T().surface2);
+    char tb[16]; snprintf(tb,sizeof(tb),"TLS min %uK",(unsigned)(tlsMin()/1000));
+    s.setTextColor(T().accent); s.setCursor(SCR_W-246,29); s.print(tb);
+  }
+
   bool wide = (SCR_W >= 300); // landscape: 2 kolom berdampingan; portrait: numpuk vertikal
   int top = 50;
   if(wide){
@@ -20949,6 +20978,13 @@ void hwmonTouch(int x,int y,bool held,bool isNew){
   if(x>=SCR_W-168 && x<=SCR_W-90 && y>=24 && y<=42){
     bool ok = hwmonPlayTestTone();
     showToast(ok ? RPTR("Nada uji selesai") : RPTR("Speaker gagal dibuka"));
+    needRedraw=true;
+    return;
+  }
+  if(SCR_W>=330 && x>=SCR_W-252 && x<=SCR_W-174 && y>=24 && y<=42){   // TLS_MIN_V1
+    tlsMinCycle();
+    char tm[48]; snprintf(tm,sizeof(tm),"Ambang TLS: %u byte",(unsigned)tlsMin());
+    showToast(tm);
     needRedraw=true;
     return;
   }
@@ -21142,6 +21178,7 @@ void setup(){
   if(display.touch())loadOrRunCalibration(); // kalibrasi SEKARANG selalu match dgn rotasi runtime
 #endif
   loadTheme();
+  tlsMin();   // TLS_MIN_V1: muat ambang TLS dari NVS sekarang (bukan nanti dari dalam task)
   loadFontPref();
   loadLangPref(); // I18N_V1: bahasa UI (default English)
   initAppColors();
