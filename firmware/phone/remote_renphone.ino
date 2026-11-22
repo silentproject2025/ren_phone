@@ -207,6 +207,7 @@ static bool rcApStart() {
   Serial.printf("[remote] sebelum AP: freeInternal=%u largestBlock=%u\n",
                 heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
                 heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+  smHoldRelease(); // SYSMEM: ruang kontigu utk start AP/radio
   WiFi.mode((wifiConnected || wifiConnecting) ? WIFI_AP_STA : WIFI_AP);
   bool ok = WiFi.softAP(rcCfg.ssid, rcCfg.pass, rcCfg.channel, rcCfg.hidden ? 1 : 0, 2);
   if (!ok) {
@@ -754,7 +755,7 @@ static void rcHandleScan() {
   if (webServer.hasArg("go")) {
     if (WiFi.scanComplete() != WIFI_SCAN_RUNNING) {
       WiFi.scanDelete();
-      if (WiFi.getMode() == WIFI_AP) WiFi.mode(WIFI_AP_STA);   // scan butuh radio STA
+      if (WiFi.getMode() == WIFI_AP) { smHoldRelease(); WiFi.mode(WIFI_AP_STA); }   // scan butuh radio STA
       WiFi.scanNetworks(true);
     }
     webServer.send(200, "text/plain", "run");

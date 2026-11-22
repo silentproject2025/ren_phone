@@ -52,6 +52,10 @@ static sysmem::Mgr& smMgr() {
     b.alloc = smB_alloc; b.free = smB_free; b.freeBytes = smB_free_sz; b.largest = smB_largest;
     b.totalBytes = smB_total; b.nowMs = smB_now; b.delayMs = smB_delay;
     smM.init(b);
+#ifndef RP_CONTIG_HOLD_KB
+#define RP_CONTIG_HOLD_KB 24     // 0 = matikan cadangan kontigu. Bisa ditimpa: -DRP_CONTIG_HOLD_KB=32
+#endif
+    smM.cfg.holdContig = (uint32_t)RP_CONTIG_HOLD_KB * 1024u;
     //            id          nama        budget int  budget psram  priv
     smM.setOwner(SM_O_SYSTEM, "system",   0,          0,            true);
     smM.setOwner(SM_O_UI,     "ui",       0,          0);
@@ -136,4 +140,33 @@ void smDump() {
   smMgr().format(buf, sizeof(buf));
   smUnlock();
   Serial.printf("[SysMem]\n%s", buf);
+}
+
+// ---- cadangan kontigu (anti-fragmentasi) -----------------------------------------------------
+bool smHoldTake() {
+  smLock(portMAX_DELAY);
+  bool ok = smMgr().holdTake();
+  smUnlock();
+  if (ok) Serial.printf("[SysMem] cadangan kontigu %u KB diambil (blok terbesar kini %u B)\n",
+                        (unsigned)(smMgr().holdSize / 1024), (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+  return ok;
+}
+
+void smHoldRelease() {
+  smLock(portMAX_DELAY);
+  bool did = smMgr().holdRelease();
+  smUnlock();
+  if (did) Serial.printf("[SysMem] cadangan kontigu dilepas (blok terbesar kini %u B)\n",
+                         (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+}
+
+uint32_t smHoldBytes() {
+  if (!smInited) return 0;
+  return smM.holdSize;                            // baca 32-bit tunggal: aman tanpa kunci
+}
+
+bool smEnsureContig(uint32_t need) {
+  if (heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL) >= need) return true;
+  smHoldRelease();
+  return heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL) >= need;
 }

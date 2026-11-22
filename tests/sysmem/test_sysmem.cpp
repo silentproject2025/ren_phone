@@ -307,6 +307,69 @@ static void test_snapshot() {
   M.free(a);
 }
 
+
+// ------------------------- cadangan kontigu (hold) -------------------------
+static void test_hold() {
+  // 1) nonaktif secara default: tidak ada alokasi, perilaku lama
+  setup();
+  CHECK(!M.holdTake());
+  CHECK(M.holdPtr == nullptr);
+
+  // 2) syarat: free >= holdFreeMin & blok terbesar >= hold + margin
+  setup(200 * 1024);
+  M.cfg.holdContig = 24 * 1024;
+  CHECK(M.holdTake());
+  CHECK(M.holdSize == 24 * 1024 && F.used[REG_INT] == 24 * 1024);
+  CHECK(!M.holdTake());                                  // sudah ada: no-op
+
+  // 3) tekanan menghitung hold sebagai ruang tersedia
+  setup(60 * 1024);
+  M.cfg.holdContig = 24 * 1024; M.cfg.holdFreeMin = 40 * 1024; M.cfg.holdMargin = 8 * 1024;
+  CHECK(M.holdTake());
+  F.used[REG_INT] += 20 * 1024;                          // sisa free 16K + hold 24K = 40K (batas LOW tepat)
+  CHECK(M.pressure() == 1);                              // 40K !< lowFreeInt(40K) -> tapi lg 16K<32K => LOW
+  M.holdRelease();
+
+  // 4) contigNow melepas hold LEBIH DULU daripada reclaim cache app
+  setup(100 * 1024);
+  M.cfg.holdContig = 24 * 1024; M.cfg.holdFreeMin = 40 * 1024; M.cfg.holdMargin = 8 * 1024;
+  Cache cc{O_CHAT, {}, 0}; M.addReclaim(cacheReclaim, &cc, O_CHAT, 5);
+  cc.blocks.push_back(M.alloc(O_CHAT, 1000, F_INTERNAL));
+  CHECK(M.holdTake());
+  F.frag[REG_INT] = 60 * 1024;                           // heap terfragmentasi: blok terbesar jadi kecil
+  CHECK(F.largest(REG_INT) < 24 * 1024);
+  CHECK(M.contigNow(20 * 1024, REG_INT, -1));
+  CHECK(M.holdPtr == nullptr && M.nHoldRelease == 1);
+  CHECK(cc.calls == 0);                                  // cache app TIDAK dikorbankan
+  M.free(cc.blocks.back()); cc.blocks.clear();
+
+  // 5) setelah dilepas ada jeda (quiet) sebelum bisa diambil lagi
+  setup(200 * 1024);
+  M.cfg.holdContig = 24 * 1024; M.cfg.holdQuietMs = 5000;
+  CHECK(M.holdTake()); CHECK(M.holdRelease());
+  CHECK(!M.holdTake());                                  // masih dalam jeda
+  F.now += 5001;
+  CHECK(M.holdTake());
+
+  // 6) tick() mengambil hold saat syarat terpenuhi
+  setup(200 * 1024);
+  M.cfg.holdContig = 24 * 1024; F.now += 2000;
+  M.tick(); CHECK(M.holdPtr != nullptr);
+
+  // 7) tidak ambil kalau free internal terlalu sedikit (jangan menekan sistem)
+  setup(70 * 1024);
+  M.cfg.holdContig = 24 * 1024;                          // holdFreeMin default 64K, free 70K -> boleh
+  CHECK(M.holdTake()); M.holdRelease(); F.now += 6000;
+  F.used[REG_INT] = 20 * 1024;                           // free 50K < 64K
+  CHECK(!M.holdTake());
+
+  // 8) format menampilkan baris hold dan tidak overflow
+  setup(200 * 1024); M.cfg.holdContig = 24 * 1024; M.holdTake();
+  char buf[1024]; M.format(buf, sizeof(buf)); CHECK(strstr(buf, "hold=24K on=1"));
+  char tiny[24]; size_t w = M.format(tiny, sizeof(tiny)); CHECK(w < sizeof(tiny));
+  M.holdRelease();
+}
+
 // ------------------------- fuzz: invarian akuntansi -------------------------
 static uint32_t rng = 12345;
 static uint32_t rnd() { rng ^= rng << 13; rng ^= rng >> 17; rng ^= rng << 5; return rng; }
@@ -354,7 +417,7 @@ static void test_fuzz(uint32_t seed) {
 int main() {
   test_basic(); test_region_choice(); test_corruption(); test_budget(); test_reserve();
   test_reclaim_chain(); test_runaway_callback(); test_reclaim_order_and_removal(); test_waitContig(); test_pressure_tick();
-  test_realloc(); test_snapshot();
+  test_realloc(); test_snapshot(); test_hold();
   for (uint32_t s : {1u, 7u, 42u, 1337u, 99991u}) test_fuzz(s);
   printf("%d cek, %d gagal\n", nChecks, nFail);
   return nFail ? 1 : 0;

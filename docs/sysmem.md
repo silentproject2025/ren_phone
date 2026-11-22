@@ -54,3 +54,11 @@ smFree(buf);
 2. Pantau `untracked` vs `tracked`: sebelum migrasi hampir semua *untracked* — itu wajar.
 3. Migrasikan satu fitur (mis. Gutenberg: loop tunggu TLS di `gutenberg_renphone.ino` ±baris 486) → `[SysMem] reclaim:` muncul saat RAM mepet.
 4. Setelah ada beberapa owner, isi `budget` per owner dari puncak yang terlihat di `smDump()`.
+
+## Cadangan kontigu (anti-fragmentasi)
+Heap ESP32 tidak bisa di-defrag, jadi `sysmem` memegang **satu blok RAM internal** (default 24 KB, `-DRP_CONTIG_HOLD_KB=0` mematikannya) selagi heap masih rapi, lalu **melepasnya otomatis** saat ada yang butuh blok kontigu.
+- Diambil di `setup()` tepat setelah `connectWifi()` (`smHoldTake()`), dan oleh `smTick()` kalau free internal ≥ 64 KB dan blok terbesar ≥ hold + 12 KB. Setelah dilepas ada jeda 5 dtk sebelum bisa diambil lagi.
+- Dilepas **sebelum** reclaim cache app (murah, tidak terlihat user): `smWaitContig()`/`contigNow()`, `smEnsureContig(need)` (cek blok telepon, catur, backup cloud, devreg), tunggu TLS Gutenberg, dan sebelum radio WiFi/AP dinyalakan (`connectWifi()`, `remote_renphone.ino`).
+- `pressure()` dan App Memory Guard menghitung cadangan sebagai ruang yang tersedia, jadi cadangan sendiri tidak memicu status LOW/CRITICAL.
+- `smDump()` menampilkan baris `hold=24K on=1 take=N rel=N`.
+- `rpAllocPs(n)` (di `sysmem_fw.h`): alokasi PSRAM dulu, jatuh ke heap biasa. Jangan dipakai untuk buffer yang diisi DMA dari SD (SD SPI di Aether).

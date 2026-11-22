@@ -2838,6 +2838,7 @@ void saveWifiCreds(){
 }
 void connectWifi(bool announceResult=false){
   if(airplaneMode || !strlen(WIFI_SSID)) return;
+  smHoldRelease(); // SYSMEM: beri ruang kontigu utk init radio WiFi (no-op kalau cadangan belum dipegang)
   WiFi.begin(WIFI_SSID,WIFI_PASSWORD);
   WiFi.setSleep(false);
   wifiConnecting=true;
@@ -7243,7 +7244,7 @@ void appMemGuardTick(){
   if(now-appMemGuardLastCheckMs<APP_MEM_GUARD_CHECK_MS) return;
   appMemGuardLastCheckMs=now;
 
-  size_t freeInternal = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+  size_t freeInternal = heap_caps_get_free_size(MALLOC_CAP_INTERNAL) + smHoldBytes(); // cadangan kontigu bisa dilepas kapan saja -> dihitung lega
   if(freeInternal>=APP_MEM_GUARD_MIN_FREE_BYTES) return; // masih aman, gak perlu kill siapa2
 
   int victim = appFindLruBackgroundVictim(curScreen());
@@ -12375,7 +12376,7 @@ bool updInstallFromURLOnce(const String& url){
   uint8_t* buf = sbuf;
   size_t bufSz = sizeof(sbuf);
   struct BufGuard { uint8_t* p = nullptr; ~BufGuard(){ if(p) free(p); } } bufGuard;
-  bufGuard.p = (uint8_t*)malloc(8192);
+  bufGuard.p = (uint8_t*)rpAllocPs(8192);   // PSRAM dulu: buffer 8 KB ini tidak lagi memotong blok kontigu internal saat OTA/TLS
   if(bufGuard.p){ buf = bufGuard.p; bufSz = 8192; }
   size_t written = 0;
   unsigned long lastData = millis();
@@ -21152,6 +21153,7 @@ void setup(){
   loadWifiCreds();
   connectWifi();
   rpHL("setelah_connectWifi");
+  smHoldTake();   // SYSMEM: pegang cadangan kontigu RAM internal selagi heap masih rapi (dilepas otomatis oleh smWaitContig/smEnsureContig)
   wakeBegin(); // v115: siapin wake word (alokasi PSRAM, load template, jalanin task kalau user sempat ngaktifin)
   rpHL("akhir_setup");
   rpHLFlush();

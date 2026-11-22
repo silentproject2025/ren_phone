@@ -3420,7 +3420,7 @@ static void chsPrefsLoad() {
 #if CHS_SMP
   chsSmpOn = p.getUChar("smp", 1) != 0;
 #endif
-  uint8_t* sb = (uint8_t*)malloc(CHS_STY_LEN + CHS_BK_MAXLEN + 16);          // heap, bukan stack (task loop cuma 8 KB)
+  uint8_t* sb = (uint8_t*)rpAllocPs(CHS_STY_LEN + CHS_BK_MAXLEN + 16);          // heap, bukan stack (task loop cuma 8 KB)
   if (sb) {
     size_t L = p.getBytesLength("sty");
     bool styOk = false;                                                         // sty versi lama / rusak -> jaringan DAN kebiasaan mulai dari awal (hab dilatih bersama jaringannya)
@@ -3441,7 +3441,7 @@ static void chsRbLoadNvs() {
   if (!p.begin("chess", true)) return;
   size_t L = p.getBytesLength("rb");
   if (L >= 4 && L <= CHS_RB_MAXLEN) {
-    uint8_t* sb = (uint8_t*)malloc(CHS_RB_MAXLEN + 8);
+    uint8_t* sb = (uint8_t*)rpAllocPs(CHS_RB_MAXLEN + 8);
     if (sb) { p.getBytes("rb", sb, L); chsRbDeser(sb, L); free(sb); }
   }
   p.end();
@@ -3463,7 +3463,7 @@ static void chsStyleSaveEx(bool withRb) {
   if (!sd && !rd) return;
   Preferences p;
   if (!p.begin("chess", false)) return;
-  uint8_t* sb = (uint8_t*)malloc(CHS_STY_LEN + CHS_BK_MAXLEN + 16);
+  uint8_t* sb = (uint8_t*)rpAllocPs(CHS_STY_LEN + CHS_BK_MAXLEN + 16);
   if (sb) {
     if (sd) {
       size_t L = chsStyleSer(sb); p.putBytes("sty", sb, L);
@@ -3544,7 +3544,7 @@ static void chsTaskFunc(void*) {
       chsConn = 2; chsSetErr("WiFi belum terhubung"); chsDirty = true;
       vTaskDelay(pdMS_TO_TICKS(1500)); continue;
     }
-    if (heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL) < 30000) {
+    if (!smEnsureContig(30000)) {
       chsConn = 2; chsSetErr("RAM padat, tutup app lain"); chsDirty = true;
       vTaskDelay(pdMS_TO_TICKS(2000)); continue;
     }

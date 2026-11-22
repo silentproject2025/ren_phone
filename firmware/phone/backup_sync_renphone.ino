@@ -224,7 +224,7 @@ bool bkCloudStart(int op, bool secrets) {
   if (bsBusy) return false;
   if (sizeof(RP_REG_URL) <= 1) { bsDone("Fitur cloud dimatikan di firmware"); return false; }
   if (WiFi.status() != WL_CONNECTED) { bsDone(RPTR("WiFi belum tersambung")); return false; }
-  if (heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL) < BS_MIN_INT_BLOCK) { bsDone(RPTR("RAM kurang, tutup app lain dulu")); return false; }
+  if (!smEnsureContig(BS_MIN_INT_BLOCK)) { bsDone(RPTR("RAM kurang, tutup app lain dulu")); return false; }
   bsOp = (uint8_t)op; bsSec = secrets; bsReady = false; bsRestart = false; bsBusy = true;
   if (xTaskCreatePinnedToCore(bsTask, "bkcloud", 12288, NULL, 1, NULL, 0) != pdPASS) { bsDone(RPTR("Gagal memulai tugas")); return false; }
   return true;

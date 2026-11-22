@@ -2658,7 +2658,7 @@ static bool callEnsureInit() {
   if (!callStack) callStack = (StackType_t*)heap_caps_aligned_alloc(16, SZ, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
   // RAM_OPT_V1: stack di PSRAM -> RAM internal cuma kepake TCB (~0,4 KB) + struct kecil, ambang 12 KB cukup.
   // Kalau stack PSRAM gagal, fallback stack di RAM internal tetap butuh blok 24 KB.
-  if (heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL) < (callStack ? 12000u : 24000u)) return false;
+  if (!smEnsureContig(callStack ? 12000u : 24000u)) return false;
   if (callStack) callTask = xTaskCreateStaticPinnedToCore(callTaskFunc, "callTask", SZ, NULL, 3, callStack, &callTCB, 1);
   else {
     BaseType_t r = xTaskCreatePinnedToCore(callTaskFunc, "callTask", SZ, NULL, 3, &callTask, 1);

@@ -90,6 +90,12 @@ struct Config {
   uint32_t critFreeInt      = 24 * 1024;  // tekanan CRITICAL
   uint32_t critContig       = 20 * 1024;
   uint32_t tickMs           = 1000;       // jarak minimal antar tick()
+  // CADANGAN KONTIGU (HOLD): satu blok RAM internal dipegang selagi heap masih rapi, dilepas OTOMATIS
+  // saat ada yang butuh blok kontigu (contigNow/waitContig/smHoldRelease) -- lawan fragmentasi.
+  uint32_t holdContig       = 0;          // 0 = nonaktif (perilaku lama persis)
+  uint32_t holdFreeMin      = 64 * 1024;  // hold hanya diambil kalau free internal >= ini (sisa >= lowFreeInt)
+  uint32_t holdMargin       = 12 * 1024;  // dan blok terbesar >= holdContig + margin
+  uint32_t holdQuietMs      = 5000;       // setelah dilepas, jangan diambil lagi selama ini
 };
 
 struct OwnerStat {
@@ -117,11 +123,37 @@ struct Mgr {
   OwnerStat own[SM_MAX_OWNERS];
   ReclaimCb cbs[SM_MAX_RECLAIM];
   uint32_t nReclaimCalls, nReclaimHit, nGateOk, nGateFail, lastTickMs, nBadGlobal;
+  void*    holdPtr; uint32_t holdSize, holdQuietUntil, nHoldTake, nHoldRelease;
 
   void init(const Backend& b) {
     be = b; cfg = Config();
     memset(own, 0, sizeof(own)); memset(cbs, 0, sizeof(cbs));
     nReclaimCalls = nReclaimHit = nGateOk = nGateFail = lastTickMs = nBadGlobal = 0;
+    holdPtr = nullptr; holdSize = holdQuietUntil = nHoldTake = nHoldRelease = 0;
+  }
+
+  // ---------------------------------------------------------- hold kontigu
+  // Ambil cadangan (aman dipanggil berulang; no-op kalau nonaktif/sudah ada/syarat tak terpenuhi).
+  bool holdTake() {
+    if (!cfg.holdContig || holdPtr || !be.alloc || !be.free) return false;
+    uint32_t now = be.nowMs ? be.nowMs(be.ctx) : 0;
+    if (holdQuietUntil && now && (int32_t)(now - holdQuietUntil) < 0) return false;
+    size_t fi = be.freeBytes ? be.freeBytes(be.ctx, REG_INT) : 0;
+    size_t lg = be.largest ? be.largest(be.ctx, REG_INT) : 0;
+    if (fi < cfg.holdFreeMin || lg < (size_t)cfg.holdContig + cfg.holdMargin) return false;
+    void* p = be.alloc(be.ctx, cfg.holdContig, REG_INT);
+    if (!p) return false;
+    holdPtr = p; holdSize = cfg.holdContig; nHoldTake++;
+    return true;
+  }
+  // Lepas cadangan sekarang. true = ada yang dilepas.
+  bool holdRelease() {
+    if (!holdPtr) return false;
+    be.free(be.ctx, holdPtr, REG_INT);
+    holdPtr = nullptr; holdSize = 0; nHoldRelease++;
+    uint32_t now = be.nowMs ? be.nowMs(be.ctx) : 0;
+    holdQuietUntil = now ? now + cfg.holdQuietMs : 0;
+    return true;
   }
 
   // daftarkan owner. budget 0 = tanpa batas. priv = boleh menembus cadangan internal.
@@ -155,6 +187,10 @@ struct Mgr {
   int pressure() const {
     size_t fi = be.freeBytes ? be.freeBytes(be.ctx, REG_INT) : (size_t)-1;
     size_t lg = be.largest ? be.largest(be.ctx, REG_INT) : (size_t)-1;
+    if (holdSize) {                                  // cadangan bisa dilepas kapan saja -> hitung sebagai tersedia
+      if (fi != (size_t)-1) fi += holdSize;
+      if (lg != (size_t)-1 && lg < holdSize) lg = holdSize;
+    }
     if (fi < cfg.critFreeInt || lg < cfg.critContig) return 2;
     if (fi < cfg.lowFreeInt || lg < cfg.lowContig) return 1;
     return 0;
@@ -275,6 +311,10 @@ struct Mgr {
   // Satu putaran reclaim TANPA menunggu: level 1 lalu 2, berhenti begitu blok kontigu terbesar
   // di region >= need. true = sudah cukup. Aman dipanggil dari glue yang memegang mutex sendiri.
   bool contigNow(uint32_t need, int region = REG_INT, int skipOwner = -1) {
+    if (region == REG_INT && holdPtr) {               // cadangan kontigu dilepas PERTAMA (tanpa korban cache app)
+      size_t lg0 = be.largest ? be.largest(be.ctx, region) : (size_t)-1;
+      if (lg0 < need) holdRelease();
+    }
     for (int level = 1; level <= 2; level++) {
       uint8_t mask = 0; int steps = 0;
       for (;;) {
@@ -305,6 +345,7 @@ struct Mgr {
     uint32_t now = be.nowMs ? be.nowMs(be.ctx) : 0;
     if (lastTickMs && now - lastTickMs < cfg.tickMs) return false;
     lastTickMs = now ? now : 1;
+    if (cfg.holdContig && !holdPtr) holdTake();     // no-op kalau syarat (free/blok terbesar/jeda) belum terpenuhi
     int lv = pressure();
     if (!lv) return false;
     uint8_t mask = 0;
@@ -336,6 +377,11 @@ struct Mgr {
       if (k < 0) break;
       w += (size_t)k;
       if (w >= cap) { w = cap - 1; break; }
+    }
+    if (cfg.holdContig && w < cap) {
+      int k = snprintf(buf + w, cap - w, "hold=%uK on=%d take=%u rel=%u\n", (unsigned)(cfg.holdContig / 1024),
+                       holdPtr ? 1 : 0, (unsigned)nHoldTake, (unsigned)nHoldRelease);
+      if (k > 0) { w += (size_t)k; if (w >= cap) w = cap - 1; }
     }
     for (int i = 0; i < SM_MAX_OWNERS && w < cap; i++) {
       const OwnerStat& o = own[i]; if (!o.used) continue;

@@ -484,6 +484,7 @@ static int gutDownloadParallel(const char* u, const char* tmp, uint32_t total) {
 static bool gutWaitTlsHeap(uint32_t maxMs) {
   uint32_t t0 = millis();
   size_t lb = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
+  if (lb < GUT_TLS_MIN_BLOCK) { smHoldRelease(); lb = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL); }   // SYSMEM: lepas cadangan kontigu dulu
   while (lb < GUT_TLS_MIN_BLOCK && (uint32_t)(millis() - t0) < maxMs && !gutCancel) { delay(100); lb = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL); }
   Serial.printf("[GUT] tunggu RAM: blok terbesar %u B (butuh %u) setelah %lu ms\n", (unsigned)lb, (unsigned)GUT_TLS_MIN_BLOCK, (unsigned long)(millis() - t0));
   return lb >= GUT_TLS_MIN_BLOCK;

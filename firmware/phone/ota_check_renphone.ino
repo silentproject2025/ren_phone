@@ -347,6 +347,7 @@ static void otaFetchNotes(const String& base, const String& head) {
   if (c != HTTP_CODE_OK) return;
   // bersihkan: hanya ASCII tercetak + \n (font layar tidak punya glyph lain), buang \r
   String clean = "";
+  clean.reserve(nb.length() < 1500 ? nb.length() + 1 : 1501);   // satu alokasi, bukan tumbuh bertahap
   for (size_t i = 0; i < nb.length() && clean.length() < 1500; i++) {
     char ch = nb[i];
     if (ch == '\n' || (ch >= 32 && ch < 127)) clean += ch;

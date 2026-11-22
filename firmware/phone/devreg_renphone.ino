@@ -258,7 +258,7 @@ void devRegTick(){
   if(!drUserKick && now < DR_MIN_UPTIME_MS) return;
   if((int32_t)(drNextMs - now) > 0) return;
   if(WiFi.status() != WL_CONNECTED) return;
-  if(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL) < DR_MIN_INT_BLOCK){
+  if(!smEnsureContig(DR_MIN_INT_BLOCK)){
     drNextMs = now + 30000UL;               // RAM sempit (mis. app besar jalan): cek lagi nanti
     return;
   }

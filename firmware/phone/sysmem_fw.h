@@ -36,3 +36,15 @@ void   smTick();
 int    smPressure();
 // cetak tabel pemakaian per owner ke Serial
 void   smDump();
+// CADANGAN KONTIGU RAM internal (anti-fragmentasi). Diambil saat boot/tick, dilepas otomatis oleh smWaitContig().
+bool   smHoldTake();                       // ambil sekarang (true = berhasil)
+void   smHoldRelease();                    // lepas sekarang (panggil sebelum init WiFi / alokasi blok besar internal)
+uint32_t smHoldBytes();                    // ukuran cadangan yang sedang dipegang (0 = tidak ada)
+// true kalau blok internal terbesar >= need; kalau belum, cadangan dilepas dulu lalu dicek lagi
+bool   smEnsureContig(uint32_t need);
+// alokasi PSRAM dulu, jatuh ke heap biasa kalau PSRAM penuh/tidak ada. Bebaskan dengan free()/heap_caps_free().
+// JANGAN dipakai untuk buffer yang diisi DMA dari SD (SD SPI Aether: baca langsung ke PSRAM bisa menghasilkan nol).
+static inline void* rpAllocPs(size_t n) {
+  void* p = heap_caps_malloc(n, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  return p ? p : malloc(n);
+}
