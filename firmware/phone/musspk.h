@@ -32,8 +32,13 @@ using namespace libhelix;
 #define MUS_SPK_DEC_PSRAM 1
 #endif
 // Ambang bawaan Arduino-ESP32 (CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL). Dipulihkan setelah decoder dibuat.
+// MUSIK_HEAP_FIX_V1: pulihkan ke nilai SDK yg sebenarnya (preset hemat RAM = 2048), bukan 16384 tetap.
 #ifndef MUS_SPK_HEAP_THRESHOLD
-#define MUS_SPK_HEAP_THRESHOLD 16384
+ #ifdef CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL
+  #define MUS_SPK_HEAP_THRESHOLD CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL
+ #else
+  #define MUS_SPK_HEAP_THRESHOLD 2048
+ #endif
 #endif
 #define SPK_IN_CHUNK    2048          // byte file dibaca per putaran
 #define SPK_OUT_FRAMES  1152          // frame stereo maks per tulisan I2S (1 frame MP3)
