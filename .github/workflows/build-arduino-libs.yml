@@ -39,8 +39,8 @@ on:
       spiram_always_internal:
         description: "Alokasi malloc <= batas ini (byte) tetap di RAM internal; lebih besar -> PSRAM. Bawaan IDF 16384. 4096 = lebih banyak ke PSRAM, RAM internal lebih lega (sedikit lebih lambat)"
         type: choice
-        options: [ "default", "4096", "2048" ]
-        default: "2048"
+        options: [ "default", "4096", "2048", "1024", "512", "256" ]
+        default: "512"
       tcp_window_kb:
         description: "EKSPERIMEN: window TCP lwIP (KB) utk unduhan lebih cepat di jaringan latensi tinggi. default = bawaan IDF (~5,6 KB). Makin besar makin boros RAM"
         type: choice
@@ -193,7 +193,7 @@ jobs:
           #  - SPIRAM_TRY_ALLOCATE_WIFI_LWIP: buffer WiFi/lwIP diutamakan di PSRAM (RAM
           #    internal lebih lega). Bisa dimatikan lewat input wifi_lwip_psram=false.
           case "${{ inputs.spiram_always_internal }}" in
-            2048|4096) AI="${{ inputs.spiram_always_internal }}" ;;
+            256|512|1024|2048|4096) AI="${{ inputs.spiram_always_internal }}" ;;
             *) AI="" ;;
           esac
           {
