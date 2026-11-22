@@ -9,6 +9,7 @@ There are three installation paths. Pick the one that matches your needs.
 | **C. Manual build (Arduino CLI / IDE)** | Developers who need full control | Arduino CLI or Arduino IDE |
 
 - [Option A — CI-built firmware](#option-a--ci-built-firmware)
+- [What the automatic build does and does not do](#what-the-automatic-build-does-and-does-not-do)
 - [Option B — build on GitHub Actions](#option-b--build-on-github-actions)
 - [Option C — manual build for the ESP32-S3](#option-c--manual-build-for-the-esp32-s3)
 - [Building the ESP32-CAM coprocessor](#building-the-esp32-cam-coprocessor)
@@ -59,7 +60,7 @@ After a Release is created, the **Web Flasher (GitHub Pages)** workflow is calle
 
 ### Nyx Apps (ELF) build
 
-The **Build Nyx Apps (ELF)** workflow (`build-nyxapps.yml`) compiles every `examples/native/<id>/` that has an `app.c` and a `manifest.txt`, using the `espressif/idf` Docker image (default `espressif/idf:v5.5.5`, an input of the manual run; keep it equal to the IDF version of the core libraries) and `examples/native/idf_template`. It checks each ELF, and on `main`/`master` (or a manual run with `publish` on) it packs `<id>.zip` plus `nyxapps.json` with `tools/nyxapps_release.py` into the rolling pre-release `nyxapps`, then re-runs the web flasher, whose **Nyx Apps** tab links the downloads. A new example app is just a new folder. The workflow has not yet had a confirmed real run; see [Nyx Apps](./features/native-apps.md).
+The **Build Nyx Apps (ELF)** workflow (`build-nyxapps.yml`) compiles every `examples/native/<id>/` that has an `app.c` and a `manifest.txt`, using the `espressif/idf` Docker image (default `espressif/idf:v5.5.5`, an input of the manual run; keep it equal to the IDF version of the core libraries) and `examples/native/idf_template`. It checks each ELF, and on `main`/`master` (or a manual run with `publish` on) it packs `<id>.zip` plus `nyxapps.json` with `tools/nyxapps_release.py` into the rolling pre-release `nyxapps`, then re-runs the web flasher, whose **Nyx Apps** tab links the downloads. A new example app is just a new folder. On a device, the loader and the `hello` example are confirmed; see [Nyx Apps](./features/native-apps.md) for what is still unconfirmed.
 
 You can also flash with `esptool`:
 
@@ -69,6 +70,26 @@ esptool.py --chip esp32   --baud 921600 write_flash 0x0 cam_merged.bin          
 ```
 
 On first boot, follow the on-screen **touch calibration** procedure.
+
+### What the automatic build does and does not do
+
+The build that starts after every push is a **firmware** build. It uses the custom core libraries (see [below](#custom-core-libraries-mbedtls-in-psram)) but never builds them, and it ignores the manual inputs.
+
+| Question | Answer |
+|---|---|
+| Does a push build use the custom core libraries? | Yes, **if the package already exists**: it downloads `esp32s3-libs.tar.gz` from the `arduino-libs-custom` pre-release and installs it over the stock libraries. |
+| Does a push build create them? | No. Only the manual **Build Arduino Libs** workflow does (slow, hours). Run it once per core version, or when you change one of its options (including `elf_loader`). |
+| What if the package is missing, for another core version, or lacks the expected options? | The build stays green and silently uses the stock libraries. Nyx Apps then reports that the loader is missing. |
+| After re-running Build Arduino Libs, do old firmware files change? | No. Start **Build Firmware Binaries** again so a new firmware is compiled against the new package. |
+| Do the manual inputs (`use_custom_libs`, `loop_core`, `simd_pie`, `nyx_nn`, `push_diff`, `chess_opt`) apply to a push? | No. Only *Run workflow* offers them; a push uses the defaults. The Release notes only name the commit and branch, not the inputs. |
+| Is the Nyx Apps (ELF) workflow part of every push? | No. It runs when `examples/native/**`, `firmware/phone/nyx_app.h`, the packaging tools or its own workflow file change. |
+
+Checklist for a firmware that must run Nyx Apps:
+
+1. Run **Build Arduino Libs** once with `elf_loader` = true (the default).
+2. Push, or run **Build Firmware Binaries** by hand.
+3. In the log, step *Verifikasi library kustom terpasang* must print `elf_loader ADA di library kustom -> NYXAPP_HAVE_ELF=1`. If it prints the warning instead, the loader is not in this firmware.
+4. Flash, open **Nyx Apps** and start an app (`hello` is the smallest).
 
 ## Option B — build on GitHub Actions
 
@@ -141,6 +162,7 @@ This component is **optional**, but it is used by the CI builds.
 | `CONFIG_MBEDTLS_DYNAMIC_BUFFER=y`, `..._DYNAMIC_FREE_CONFIG_DATA=y` | TLS buffers are allocated per connection and configuration data is released after the handshake. |
 | `CONFIG_FREERTOS_TASK_CREATE_ALLOW_EXT_MEM=y` | Prerequisite for task stacks in PSRAM (`xTaskCreateStaticPinnedToCore`). |
 | `CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y` | WiFi/lwIP buffers are preferably placed in PSRAM. WiFi throughput may drop slightly; disable with the `wifi_lwip_psram=false` input. |
+| `CONFIG_ELF_LOADER=y`, `CONFIG_ELF_LOADER_LOAD_PSRAM=y` (input `elf_loader`, on by default) | Adds `espressif/elf_loader` 2.0.0 so [Nyx Apps](./features/native-apps.md) can load `app.elf` into PSRAM. Without it the firmware still builds and Nyx Apps says the loader is missing. |
 
 The `-DCONFIG_MBEDTLS_*` flags that used to be in `build-firmware.yml` were removed because they do not affect an already-built `libmbedtls.a`. Extra options only produce a *warning* if they fail to apply; only `EXTERNAL_MEM_ALLOC` fails the build.
 
@@ -151,7 +173,7 @@ The emulator and DOOM cores (`third_party/nofrendo_core/`, `third_party/esp_doom
 | Log step | Expected result |
 |---|---|
 | *Pasang library core kustom* ("install custom core library") | `Library kustom (mbedTLS di PSRAM) terpasang utk core X.Y.Z` appears. |
-| *Verifikasi library kustom terpasang* ("verify custom library installed") | `CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC 1` in `sdkconfig.h`, and the installed `libmbedtls.a` hash **differs** from the original. |
+| *Verifikasi library kustom terpasang* ("verify custom library installed") | `CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC 1` in `sdkconfig.h`, and the installed `libmbedtls.a` hash **differs** from the original. For Nyx Apps it also prints `elf_loader ADA di library kustom` (`esp_elf.h` and `libelf_loader.a` found). |
 
 Re-run the libs workflow only when the core version changes or the `sdkconfig` options change. **Build Firmware Binaries** also offers the manual `use_custom_libs` input (`false` for an A/B comparison with the stock libraries).
 

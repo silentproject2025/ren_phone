@@ -27,7 +27,7 @@ The device consists of two microcontrollers connected over UART. The ESP32-S3 ha
 
 Important design consequences:
 
-- **The device has no speaker.** All audio output (music, video, calls, voice memos) goes through the ESP32-CAM to Bluetooth TWS earbuds.
+- **There is no built-in speaker.** All audio output (music, video, calls, voice memos) goes through the ESP32-CAM to Bluetooth TWS earbuds. An optional MAX98357A module on the S3 can play Music and phone calls instead (`BETA`); AVI video sound still needs Bluetooth.
 - **Two firmwares must be kept consistent.** `rplink.h` must be **identical** on the S3 side (`firmware/phone/rplink.h`) and the CAM side (`firmware/cam_bt_coprocessor/rplink.h`).
 - **Memory is the scarcest resource.** See below.
 

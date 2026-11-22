@@ -7,7 +7,7 @@
 
 ## Audio
 
-- Audio only goes through Bluetooth. Without the ESP32-CAM and TWS earbuds, no app produces sound.
+- Audio goes through Bluetooth by default. Without the ESP32-CAM and TWS earbuds, only the optional MAX98357A speaker can produce sound (Music app and phone calls; `BETA`, not yet tested on hardware). AVI video sound and the other apps stay silent.
 
 ## Phone calls
 
@@ -30,11 +30,12 @@
 - **PNG:** at most 4 MB and 8 million pixels; above 2 MB there is no thumbnail.
 - **OpenDML AVI (> 1 GB)** is not supported for seek and resume. VBR MP3 may drift slightly after a long jump.
 - **NyxPPU** is not yet used in Inferno or the Home/Lock Screen.
-- **Nyx Apps:** experimental. The ELF loader is only present when the custom core libraries are built with the `elf_loader` option; the loader, the launcher and its SD/FFat storage choice have not been tested on a device. CI compiles the example apps and the web flasher offers them, but they have never run on a phone. Apps stored on internal flash share the roughly 9 MB FFat partition, and app file access there is slower than on the SD card. Apps are not sandboxed against a malicious app: install only apps you trust. See [Nyx Apps](./features/native-apps.md).
+- **Nyx Apps:** partly tested. The ELF loader is only present when the custom core libraries are built with the `elf_loader` option. The loader, the launcher and the `hello` example run on a real phone; the Nyx Store, the SD/FFat storage choice, the other examples, the watchdog and HTTP from apps are not yet confirmed. CI compiles the example apps and the web flasher offers them. Apps stored on internal flash share the roughly 9 MB FFat partition, and app file access there is slower than on the SD card. Apps are not sandboxed against a malicious app: install only apps you trust. See [Nyx Apps](./features/native-apps.md).
 - **Hardware scroll and row-diff push:** ST7796 and Aether builds only. Vertical scrolling in landscape cannot use hardware scroll (the panel scrolls only along its 480-pixel axis). In portrait, hardware scroll falls back to full-frame drawing while someone views Remote Control, in game mode, when PSRAM is low, while an overlay is open and, on Home, when a wallpaper is set. Hardware scroll on screens other than Home is `BETA` (see [System UI](./features/system-ui.md#home-pages-and-hardware-scroll-st7796)).
 - **DOOM from FFat:** the WAD is streamed from flash through a helper task (`wadio`, about 10 KB of internal RAM), so it no longer has to fit in PSRAM. Save games are not stored while the WAD is on FFat; use the SD card if you want to save games. DOOM has no sound. The zone memory is 6 MiB only when a contiguous PSRAM block of about 6.25 MB is free, otherwise 5 or 4 MiB, and big levels may then fail (`Z_Malloc: failed`, the device restarts). Restarting the phone before opening DOOM gives the largest block.
 
 ## Build and release
 
 - CI does not pin tool versions, so upstream updates can break a build without any change in the repository.
+- The automatic build after a push only **installs** the custom core libraries; it never builds them. Only the manual *Build Arduino Libs* workflow does. Manual inputs such as `nyx_nn` or `loop_core` are not available to push builds. See [Building](./building.md#what-the-automatic-build-does-and-does-not-do).
 - The custom core libraries are tied to one core version. If the core version in CI changes, the package in the Release is skipped (the build stays green but uses the stock libraries) until the *Build Arduino Libs* workflow is run again.

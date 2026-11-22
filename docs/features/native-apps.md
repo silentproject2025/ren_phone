@@ -1,4 +1,4 @@
-# Nyx Apps — native (ELF) apps from SD or internal flash `EXP`
+# Nyx Apps — native (ELF) apps from SD or internal flash `PARTIAL`
 
 Run your own apps **at native speed** (Xtensa machine code) without reflashing the firmware.
 An app is a folder on the SD card (or on internal flash, see [Storage](#storage-sd-card-or-internal-flash)); you open it from the **Nyx Apps** icon on Home.
@@ -16,11 +16,12 @@ An app is a folder on the SD card (or on internal flash, see [Storage](#storage-
 |---|---|
 | Memory arena, quota, leak/corruption detection, pressure handling, TLS Gate (`nyxmem.h`) | **Tested on a PC**: 189 checks, fuzzing with 5 seeds, ASan + UBSan, mutation tests |
 | Host: manifest, path sandbox, permissions, file handles, async HTTP (`nyxhost.h`) | **Tested on a PC**: 158 checks, 5 example apps run through `dlopen`, mutation tests |
-| Firmware glue (`nyxapp_renphone.ino`), `phone.ino` patch | **Syntax-checked only** (with stubs) plus a CI build; the patch fits and is idempotent on this repo's `phone.ino`. **Never run on a phone.** |
-| ELF loader on Xtensa/PSRAM, task + watchdog, HTTP worker, tilt | **Not tested on hardware.** The biggest risk areas: see "Enabling the ELF loader" and "Things to check on the phone". |
-| SD / internal flash (FFat) storage choice and the FFat worker task | **Not tested on hardware.** |
+| Firmware glue (`nyxapp_renphone.ino`), `phone.ino` patch | Syntax-checked with stubs plus a CI build, and the launcher path used by `hello` runs on a phone. Other code paths in the glue are not yet confirmed. |
+| ELF loader on Xtensa/PSRAM, app task, drawing, touch, Back button (example `hello`) | **Confirmed on a real phone.** `hello` loads, draws its text and frame counter, follows touch and closes with Back. |
+| Watchdog, HTTP worker, tilt, the other examples (`bounce`, `memhog`, `notes`, `leaky`) | **Not yet confirmed on hardware.** See "Things to check on the phone". |
+| SD / internal flash (FFat) storage choice and the FFat worker task | **Not yet confirmed as a separate test.** If you tested one of them, report which. |
 | Nyx Store: catalogue parser, validation, install-state logic (`nyxstore_core.h`) | **Tested on a PC**: 85 checks, fuzzing, ASan + UBSan, mutation checks |
-| Nyx Store: UI, download task, SHA-256, write/rename/remove (`nyxstore_renphone.ino`) | **Syntax-checked only** (with stubs). **Never run on a phone, never run against the real GitHub release.** |
+| Nyx Store: UI, download task, SHA-256, write/rename/remove (`nyxstore_renphone.ino`) | **Syntax-checked only** (with stubs). Not yet confirmed on a phone or against the real GitHub release. |
 
 PC tests: `cd tests/nyxapp && ./run.sh` (needs `g++` and `gcc`).
 
@@ -85,7 +86,7 @@ The **Build Nyx Apps (ELF)** workflow (`.github/workflows/build-nyxapps.yml`) co
 * New example app = new folder under `examples/native/`; CI picks it up automatically.
 * The ESP-IDF image is an input of the manual run (default `espressif/idf:v5.5.5`); keep it equal to the IDF version of the core libraries.
 * Packaging logic: `tools/nyxapps_release.py` (uses `tools/pack_app.py` for validation).
-* **Not tested on hardware**, and the `idf.py elf` build itself has only been written, not run, in CI yet.
+* The `hello` example is confirmed on a device. The other examples have been compiled by CI but not yet confirmed on one.
 
 ## Nyx Store (install apps from the phone)
 
@@ -103,7 +104,7 @@ Publishing an app to the Store = adding `examples/native/<id>/{app.c,manifest.tx
 
 **Security, honestly.** The connection uses `setInsecure()` (like the OTA updater), so the SHA-256 protects against corrupted or truncated downloads, **not** against someone who controls your network and can rewrite both the catalogue and the file. Native apps are not sandboxed (see the trust model above). Install only apps from a source you trust.
 
-Tests: `tests/nyxapp/test_store.cpp` (catalogue parser, validation, fuzzing, install-state logic; run by `tests/nyxapp/run.sh`). The UI and the download/install glue (`nyxstore_renphone.ino`) are **syntax-checked only and have never run on a phone**.
+Tests: `tests/nyxapp/test_store.cpp` (catalogue parser, validation, fuzzing, install-state logic; run by `tests/nyxapp/run.sh`). The UI and the download/install glue (`nyxstore_renphone.ino`) are **syntax-checked only; not yet confirmed on a phone**.
 
 ## Storage: SD card or internal flash
 
@@ -127,7 +128,7 @@ This repository already includes the integration: `nyx_app.h`, `nyxmem.h`, `nyxh
 
 Without an ELF loader the build still succeeds: Nyx Apps opens and explains that the loader is missing.
 
-## Enabling the ELF loader (not yet tried)
+## Enabling the ELF loader
 
 `espressif/elf_loader` is an **ESP-IDF component** (enabled with `CONFIG_ELF_LOADER`, and `ELF_LOADER_LOAD_PSRAM` so the code is loaded into PSRAM). The Arduino-ESP32 build uses precompiled IDF libraries, so this component has to get into them:
 
@@ -138,12 +139,14 @@ Note from the repository history: building custom libraries has hit linker probl
 
 ### Enabling via CI (added)
 
-Run **Actions → Build Arduino Libs → Run workflow** with `elf_loader` = true (default). The workflow adds `espressif/elf_loader` **2.0.0** to the lib-builder `main/idf_component.yml`, sets `CONFIG_ELF_LOADER=y` and `CONFIG_ELF_LOADER_LOAD_PSRAM=y`, and after the build warns if `libelf_loader.a` or `esp_elf.h` is missing from the result. Then run **Build Firmware**: its "Verifikasi library kustom" step prints whether the loader is present (`NYXAPP_HAVE_ELF=1`). Pinned to 2.0.0 because the glue uses the 3-argument `esp_elf_relocate(elf, data, size)` (1.x has 2 arguments). Still untested on hardware.
+Run **Actions → Build Arduino Libs → Run workflow** with `elf_loader` = true (default). The workflow adds `espressif/elf_loader` **2.0.0** to the lib-builder `main/idf_component.yml`, sets `CONFIG_ELF_LOADER=y` and `CONFIG_ELF_LOADER_LOAD_PSRAM=y`, and after the build warns if `libelf_loader.a` or `esp_elf.h` is missing from the result. Then run **Build Firmware**: its "Verifikasi library kustom" step prints whether the loader is present (`NYXAPP_HAVE_ELF=1`). Pinned to 2.0.0 because the glue uses the 3-argument `esp_elf_relocate(elf, data, size)` (1.x has 2 arguments). With this setup the loader has run `hello` on a real phone.
+
+> **Note.** The push-triggered *Build Firmware* only **installs** a package that already exists; it never builds it. Run *Build Arduino Libs* first, then rebuild the firmware. If the package is missing or does not match, the firmware is still built (green) without the loader. See [Building](../building.md#what-the-automatic-build-does-and-does-not-do).
 
 ## Things to check on the phone (suggested order)
 
 1. Build without the loader → open Nyx Apps → the app list shows and the "no loader" message is correct. Repeat with the SD card removed and an app on FFat.
-2. Build with the loader → `hello`: does the ELF load? **Check the entry symbol:** the glue calls `esp_elf_request(&elf, 0, NYX_ENTRY_ARGC, argv)` with `argv[0]` = the `NyxApi` pointer. If the loader uses another entry convention, only `nyxTaskFn` (the `NYXC_START` branch) needs to change.
+2. Build with the loader → `hello`: does the ELF load? *(Done: it loads and runs.)* **Entry symbol, for reference:** the glue calls `esp_elf_request(&elf, 0, NYX_ENTRY_ARGC, argv)` with `argv[0]` = the `NyxApi` pointer. If the loader uses another entry convention, only `nyxTaskFn` (the `NYXC_START` branch) needs to change.
 3. `memhog` → Serial should show a peak ≈ the quota and `0 leaked blocks`. `leaky` → the toast "App damaged its own heap".
 4. Watchdog: make an app with `while(1){}` in `frame()` → it must be killed in under 0.5 s without freezing the phone.
 5. Files on FFat: have an app write and read back a file under `data/` — this goes through the worker task and must not reboot the phone.

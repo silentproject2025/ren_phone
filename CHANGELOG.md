@@ -1,6 +1,9 @@
 # Changelog
 
 ## Unreleased
+- Confirmed: Nyx Apps now run on a real phone. The ELF loader and the hello example work (text, frame counter, touch, Back). The Nyx Store, the SD/internal flash choice and the other example apps are still unconfirmed
+- Docs: README and docs rewritten. New section "What the automatic build does and does not do": a push build only installs the custom core libraries (PSRAM mbedTLS, ELF loader), it never builds them. Run Build Arduino Libs first, then rebuild the firmware. Manual inputs (nyx_nn, loop_core, ...) do not apply to pushes
+- Docs: audio sections now describe the optional MAX98357A speaker (Music, calls); Nyx Apps is marked PARTIAL instead of EXP
 - New: the Music app can play MP3 files from internal flash (FFat) when there is no SD card or no MP3 on it (Output: SPK only). FFat is read by a small helper task with an internal-RAM stack, because tasks with a PSRAM stack must not touch flash
 - New: while Output is SPK, the chip at the top right of the Music screen shows free internal RAM / largest block (KB), and the Serial log prints `[SPK-RAM]` lines (pra, decoder, i2s, main-2d, stop)
 - Changed: phone calls no longer depend on TWS earbuds. When no TWS is connected the call audio goes to the MAX98357A speaker (build flag CALL_SPK_FALLBACK=0 turns this off)

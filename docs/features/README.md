@@ -15,5 +15,5 @@ Status markers: `OK` tested on a device, `PARTIAL` partly tested, `BETA` not yet
 | [Voice and AI](./voice-and-ai.md) | Wake word, Gemini AI Chat, Voice Memo |
 | [System tools](./system-tools.md) | Battery, OTA, Backup & Restore, crash log, HWmonitor |
 | [Games](./games.md) | Inferno, NES, DOOM, Maze, classics |
-| [Nyx Apps](./native-apps.md) | Native ELF apps from SD or internal flash `EXP` |
+| [Nyx Apps](./native-apps.md) | Native ELF apps from SD or internal flash `PARTIAL` |
 | [Experimental](./experimental.md) | SPI overclock, NyxPPU |
