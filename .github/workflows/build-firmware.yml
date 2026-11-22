@@ -286,6 +286,7 @@ jobs:
           cp firmware/phone/power_renphone.ino build_sketch/
           cp firmware/phone/musicbt_renphone.ino build_sketch/
           cp firmware/phone/musspk.h build_sketch/              # pemutar MP3/WAV lokal -> MAX98357A
+          cp firmware/phone/musfs.h build_sketch/               # SPK_FFAT_V1: worker FFat + musRamLog (di-include musspk.h)
           cp firmware/phone/avi_renphone.ino build_sketch/
           cp firmware/phone/features_renphone.ino build_sketch/
           cp firmware/phone/gallery_renphone.ino build_sketch/
