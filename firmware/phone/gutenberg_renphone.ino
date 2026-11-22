@@ -35,7 +35,7 @@
 #define GUT_MAX_STALL  6           // sambung ulang berturut-turut tanpa kemajuan sebelum menyerah (dengan jeda makin panjang)
 #define GUT_MAX_TRY    40          // maks sambungan ulang per unduhan (berhenti lebih awal bila 3x tanpa kemajuan)
 #define GUT_PARALLEL   0           // 1 = unduh dgn 2 koneksi paralel (Range, tiap koneksi separuh berkas); 0 = satu koneksi saja
-#define GUT_TLS_MIN_BLOCK 24000u        // blok RAM internal terbesar yg diminta sebelum (sambung ulang); mbedTLS sudah di PSRAM, jadi ambang rendah. TEBAKAN, sesuaikan dari log
+#define GUT_TLS_MIN_BLOCK 10000u        // blok RAM internal terbesar yg diminta sebelum (sambung ulang); mbedTLS sudah di PSRAM, jadi ambang rendah. TEBAKAN, sesuaikan dari log
 #define GUT_PAR_MIN_BLOCK 30000u        // paralel hanya dicoba bila blok internal terbesar >= ini ... (TEBAKAN)
 #define GUT_PAR_MIN_FREE  60000u        // ... dan total RAM internal bebas >= ini (TEBAKAN)
 #define GUT_PAR_MIN    (192u * 1024u)   // berkas lebih kecil dari ini: satu koneksi saja (handshake TLS kedua tak sepadan)
