@@ -956,8 +956,20 @@ String nasaHttpErrHint(int code){
 // kalau largestBlock msh kurang setelah retry singkat. nasaWaitForHeap() yg
 // lama di dalam fungsi Fetch DIBIARKAN tetap ada sbg lapis jaga2 tambahan
 // (gak ganggu apa2), tapi guard di SINI yg sekarang jadi penentu sebenarnya.
+// RAM_V5: bersihkan RAM internal secara AKTIF (bukan cuma menunggu). Urutan: lepas cadangan kontigu,
+// lalu bebaskan cache app background (LRU, lewat onLowMem), tunggu sampai blok terbesar >= need.
+// HANYA dipanggil dari konteks loop()/touch handler (sebelum task dibuat), bukan dari dalam task lain,
+// karena onLowMem() menyentuh state UI.
+bool rpHeapEnsure(size_t need, unsigned long maxMs){
+  if(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL) >= need) return true;
+  bool ok = smWaitContig((uint32_t)need, (uint32_t)maxMs, SM_O_OTHER);
+  size_t lb = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
+  Serial.printf("[RAM] rpHeapEnsure(%u) -> %s, blok terbesar kini %u B\n", (unsigned)need, ok?"OK":"GAGAL", (unsigned)lb);
+  return lb >= need;
+}
 bool nasaHeapReadyForTask(size_t minBlock=20000){
   size_t lb = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
+  if(lb<minBlock){ rpHeapEnsure(minBlock, 1500); lb = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL); }   // RAM_V5
   for(int i=0;i<3 && lb<minBlock;i++){
     delay(150);
     lb = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
@@ -3360,6 +3372,10 @@ void triggerGeminiAI() {
   const size_t MIN_BLOCK_TO_START = 12000; // diturunkan dr 20000 (lihat catatan di atas)
   for (int i = 0; i < 3 && largestBlock < MIN_BLOCK_TO_START; i++) {
     delay(150);
+    largestBlock = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
+  }
+  if (largestBlock < MIN_BLOCK_TO_START) {   // RAM_V5: bersihkan aktif (cache app background) sebelum menyerah
+    rpHeapEnsure(MIN_BLOCK_TO_START, 1500);
     largestBlock = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
   }
   freeInternal = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
