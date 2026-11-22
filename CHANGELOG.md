@@ -1,6 +1,9 @@
 # Changelog
 
 ## Unreleased
+- New: the Music app can play MP3 files from internal flash (FFat) when there is no SD card or no MP3 on it (Output: SPK only). FFat is read by a small helper task with an internal-RAM stack, because tasks with a PSRAM stack must not touch flash
+- New: while Output is SPK, the chip at the top right of the Music screen shows free internal RAM / largest block (KB), and the Serial log prints `[SPK-RAM]` lines (pra, decoder, i2s, main-2d, stop)
+- Changed: phone calls no longer depend on TWS earbuds. When no TWS is connected the call audio goes to the MAX98357A speaker (build flag CALL_SPK_FALLBACK=0 turns this off)
 - New: Music app can play through a MAX98357A speaker (Find TWS page, button Output: BT/SPK). Needs the `arduino-libhelix` library; decoder runs on the S3 with its memory in PSRAM. Untested on hardware. AVI sound still uses Bluetooth
 - New: phone calls also play through the MAX98357A speaker when the output is set to SPK (8 kHz mono over I2S, no earbuds needed). No echo cancellation, so keep the speaker away from the mic. Untested on hardware
 - New: optional MAX98357A speaker support is back. HWmonitor has a "Test Speaker" button that plays a 1 kHz tone (default pins BCLK 16, LRC 17, DIN 8 or 15; see docs/hardware.md)

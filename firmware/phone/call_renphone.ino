@@ -18,8 +18,10 @@
 //   (mode WAV: resample ke 44,1 kHz) -> A2DP -> TWS.
 //   OPSIONAL: kalau output Musik = "SPK" (Musik > cari TWS > Output: SPK), suara lawan
 //   langsung ke speaker MAX98357A lewat I2S (8 kHz mono, tanpa CAM/TWS; lihat musspk.h).
-//   => TELEPON BUTUH TWS TERSAMBUNG (Musik > cari TWS) kecuali output = SPK. Tanpa keduanya tidak ada
-//   suara masuk (mic tetap jalan).
+//   SPK_FFAT_V1: speaker dipakai kalau output Musik = SPK ATAU TWS tidak tersambung -> telepon TIDAK lagi
+//   bergantung pada TWS (lihat callSpkSelected() di musicbt_renphone.ino, macro CALL_SPK_FALLBACK).
+//   TWS tersambung + output = BT tetap lewat TWS. Tanpa modul MAX98357A & tanpa TWS tidak ada suara masuk
+//   (mic tetap jalan).
 //
 // ARSITEKTUR
 //   Satu task FreeRTOS permanen "callTask" (stack PSRAM, core 1, prioritas 2)

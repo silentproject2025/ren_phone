@@ -275,13 +275,14 @@ static void musHistPush(int idx) {
 // =====================================================================
 //  PLAYLIST (dipanggil di task)
 // =====================================================================
-static void musScanPlaylist() {
-  std::vector<String> tmp;
+// SPK_FFAT_V1: pindai satu filesystem -> daftar .mp3 (/music dulu, kalau tak ada pakai root). Untuk FFat
+// WAJIB dipanggil dari worker (musScanFfFn); task musik ber-stack PSRAM dilarang menyentuh flash.
+static void musScanDirOn(fs::FS& fsx, std::vector<String>& tmp) {
   String base = MUS_DIR;
-  File root = SD_MMC.open(MUS_DIR);
+  File root = fsx.open(MUS_DIR);
   if (!root || !root.isDirectory()) {
     if (root) root.close();
-    root = SD_MMC.open("/");
+    root = fsx.open("/");
     base = "";
   }
   if (root && root.isDirectory()) {
@@ -302,6 +303,18 @@ static void musScanPlaylist() {
     }
     root.close();
   }
+}
+static void musScanFfFn(void* p) { musScanDirOn(FFat, *(std::vector<String>*)p); }
+
+static void musScanPlaylist() {
+  std::vector<String> tmp;
+  bool ff = false;
+  musScanDirOn(SD_MMC, tmp);                         // SD diutamakan
+  if (tmp.empty() && ffatReady) {                    // SD tak ada / tak ada MP3 -> coba flash internal
+    std::vector<String> t2;
+    if (mffRun(musScanFfFn, &t2) && !t2.empty()) { tmp.swap(t2); ff = true; }
+  }
+  musUseFfat = ff;
   std::sort(tmp.begin(), tmp.end(), [](const String& a, const String& b) { return a.compareTo(b) < 0; });
   uint32_t keys[MUS_MAX_TRACKS];
   int nk = (int)tmp.size(); if (nk > MUS_MAX_TRACKS) nk = MUS_MAX_TRACKS;
@@ -317,6 +330,11 @@ static void musScanPlaylist() {
   musRyneAttach(keys, n);
 }
 
+// SPK_FFAT_V1: baca n byte ke dst (PSRAM boleh). FFat (hanya di worker) lewat buffer pantul internal.
+static size_t musFReadF(File& f, uint8_t* dst, size_t n) {
+  if (musUseFfat && mffBuf) return mffReadI(f, dst, n);
+  return (size_t)f.read(dst, n);
+}
 // header MP3: cari frame pertama utk sample rate & bitrate (estimasi durasi CBR)
 static bool musParseMp3(uint32_t* sr, uint32_t* kbps, uint32_t* off) {
   uint8_t h[10];
@@ -328,7 +346,7 @@ static bool musParseMp3(uint32_t* sr, uint32_t* kbps, uint32_t* off) {
               ((uint32_t)(h[8] & 0x7F) << 7) | (uint32_t)(h[9] & 0x7F));
   *off = o;
   musFile.seek(o);
-  int n = musFile.read(musBlk, 4096);
+  int n = (int)musFReadF(musFile, musBlk, 4096);
   static const uint16_t srT[3]  = {44100, 48000, 32000};
   static const uint16_t br1[16] = {0,32,40,48,56,64,80,96,112,128,160,192,224,256,320,0};
   static const uint16_t br2[16] = {0,8,16,24,32,40,48,56,64,80,96,112,128,144,160,0};
@@ -349,6 +367,19 @@ static bool musParseMp3(uint32_t* sr, uint32_t* kbps, uint32_t* off) {
   return false;
 }
 
+
+// SPK_FFAT_V1: buka + parse header MP3 + ukuran file untuk lagu di FFat (jalan di worker), lalu tutup lagi.
+struct MusFfInfo { const char* path; uint32_t sr, kbps, off, size; int ok; };
+static void musFfInfoFn(void* p) {
+  MusFfInfo* o = (MusFfInfo*)p;
+  o->ok = -1;
+  File f = FFat.open(o->path, FILE_READ);
+  if (!f) return;
+  o->size = (uint32_t)f.size();
+  musFile = f;
+  o->ok = musParseMp3(&o->sr, &o->kbps, &o->off) ? 1 : 0;
+  musFile.close();
+}
 
 // =====================================================================
 //  COVER ART (ID3v2 APIC -> JPEG -> sprite)  -- hanya JPEG baseline
@@ -418,7 +449,7 @@ static uint8_t* musReadApic(File& f, uint32_t* outLen) {
       uint8_t* buf = (uint8_t*)heap_caps_malloc(fs, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
       if (!buf) return nullptr;
       f.seek(pos + hl);
-      if ((uint32_t)f.read(buf, fs) != fs) { free(buf); return nullptr; }
+      if ((uint32_t)musFReadF(f, buf, fs) != fs) { free(buf); return nullptr; }
       uint8_t* d = buf; uint32_t n = fs;
       if (dli) { if (n <= 4) { free(buf); return nullptr; } d += 4; n -= 4; }
       if (unsync) n = musDeunsync(d, n);
@@ -439,17 +470,38 @@ static uint8_t* musReadApic(File& f, uint32_t* outLen) {
   return nullptr;
 }
 
+// SPK_FFAT_V1: baca gambar cover dari SD, atau dari FFat lewat worker.
+struct MusFfApic { const char* path; uint8_t* img; uint32_t len; };
+static void musFfApicFn(void* p) {
+  MusFfApic* o = (MusFfApic*)p;
+  File f = FFat.open(o->path, FILE_READ);
+  if (!f) return;
+  o->img = musReadApic(f, &o->len);
+  f.close();
+}
+static uint8_t* musReadApicPath(const char* path, uint32_t* outLen) {
+  *outLen = 0;
+  if (musUseFfat) {
+    MusFfApic o; o.path = path; o.img = nullptr; o.len = 0;
+    if (!mffRun(musFfApicFn, &o)) return nullptr;
+    *outLen = o.len;
+    return o.img;
+  }
+  File f = SD_MMC.open(path, FILE_READ);
+  if (!f) return nullptr;
+  uint8_t* img = musReadApic(f, outLen);
+  f.close();
+  return img;
+}
+
 static int musCoverDraw(JPEGDRAW* d) {
   musCvTmp.pushImage(d->x, d->y, d->iWidth, d->iHeight, (lgfx::swap565_t*)d->pPixels);
   return 1;
 }
 
 static bool musLoadCover(const char* path) {
-  File f = SD_MMC.open(path, FILE_READ);
-  if (!f) return false;
   uint32_t len = 0;
-  uint8_t* img = musReadApic(f, &len);
-  f.close();
+  uint8_t* img = musReadApicPath(path, &len);
   if (!img) return false;
   if (len < 4 || img[0] != 0xFF || img[1] != 0xD8) { free(img); return false; }   // bukan JPEG (mis. PNG) -> tetap piringan hitam
 
@@ -506,22 +558,31 @@ static bool musStartTrack(int idx, int prevHow) {
   if (idx >= n) idx = 0;
 
   if (musFile) musFile.close();
-  musFile = SD_MMC.open(musList[idx].c_str(), FILE_READ);
-  if (!musFile) { musToast("Gagal membuka file"); return false; }
-
-  uint32_t sr = 0, kbps = 0, off = 0;
-  if (!musParseMp3(&sr, &kbps, &off)) {
-    musFile.close();
-    musToast("Bukan MP3 Layer III");
-    return false;
+  uint32_t sr = 0, kbps = 0, off = 0, fsz = 0;
+  if (musUseFfat) {                             // SPK_FFAT_V1: lagu di flash internal
+    if (!musOutSpk) { musToast("Lagu di FFat: pilih Output SPK"); return false; }
+    MusFfInfo inf; inf.path = musList[idx].c_str(); inf.sr = inf.kbps = inf.off = inf.size = 0; inf.ok = -1;
+    if (!mffRun(musFfInfoFn, &inf)) { musToast("FFat tidak merespons"); return false; }
+    if (inf.ok < 0) { musToast("Gagal membuka file"); return false; }
+    if (inf.ok == 0) { musToast("Bukan MP3 Layer III"); return false; }
+    sr = inf.sr; kbps = inf.kbps; off = inf.off; fsz = inf.size;
+  } else {
+    musFile = SD_MMC.open(musList[idx].c_str(), FILE_READ);
+    if (!musFile) { musToast("Gagal membuka file"); return false; }
+    if (!musParseMp3(&sr, &kbps, &off)) {
+      musFile.close();
+      musToast("Bukan MP3 Layer III");
+      return false;
+    }
+    fsz = (uint32_t)musFile.size();
   }
-  uint64_t body = (musFile.size() > off) ? (musFile.size() - off) : musFile.size();
+  uint64_t body = (fsz > off) ? (fsz - off) : fsz;
   musDurMs = kbps ? (uint32_t)((body * 8ULL) / kbps) : 0;   // bytes*8 / kbps = ms
   musKbps = kbps; musSr = sr;
   if (sr != 44100 && !musOutSpk) musToast("MP3 bukan 44.1kHz, nada bergeser");
   // JANGAN kirim tag ID3 ke CAM: cover JPEG ratusan KB di dalamnya penuh pola 0xFF yg mirip sync-word MP3 ->
   // decoder Helix memproses sampah, beban CPU/stack melonjak (khas file kbps tinggi yg bawa cover besar).
-  if (off > 0 && off < (uint32_t)musFile.size()) musFile.seek(off); else musFile.seek(0);
+  if (!musUseFfat) { if (off > 0 && off < (uint32_t)musFile.size()) musFile.seek(off); else musFile.seek(0); }
 
   musWavMode = false;                           // lagu playlist -> keluar dari mode memo
   musEndCurrent(prevHow);                       // bukukan lagu sebelumnya (reward) SEBELUM musPlayedMs di-reset
@@ -1005,6 +1066,7 @@ static void musBegin() {
   if (musStarted) return;
   musStarted = true;
   musMtx = xSemaphoreCreateMutex();
+  musFsInit();                                 // SPK_FFAT_V1: semaphore worker FFat (musfs.h)
   musQ = xQueueCreate(8, sizeof(MusReq));
   musBlk = (uint8_t*)heap_caps_malloc(4096, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
   if (!musBlk) musBlk = (uint8_t*)malloc(4096);
@@ -1426,7 +1488,13 @@ static void musDrawChips(LGFX_Sprite& s) {
   { int cx, cw; if (ryvChipRect(&cx, &cw)) { musPanel(s, cx, mHdrY, cw, mChipH, 9, T().surface2, 210); s.setTextColor(T().accent); s.setCursor(cx + (cw - 24) / 2, mHdrY + 5); s.print("RYNE"); s.setTextColor(T().text); } }
 
   const char* st; uint16_t col;
-  if (musOutSpk)           { st = "Speaker";           col = T().good; }
+  char spkTxt[24];
+  if (musOutSpk) {   // SPK_FFAT_V1: RAM internal bebas / blok terbesar (KB) -- bandingkan saat idle vs lagu main
+    snprintf(spkTxt, sizeof(spkTxt), "SPK%s %uK/%uK", musUseFfat ? "-F" : "",
+             (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024),
+             (unsigned)(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL) / 1024));
+    st = spkTxt; col = T().good;
+  }
   else if (!musCamAlive)   { st = "Modul BT mati";     col = T().danger; }
   else if (musBtConn)      { st = "TWS terhubung";     col = T().good; }
   else if (musConnecting)  { st = "Menghubungkan...";  col = T().accent2; }
@@ -1977,7 +2045,12 @@ uint32_t memoPlayPosMs() { return musPlayedMs; }
 bool memoBtReady() { return musOutSpk || (musCamAlive && musBtConn); }
 
 // ---- jembatan ke call_renphone.ino (telepon lewat speaker; deklarasi maju ada di file itu) ----
-bool callSpkSelected()                     { return musOutSpk; }
+// SPK_FFAT_V1: telepon memakai speaker kalau Output=SPK ATAU TWS tidak tersambung (tidak lagi bergantung pada TWS).
+// TWS tersambung + Output=BT -> tetap lewat TWS. Tanpa modul MAX98357A terpasang, set -DCALL_SPK_FALLBACK=0.
+#ifndef CALL_SPK_FALLBACK
+#define CALL_SPK_FALLBACK 1
+#endif
+bool callSpkSelected()                     { return musOutSpk || (CALL_SPK_FALLBACK && !(musCamAlive && musBtConn)); }
 bool callSpkBegin()                        { return spkLiveBegin(8000); }
 void callSpkWrite(const int16_t* pcm, int n) { spkLiveWrite(pcm, n); }
 void callSpkEnd()                          { spkLiveEnd(); }

@@ -24,6 +24,7 @@
 #include <SD_MMC.h>
 #include <ESP_I2S.h>
 #include <esp_heap_caps.h>
+#include "musfs.h"      // SPK_FFAT_V1: worker FFat + musRamLog
 #include "MP3DecoderHelix.h"
 using namespace libhelix;
 
@@ -46,6 +47,7 @@ static volatile uint32_t spkCmdSeq    = 0;
 static char              spkCmdPath[128];
 static volatile bool     spkCmdWav    = false;
 static volatile uint32_t spkCmdOff    = 0;
+static volatile bool     spkCmdFfat   = false;   // SPK_FFAT_V1: sesi ini membaca dari FFat
 
 // ---- status ----
 static volatile bool     spkPausedF   = false;
@@ -77,6 +79,7 @@ static bool spkOpenI2S(uint32_t rate) {
   if (!spkI2S.begin(I2S_MODE_STD, rate, I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO)) return false;
   spkI2S.setTimeout(1000);                         // tulisan musik boleh menunggu DMA (jadi pengatur tempo)
   spkI2SOpen = true; spkI2SRate = rate;
+  musRamLog("i2s");
   return true;
 }
 static void spkCloseI2S() {
@@ -128,6 +131,7 @@ static bool spkDecCreate() {
 #if MUS_SPK_DEC_PSRAM
   heap_caps_malloc_extmem_enable(MUS_SPK_HEAP_THRESHOLD);   // kembalikan perilaku malloc normal
 #endif
+  musRamLog("decoder");
   return spkDec != nullptr;
 }
 static void spkDecDestroy() {
@@ -135,6 +139,40 @@ static void spkDecDestroy() {
   spkDec->end();
   delete spkDec;
   spkDec = nullptr;
+}
+
+// ---- SPK_FFAT_V1: akses file lagu. SD langsung; FFat lewat worker ber-stack internal (musfs.h) ----
+static File spkF;                                  // file SD (spkTask pemilik tunggal)
+struct SpkIo { int op; const char* path; uint8_t* dst; size_t n; uint32_t pos; long ret; };
+static void spkIoFn(void* p) {                     // jalan di worker
+  SpkIo* o = (SpkIo*)p;
+  o->ret = 0;
+  switch (o->op) {
+    case 0:  mffPlayF = FFat.open(o->path, FILE_READ); o->ret = mffPlayF ? 1 : 0; break;
+    case 1:  o->ret = mffPlayF ? (long)mffReadI(mffPlayF, o->dst, o->n) : -1; break;
+    case 2:  o->ret = (mffPlayF && mffPlayF.seek(o->pos)) ? 1 : 0; break;
+    default: if (mffPlayF) mffPlayF.close(); o->ret = 1; break;
+  }
+}
+static long spkIo(int op, const char* path, uint8_t* dst, size_t n, uint32_t pos) {
+  SpkIo o; o.op = op; o.path = path; o.dst = dst; o.n = n; o.pos = pos; o.ret = -1;
+  if (!mffRun(spkIoFn, &o)) return -1;
+  return o.ret;
+}
+static bool spkOpenFile(const char* p, bool ffat) {
+  if (ffat) return spkIo(0, p, nullptr, 0, 0) == 1;
+  spkF = SD_MMC.open(p, FILE_READ);
+  return (bool)spkF;
+}
+static int spkReadFile(bool ffat, uint8_t* b, size_t n) {
+  if (ffat) return (int)spkIo(1, nullptr, b, n, 0);
+  return spkF.read(b, n);
+}
+static void spkSeekFile(bool ffat, uint32_t pos) {
+  if (ffat) spkIo(2, nullptr, nullptr, 0, pos); else spkF.seek(pos);
+}
+static void spkCloseFile(bool ffat) {
+  if (ffat) spkIo(3, nullptr, nullptr, 0, 0); else if (spkF) spkF.close();
 }
 
 static void spkTaskFn(void* arg) {
@@ -146,33 +184,35 @@ static void spkTaskFn(void* arg) {
     return;
   }
   uint32_t seen = 0;
-  File f;
-  bool playing = false, wav = false, pausedHandled = false;
+  bool fileOpen = false, ffat = false;
+  bool playing = false, wav = false, pausedHandled = false, ramLogged = false;
   uint32_t wavSr = 16000; int wavCh = 1;
 
   for (;;) {
     if (spkCmdSeq != seen) {                         // perintah baru: bongkar sesi lama, mulai sesi baru
       seen = spkCmdSeq;
-      if (f) f.close();
+      if (fileOpen) { spkCloseFile(ffat); fileOpen = false; }
       spkDecDestroy();
       if (spkI2SOpen && !spkLive) { spkSilence(); spkCloseI2S(); }   // mode live: I2S milik telepon, jangan ditutup di sini
-      playing = false; pausedHandled = false;
+      playing = false; pausedHandled = false; ramLogged = false;
+      if (spkCmdPath[0]) musRamLog("pra");
       if (spkCmdPath[0] && !spkLive) {
-        f = SD_MMC.open(spkCmdPath, FILE_READ);
-        bool ok = (bool)f;
+        ffat = spkCmdFfat;
+        bool ok = spkOpenFile(spkCmdPath, ffat);
+        fileOpen = ok;
         wav = spkCmdWav;
-        if (ok && wav) {                             // memo WAV: header 44 byte, PCM 16-bit
+        if (ok && wav) {                             // memo WAV (selalu dari SD): header 44 byte, PCM 16-bit
           uint8_t h[44];
-          ok = (f.read(h, 44) == 44) && memcmp(h, "RIFF", 4) == 0 && h[34] == 16;
+          ok = (spkF.read(h, 44) == 44) && memcmp(h, "RIFF", 4) == 0 && h[34] == 16;
           wavCh = h[22];
           wavSr = (uint32_t)h[24] | ((uint32_t)h[25] << 8) | ((uint32_t)h[26] << 16) | ((uint32_t)h[27] << 24);
           if (wavCh < 1 || wavCh > 2 || wavSr < 8000 || wavSr > 96000) ok = false;
         } else if (ok) {
-          if (spkCmdOff) f.seek(spkCmdOff);          // lewati tag ID3
+          if (spkCmdOff) spkSeekFile(ffat, spkCmdOff);   // lewati tag ID3
           ok = spkDecCreate();
         }
         if (ok) playing = true;
-        else { if (f) f.close(); spkDecDestroy(); spkFailF = true; }
+        else { if (fileOpen) { spkCloseFile(ffat); fileOpen = false; } spkDecDestroy(); spkFailF = true; }
       }
       spkIdleF = !playing;
       spkSeenSeq = seen;
@@ -186,15 +226,19 @@ static void spkTaskFn(void* arg) {
     }
     pausedHandled = false;
 
-    int n = f.read(buf, SPK_IN_CHUNK);
-    if (n <= 0) {                                    // file habis
+    if (!ramLogged && spkRate && spkFrames > spkRate * 2u) { ramLogged = true; musRamLog("main-2d"); }
+
+    int n = spkReadFile(ffat, buf, SPK_IN_CHUNK);
+    if (n <= 0) {                                    // file habis (atau FFat macet kalau n < 0)
       spkSilence();
-      f.close();
+      if (fileOpen) { spkCloseFile(ffat); fileOpen = false; }
       spkDecDestroy();
       spkCloseI2S();
       playing = false;
       spkIdleF = true;
-      if (spkCmdSeq == seen) spkEndedF = true;       // jangan tandai "habis" kalau sudah ada perintah baru
+      if (n < 0) spkFailF = true;
+      else if (spkCmdSeq == seen) spkEndedF = true;  // jangan tandai "habis" kalau sudah ada perintah baru
+      musRamLog("stop");
       continue;
     }
     if (wav) spkWritePcm((const int16_t*)buf, (size_t)n / (2u * (size_t)wavCh), wavCh, wavSr);
@@ -223,6 +267,7 @@ static bool spkPlay(const char* path, bool wav, uint32_t off) {
   strncpy(spkCmdPath, path, sizeof(spkCmdPath) - 1);
   spkCmdPath[sizeof(spkCmdPath) - 1] = 0;
   spkCmdWav = wav; spkCmdOff = off;
+  spkCmdFfat = (!wav && musUseFfat);          // memo WAV selalu dari SD; lagu ikut hasil pindai
   spkPausedF = false; spkEndedF = false; spkFailF = false;
   spkFrames = 0;
   __sync_synchronize();
