@@ -19,8 +19,24 @@
 //               (6-30 napas/mnt). Puncak harus jauh di atas median pita dan orang
 //               tidak sedang bergerak. Hasil dihaluskan (median 5 estimasi).
 //
+// MODE MULTI-SUBCARRIER (WSENSE_MULTI_V1, bawaan aktif)
+//   Rata-rata amplitudo ke satu angka membuang informasi: gerak/napas menggeser tiap
+//   subcarrier dgn arah & kekuatan berbeda (multipath), jadi sebagian saling meniadakan
+//   saat dirata-rata. Mode multi menyimpan 64 subcarrier LLTF (128 byte pertama buffer CSI)
+//   per bin 100 ms (ring 30 dtk di PSRAM, ~38 KB) lalu:
+//     GERAK : skor per subcarrier (RMS selisih 2 dtk / rata-rata subcarrier), diambil
+//             rata-rata SEPARUH TERATAS. Noise menaikkan semua subcarrier sama rata,
+//             gerak hanya subcarrier yg dilalui jalur -> ekor atas lebih sensitif.
+//     NAPAS : spektrum Goertzel tiap subcarrier (dinormalkan median-nya sendiri, dibatasi 25x)
+//             DIJUMLAHKAN lintas subcarrier (tanpa fase -> tak saling meniadakan). Ambang
+//             puncak turun mengikuti jumlah subcarrier efektif: 1 + 5/sqrt(K/3). Dikerjakan
+//             6 subcarrier per putaran loop supaya UI tidak patah-patah.
+//   Kalau PSRAM kurang / paket CSI tanpa LLTF (< 128 byte) / < 8 subcarrier hidup, otomatis
+//   jatuh ke mode rata-rata lama. Ketuk label "Multi N"/"Rata" di pojok grafik utk berganti
+//   (A/B di ruanganmu). Dasar kalibrasi disimpan terpisah per mode.
+//
 // BATAS YANG JUJUR
-//   * BELUM DIUJI di perangkat keras. Ambang (sensitivitas, rasio puncak napas) perlu
+//   * BELUM DIUJI di perangkat keras (mode multi baru diuji dgn simulasi di tests/wifisense). Ambang (sensitivitas, rasio puncak napas) perlu
 //     di-tuning di ruanganmu. Tombol Kalibrasi + tombol -/+ ada untuk itu.
 //   * Bukan pose / tembus dinding. Hanya "ada gerak" dan "ada orang diam yang bernapas".
 //   * Napas hanya masuk akal kalau HP DIAM (taruh di meja/tripod), orang diam 30 dtk
@@ -64,6 +80,11 @@
 #define WS_GRAPH_N     150                 // 15 detik terakhir digambar
 #define WS_DEF_BASE    0.006f              // skor dasar bawaan (sebelum kalibrasi)
 #define WS_PING_MS     50
+// ---- mode multi-subcarrier (WSENSE_MULTI_V1) ----
+#define WS_NSUB        64                  // subcarrier LLTF (128 byte pertama buffer CSI)
+#define WS_SUB_MIN_AMP 2.0f                // rata-rata amplitudo < ini = subcarrier null/guard -> dilewati
+#define WS_DEF_BASE_M  0.03f               // skor dasar bawaan mode multi (perkiraan kasar; kalibrasi menggantikannya)
+#define WS_BR_SLICE    6                   // subcarrier diproses per putaran loop
 #define WS_RGB(r,g,b)  ((uint16_t)((((r)&0xF8)<<8)|(((g)&0xFC)<<3)|((b)>>3)))
 
 enum WsState { WS_OFF = 0, WS_EMPTY, WS_MOVING, WS_STILL, WS_HOLD };
@@ -86,7 +107,6 @@ static int      wsCount      = 0;
 static float    wsLastBin    = 0;
 
 static float    wsScore      = 0;           // RMS selisih jendela 2 dtk (ternormalisasi)
-static float    wsBase       = WS_DEF_BASE; // skor dasar ruang kosong
 static const float wsSensMul[5] = { 6.0f, 4.0f, 3.0f, 2.2f, 1.6f };
 static int      wsSens       = 2;           // indeks 0 (rendah) .. 4 (tinggi)
 static bool     wsMoving     = false;
@@ -101,6 +121,28 @@ static float    wsBrRing[5]  = {0,0,0,0,0}; static int wsBrRingN = 0, wsBrRingI 
 static float    wsBrRatio    = 0;
 static WsState  wsState      = WS_OFF;
 
+// ---- mode multi-subcarrier ----
+static bool      wsMulti     = true;        // pilihan pengguna
+static bool      wsUseSub    = false;       // mode yg SEDANG dipakai (multi hanya kalau datanya cukup)
+static uint16_t* wsSub       = nullptr;     // ring [WS_N][WS_NSUB], amplitudo*64, di PSRAM
+static float     wsSubSum[WS_NSUB];         // diisi callback CSI (dijaga wsMux)
+static uint32_t  wsSubCnt    = 0;
+static float     wsSubLast[WS_NSUB];
+static float     wsSubMean[WS_NSUB];        // EMA ~5 dtk per subcarrier
+static int       wsNValid    = 0;
+static int       wsBrK       = -1;          // napas multi: subcarrier berikutnya (-1 = tidak jalan)
+static int       wsBrUsed    = 0;
+static float     wsPsum[WS_NF];              // jumlah spektrum ternormalkan-median (dibatasi) -> uji kekuatan puncak
+static float     wsPn[WS_NF];                // jumlah spektrum ternormalkan-total -> LOKASI puncak (tanpa batas, tak seri)
+static int       wsSubIdle   = 0;            // bin berturut-turut tanpa paket ber-LLTF
+static float     wsD[WS_N];
+static float     wsHann[WS_N];
+static bool      wsHannOk    = false;
+static float     wsBaseS     = WS_DEF_BASE; // dasar mode rata-rata
+static float     wsBaseM     = WS_DEF_BASE_M; // dasar mode multi
+static inline float& wsBaseRef() { return wsUseSub ? wsBaseM : wsBaseS; }
+#define wsBase (wsBaseRef())
+
 #if WSENSE_PING
 static esp_ping_handle_t wsPing = nullptr;
 #endif
@@ -114,11 +156,15 @@ static void wsCsiCb(void* ctx, wifi_csi_info_t* info) {
   if (!info || !info->buf || info->len < 16) return;
   const int8_t* b = info->buf;
   int n = info->len / 2;
+  const bool haveSub = (info->len >= 2 * WS_NSUB);      // LLTF utuh -> simpan per subcarrier
+  float sub[WS_NSUB];
   float sum = 0; int cnt = 0;
-  for (int i = 2; i < n; i++) {                         // lewati 2 subcarrier pertama (DC / guard)
+  for (int i = 0; i < n; i++) {
+    if (i < 2 && !haveSub) continue;                    // jalur rata-rata: lewati 2 subcarrier pertama (DC / guard)
     float im = (float)b[2 * i], re = (float)b[2 * i + 1];
     float a = sqrtf(re * re + im * im);
-    if (a < 0.5f) continue;                             // subcarrier null
+    if (haveSub && i < WS_NSUB) sub[i] = a;
+    if (i < 2 || a < 0.5f) continue;                    // subcarrier null
     sum += a; cnt++;
   }
   if (cnt < 8) return;
@@ -126,6 +172,7 @@ static void wsCsiCb(void* ctx, wifi_csi_info_t* info) {
   wsBinSum += sum / (float)cnt;
   wsBinCnt++;
   wsPktTotal++;
+  if (haveSub) { for (int k = 0; k < WS_NSUB; k++) wsSubSum[k] += sub[k]; wsSubCnt++; }
   portEXIT_CRITICAL(&wsMux);
 }
 #endif
@@ -136,7 +183,13 @@ static void wsCsiCb(void* ctx, wifi_csi_info_t* info) {
 static void wsResetSeries() {
   wsHead = 0; wsCount = 0; wsLastBin = 0; wsScore = 0; wsMoving = false; wsMovHist = 0;
   wsBr = 0; wsBrRatio = 0; wsBrRingN = 0; wsBrRingI = 0; wsLastMove = 0;
-  portENTER_CRITICAL(&wsMux); wsBinSum = 0; wsBinCnt = 0; wsPktTotal = 0; portEXIT_CRITICAL(&wsMux);
+  portENTER_CRITICAL(&wsMux);
+  wsBinSum = 0; wsBinCnt = 0; wsPktTotal = 0;
+  memset(wsSubSum, 0, sizeof(wsSubSum)); wsSubCnt = 0;
+  portEXIT_CRITICAL(&wsMux);
+  memset(wsSubLast, 0, sizeof(wsSubLast)); memset(wsSubMean, 0, sizeof(wsSubMean));
+  if (wsSub) memset(wsSub, 0, (size_t)WS_N * WS_NSUB * sizeof(uint16_t));
+  wsNValid = 0; wsUseSub = false; wsBrK = -1; wsBrUsed = 0; wsSubIdle = 0;
   wsPktPrev = 0; wsPktRate = 0;
 }
 
@@ -144,6 +197,8 @@ static bool wsStart() {
   wsMsg[0] = 0;
 #if WSENSE_CSI
   if (WiFi.status() != WL_CONNECTED) { snprintf(wsMsg, sizeof(wsMsg), "Sambungkan WiFi dulu"); return false; }
+  if (!wsSub) wsSub = (uint16_t*)heap_caps_malloc((size_t)WS_N * WS_NSUB * sizeof(uint16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  if (!wsSub) snprintf(wsMsg, sizeof(wsMsg), "PSRAM kurang: mode rata-rata");
   wsResetSeries();
   WiFi.setSleep(false);                                  // mode hemat daya bikin paket jarang
   wifi_csi_config_t cfg;
@@ -182,6 +237,8 @@ static void wsStop() {
   #endif
 #endif
   wsCsiOk = false; wsRun = false; wsCal = false; wsState = WS_OFF;
+  wsBrK = -1; wsUseSub = false;
+  if (wsSub) { heap_caps_free(wsSub); wsSub = nullptr; }   // CSI sudah dimatikan di atas -> callback tak menyentuh ring
 }
 
 // ---------------------------------------------------------------------
@@ -201,6 +258,44 @@ static void wsMeanStd(int n, float* mean, float* sd) {
   *mean = m; *sd = sqrtf(var);
 }
 
+// ---- mode multi-subcarrier: simpan 1 baris (64 subcarrier) per bin. Harus dipanggil SEBELUM wsPushBin
+//      (wsHead belum maju) supaya barisnya sejajar dgn wsX. ----
+static void wsPushSub(const float* acc, uint32_t cnt) {
+  uint16_t* row = wsSub + (size_t)wsHead * WS_NSUB;
+  for (int k = 0; k < WS_NSUB; k++) {
+    float v = cnt ? acc[k] / (float)cnt : wsSubLast[k]; // bin tanpa paket: ulangi nilai terakhir
+    wsSubLast[k] = v;
+    if (v > 1020.0f) v = 1020.0f;
+    row[k] = (uint16_t)(v * 64.0f + 0.5f);
+    if (wsSubMean[k] <= 0) wsSubMean[k] = v; else wsSubMean[k] += (v - wsSubMean[k]) * 0.02f;
+  }
+}
+
+// skor gerak multi: per subcarrier RMS selisih 2 dtk / rata-rata subcarrier, lalu rata-rata SEPARUH TERATAS.
+// Mengembalikan -1 kalau subcarrier hidup < 8 (-> pakai skor rata-rata).
+static float wsSubMotion() {
+  int rows[WS_MOT_N];
+  { int i = wsHead - 1; if (i < 0) i += WS_N;           // wsHead sudah maju -> sampel terbaru = head-1
+    for (int j = 0; j < WS_MOT_N; j++) { rows[j] = i; if (--i < 0) i = WS_N - 1; } }
+  float sc[WS_NSUB]; int m = 0;
+  if (wsSubIdle >= 20) { wsNValid = 0; return -1.0f; } // 2 dtk tanpa paket ber-LLTF: data subcarrier basi -> jalur rata-rata
+  for (int k = 0; k < WS_NSUB; k++) {
+    float mean = wsSubMean[k];
+    if (mean < WS_SUB_MIN_AMP) continue;                // null / guard
+    float dq = 0; float prev = (float)wsSub[(size_t)rows[0] * WS_NSUB + k];
+    for (int j = 1; j < WS_MOT_N; j++) {
+      float cur = (float)wsSub[(size_t)rows[j] * WS_NSUB + k]; float dd = (prev - cur) * (1.0f / 64.0f); dq += dd * dd; prev = cur;
+    }
+    sc[m++] = sqrtf(dq / (WS_MOT_N - 1)) / mean;
+  }
+  wsNValid = m;
+  if (m < 8) return -1.0f;
+  for (int i = 1; i < m; i++) { float v = sc[i]; int j = i - 1; while (j >= 0 && sc[j] > v) { sc[j + 1] = sc[j]; j--; } sc[j + 1] = v; }
+  int h = m / 2; float sum = 0;
+  for (int i = m - h; i < m; i++) sum += sc[i];
+  return sum / (float)h;
+}
+
 static void wsPushBin(float v) {
   wsX[wsHead] = v; wsHead = (wsHead + 1) % WS_N; if (wsCount < WS_N) wsCount++;
   wsLastBin = v;
@@ -214,6 +309,9 @@ static void wsPushBin(float v) {
   float dq = 0;
   for (int k = 0; k < WS_MOT_N - 1; k++) { float dd = wsAt(k) - wsAt(k + 1); dq += dd * dd; }
   wsScore = (mLong > 1e-3f) ? sqrtf(dq / (WS_MOT_N - 1)) / mLong : 0;
+  { float sm = (wsMulti && wsSub) ? wsSubMotion() : -1.0f;   // WSENSE_MULTI_V1
+    wsUseSub = (sm >= 0);
+    if (wsUseSub) wsScore = sm; }
 
   if (wsCal) {                                          // kumpulkan data ruang kosong
     wsCalSum += wsScore; wsCalSq += wsScore * wsScore; wsCalN++;
@@ -231,7 +329,8 @@ static void wsFinishCal() {
   float m = wsCalSum / wsCalN, var = wsCalSq / wsCalN - m * m; if (var < 0) var = 0;
   float b = m + 3.0f * sqrtf(var);                      // rata-rata + 3 sigma noise ruang kosong
   if (b < 0.002f) b = 0.002f;
-  if (b > 0.10f)  b = 0.10f;
+  float bmax = wsUseSub ? 0.30f : 0.10f;               // noise per-subcarrier lebih besar dari rata-rata semua subcarrier
+  if (b > bmax)  b = bmax;
   // wsBase dikalikan wsSensMul[] saat dibandingkan, jadi simpan sebagai dasar (bagi 3 = sens default)
   wsBase = b / 1.5f;
   snprintf(wsMsg, sizeof(wsMsg), "Kalibrasi selesai (dasar %.3f)", (double)wsBase);
@@ -245,26 +344,42 @@ static float wsGoertzel(const float* d, int n, float f) {
   return s1 * s1 + s2 * s2 - c * s1 * s2;
 }
 
+// detrend linear + jendela Hann pada d[] (sudah dalam satuan CV), kembalikan RMS-nya
+static float wsPrep(float* d) {
+  if (!wsHannOk) { for (int k = 0; k < WS_N; k++) wsHann[k] = 0.5f - 0.5f * cosf(2.0f * (float)M_PI * k / (WS_N - 1)); wsHannOk = true; }
+  float sx = 0, sy = 0, sxx = 0, sxy = 0;
+  for (int k = 0; k < WS_N; k++) { sx += k; sy += d[k]; sxx += (float)k * k; sxy += k * d[k]; }
+  float den = WS_N * sxx - sx * sx; float slope = den != 0 ? (WS_N * sxy - sx * sy) / den : 0;
+  float icpt = (sy - slope * sx) / WS_N;
+  float varsum = 0;
+  for (int k = 0; k < WS_N; k++) { d[k] -= (icpt + slope * k); d[k] *= wsHann[k]; varsum += d[k] * d[k]; }
+  return sqrtf(varsum / WS_N);
+}
+
+// hasil deteksi napas -> median 5 estimasi / peluruhan keyakinan
+static void wsBrCommit(bool ok, int best) {
+  if (ok) {
+    float bpm = (0.10f + 0.01f * best) * 60.0f;
+    wsBrRing[wsBrRingI] = bpm; wsBrRingI = (wsBrRingI + 1) % 5; if (wsBrRingN < 5) wsBrRingN++;
+    float t[5]; for (int i = 0; i < wsBrRingN; i++) t[i] = wsBrRing[i];
+    for (int i = 1; i < wsBrRingN; i++) { float v = t[i]; int j = i - 1; while (j >= 0 && t[j] > v) { t[j + 1] = t[j]; j--; } t[j + 1] = v; }
+    wsBr = t[wsBrRingN / 2];
+  } else {
+    if (wsBrRingN > 0) wsBrRingN--;                     // keyakinan meluruh
+    if (wsBrRingN == 0) wsBr = 0;
+  }
+}
+
 static void wsBreathing() {
   if (wsCount < WS_N) return;                           // butuh 30 dtk penuh
-  // pakai buffer sementara di PSRAM? 1,2 KB cukup di stack task loop (stack loop() Arduino 8 KB)
-  static float d[WS_N];
+  float* d = wsD;
   // urut kronologis lama -> baru, dibagi rata-rata (ke satuan CV), buang tren linear
   float mean = 0;
   for (int k = 0; k < WS_N; k++) { float v = wsAt(WS_N - 1 - k); d[k] = v; mean += v; }
   mean /= WS_N;
   if (mean < 1e-3f) return;
-  float sx = 0, sy = 0, sxx = 0, sxy = 0;
-  for (int k = 0; k < WS_N; k++) { d[k] = d[k] / mean - 1.0f; sx += k; sy += d[k]; sxx += (float)k * k; sxy += k * d[k]; }
-  float den = WS_N * sxx - sx * sx; float slope = den != 0 ? (WS_N * sxy - sx * sy) / den : 0;
-  float icpt = (sy - slope * sx) / WS_N;
-  float varsum = 0;
-  for (int k = 0; k < WS_N; k++) {
-    d[k] -= (icpt + slope * k);
-    float hann = 0.5f - 0.5f * cosf(2.0f * (float)M_PI * k / (WS_N - 1));
-    d[k] *= hann; varsum += d[k] * d[k];
-  }
-  float rms = sqrtf(varsum / WS_N);
+  for (int k = 0; k < WS_N; k++) d[k] = d[k] / mean - 1.0f;
+  float rms = wsPrep(d);
 
   float P[WS_NF], tmp[WS_NF]; int best = 0;
   for (int i = 0; i < WS_NF; i++) {
@@ -276,18 +391,57 @@ static void wsBreathing() {
   wsBrRatio = P[best] / (med + 1e-12f);
 
   bool calm   = wsMovHist < 80;                         // hampir tidak ada gerak besar 30 dtk terakhir
-  bool strong = rms > wsBase * 0.5f;                    // ada variasi di atas noise ruang kosong
+  bool strong = rms > wsBaseS * 0.5f;                   // ada variasi di atas noise ruang kosong
   bool peak   = wsBrRatio >= 6.0f && best > 0 && best < WS_NF - 1;
-  if (calm && strong && peak) {
-    float bpm = (0.10f + 0.01f * best) * 60.0f;
-    wsBrRing[wsBrRingI] = bpm; wsBrRingI = (wsBrRingI + 1) % 5; if (wsBrRingN < 5) wsBrRingN++;
-    float t[5]; for (int i = 0; i < wsBrRingN; i++) t[i] = wsBrRing[i];
-    for (int i = 1; i < wsBrRingN; i++) { float v = t[i]; int j = i - 1; while (j >= 0 && t[j] > v) { t[j + 1] = t[j]; j--; } t[j + 1] = v; }
-    wsBr = t[wsBrRingN / 2];
-  } else {
-    if (wsBrRingN > 0) wsBrRingN--;                     // keyakinan meluruh
-    if (wsBrRingN == 0) wsBr = 0;
+  wsBrCommit(calm && strong && peak, best);
+}
+
+// ---- napas multi-subcarrier: jumlahkan spektrum tiap subcarrier (tanpa fase) ----
+static void wsBrFinishMulti() {
+  int K = wsBrUsed;
+  if (K < 8) { wsBreathing(); return; }                 // subcarrier hidup kurang -> jalur rata-rata
+  float tmp[WS_NF]; int best = 0;
+  for (int i = 0; i < WS_NF; i++) { tmp[i] = wsPsum[i]; if (wsPn[i] > wsPn[best]) best = i; }   // lokasi dari wsPn: batas 25x pada wsPsum membuat banyak bin seri
+  for (int i = 1; i < WS_NF; i++) { float v = tmp[i]; int j = i - 1; while (j >= 0 && tmp[j] > v) { tmp[j + 1] = tmp[j]; j--; } tmp[j + 1] = v; }
+  float med = tmp[WS_NF / 2];
+  wsBrRatio = wsPsum[best] / (med + 1e-12f);
+  float keff = (float)K / 3.0f; if (keff < 1.0f) keff = 1.0f;   // subcarrier tetangga berkorelasi -> hitung 1/3 saja
+  float thr = 1.0f + 5.0f / sqrtf(keff);                // K=1 -> 6 (sama dgn jalur rata-rata), K=52 -> ~2,2
+  bool calm = wsMovHist < 80;
+  bool peak = wsBrRatio >= thr && best > 0 && best < WS_NF - 1;
+  wsBrCommit(calm && peak, best);
+}
+
+static void wsBrStartMulti() {
+  for (int i = 0; i < WS_NF; i++) { wsPsum[i] = 0; wsPn[i] = 0; }
+  wsBrUsed = 0; wsBrK = 0;
+}
+
+static void wsBreathingStep() {
+  if (wsBrK < 0 || !wsSub) { wsBrK = -1; return; }
+  int done = 0;
+  while (wsBrK < WS_NSUB && done < WS_BR_SLICE) {
+    int k = wsBrK++;
+    if (wsSubMean[k] < WS_SUB_MIN_AMP) continue;
+    done++;
+    float mean = 0; int idx = wsHead;                   // buffer penuh: sampel terlama ada di wsHead
+    for (int n = 0; n < WS_N; n++) {
+      float v = (float)wsSub[(size_t)idx * WS_NSUB + k] * (1.0f / 64.0f);
+      wsD[n] = v; mean += v; if (++idx >= WS_N) idx = 0;
+    }
+    mean /= WS_N;
+    if (mean < WS_SUB_MIN_AMP) continue;
+    for (int n = 0; n < WS_N; n++) wsD[n] = wsD[n] / mean - 1.0f;
+    wsPrep(wsD);
+    float P[WS_NF], tmp[WS_NF];
+    for (int i = 0; i < WS_NF; i++) { P[i] = wsGoertzel(wsD, WS_N, 0.10f + 0.01f * i); if (P[i] < 0) P[i] = 0; tmp[i] = P[i]; }
+    for (int i = 1; i < WS_NF; i++) { float v = tmp[i]; int j = i - 1; while (j >= 0 && tmp[j] > v) { tmp[j + 1] = tmp[j]; j--; } tmp[j + 1] = v; }
+    float med = tmp[WS_NF / 2] + 1e-12f, tot = 0;
+    for (int i = 0; i < WS_NF; i++) tot += P[i];
+    for (int i = 0; i < WS_NF; i++) { float r = P[i] / med; if (r > 25.0f) r = 25.0f; wsPsum[i] += r; wsPn[i] += P[i] / (tot + 1e-12f); }   // batas 25x: satu subcarrier tak mendominasi
+    wsBrUsed++;
   }
+  if (wsBrK >= WS_NSUB) { wsBrK = -1; wsBrFinishMulti(); }
 }
 
 static void wsUpdateState() {
@@ -321,10 +475,14 @@ void wsenseLoopPoll() {
   // gabungkan paket menjadi bin 100 ms
   while (now - wsBinT0 >= WS_BIN_MS) {
     wsBinT0 += WS_BIN_MS;
-    float sum; uint32_t cnt;
-    portENTER_CRITICAL(&wsMux); sum = wsBinSum; cnt = wsBinCnt; wsBinSum = 0; wsBinCnt = 0; portEXIT_CRITICAL(&wsMux);
+    float sum; uint32_t cnt; uint32_t sc; float subTmp[WS_NSUB];
+    portENTER_CRITICAL(&wsMux);
+    sum = wsBinSum; cnt = wsBinCnt; wsBinSum = 0; wsBinCnt = 0;
+    sc = wsSubCnt; memcpy(subTmp, wsSubSum, sizeof(subTmp)); memset(wsSubSum, 0, sizeof(wsSubSum)); wsSubCnt = 0;
+    portEXIT_CRITICAL(&wsMux);
     float v = cnt ? sum / (float)cnt : wsLastBin;       // bin tanpa paket: ulangi nilai terakhir
-    if (v > 0) wsPushBin(v);
+    if (cnt) { if (sc) wsSubIdle = 0; else if (wsSubIdle < 1000) wsSubIdle++; }   // ada paket tapi tanpa LLTF
+    if (v > 0) { if (wsSub) wsPushSub(subTmp, sc); wsPushBin(v); }
     if (now - wsBinT0 > 1000UL) wsBinT0 = now;          // tertinggal jauh (mis. layar berat) -> sinkron ulang
   }
   if (now - wsRateT0 >= 1000UL) {
@@ -333,7 +491,14 @@ void wsenseLoopPoll() {
     wsPktPrev = tot; wsRateT0 = now;
   }
   if (wsCal && now - wsCalT0 >= WS_CAL_MS) wsFinishCal();
-  if (now - wsBrT0 >= WS_BR_EVERY_MS) { wsBrT0 = now; if (!wsCal) wsBreathing(); }
+  if (now - wsBrT0 >= WS_BR_EVERY_MS) {
+    wsBrT0 = now;
+    if (!wsCal) {
+      if (wsUseSub && wsSub) { if (wsCount >= WS_N && wsBrK < 0) wsBrStartMulti(); }   // dikerjakan bertahap di bawah
+      else wsBreathing();
+    }
+  }
+  if (wsBrK >= 0) wsBreathingStep();
   wsUpdateState();
   if (now - wsUiT0 >= 200UL) { wsUiT0 = now; needRedraw = true; }
 }
@@ -400,6 +565,11 @@ void drawWsense(LGFX_Sprite& s) {
   int gx = 8, gy = iy + 14, gw = SCR_W - 16, gh = wsGraphBottom() - gy;
   if (gh < 30) gh = 30;
   drawGlassPanel(s, gx, gy, gw, gh, 10, T().surface2, 140);
+  { char tb[16]; const char* tg;                        // label mode (ketuk utk ganti)
+    if (wsUseSub) { snprintf(tb, sizeof(tb), "Multi %d", wsNValid); tg = tb; }
+    else tg = wsMulti ? "Multi.." : "Rata";
+    s.setTextSize(1); s.setTextColor(T().subtext);
+    int tw = s.textWidth(tg); s.setCursor(gx + gw - tw - 8, gy + 8); s.print(tg); }
   int n = wsCount < WS_GRAPH_N ? wsCount : WS_GRAPH_N;
   if (n > 3) {
     float m = 0; for (int k = 0; k < n; k++) m += wsAt(k); m /= n;
@@ -454,6 +624,12 @@ void wsenseTouch(int x, int y, bool held, bool isNew) {
   (void)held;
   if (!isNew) return;
   if (isBack(x, y)) { navBack(); return; }
+  { int tgy = 26 + 18 + 46 + 6 + 14;                    // = gy di drawWsense (jaga tetap sama)
+    if (y >= tgy && y <= tgy + 20 && x > SCR_W - 100) {  // ganti mode multi <-> rata-rata
+      wsMulti = !wsMulti; wsBrK = -1; wsBrRingN = 0; wsBr = 0; wsMovHist = 0;
+      snprintf(wsMsg, sizeof(wsMsg), wsMulti ? "Mode multi-subcarrier" : "Mode rata-rata");
+      needRedraw = true; return;
+    } }
   if (y < wsBtnY() || y > wsBtnY() + 26) return;
   for (int i = 0; i < 4; i++) {
     int bx, bw; wsBtnRect(i, &bx, &bw);

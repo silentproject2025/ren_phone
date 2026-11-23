@@ -6,6 +6,11 @@
 #include <algorithm>
 using std::max; using std::min;
 #define WSENSE_FORCE 1
+#include <stdlib.h>
+#define MALLOC_CAP_SPIRAM 1
+#define MALLOC_CAP_8BIT 2
+inline void* heap_caps_malloc(size_t n, unsigned) { return malloc(n); }
+inline void heap_caps_free(void* p) { free(p); }
 static unsigned long g_ms = 100000;
 inline unsigned long millis() { return g_ms; }
 #define WL_CONNECTED 3
