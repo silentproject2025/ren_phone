@@ -20,8 +20,8 @@ NyxOS is neither Android nor Linux. The launcher, notification center, network s
 | | |
 |---|---|
 | **Microcontroller** | ESP32-S3, 16 MB flash, 8 MB OPI PSRAM |
-| **Built-in apps** | 46 |
-| **Code size** | ~65,000 lines of main firmware + ~1,500 lines of coprocessor firmware (third-party code and generated data tables excluded) |
+| **Built-in apps** | 47 |
+| **Code size** | ~67,000 lines of main firmware + ~1,500 lines of coprocessor firmware (third-party code and generated data tables excluded) |
 | **UI language** | English (default) and Indonesian, switchable in *Settings → Language* |
 | **Version** | 1.0.3 (see [`VERSION`](./VERSION)) |
 | **License** | AGPL-3.0 |
@@ -39,6 +39,9 @@ NyxOS is neither Android nor Linux. The launcher, notification center, network s
 > - **ST7796 display tricks beyond Home** are `BETA`: hardware scroll on other portrait screens (Settings, Files, Chat, Books and more) and row-diff screen push (`RP_PUSH_DIFF`, on by default in ST7796 and Aether builds). If the screen shows leftovers or corruption, build with `push_diff=0`. The **Aether Board** profile is `BETA` too.
 >
 > - **Speaker output** (optional MAX98357A module: Music *Output: SPK*, call audio through the speaker, MP3 from internal flash) is `BETA`: not yet tested on hardware. Bluetooth stays the default output.
+>
+> - **WiFi Sensing** (motion, presence and a rough breathing estimate from WiFi CSI) is `BETA`: the signal processing is tested with synthetic signals on a PC (`tests/wifisense/`) but not yet on a device. It needs CSI in the custom core libraries (input `wifi_csi`, on by default). The labels on its screen are still Indonesian only.
+> - **Automatic broker login** (Chat and Chess fetch their MQTT host, username and password from Supabase, plus the **Refetch** button) is `BETA`: not yet tested on a device. The login is **not secret**; see the [security notice](#security-notice).
 >
 > Each feature is described in full in the [feature documentation](./docs/features/).
 
@@ -86,6 +89,7 @@ Status markers used throughout the documentation:
 | **Communication** | [Chat over an MQTT broker](./docs/features/chat.md) | `OK` |
 | | [Phone calls (SIP and LAN)](./docs/features/phone-calls.md) | `PARTIAL` |
 | | [Chess (online and vs. AI)](./docs/features/chess.md) | `BETA` |
+| | [Automatic broker login](./docs/features/chat.md#automatic-broker-login-beta) for Chat and Chess: fetched once from Supabase, with a **Refetch** button instead of the old *Set* button | `BETA` |
 | **Remote** | [Remote Control (web) and web gamepad](./docs/features/remote-control.md) | `OK` |
 | **Media** | [Bluetooth music, AVI/MJPEG player, Gallery](./docs/features/media.md) | `OK` |
 | | [Camera (OV2640 on the ESP32-CAM)](./docs/features/camera.md) | `OK` |
@@ -98,9 +102,10 @@ Status markers used throughout the documentation:
 | | [Nyx Apps](./docs/features/native-apps.md): native ELF apps loaded from the SD card, or from internal flash when no SD card is inserted. Example apps are compiled by CI and downloadable from the web flasher, or installable on the phone itself through the **Nyx Store**. The loader and the `hello` example are confirmed on a device; the Store and the rest are not | `PARTIAL` (Store `BETA`) |
 | | [Security hardening](./docs/security.md): Web File Manager login (salted PBKDF2 hash, escalating lockout, only active while File Explorer is open), encrypted Gemini/NASA API keys, random Remote Control WiFi password, optional signed OTA updates (ECDSA P-256) | `BETA` |
 | | [SysMem](./docs/sysmem.md): per-feature memory accounting, budgets, reserve floor and one reclaim path for the main firmware | `BETA` |
+| | [WiFi Sensing](./docs/features/system-tools.md#wifi-sensing-beta): detects motion and presence and estimates breathing from WiFi CSI (router as transmitter, no camera); multi-subcarrier mode, per-router calibration | `BETA` |
 | **Games** | [Inferno, NES, DOOM, Maze, classics, PPU demo](./docs/features/games.md) | `OK` |
 | **Experimental** | [SPI overclock (`HW`), NyxPPU pixel engine (`EXP`)](./docs/features/experimental.md) | — |
-| **Platform** | Custom core libraries (mbedTLS and WiFi/lwIP buffers in PSRAM, larger CPU cache, optional ELF loader). Built **manually** once with *Build Arduino Libs*; every CI firmware build then installs them automatically when they exist — [details](#what-the-automatic-build-does-and-does-not-do) | `OK` |
+| **Platform** | Custom core libraries (mbedTLS and WiFi/lwIP buffers in PSRAM, larger CPU cache, optional ELF loader, optional WiFi CSI for WiFi Sensing). Built **manually** once with *Build Arduino Libs*; every CI firmware build then installs them automatically when they exist — [details](#what-the-automatic-build-does-and-does-not-do) | `OK` |
 | | Web flasher on GitHub Pages: stable and test firmware, SHA-256 checksums, and a **Nyx Apps** tab with the example apps | `OK` (firmware) / `PARTIAL` (Nyx Apps tab) |
 
 ## Architecture at a glance
@@ -227,9 +232,9 @@ Without an SD card, upload `manifest.txt` and `app.elf` through the phone's Web 
 │   │   └── extras/           Sources the CI copies into the sketch's src/ folder
 │   ├── cam_bt_coprocessor/   ESP32-CAM coprocessor sketch (Bluetooth audio + camera)
 │   └── prebuilt/             Alternative prebuilt firmware (Bruce fork), separate from NyxOS
-├── supabase/                 SQL, registration page and dashboard for the optional device registry
+├── supabase/                 SQL for the optional device registry (setup.sql, register page, dashboard), cloud backup (backup.sql) and the Chat/Chess broker login (broker_config.sql)
 ├── third_party/              Vendored third-party code (Nofrendo NES core, ESP-DOOM core)
-├── tests/                    Host-side (PC) tests: backup, chess, ebook, gutenberg, camera, dictionary, nyxapp, sysmem, security
+├── tests/                    Host-side (PC) tests: backup, chess, ebook, gutenberg, camera, dictionary, nyxapp, sysmem, security, wifisense
 ├── tools/                    Generators and helpers (emoji, fonts, dictionaries, i18n, Nyx App packaging)
 │   ├── pack_app.py           Lay out one app as <sd>/apps/<id>/{app.elf,manifest.txt,data/}
 │   ├── nyxapps_release.py    Zip built ELFs + build the nyxapps.json index for the web flasher
@@ -238,6 +243,7 @@ Without an SD card, upload `manifest.txt` and `app.elf` through the phone's Web 
 │   ├── patches/              Idempotent patch scripts for phone.ino; the Nyx Apps and SysMem ones are still checked by CI, the rest are kept as history
 │   ├── ci/                   Helper scripts used by the CI workflows
 │   └── legacy-patches/       Archived one-shot patch scripts, including elf_loader.patch (see its README)
+├── apply_*.py                Idempotent one-shot patch scripts (Web File Manager, WiFi Sensing, speaker/FFat, Nyx Store UI, login hardening); most are already applied to the sources
 ├── CHANGELOG.md              Release notes; the matching section is shown on the phone during an OTA update
 ├── CONTRIBUTING.md
 ├── LICENSE                   AGPL-3.0
@@ -254,7 +260,7 @@ The folder name `firmware/phone/` matches `phone.ino` so the sketch can also be 
 |---|---|
 | **Build Firmware Binaries** (`build-firmware.yml`) | Every push: compiles the S3 firmware (ILI9341, ST7796 and Aether Board variants), publishes a Release and the OTA channel, then calls the web flasher. |
 | **Build CAM BT Co-Processor** (`build-cam-coprocessor.yml`) | Compiles the ESP32-CAM coprocessor firmware. |
-| **Build Arduino Libs** (`build-arduino-libs.yml`) | Manual: builds the custom core libraries (mbedTLS in PSRAM, cache sizes, WiFi/lwIP in PSRAM, optional `elf_loader` 2.0.0). Re-run only when the core version or the options change. |
+| **Build Arduino Libs** (`build-arduino-libs.yml`) | Manual: builds the custom core libraries (mbedTLS in PSRAM, cache sizes, WiFi/lwIP in PSRAM, optional `elf_loader` 2.0.0, optional WiFi CSI with the `wifi_csi` input). Re-run only when the core version or the options change. |
 | **Build Nyx Apps (ELF)** (`build-nyxapps.yml`) | Compiles each `examples/native/<id>/` with ESP-IDF to an ELF, checks it (magic, Xtensa, ≤ 1 MB), and on `main`/`master` publishes zips to the `nyxapps` pre-release and refreshes the web flasher. Pushes and pull requests only prove the apps still compile. |
 | **Web Flasher (GitHub Pages)** (`flasher-pages.yml`) | Builds the flasher page: stable vs. test firmware, `.bin` downloads, SHA-256, and the Nyx Apps tab. |
 | **nyxapp-tests**, **sysmem-tests**, **security-tests** | Run the PC test suites when the related files change. `security-tests` also checks the OTA signing flow (key generation, signing, device-style verification). |
@@ -308,6 +314,7 @@ A short list; the full list is in [docs/limitations.md](./docs/limitations.md).
 - DOOM needs a contiguous block of about 6.25 MB of PSRAM for its full 6 MiB zone; with less it runs with a 5 or 4 MiB zone and big levels may fail. A WAD on FFat is streamed by a helper task and no longer has to fit in PSRAM (see [Games](./docs/features/games.md#doom-wad-files)).
 - Hardware scroll and row-diff push exist only on ST7796 and Aether builds. Vertical scrolling in landscape cannot use hardware scroll, because the panel can only scroll along its long (480-pixel) axis; landscape Home uses swipeable pages instead. Hardware scroll also steps aside while someone views Remote Control, in game mode, while an overlay is open and, on portrait Home, when a wallpaper is set (see [System UI](./docs/features/system-ui.md#home-pages-and-hardware-scroll-st7796)).
 - Phone calls: partially tested; no ICE; TURN over UDP only; no PSTN numbers through free services.
+- WiFi Sensing reports only "motion" and "someone still is breathing" (no pose, no seeing through walls). Breathing needs the phone to be still, the person within about 1-3 m and a router that is not too far away. Not yet tested on a device.
 - TLS certificates are not verified (see the security notice). The Web File Manager uses HTTP Basic authentication over plain HTTP, so use it only on networks you trust.
 - Nyx Apps need the ELF loader, which is only in custom core libraries built with `elf_loader` enabled. The loader and the `hello` example run on a device; the Nyx Store, the storage choice and the other examples are not yet confirmed. App files on internal flash share the roughly 9 MB FFat partition. See [Nyx Apps](./docs/features/native-apps.md).
 - There is no memory compaction: native apps use real pointers, so blocks are never moved. Fragmentation is limited (per-app arenas, block merging, the TLS gate), not removed.
@@ -325,6 +332,7 @@ This project is a personal, experimental device. Before using it with sensitive 
 - The Remote Control WiFi uses WPA2 with a random password (the old public default is replaced automatically).
 - OTA updates can be verified with an ECDSA P-256 signature. This is **off by default**: it starts working once a public key is placed in `firmware/phone/ota_pubkey.h` (see [docs/security.md](./docs/security.md)).
 - On the first WiFi connection the device registers itself once with an anonymous id (a hash of the chip MAC) and sends its firmware version, build, branch and display type. A public username is optional and shown on the dashboard only if you set one. Leave the username empty to stay off the public list; details are in [docs/security.md](./docs/security.md).
+- The Chat and Chess broker logins are served by a Supabase function that the public key in the firmware can call, so **anyone who reads the repository can obtain them**. Use broker users made only for this project, limited by ACL, never an admin account (see [docs/security.md](./docs/security.md)).
 
 ## Contributing
 

@@ -28,7 +28,9 @@ Complete chess (check, checkmate, stalemate, castling, *en passant*, promotion, 
 
 ## Broker
 
-Chess uses **its own** broker settings, separate from Chat (TLS, default port 8883; `host` may carry `:port`). Fill them in through the app (host, username, password, then **Save**), through a `/chess.cfg` file on the SD card (`host=`, `user=`, `pass=`; see [Configuration](../configuration.md)), or with the copy button from the Chat settings (after copying, the two remain separate). If the broker account is restricted by ACL to `renphone/chat/#`, add *publish* and *subscribe* permission to `renphone/chess/#`.
+Chess uses **its own** broker settings, separate from Chat (TLS, default port 8883; `host` may carry `:port`). Normally the phone fetches them automatically (see below). Otherwise put a `/chess.cfg` file on the SD card (`host=`, `user=`, `pass=`; see [Configuration](../configuration.md)); it is loaded when the app opens and no broker is stored. The in-app Broker screen (fields, *From SD*, *Copy Chat*, *Save*) can no longer be opened from the interface. If the broker account is restricted by ACL to `renphone/chat/#`, add *publish* and *subscribe* permission to `renphone/chess/#`.
+
+**Automatic login `BETA`.** Like Chat, Chess fetches its login from Supabase (`get_broker_config('chess', <device id>)`) once, when the app opens with WiFi on and no broker stored. A login loaded from `/chess.cfg` is never overwritten by that. On the setup screen the **Refetch** button (beside the broker line, it replaced *Set*) asks Supabase again and replaces the stored login; if it fails the old one stays and a toast shows `Gagal ambil broker (code)`. The codes, the Supabase setup and the security notes are the same as in [Chat](./chat.md#automatic-broker-login-beta). Chess uses its own `chess` row, so it can point to a different broker than Chat.
 
 ## How online play works
 

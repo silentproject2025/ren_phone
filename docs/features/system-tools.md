@@ -5,6 +5,7 @@
 - [Settings Backup and Restore](#settings-backup-and-restore-beta)
 - [Crash log](#crash-log-beta)
 - [HWmonitor](#hwmonitor)
+- [WiFi Sensing](#wifi-sensing-beta)
 - [Other utility apps](#other-utility-apps)
 
 ## Battery (INA219) `OK`
@@ -88,6 +89,29 @@ At boot, NyxOS reads the last reset reason. For an abnormal reset (panic, watchd
 Live monitoring on the device: per-core load, internal RAM, PSRAM and the *largest free block*. The main tool for diagnosing memory problems.
 
 The **Test Speaker** button plays a short 1 kHz tone through an optional MAX98357A module (wiring in [Hardware](../hardware.md)). Without the module nothing happens, and the rest of the phone is unaffected.
+
+## WiFi Sensing `BETA`
+
+Detects **motion** and **presence**, and gives a rough **breathing rate**, without a camera. It reads the Channel State Information (CSI) of the packets your router sends to the phone, so only one ESP32-S3 and a router are needed. The source is `firmware/phone/wifisense_renphone.ino`; the app is in the *System* category on Home.
+
+**How it works**
+
+- The CSI callback averages the subcarrier amplitudes of every packet. To get a steady rate (about 40 packets per second instead of only beacons), the phone pings the gateway every 25 ms; without ping support it falls back to beacons, where motion still works but breathing usually does not.
+- Amplitudes are averaged into 100 ms bins. **Motion** is the RMS of the change over 2 s compared with a threshold from the calibration times the sensitivity. **Breathing** uses a 30 s window and a spectrum in the 0.10-0.50 Hz band (6-30 breaths per minute), and only counts when nobody is moving.
+- **Multi-subcarrier mode** (default) keeps 64 subcarriers per bin (about 38 KB in PSRAM). Motion uses the top half of the per-subcarrier scores; breathing sums the per-subcarrier spectra, so subcarriers do not cancel each other out. If PSRAM is short, or the packets carry no LLTF data, it falls back to the older single-average mode. Tap the **Multi N** / **Rata** label in the graph corner to switch (calibration is stored per mode).
+- **Packet filter:** only packets from the router you are connected to (source MAC = BSSID) and of a single PHY class are used; other transmitters have a different amplitude scale and cause false jumps. Glitch packets (the average amplitude jumps more than 40% for an instant) are dropped.
+- **Adaptive threshold:** after calibration, the 25th percentile of the motion score is tracked and the threshold follows the noise level of the room (0.6x to 3x of the calibrated value), which reduces false "motion" when the room gets noisy.
+- **Calibration and sensitivity are remembered per router** (saved against its BSSID) and loaded when the app opens.
+- The breathing estimate is refined with a parabolic fit at the spectrum peak, so it no longer sticks to multiples of 0.6.
+
+**Using it.** Connect to WiFi and open the app. Tap **Mulai** (Start). Press **Kalibrasi** (Calibrate) while the room is empty (about 15 s), then use **-** / **+** to set the sensitivity (1 to 5). The screen shows the state (*Kosong* = empty, *Ada gerak* = motion, *Baru ada gerak* = waiting for calm to check breathing, *Ada orang (diam)* = a person who is still and breathing), the packet rate (green from 25 per second, yellow from 12, red below that), the motion score as a multiple of the threshold, the breathing rate and a graph of the last 15 s.
+
+**Requirements**
+
+- The custom core libraries must include `CONFIG_ESP_WIFI_CSI_ENABLED=y` (input `wifi_csi` of *Build Arduino Libs*, on by default; see [Building](../building.md)). The firmware build passes `-DWSENSE_FORCE=1`, so the app always compiles; if CSI is missing it shows a message instead of crashing.
+- WiFi must be connected (station mode).
+
+**Limits.** Not yet tested on a device; the sensitivity and breathing thresholds may need tuning in your room (that is what Calibrate and **-** / **+** are for). It shows only "motion" and "someone still is breathing", not pose, and cannot see through walls. Breathing needs the phone to stay still on a table or tripod, the person to stay still for 30 s within about 1-3 m, and a router that is not too far away. The labels on the screen are Indonesian only (not yet in the language dictionary). The signal processing is tested on a PC with synthetic signals (`tests/wifisense/`, see [Tests](../../tests/README.md)).
 
 ## Other utility apps
 

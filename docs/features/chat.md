@@ -4,6 +4,7 @@ Private messaging between devices **without a self-built server**. An MQTT broke
 
 - [How it works](#how-it-works)
 - [Configuration](#configuration)
+- [Automatic broker login](#automatic-broker-login-beta)
 - [Choosing a broker](#choosing-a-broker)
 - [What is and is not verified](#what-is-and-is-not-verified)
 - [Limitations](#limitations)
@@ -18,7 +19,7 @@ Private messaging between devices **without a self-built server**. An MQTT broke
 
 ## Configuration
 
-Fill it in through the app (Broker, Username, Password, Name, then *Save & connect*), or put a `/chat.cfg` file on the SD card and press *Load SD* (see [Configuration](../configuration.md)). Typing on the on-screen keyboard is tiring, so the SD file is often more convenient:
+If no login is fetched automatically (see [below](#automatic-broker-login-beta)), fill it in through the app (Broker, Username, Password, Name, then *Save & connect*; this screen only appears while no login is stored), or put a `/chat.cfg` file on the SD card and press *Load SD* (see [Configuration](../configuration.md)). Typing on the on-screen keyboard is tiring, so the SD file is often more convenient:
 
 ```
 host=xxxxxxxx.ala.eu-central-1.emqxsl.com
@@ -28,6 +29,21 @@ name=Ren
 ```
 
 Then open the Chat app (or press *Load SD* on the settings screen).
+
+## Automatic broker login `BETA`
+
+Nothing has to be typed if the project owner has set up the Supabase side. When WiFi is connected and Chat is opened with **no broker login stored**, the phone calls the Supabase function `get_broker_config('chat', <device id>)` once and stores the host, username and password on the phone (NVS). Not yet tested on a device.
+
+- **Fetched once.** As soon as a login is stored, Chat no longer contacts Supabase.
+- **Your own login is safe.** A login you typed, or loaded from `/chat.cfg`, is never overwritten by the automatic fetch.
+- **Refetch button** (top right in Chat, it replaced the old *Set* button). It asks Supabase for the current login and replaces the stored one, also a typed one. Use it after the password was changed on the broker. If the request fails, the old login stays and a toast shows `Gagal ambil broker (code)`.
+- **Codes in that toast:** an HTTP status as is (for example `401` or `404`), `-1` network or TLS failure, `-100` not enough internal RAM, `-101` the request could not start, `-102` Supabase answered but the login is empty or switched off.
+- **Fallback.** If nothing is stored and the fetch fails, the manual screen (Broker, Username, Password, Name) appears as before, and `/chat.cfg` is still read.
+- **Off switch.** Leave `RP_REG_URL` in `firmware/phone/devreg_conf.h` empty and the whole feature does nothing.
+
+**Setup (once, by the project owner).** In the Supabase SQL Editor run `supabase/setup.sql`, then `supabase/broker_config.sql`. Replace the `GANTI_USER_*` / `GANTI_PASSWORD_*` placeholders and the hosts with your own broker accounts. The table has one row per service (`chat` and `chess`, two separate brokers). Setting `enabled = false` on a row switches it off for every phone without a firmware update.
+
+**Security.** The publishable key is in the public firmware, so anyone can call the function and read the login. Treat it as not secret: create broker users only for this project and restrict them by ACL (Chat: `renphone/chat/#`; Chess: its own topics), never an admin account. See [Security](../security.md).
 
 ## Choosing a broker
 

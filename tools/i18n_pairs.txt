@@ -849,3 +849,15 @@ Penyimpanan penuh / gagal menulis ::: Storage full / write failed
 Gagal membuka berkas tujuan ::: Could not open destination file
 PSRAM tidak cukup ::: Not enough PSRAM
 Atau pasang lewat Store (kanan atas). ::: Or install from the Store (top right).
+# --- Broker dari Supabase: tombol "Ambil ulang" (BROKERCFG_V1) ---
+Ambil ulang ::: Refetch
+Mengambil broker... ::: Fetching broker...
+Mengambil broker Catur... ::: Fetching Chess broker...
+Tidak bisa mulai ambil broker ::: Cannot start fetching the broker
+Broker diperbarui ::: Broker updated
+Broker Catur diperbarui ::: Chess broker updated
+# --- Speaker (SPK_FFAT_V1): entri ini sebelumnya hanya ada di i18n_dict.h, belum di file sumber ---
+Tes Speaker ::: Test Speaker
+Pindai ::: Scan
+Nada uji selesai ::: Test tone finished
+Speaker gagal dibuka ::: Speaker failed to open

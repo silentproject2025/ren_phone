@@ -43,11 +43,22 @@ Find your symptom in the table. For memory-related problems, the **HWmonitor** a
 | "CAM RAM low" message | Camera, A2DP and MP3 running together | Turn off Bluetooth or music before opening Camera. |
 | The ESP32-CAM restarts often | *Brownout* from a weak power supply | Use the 5V pin with a strong supply. |
 
+## Broker login (Chat and Chess)
+
+| Symptom | Likely cause | Action |
+|---|---|---|
+| Toast `Gagal ambil broker (-1)` | No internet, or the TLS connection to Supabase failed | Check WiFi, then tap **Refetch** (Chat: top right; Chess: setup screen). |
+| `Gagal ambil broker (-100)` | Not enough internal RAM for the TLS connection | Close other apps (App Switcher → Close all), then try again. |
+| `Gagal ambil broker (-102)` | Supabase answered, but the row for that service is missing, disabled (`enabled = false`) or empty | Check the `broker_config` table in Supabase. |
+| `Gagal ambil broker (401)` or `(404)` | Wrong key or URL in `devreg_conf.h`, or `supabase/broker_config.sql` was not run | Run `broker_config.sql` after `setup.sql` and check `RP_REG_URL` and `RP_REG_KEY`. |
+| Chat or Chess still connects with the old password after it was changed on the broker | The login is fetched only once and kept on the phone | Tap **Refetch**. |
+| The broker screen cannot be opened any more | The *Set* button was replaced by **Refetch** | If the fetch keeps failing, put `/chat.cfg` or `/chess.cfg` on the SD card. |
+
 ## Chess
 
 | Symptom | Likely cause | Action |
 |---|---|---|
-| Chess shows "Set the Chess broker first" or "Chess broker not set" | Broker host, username or password not filled in | Fill them in the Chess app and **Save**, put `/chess.cfg` on the SD card, or copy from the Chat settings. |
+| Chess shows "Set the Chess broker first" or "Chess broker not set" | Broker host, username or password not filled in | Tap **Refetch** on the setup screen (needs WiFi and Supabase set up), or put `/chess.cfg` on the SD card. |
 | Chess shows "Wrong username/password" or "Cannot reach the broker" | Wrong credentials, WiFi not connected, or the broker is unavailable | Check the account and host; make sure WiFi is on; if an ACL exists, allow `renphone/chess/#`. |
 | The Chess Network screen shows "RAM not enough for diff" | The initial weights for the **Diff** chip do not fit in PSRAM | Close other apps and reopen the Network screen; the Network, Weights and Squares tabs still work without Diff. |
 | Chess shows "RAM tight, close other apps" | Not enough internal RAM for the TLS connection | Close other apps (App Switcher → Close all), then try again. |

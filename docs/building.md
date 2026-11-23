@@ -163,6 +163,7 @@ This component is **optional**, but it is used by the CI builds.
 | `CONFIG_FREERTOS_TASK_CREATE_ALLOW_EXT_MEM=y` | Prerequisite for task stacks in PSRAM (`xTaskCreateStaticPinnedToCore`). |
 | `CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y` | WiFi/lwIP buffers are preferably placed in PSRAM. WiFi throughput may drop slightly; disable with the `wifi_lwip_psram=false` input. |
 | `CONFIG_ELF_LOADER=y`, `CONFIG_ELF_LOADER_LOAD_PSRAM=y` (input `elf_loader`, on by default) | Adds `espressif/elf_loader` 2.0.0 so [Nyx Apps](./features/native-apps.md) can load `app.elf` into PSRAM. Without it the firmware still builds and Nyx Apps says the loader is missing. |
+| `CONFIG_ESP_WIFI_CSI_ENABLED=y` (input `wifi_csi`, on by default) | WiFi CSI callbacks for the [WiFi Sensing](./features/system-tools.md#wifi-sensing-beta) app. Turn it off if internal RAM feels tight. The firmware build also passes `-DWSENSE_FORCE=1`, so the app always compiles; without CSI in the library it shows a message on screen instead of crashing. |
 
 The `-DCONFIG_MBEDTLS_*` flags that used to be in `build-firmware.yml` were removed because they do not affect an already-built `libmbedtls.a`. Extra options only produce a *warning* if they fail to apply; only `EXTERNAL_MEM_ALLOC` fails the build.
 

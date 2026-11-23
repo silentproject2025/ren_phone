@@ -11,6 +11,7 @@ These tests run on a PC (or in Termux) with `g++` and Python 3; no ESP32 is need
 | Ebook | `tests/ebook/` | inflate, ZIP, EPUB, TXT, Markdown, layout, UI flow (with AddressSanitizer) |
 | Gutenberg | `tests/gutenberg/` | Gutendex/OPDS parsing, download registry, CRC32 and ZIP checks, download simulation |
 | Nyx Apps | `tests/nyxapp/` | `nyxmem.h` arena (quota, canaries, fuzzing, memory pressure, TLS gate), `nyxhost.h` host API (manifest, path sandbox, permissions), example apps run through `dlopen`, and a syntax check of `nyxapp_renphone.ino` against a stub |
+| WiFi Sensing | `tests/wifisense/` | Motion and breathing detection on synthetic CSI signals: packet filter, adaptive baseline, multi-subcarrier mode, calibration |
 | SysMem | `tests/sysmem/` | `sysmem.h` accounting, budgets, reserve floor, reclaim chain, fuzzing with ASan + UBSan |
 
 The tests include the real firmware sources from `firmware/phone/` (and `firmware/cam_bt_coprocessor/` for the camera), so they exercise the code that is actually shipped.
@@ -36,6 +37,9 @@ python3 tests/gutenberg/run_sim.py
 # Camera
 g++ -std=c++11 -I firmware/cam_bt_coprocessor -I tests/camera/stub -I tests/camera -I firmware/phone \
     -o /tmp/test_cam tests/camera/test_cam.cpp && /tmp/test_cam
+
+# WiFi Sensing (uses $TMPDIR; needs g++)
+sh tests/wifisense/run.sh
 
 # Nyx Apps (uses $TMPDIR, so it also works in Termux; needs g++ and gcc)
 (cd tests/nyxapp && ./run.sh)
