@@ -469,7 +469,7 @@ void chatLoopPoll() {
         }
       } else {
         bcAck(BC_SVC_CHAT);
-        if (!chatConfigured()) showToast(RPTR("Gagal ambil broker, isi manual"), 2400);
+        if (!chatConfigured()) { static char bm[40]; snprintf(bm, sizeof(bm), "Gagal ambil broker (%d)", bcLastCode(BC_SVC_CHAT)); showToast(bm, 3200); }
       }
       chatCfgMode = !chatConfigured();
       chatActive = !chatCfgMode;

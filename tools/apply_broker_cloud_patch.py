@@ -32,7 +32,7 @@ CHAT_POLL = '''  if (chatBcWait) {                         // BROKERCFG_V1: tung
         }
       } else {
         bcAck(BC_SVC_CHAT);
-        if (!chatConfigured()) showToast(RPTR("Gagal ambil broker, isi manual"), 2400);
+        if (!chatConfigured()) { static char bm[40]; snprintf(bm, sizeof(bm), "Gagal ambil broker (%d)", bcLastCode(BC_SVC_CHAT)); showToast(bm, 3200); }
       }
       chatCfgMode = !chatConfigured();
       chatActive = !chatCfgMode;
@@ -71,7 +71,7 @@ CHESS_POLL = '''  if (chsBcWait) {                          // BROKERCFG_V1: tun
         }
       } else {
         bcAck(BC_SVC_CHESS);
-        if (!chsBrokerOk()) showToast(RPTR("Gagal ambil broker Catur"), 2400);
+        if (!chsBrokerOk()) { static char bm[40]; snprintf(bm, sizeof(bm), "Gagal ambil broker (%d)", bcLastCode(BC_SVC_CHESS)); showToast(bm, 3200); }
       }
       needRedraw = true;
     }

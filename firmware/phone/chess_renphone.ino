@@ -4193,7 +4193,7 @@ void chessLoopPoll() {
         }
       } else {
         bcAck(BC_SVC_CHESS);
-        if (!chsBrokerOk()) showToast(RPTR("Gagal ambil broker Catur"), 2400);
+        if (!chsBrokerOk()) { static char bm[40]; snprintf(bm, sizeof(bm), "Gagal ambil broker (%d)", bcLastCode(BC_SVC_CHESS)); showToast(bm, 3200); }
       }
       needRedraw = true;
     }

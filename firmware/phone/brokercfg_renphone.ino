@@ -5,7 +5,8 @@
 //          RPC get_broker_config(p_service, p_device_id) -> app mengambil hasilnya lewat bcTake()
 //          dan menyimpannya ke NVS miliknya sendiri. Pengguna tidak perlu mengetik apa pun.
 // Aturan : * Config yg DIKETIK/DIMUAT dari SD oleh pengguna tidak pernah ditimpa (dikenali lewat hash).
-//          * Config yg berasal dari cloud ikut ter-update otomatis (mis. password diganti di EMQX).
+//          * Fetch hanya SEKALI: begitu config tersimpan di NVS, app tidak menghubungi Supabase lagi.
+//            Ganti password di EMQX -> kosongkan config di app (atau hapus NVS) agar diambil ulang.
 //          * Gagal jaringan -> pakai config tersimpan (kalau ada), kalau tidak ada -> layar isi manual.
 // Mati   : RP_REG_URL kosong (devreg_conf.h) -> semua fungsi no-op.
 // Skema  : supabase/broker_config.sql
@@ -26,7 +27,7 @@ bool rpHeapEnsure(size_t need, unsigned long maxMs);   // phone.ino
 #define BC_FAIL   3
 #define BC_SVC_CHAT   0
 #define BC_SVC_CHESS  1
-#define BC_MIN_INT_BLOCK 22000                  // blok RAM internal utk handshake TLS (sama dgn devreg)
+#define BC_MIN_INT_BLOCK 22000                  // sama dgn CHAT_MIN_BLOCK: fetch tak boleh lebih rewel dari Chat sendiri
 
 static volatile uint8_t bcSt[2] = {BC_IDLE, BC_IDLE};
 static char bcH[2][96], bcU[2][64], bcP[2][96];
@@ -59,10 +60,16 @@ static bool bcJsonStr(const char* j, const char* key, char* out, size_t n) {
   return i > 0;
 }
 
-static void bcTask(void* arg) {
-  const uint8_t svc = (uint8_t)(uintptr_t)arg;
+// Kode alasan gagal (ditampilkan di toast): HTTP status apa adanya (404, 401, -1 = gagal jaringan/TLS, ...)
+//   -100 RAM internal kurang | -101 http.begin gagal | -102 HTTP 200 tapi isi tidak valid (null / disabled)
+static volatile int bcCode[2] = {0, 0};
+int bcLastCode(uint8_t svc) { return svc > 1 ? 0 : (int)bcCode[svc]; }
+
+static void bcDoFetch(uint8_t svc) {
   bool ok = false;
+  int code = -100;
   if (smEnsureContig(BC_MIN_INT_BLOCK)) {
+    code = -101;
     WiFiClientSecure net;
 #ifdef RP_REG_CA
     if (sizeof(RP_REG_CA) > 1) net.setCACert(RP_REG_CA); else net.setInsecure();
@@ -79,7 +86,7 @@ static void bcTask(void* arg) {
       if (strncmp(RP_REG_KEY, "sb_", 3) != 0) http.addHeader("Authorization", String("Bearer ") + RP_REG_KEY);
       char body[96];
       snprintf(body, sizeof(body), "{\"p_service\":\"%s\",\"p_device_id\":\"%s\"}", bcSvcName(svc), devRegId());
-      int code = http.POST((uint8_t*)body, strlen(body));
+      code = http.POST((uint8_t*)body, strlen(body));
       Serial.printf("[bcfg] %s -> %d\n", bcSvcName(svc), code);
       if (code >= 200 && code < 300) {
         String r = http.getString();
@@ -88,13 +95,29 @@ static void bcTask(void* arg) {
             bcJsonStr(r.c_str(), "pass", w, sizeof(w))) {
           strcpy(bcH[svc], h); strcpy(bcU[svc], u); strcpy(bcP[svc], w);
           ok = true;
+        } else {
+          code = -102;
         }
       }
       http.end();
     }
+  } else {
+    Serial.printf("[bcfg] RAM internal kurang, blok terbesar %u\n", (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
   }
+  bcCode[svc] = code;
   bcSt[svc] = ok ? BC_OK : BC_FAIL;             // ditulis terakhir: UI baru membaca buffer setelah ini
-  vTaskDelete(NULL);
+}
+
+// Worker tetap (dibuat sekali, stack di PSRAM supaya tidak memakan RAM internal yg dibutuhkan TLS).
+static StackType_t* bcStack = nullptr;
+static StaticTask_t bcTCB;
+static TaskHandle_t bcWorkerH = nullptr;
+static void bcWorker(void*) {
+  for (;;) {
+    bool any = false;
+    for (uint8_t sv = 0; sv < 2; sv++) if (bcSt[sv] == BC_BUSY) { bcDoFetch(sv); any = true; }
+    if (!any) vTaskDelay(pdMS_TO_TICKS(150));
+  }
 }
 
 // ---- hash config terakhir yg berasal dari cloud (NVS "bcfg"), untuk mengenali config buatan pengguna ----
@@ -120,22 +143,24 @@ static bool bcManaged(uint8_t svc, const String& h, const String& u, const Strin
 // ---------------------------------------------------------------------
 // API untuk app Chat / Catur
 // ---------------------------------------------------------------------
-// Perlu ambil dari cloud? (fitur aktif, WiFi ada, dan config kosong / masih milik cloud)
+// Perlu ambil dari cloud? Hanya jika fitur aktif, WiFi ada, dan config masih KOSONG.
 bool bcShouldFetch(uint8_t svc, const String& h, const String& u, const String& w) {
   if (svc > 1 || sizeof(RP_REG_URL) <= 1) return false;
   if (WiFi.status() != WL_CONNECTED) return false;
-  return bcManaged(svc, h, u, w);
+  return !(h.length() && u.length() && w.length());   // SEKALI saja: config sudah tersimpan (NVS) = tidak fetch lagi
 }
 
 // Mulai ambil (sekali jalan, di task terpisah). false = tidak bisa mulai (app lanjut tanpa menunggu).
 bool bcRequest(uint8_t svc) {
   if (svc > 1 || sizeof(RP_REG_URL) <= 1) return false;
   if (bcSt[svc] == BC_BUSY) return true;
-  rpHeapEnsure(BC_MIN_INT_BLOCK, 1500);   // RAM_V5
+  rpHeapEnsure(BC_MIN_INT_BLOCK, 1500);            // RAM_V5: lepas cadangan + buang cache app latar (konteks UI), tunggu <=1,5 dtk
   bcSt[svc] = BC_BUSY;
-  if (xTaskCreatePinnedToCore(bcTask, "bcfg", 10240, (void*)(uintptr_t)svc, 1, NULL, 0) != pdPASS) {
-    bcSt[svc] = BC_IDLE;
-    return false;
+  if (!bcWorkerH) {
+    if (createTaskPsramStack(bcWorker, "bcfg", 12288, NULL, &bcStack, &bcTCB, &bcWorkerH, 0) != pdPASS) {
+      bcWorkerH = nullptr; bcSt[svc] = BC_IDLE;
+      return false;
+    }
   }
   return true;
 }
