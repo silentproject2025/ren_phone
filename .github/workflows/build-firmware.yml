@@ -412,7 +412,7 @@ jobs:
           echo "Varian layar: $VARIANT ${DISP_FLAG}${PD_FLAG} (push_diff input: '${PUSH_DIFF_IN:-default}')"
           arduino-cli compile --fqbn esp32:esp32:esp32s3 \
             --board-options "FlashSize=16M,PSRAM=opi,PartitionScheme=app3M_fat9M_16MB${LOOP_OPT}" \
-            --build-property "compiler.cpp.extra_flags=-DRP_BUILD_NUM=${{ github.run_number }} -DRP_BRANCH=${RP_BRANCH} -DRP_VERSION=${RP_VERSION} ${DISP_FLAG}${PD_FLAG}${CHS_FLAGS} -I${NOF_INCLUDE}" \
+            --build-property "compiler.cpp.extra_flags=-DWSENSE_FORCE=1 -DRP_BUILD_NUM=${{ github.run_number }} -DRP_BRANCH=${RP_BRANCH} -DRP_VERSION=${RP_VERSION} ${DISP_FLAG}${PD_FLAG}${CHS_FLAGS} -I${NOF_INCLUDE}" \
             --build-property "compiler.c.extra_flags=-I${NOF_INCLUDE}" \
             build_sketch --output-dir build 2>&1 | tee compile.log
 
@@ -462,7 +462,7 @@ jobs:
           [ "$VARIANT" = "aether" ] && DISP_FLAG="-DRP_BOARD_AETHER"
           arduino-cli compile --fqbn esp32:esp32:esp32s3 \
             --board-options "FlashSize=16M,PSRAM=opi,PartitionScheme=app3M_fat9M_16MB" \
-            --build-property "compiler.cpp.extra_flags=${DISP_FLAG} -I${NOF_INCLUDE}" \
+            --build-property "compiler.cpp.extra_flags=-DWSENSE_FORCE=1 ${DISP_FLAG} -I${NOF_INCLUDE}" \
             --build-property "compiler.c.extra_flags=-I${NOF_INCLUDE}" \
             --preprocess build_sketch > diag/preprocessed.cpp 2> diag/preprocess.err || true
           head -c 300000 diag/preprocessed.cpp > diag/preprocessed_head.cpp || true
