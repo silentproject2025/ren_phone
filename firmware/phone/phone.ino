@@ -20986,11 +20986,18 @@ void drawHwmon(LGFX_Sprite& s){
   top += 10;
 
   // RAM internal
-  int ramPct = hwmonHeapTotal>0 ? (int)(100 - (hwmonHeapFree*100UL/hwmonHeapTotal)) : 0;
+  // FRAG_V3: cadangan kontigu (sysmem) BUKAN pemakaian nyata -- ia dilepas otomatis saat dibutuhkan. Jadi
+  // persen & warna dihitung TANPA cadangan, dan cadangan digambar sbg segmen terpisah di bar + dijelaskan
+  // di baris "Blok Terbesar" (angka nyata tetap tampil, tidak ada yang disembunyikan).
+  size_t ramHold = smHoldBytes();
+  size_t ramUsedRaw = hwmonHeapTotal>hwmonHeapFree ? hwmonHeapTotal-hwmonHeapFree : 0;
+  if(ramHold>ramUsedRaw) ramHold=0;                                   // jaga-jaga data tidak sinkron
+  size_t ramUsed = ramUsedRaw - ramHold;
+  int ramPct = hwmonHeapTotal>0 ? (int)(ramUsed*100UL/hwmonHeapTotal) : 0;
   s.setTextColor(T().text); s.setTextSize(1); s.setCursor(14, top);
   s.print(RPTR("RAM Internal"));
   char ramBuf[40]; sprintf(ramBuf,"%d%%  (%u / %u KB)", ramPct,
-                           (unsigned)((hwmonHeapTotal-hwmonHeapFree)/1024), (unsigned)(hwmonHeapTotal/1024));
+                           (unsigned)(ramUsed/1024), (unsigned)(hwmonHeapTotal/1024));
   int rw=s.textWidth(ramBuf);
   s.setTextColor(hwmonLoadColor(ramPct)); s.setCursor(SCR_W-14-rw, top);
   s.print(ramBuf);
@@ -20998,6 +21005,13 @@ void drawHwmon(LGFX_Sprite& s){
   nyxAaRRRing(s, 14, top, SCR_W-28, 14, 4, T().text);
   int ramFillW = constrain((SCR_W-28-4)*ramPct/100, 0, SCR_W-28-4);
   if(ramFillW>0) nyxAaRR(s, 16, top+2, ramFillW, 10, 3, hwmonLoadColor(ramPct));
+  if(ramHold>0 && hwmonHeapTotal>0){                                  // FRAG_V3: segmen cadangan (warna beda, bukan merah)
+    int holdW = (int)((SCR_W-28-4)*(unsigned long)ramHold/hwmonHeapTotal);
+    if(holdW<3) holdW=3;
+    int holdX = 16+ramFillW;
+    if(holdX+holdW > SCR_W-16) holdW = SCR_W-16-holdX;
+    if(holdW>0) nyxAaRR(s, holdX, top+2, holdW, 10, 3, T().accent2);
+  }
   top += 22;
 
   // v60: "Blok Terbesar" -- BEDA dari "RAM Internal" di atas (yg itu
@@ -21017,7 +21031,7 @@ void drawHwmon(LGFX_Sprite& s){
   s.setTextColor(T().text); s.setCursor(14, top);
   s.print(RPTR("Blok Terbesar"));
   char lbBuf[32];
-  if(lbHold) sprintf(lbBuf,"%u KB (+%uK)", (unsigned)(hwmonHeapLargestBlock/1024), (unsigned)(lbHold/1024));
+  if(lbHold) sprintf(lbBuf,"%u KB + %uK", (unsigned)(hwmonHeapLargestBlock/1024), (unsigned)(lbHold/1024));   // FRAG_V3: blok bebas + cadangan
   else       sprintf(lbBuf,"%u KB", (unsigned)(hwmonHeapLargestBlock/1024));
   int lbw=s.textWidth(lbBuf);
   s.setTextColor(lbLow?T().danger:T().good); s.setCursor(SCR_W-14-lbw, top);
@@ -21026,6 +21040,10 @@ void drawHwmon(LGFX_Sprite& s){
   if(lbLow){
     s.setTextColor(T().subtext); s.setTextSize(1); s.setCursor(14, top);
     s.print(RPTR("(<20KB -> app internet bs gagal HTTP -1)"));
+  } else if(lbHold){                                                  // FRAG_V3: legenda segmen cadangan di bar RAM
+    s.fillRect(14, top+1, 6, 6, T().accent2);
+    s.setTextColor(T().subtext); s.setTextSize(1); s.setCursor(24, top);
+    s.print(RPTR("Cadangan, dilepas otomatis"));
   }
   top += 20;
 

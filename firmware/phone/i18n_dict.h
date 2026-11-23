@@ -240,6 +240,7 @@ static const I18nPair I18N_DICT[] = {
   { "Ngomong / ketuk2 dekat mic buat liat bar naik. Diam terus di 0%? Cek wiring GPIO 45/46/47.", "Speak / tap near the mic to see the bar rise. Stuck at 0%? Check GPIO 45/46/47 wiring." },
   { "RAM Internal", "Internal RAM" },
   { "Blok Terbesar", "Largest Block" },
+  { "Cadangan, dilepas otomatis", "Reserve, released automatically" },
   { "RAM tidak cukup", "Not enough RAM" },
   { "RAM tidak cukup untuk Chat.", "Not enough RAM for Chat." },
   { "RAM tidak cukup untuk Telepon.", "Not enough RAM for Phone." },
