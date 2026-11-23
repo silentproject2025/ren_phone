@@ -27,7 +27,8 @@ bool rpHeapEnsure(size_t need, unsigned long maxMs);   // phone.ino
 #define BC_FAIL   3
 #define BC_SVC_CHAT   0
 #define BC_SVC_CHESS  1
-#define BC_MIN_INT_BLOCK 22000                  // sama dgn CHAT_MIN_BLOCK: fetch tak boleh lebih rewel dari Chat sendiri
+#define BC_MIN_INT_BLOCK 12000                  // wajib: sama dgn ambang Gemini (mbedTLS di PSRAM)
+#define BC_WANT_BLOCK    22000                  // diusahakan (lepas cadangan / buang cache app), tidak wajib
 
 static volatile uint8_t bcSt[2] = {BC_IDLE, BC_IDLE};
 static char bcH[2][96], bcU[2][64], bcP[2][96];
@@ -65,10 +66,11 @@ static bool bcJsonStr(const char* j, const char* key, char* out, size_t n) {
 static volatile int bcCode[2] = {0, 0};
 int bcLastCode(uint8_t svc) { return svc > 1 ? 0 : (int)bcCode[svc]; }
 
-static void bcDoFetch(uint8_t svc) {
+static bool bcTryOnce(uint8_t svc) {
   bool ok = false;
   int code = -100;
-  if (smEnsureContig(BC_MIN_INT_BLOCK)) {
+  smEnsureContig(BC_WANT_BLOCK);                 // best-effort: melepas cadangan kontigu bila ada
+  if (heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL) >= BC_MIN_INT_BLOCK) {
     code = -101;
     WiFiClientSecure net;
 #ifdef RP_REG_CA
@@ -105,6 +107,18 @@ static void bcDoFetch(uint8_t svc) {
     Serial.printf("[bcfg] RAM internal kurang, blok terbesar %u\n", (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
   }
   bcCode[svc] = code;
+  return ok;
+}
+
+// Maks 3 percobaan (RAM/jaringan sesaat bisa gagal). Hanya -100 (RAM) dan kode negatif jaringan yg diulang.
+static void bcDoFetch(uint8_t svc) {
+  bool ok = false;
+  for (int attempt = 0; attempt < 3 && !ok; attempt++) {
+    ok = bcTryOnce(svc);
+    int c = bcCode[svc];
+    if (ok || !(c == -100 || (c < 0 && c != -101 && c != -102))) break;
+    vTaskDelay(pdMS_TO_TICKS(800));
+  }
   bcSt[svc] = ok ? BC_OK : BC_FAIL;             // ditulis terakhir: UI baru membaca buffer setelah ini
 }
 
@@ -154,7 +168,7 @@ bool bcShouldFetch(uint8_t svc, const String& h, const String& u, const String& 
 bool bcRequest(uint8_t svc) {
   if (svc > 1 || sizeof(RP_REG_URL) <= 1) return false;
   if (bcSt[svc] == BC_BUSY) return true;
-  rpHeapEnsure(BC_MIN_INT_BLOCK, 1500);            // RAM_V5: lepas cadangan + buang cache app latar (konteks UI), tunggu <=1,5 dtk
+  rpHeapEnsure(BC_WANT_BLOCK, 1500);            // RAM_V5: lepas cadangan + buang cache app latar (konteks UI), tunggu <=1,5 dtk
   bcSt[svc] = BC_BUSY;
   if (!bcWorkerH) {
     if (createTaskPsramStack(bcWorker, "bcfg", 12288, NULL, &bcStack, &bcTCB, &bcWorkerH, 0) != pdPASS) {
