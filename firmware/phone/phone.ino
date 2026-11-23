@@ -651,7 +651,9 @@ enum Screen { SCR_HOME, SCR_CLOCK, SCR_CALC, SCR_SENSOR,
               // Catur online (MQTT) -- lihat chess_renphone.ino
               SCR_CHESS,
               // Nyx Apps: app native (ELF) dari SD -- lihat nyxapp_renphone.ino  // NYXAPP_V1
-              SCR_NYX };
+              SCR_NYX,
+              // WiFi Sensing (CSI: gerak + napas) -- lihat wifisense_renphone.ino  // WSENSE_V1
+              SCR_WSENSE };
 enum Orientation { ORIENT_LANDSCAPE = 0, ORIENT_PORTRAIT = 1 };
 
 // Dipindah ke atas — alasan sama dengan AiLine & Vec3f: arduino-cli men-generate
@@ -6394,6 +6396,12 @@ void drawAppIcon(LGFX_Sprite& s, char sym, int cx, int cy, int r, uint16_t bgCir
       s.fillRect(cx-q/3,cy-q/3,q*2/3+1,q*2/3+1,ic);
       break;
     }
+    case 'x': { // WiFi Sensing: tiga busur + titik  // WSENSE_V1
+      int rr=max(8,r-6); int by=cy+rr/2;
+      for(int k=1;k<=3;k++){ int ro=rr*k/3+1, ri=ro-max(2,rr/8); s.fillArc(cx,by,ri,ro,225.0f,315.0f,ic); }
+      nyxAaCircle(s, cx,by,max(2,rr/8),ic);
+      break;
+    }
     case 'i': { // About Phone
       int rr=max(8,r-6);
       nyxAaCircleRing(s, cx,cy,rr,ic); nyxAaCircleRing(s, cx,cy,rr-1,ic);
@@ -6590,6 +6598,9 @@ bool rpHLBootOn(); bool rpHLWanted(); void rpHLToggle();   // HEAPLOG_TOGGLE_V1
 
 void aboutEnter(); void aboutExit(); void drawAbout(LGFX_Sprite&); void aboutTouch(int,int,bool,bool);
 void aboutLoopPoll();
+// ---- wifisense_renphone.ino: WiFi Sensing (CSI) ----  // WSENSE_V1
+void wsenseEnter(); void wsenseExit(); void drawWsense(LGFX_Sprite&); void wsenseTouch(int,int,bool,bool);
+void wsenseLoopPoll();
 // ---- backup_renphone.ino: Backup & Restore pengaturan ----
 void backupEnter(); void backupExit(); void drawBackup(LGFX_Sprite&); void backupTouch(int,int,bool,bool);
 void backupAutoBoot(); void backupAutoPoll();   // backup otomatis NVS -> SD (/backup/auto.nbk) + pulihkan otomatis saat NVS kosong
@@ -6672,8 +6683,10 @@ AppDef apps[46] = {
   { "Catur",   'q', 0, chessEnter,  chessExit,  drawChess,  chessTouch,  SCR_CHESS  },
   // ---- Nyx Apps: jalankan app native (ELF) dari SD ----  // NYXAPP_V1
   { "Nyx Apps", 'n', 0, nyxAppEnter, nyxAppExit, drawNyxApp, nyxAppTouch, SCR_NYX },
+  // ---- WiFi Sensing: deteksi gerak / kehadiran + napas dari CSI WiFi ----  // WSENSE_V1
+  { "WiFi Sensing", 'x', 0, wsenseEnter, wsenseExit, drawWsense, wsenseTouch, SCR_WSENSE },
 };
-#define APP_COUNT 46
+#define APP_COUNT 47
 
 // =============================================
 // NOTIFIKASI BADGE (BARU) -- angka kecil merah di pojok ikon app, mirip
@@ -7402,7 +7415,7 @@ uint8_t homeCatOfScreen(Screen sc){
     case SCR_APOD: case SCR_NEOWS: case SCR_EPIC: case SCR_NASAIMG:
       return 4; // NASA
     case SCR_SETTINGS: case SCR_BATTERY: case SCR_UPDATE: case SCR_HWMON: case SCR_SENSOR:
-    case SCR_MICLEVEL: case SCR_ABOUT: case SCR_OWNER: case SCR_HOMEEDIT: case SCR_REMOTE: case SCR_BACKUP:
+    case SCR_MICLEVEL: case SCR_ABOUT: case SCR_OWNER: case SCR_HOMEEDIT: case SCR_REMOTE: case SCR_BACKUP: case SCR_WSENSE:
       return 5; // Sistem
     default:
       return 3; // Alat (Jam, Kalkulator, Notepad, Canvas, AI Chat, Files, Neopixel, Pomodoro, Wake Word, Stopwatch, Chat, Telepon)
@@ -22135,6 +22148,7 @@ void loop(){
     ownerLoopPoll(); // Profil: tutup Galeri setelah foto profil dipilih
     backupAutoPoll(); // simpan salinan otomatis seluruh NVS ke SD kalau ada yang berubah (tiap 10 mnt)
     if(curScreen()==SCR_ABOUT) aboutLoopPoll();
+    if(curScreen()==SCR_WSENSE) wsenseLoopPoll(); // WSENSE_V1: bin CSI 10 Hz + deteksi gerak/napas
     if(curScreen()==SCR_NYX && nyxWantsRedraw() && millis()-lastSen>33){ needRedraw=true; lastSen=millis(); } // NYXAPP_V1: app native jalan ~30 fps
     // v58 FIX bug "Labirin gak bisa digerakin sama sekali": SCR_MAZE lupa
     // didaftarin di sini pas game-nya dibikin (v56/v57). Tanpa ini,
