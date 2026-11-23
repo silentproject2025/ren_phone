@@ -354,6 +354,7 @@ jobs:
           cp firmware/phone/display_conf.h    build_sketch/
           cp firmware/phone/devreg_conf.h     build_sketch/
           cp firmware/phone/devreg_renphone.ino build_sketch/
+          cp firmware/phone/wifisense_renphone.ino build_sketch/   # WSENSE_V1: WiFi Sensing (CSI)
 
           mkdir -p build_sketch/src
           find third_party/nofrendo_core \( -name "*.c" -o -name "*.h" \) \
