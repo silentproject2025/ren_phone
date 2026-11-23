@@ -2,7 +2,7 @@
 # WSENSE_CSI_FLAG -- menambah -DWSENSE_FORCE=1 ke kedua perintah arduino-cli di build-firmware.yml,
 # supaya app WiFi Sensing selalu dibuild dengan CSI aktif (tidak bergantung CONFIG_ESP_WIFI_CSI_ENABLED).
 # Kalau CSI ternyata tidak ada di library WiFi, app menampilkan pesan di layar, tidak crash.
-# Pakai (dari root repo):  python3 apply_wsense_csi_flag.py
+# Pakai (dari root repo):  python3 tools/patches/apply_wsense_csi_flag.py
 import sys
 P = ".github/workflows/build-firmware.yml"
 s = open(P, encoding="utf-8").read()

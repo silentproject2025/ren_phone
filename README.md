@@ -243,7 +243,6 @@ Without an SD card, upload `manifest.txt` and `app.elf` through the phone's Web 
 │   ├── patches/              Idempotent patch scripts for phone.ino; the Nyx Apps and SysMem ones are still checked by CI, the rest are kept as history
 │   ├── ci/                   Helper scripts used by the CI workflows
 │   └── legacy-patches/       Archived one-shot patch scripts, including elf_loader.patch (see its README)
-├── apply_*.py                Idempotent one-shot patch scripts (Web File Manager, WiFi Sensing, speaker/FFat, Nyx Store UI, login hardening); most are already applied to the sources
 ├── CHANGELOG.md              Release notes; the matching section is shown on the phone during an OTA update
 ├── CONTRIBUTING.md
 ├── LICENSE                   AGPL-3.0

@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
+# ARSIP: sudah terpasang; anchor-nya sudah tidak ada di phone.ino saat ini, jadi skrip ini akan GAGAL kalau dijalankan lagi.
 # WEBFM_DIR_V1 -- Web File Manager mendukung FOLDER:
 #   * jelajah folder SD & FFat (folder dulu, breadcrumb, "naik satu level"), daftar dikirim bertahap (hemat RAM)
 #   * buat folder baru, hapus folder beserta isinya (rekursif), hapus/unduh/edit berkas di dalam folder
 #   * edit teks kini juga untuk FFat; unduhan memakai nama berkas asli; form upload otomatis mengisi folder aktif
 #   * semua jalur divalidasi (tanpa "..", "//", "\\")
-# Pakai (dari root repo):  python3 apply_webfm_folders.py
+# Pakai (dari root repo):  python3 tools/legacy-patches/features/apply_webfm_folders.py
 import sys, shutil
 P = "firmware/phone/phone.ino"
 s = open(P, encoding="utf-8").read()

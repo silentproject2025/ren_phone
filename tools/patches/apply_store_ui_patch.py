@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 # apply_store_ui_patch.py -- NYXSTORE_UI_V2: tampilan Nyx Store dirombak
 # Jalankan dari root repo:  python tools/patches/apply_store_ui_patch.py
-#   (atau taruh di mana saja lalu:  python apply_store_ui_patch.py  dari ~/ren_phone)
 #
 # Yang berubah (hanya nyxstore_renphone.ino, logika unduh/pasang/hapus TIDAK disentuh):
 #  - ikon app: lingkaran polos -> squircle berkilap (modernIconBase) + huruf besar kontras otomatis

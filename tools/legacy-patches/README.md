@@ -22,3 +22,5 @@ Earlier features were added to the sketch by small, **idempotent** Python/shell 
 | `features/` | Everything else (apps, chat, chess, ebook, backup, i18n, and so on) |
 
 The grouping was done automatically from file names, so a few scripts may sit in a less obvious group. Use `grep -r` to find a specific one.
+
+Three scripts that used to sit in the repository root were archived here because they no longer apply: `features/apply_login_hardening.py` and `features/apply_webfm_folders.py` (their anchors are gone from `phone.ino`; the features are already in the sources) and `build-and-ci/apply_wsense_libs_csi.py` (replaced by `tools/patches/apply_wsense_csi_input.py`; running it again would switch WiFi CSI on permanently in `build-arduino-libs.yml`). They open paths relative to the **repository root**, unlike the older scripts above.

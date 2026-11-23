@@ -11,7 +11,7 @@
   5. Estimasi napas lebih halus: interpolasi parabola di sekitar puncak spektrum (bukan hanya kelipatan 0,6 napas/mnt).
   6. Indikator kualitas paket (warna hijau/kuning/merah) dan penanda 'Adaptif xN' di grafik.
 Tes host (tests/wifisense) ikut diperbarui: stub CSI punya rx_ctrl+mac, mock Preferences/BSSID, kasus uji baru.
-Jalankan dari ROOT repo:  python3 apply_wsense_v2.py   (idempoten)"""
+Jalankan dari ROOT repo:  python3 tools/patches/apply_wsense_v2.py   (idempoten)"""
 import sys, os, shutil
 
 INO = "firmware/phone/wifisense_renphone.ino"

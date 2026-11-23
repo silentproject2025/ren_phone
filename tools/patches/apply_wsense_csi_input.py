@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # WSENSE_CSI_INPUT -- build-arduino-libs.yml: toggle "wifi_csi" di form Run workflow (bawaan: nyala).
 # Menggantikan apply_wsense_libs_csi.py (yang menyalakan CSI permanen). Aman dijalankan sebelum/sesudah skrip itu.
-# Pakai (dari root repo):  python3 apply_wsense_csi_input.py
+# Pakai (dari root repo):  python3 tools/patches/apply_wsense_csi_input.py
 import sys, re
 P = ".github/workflows/build-arduino-libs.yml"
 s = open(P, encoding="utf-8").read()

@@ -21,4 +21,13 @@ python3 tools/patches/apply_nyxapp_patch.py           # apply (keeps a .bak_* ba
 | `apply_pager_di_fast.py` | `HP_DI_FAST_V1`, `HW_RC_VIEWER_V1` | History (Dynamic Island no longer blocks the hardware-scroll warm-up; only a Remote Control viewer blocks it) |
 | `apply_wx_anim_hw.py` | `WX_ANIM_HW_V1` | History (weather icon animation off while hardware scroll is on) |
 
+| `apply_wifisense_patch.py` | `WSENSE_V1` | History (registers the WiFi Sensing app in `phone.ino`) |
+| `apply_wsense_v2.py` | `WSENSE_V2` | History (WiFi Sensing packet filter, adaptive baseline, saved calibration; also patches its host test) |
+| `apply_wsense_csi_flag.py` | `WSENSE_FORCE` | History (adds `-DWSENSE_FORCE=1` to `build-firmware.yml`) |
+| `apply_wsense_csi_input.py` | `WSENSE_CSI_INPUT` | History (adds the `wifi_csi` input to `build-arduino-libs.yml`) |
+| `apply_spk_ffat_patch.py` | `SPK_FFAT_V1` | History (Music from FFat, `[SPK-RAM]` meter, calls through the speaker without TWS) |
+| `apply_store_ui_patch.py` | `NYXSTORE_UI_V2` | History (Nyx Store redesign) |
+| `apply_webfm_idle.py` | `WEBFM_IDLE_V1` | History (Web File Manager only answers while File Explorer is open and for 10 minutes after) |
+| `apply_webfm_upload_ux.py` | `WEBFM_UPLOAD_UX_V1` | History (drag-and-drop upload queue) |
+
 Older scripts (written for the former flat layout) are archived in [`../legacy-patches/`](../legacy-patches/).

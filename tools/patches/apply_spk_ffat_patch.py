@@ -11,7 +11,7 @@ speaker (Serial + chip di layar Musik), (3) Telepon tidak lagi bergantung pada T
     CALL_SPK_FALLBACK, 1 = aktif). TWS tersambung tetap dipakai seperti biasa, kecuali Output=SPK.
 
 Idempoten. Atomik: kalau ada satu anchor kode yg tidak cocok, TIDAK ADA file yg diubah.
-Jalankan dari ROOT repo:  python3 apply_spk_ffat_patch.py"""
+Jalankan dari ROOT repo:  python3 tools/patches/apply_spk_ffat_patch.py"""
 import sys, os
 
 MUSFS_H = r'''#pragma once

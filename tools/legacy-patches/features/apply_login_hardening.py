@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
+# ARSIP: sudah terpasang; anchor-nya sudah tidak ada di phone.ino saat ini, jadi skrip ini akan GAGAL kalau dijalankan lagi.
 """LOGINLOCK_V1 -- (1) kunci login Web File Manager 60 dtk setelah 5x sandi salah,
-(2) hapus sandi dari log Serial. Idempoten. Jalankan dari ROOT repo:  python3 apply_login_hardening.py"""
+(2) hapus sandi dari log Serial. Idempoten. Jalankan dari ROOT repo:  python3 tools/legacy-patches/features/apply_login_hardening.py"""
 import sys, os
 
 def edit(path, pairs, post=None):

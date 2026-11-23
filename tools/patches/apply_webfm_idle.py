@@ -2,7 +2,7 @@
 """WEBFM_IDLE_V1 -- Web File Manager hanya aktif saat layar File Explorer terbuka, dan 10 menit
 setelah keluar / setelah aktivitas terakhir. Selebihnya server menjawab 403. Remote Control (/remote, /rc/*)
 dan gamepad (/pad) memakai server yang sama dan TIDAK terpengaruh. Idempoten.
-Jalankan dari ROOT repo:  python3 apply_webfm_idle.py"""
+Jalankan dari ROOT repo:  python3 tools/patches/apply_webfm_idle.py"""
 import sys, os, re
 f = "firmware/phone/phone.ino"
 if not os.path.exists(f): sys.exit("Jalankan dari root repo (folder berisi firmware/phone/phone.ino)")

@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
+# ARSIP: digantikan oleh tools/patches/apply_wsense_csi_input.py. Menjalankannya lagi menyalakan CSI PERMANEN di build-arduino-libs.yml (input wifi_csi tidak berlaku lagi).
 # WSENSE_LIBS_CSI -- build-arduino-libs.yml: selalu menyalakan CONFIG_ESP_WIFI_CSI_ENABLED=y di library hasil build
 # (dipakai app WiFi Sensing) dan memverifikasinya di sdkconfig hasil build.
-# Pakai (dari root repo):  python3 apply_wsense_libs_csi.py   lalu jalankan workflow "Build Arduino Libs", lalu build ulang firmware.
+# Pakai (dari root repo):  python3 tools/legacy-patches/build-and-ci/apply_wsense_libs_csi.py   lalu jalankan workflow "Build Arduino Libs", lalu build ulang firmware.
 import sys
 P = ".github/workflows/build-arduino-libs.yml"
 s = open(P, encoding="utf-8").read()

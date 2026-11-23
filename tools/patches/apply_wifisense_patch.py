@@ -6,7 +6,7 @@
 #   drawAppIcon()    <- case 'x' (tiga busur WiFi + titik)
 #   kategori Home    <- Sistem
 #   loop()           <- wsenseLoopPoll() saat app terbuka
-# Pakai (dari root repo):  python3 apply_wifisense_patch.py
+# Pakai (dari root repo):  python3 tools/patches/apply_wifisense_patch.py
 import sys, shutil
 
 P = "firmware/phone/phone.ino"

@@ -8,7 +8,7 @@
   * server membalas OK/gagal (penyimpanan penuh, tidak bisa menulis) lewat ?ajax=1, bukan redirect diam-diam
 Kode JS/CSS dilayani dari PROGMEM lewat /up.js (tidak membebani RAM String halaman).
 Cocok dengan atau tanpa apply_webfm_folders.py (WEBFM_DIR_V1). Idempoten.
-Jalankan dari ROOT repo:  python3 apply_webfm_upload_ux.py"""
+Jalankan dari ROOT repo:  python3 tools/patches/apply_webfm_upload_ux.py"""
 import sys, os, shutil
 
 P = "firmware/phone/phone.ino"
