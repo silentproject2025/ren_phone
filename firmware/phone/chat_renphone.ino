@@ -144,6 +144,7 @@ static void chatCfgSave() {
 
 static bool chatConfigured() { return chatHost.length() > 3 && chatUser.length() > 0 && chatPass.length() > 0; }
 
+static bool chatBcWait = false;               // BROKERCFG_V1: sedang menunggu kredensial dari cloud
 static bool chatCfgFromSd() {
   if (!sdReady || !SD_MMC.exists("/chat.cfg")) return false;
   File f = SD_MMC.open("/chat.cfg", FILE_READ);
@@ -408,13 +409,15 @@ void chatEnter() {
   chatCfgEdit = -1;
   chatOutState = 0; chatReplyOn = false;
   chatPeerTypeUntil = 0; chatPeerName[0] = 0; chatTypeAnim = 0.0f; chatTypeSentMs = 0; chatTypeSendReq = false;
-  chatCfgMode = !chatConfigured();
+  chatBcWait = bcShouldFetch(BC_SVC_CHAT, chatHost, chatUser, chatPass) && bcRequest(BC_SVC_CHAT);   // BROKERCFG_V1
+  chatCfgMode = !chatConfigured() && !chatBcWait;
   chatConn = 0;
   chatErrBuf[0] = 0;
-  chatActive = !chatCfgMode;
+  chatActive = !chatCfgMode && !chatBcWait;
 }
 
 void chatExit() {
+  chatBcWait = false;   // BROKERCFG_V1
   chatActive = false;     // task melepas koneksi TLS sendiri
   chatConn = 0;
 }
@@ -452,6 +455,27 @@ void chatLoopPoll() {
   if (chatDirty) {
     chatDirty = false;
     if (curScreen() == SCR_CHAT) needRedraw = true;
+  }
+  if (chatBcWait) {                         // BROKERCFG_V1: tunggu hasil ambil broker dari cloud
+    const uint8_t st = bcState(BC_SVC_CHAT);
+    if (st == BC_OK || st == BC_FAIL) {
+      chatBcWait = false;
+      String h, u, w;
+      if (st == BC_OK && bcTake(BC_SVC_CHAT, h, u, w)) {
+        if (bcMayOverwrite(BC_SVC_CHAT, chatHost, chatUser, chatPass)) {
+          chatHost = h; chatUser = u; chatPass = w;
+          chatCfgSave();
+          bcMarkApplied(BC_SVC_CHAT, chatHost, chatUser, chatPass);
+        }
+      } else {
+        bcAck(BC_SVC_CHAT);
+        if (!chatConfigured()) showToast(RPTR("Gagal ambil broker, isi manual"), 2400);
+      }
+      chatCfgMode = !chatConfigured();
+      chatActive = !chatCfgMode;
+      chatConn = 0;
+      needRedraw = true;
+    }
   }
   if (curScreen() != SCR_CHAT || chatCfgMode || !chatMsgs) { chatTypeAnim = 0.0f; return; }
   if (chatOutState == 1 && millis() - chatOutMs > 10000UL) { chatOutState = 2; needRedraw = true; }   // tak kembali dari broker

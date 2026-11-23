@@ -3322,6 +3322,7 @@ static unsigned long chsAnimMs = 0;
 static int           chsAnimFrom = 0, chsAnimTo = 0;
 // ---- BROKER MQTT KHUSUS CATUR: terpisah total dari app Chat (NVS "chess": bhost/buser/bpass; SD: /chess.cfg) ----
 static String chsBHost = "", chsBUser = "", chsBPass = "";
+static bool   chsBcWait = false;                // BROKERCFG_V1: sedang menunggu kredensial dari cloud
 static int8_t chsBEdit = -1;                    // field yg sedang diketik di layar Broker (-1 = tidak ada)
 static void chsBrokerLoad() {
   Preferences p;
@@ -3834,6 +3835,7 @@ static void chsRandomRoom() {
 
 static void chsStartGame() {
   if (!chsMoves) { showToast(RPTR("RAM tidak cukup utk Catur"), 2200); return; }
+  if (!chsBrokerOk() && chsBcWait) { showToast(RPTR("Mengambil broker Catur..."), 1800); return; }   // BROKERCFG_V1
   if (!chsBrokerOk()) { showToast(RPTR("Atur broker Catur dulu"), 2400); return; }
   chsSanitizeRoom();
   if (chsRoomStr.length() < 3) { showToast(RPTR("Kode room minimal 3 karakter"), 2200); return; }
@@ -4149,6 +4151,7 @@ void chessEnter() {
   if (!chsEnsureInit()) { showToast(RPTR("RAM tidak cukup utk Catur"), 2500); return; }
   chsBrokerLoad();
   if (!chsBrokerOk() && chsBrokerFromSd()) { chsBrokerSave(); showToast(RPTR("Broker Catur dimuat dari /chess.cfg"), 2200); }
+  chsBcWait = bcShouldFetch(BC_SVC_CHESS, chsBHost, chsBUser, chsBPass) && bcRequest(BC_SVC_CHESS);   // BROKERCFG_V1
   chsBEdit = -1;
   chsPrefsLoad();
   chsVsAI = false; chsGem = false; chsAfkAI = false; chsAiQueued = false; chsPrevMyTurn = false;
@@ -4164,6 +4167,7 @@ static void chsFreeMasks();
 static void chsVwClose();
 static void chsBenchPollIf();
 void chessExit() {
+  chsBcWait = false;        // BROKERCFG_V1
   chsActive = false;        // task melepas koneksi TLS sendiri
   chsConn = 0;
   chsAnimOn = false;
@@ -4176,6 +4180,24 @@ void chessExit() {
 }
 
 void chessLoopPoll() {
+  if (chsBcWait) {                          // BROKERCFG_V1: tunggu hasil ambil broker dari cloud
+    const uint8_t st = bcState(BC_SVC_CHESS);
+    if (st == BC_OK || st == BC_FAIL) {
+      chsBcWait = false;
+      String h, u, w;
+      if (st == BC_OK && bcTake(BC_SVC_CHESS, h, u, w)) {
+        if (chsBEdit < 0 && bcMayOverwrite(BC_SVC_CHESS, chsBHost, chsBUser, chsBPass)) {
+          chsBHost = h; chsBUser = u; chsBPass = w;
+          chsBrokerSave();
+          bcMarkApplied(BC_SVC_CHESS, chsBHost, chsBUser, chsBPass);
+        }
+      } else {
+        bcAck(BC_SVC_CHESS);
+        if (!chsBrokerOk()) showToast(RPTR("Gagal ambil broker Catur"), 2400);
+      }
+      needRedraw = true;
+    }
+  }
   if (chsDirty) { chsDirty = false; if (curScreen() == SCR_CHESS) needRedraw = true; }
   if (curScreen() == SCR_CHESS && chsPressId >= 0 && millis() - chsPressMs >= CHS_PRESS_MS) { chsPressId = -1; needRedraw = true; }   // efek tekan selesai
   chsBenchPollIf();                                  // NYX-SMP-FIX1: uji NPS bertahap (layar Jaringan)
