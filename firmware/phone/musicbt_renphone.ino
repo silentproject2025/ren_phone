@@ -308,10 +308,12 @@ static void musScanFfFn(void* p) { musScanDirOn(FFat, *(std::vector<String>*)p);
 
 static void musScanPlaylist() {
   std::vector<String> tmp;
+  tmp.reserve(MUS_MAX_TRACKS);                       // FRAG_V1: kapasitas sekali, tanpa regrow bertahap
   bool ff = false;
   musScanDirOn(SD_MMC, tmp);                         // SD diutamakan
   if (tmp.empty() && ffatReady) {                    // SD tak ada / tak ada MP3 -> coba flash internal
     std::vector<String> t2;
+    t2.reserve(MUS_MAX_TRACKS);
     if (mffRun(musScanFfFn, &t2) && !t2.empty()) { tmp.swap(t2); ff = true; }
   }
   musUseFfat = ff;

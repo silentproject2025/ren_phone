@@ -856,7 +856,7 @@ static void wxTaskFunc(void* parameter) {
     if (http.begin(client, url)) {
       int code = http.GET();
       if (code == HTTP_CODE_OK) {
-        String body = http.getString();
+        String body = rpHttpBody(http);
         ok = wxParse(body);
       }
       http.end();

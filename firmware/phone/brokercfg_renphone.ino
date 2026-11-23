@@ -91,7 +91,7 @@ static bool bcTryOnce(uint8_t svc) {
       code = http.POST((uint8_t*)body, strlen(body));
       Serial.printf("[bcfg] %s -> %d\n", bcSvcName(svc), code);
       if (code >= 200 && code < 300) {
-        String r = http.getString();
+        String r = rpHttpBody(http);
         char h[96], u[64], w[96];
         if (bcJsonStr(r.c_str(), "host", h, sizeof(h)) && bcJsonStr(r.c_str(), "user", u, sizeof(u)) &&
             bcJsonStr(r.c_str(), "pass", w, sizeof(w))) {

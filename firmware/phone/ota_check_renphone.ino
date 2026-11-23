@@ -291,7 +291,7 @@ static int otaHttpGetSmall(const String& url, String& out, size_t maxLen) {
         int len = http.getSize();
         if (len > 0 && (size_t)len > maxLen) code = -2;
         else {
-          out = http.getString();
+          out = rpHttpBody(http);
           if (out.length() > maxLen) code = -2;
         }
       }
@@ -396,7 +396,7 @@ static void otaCheckLegacy() {
     http.addHeader("Accept", "application/vnd.github+json");
     code = http.GET();
     if (code == HTTP_CODE_OK) {
-      String body = http.getString();
+      String body = rpHttpBody(http);
       int i = body.indexOf("\"tag_name\"");
       if (i >= 0) {
         int c  = body.indexOf(':', i);

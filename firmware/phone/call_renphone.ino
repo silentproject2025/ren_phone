@@ -1400,13 +1400,15 @@ static void turnHmacSha1(const uint8_t* key, size_t klen, const uint8_t* msg, si
   const mbedtls_md_info_t* mi = mbedtls_md_info_from_type(MBEDTLS_MD_SHA1);
   if (!mi || klen > 64) return;
   uint8_t k[64]; memset(k, 0, sizeof(k)); memcpy(k, key, klen);
-  uint8_t* buf = (uint8_t*)malloc(64 + mlen);
+  // FRAG_V1: pesan STUN/TURN kecil -> buffer di stack, tanpa malloc/free per pesan (tetap hanya mbedtls_md satu-tembak)
+  uint8_t sbuf[64 + 512];
+  uint8_t* buf = (64 + mlen <= sizeof(sbuf)) ? sbuf : (uint8_t*)malloc(64 + mlen);
   if (!buf) return;
   for (int i = 0; i < 64; i++) buf[i] = k[i] ^ 0x36;
   memcpy(buf + 64, msg, mlen);
   uint8_t inner[20];
   mbedtls_md(mi, buf, 64 + mlen, inner);
-  free(buf);
+  if (buf != sbuf) free(buf);
   uint8_t ob[64 + 20];
   for (int i = 0; i < 64; i++) ob[i] = k[i] ^ 0x5c;
   memcpy(ob + 64, inner, 20);

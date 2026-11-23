@@ -153,7 +153,7 @@ static int drPost(WiFiClientSecure& net, const char* fn, const char* body, char*
   int code = http.POST((uint8_t*)body, strlen(body));
   if(resp && rn){
     resp[0] = 0;
-    if(code >= 200 && code < 300){ String r = http.getString(); strncpy(resp, r.c_str(), rn - 1); resp[rn - 1] = 0; }
+    if(code >= 200 && code < 300){ String r = rpHttpBody(http); strncpy(resp, r.c_str(), rn - 1); resp[rn - 1] = 0; }
   }
   Serial.printf("[devreg] %s -> %d (%s)\n", fn, code, (code >= 200 && code < 300) ? "OK" : HTTPClient::errorToString(code).c_str());
   http.end();

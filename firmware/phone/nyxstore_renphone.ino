@@ -160,7 +160,7 @@ static bool nsDoJob(int job) {
         if (!ok && !nsAbort) snprintf(nsJobErr, sizeof(nsJobErr), "Unduhan terputus (%u / %u B)", (unsigned)nsBufLen, (unsigned)expect);
       } else {
         if (len > 0 && (uint32_t)len > nsBufCap) { strncpy(nsJobErr, "Berkas terlalu besar", sizeof(nsJobErr) - 1); http.end(); return false; }
-        String body = http.getString();           // aman utk chunked; berkasnya kecil (indeks / manifest)
+        String body = rpHttpBody(http);           // aman utk chunked; berkasnya kecil (indeks / manifest)
         if (body.length() == 0 || body.length() >= nsBufCap) { strncpy(nsJobErr, "Isi kosong / terlalu besar", sizeof(nsJobErr) - 1); http.end(); return false; }
         memcpy(nsBuf, body.c_str(), body.length()); nsBuf[body.length()] = 0;
         nsBufLen = (uint32_t)body.length(); nsGot = nsBufLen; ok = !nsAbort;

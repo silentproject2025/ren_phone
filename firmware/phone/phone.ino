@@ -854,8 +854,8 @@ public:
   }
   size_t putString(const char* k,const String& v){ return putString(k,v.c_str()); }
   String getString(const char* k,const String& d=String()){
-    int n=ovLen(k); if(n>=0){ String s; s.reserve(n); char* b=(char*)malloc(n+1);
-      if(b){ int r=ovRead(k,b,n); if(r>=0){ b[r]=0; s=String(b); free(b); return s; } free(b); } }
+    int n=ovLen(k); if(n>=0){ String s; char* b=(char*)rpAllocPs(n+1);   // FRAG_V1: buffer baca di PSRAM, String dibuat sekali
+      if(b){ int r=ovRead(k,b,n); if(r>=0){ b[r]=0; s.reserve(r); s.concat(b); free(b); return s; } free(b); } }
     return _nvs?_p.getString(k,d):d;
   }
   size_t getString(const char* k,char* out,size_t mx){
@@ -3316,7 +3316,7 @@ bool doGeminiHttpRequest(const String& promptText, String& outResponse) {
 
   if (httpCode > 0) {
     if (httpCode == HTTP_CODE_OK) {
-      String respStr = http.getString();
+      String respStr = rpHttpBody(http);
       int textIdx = respStr.indexOf("\"text\":");
       if (textIdx >= 0) {
         int start = respStr.indexOf("\"", textIdx + 7);
@@ -3346,7 +3346,7 @@ bool doGeminiHttpRequest(const String& promptText, String& outResponse) {
       }
       ok = true;
     } else {
-      String errBody = http.getString();
+      String errBody = rpHttpBody(http);
       outResponse = "HTTP Error " + String(httpCode) + ": " + errBody.substring(0, 150);
     }
   } else if (httpCode == -1) {
@@ -14427,7 +14427,7 @@ void triviaFetchQuestions(){
     triviaErrorMsg = "Gagal mengambil soal (HTTP "+String(httpCode)+"). Cek koneksi internet."+nasaHttpErrHint(httpCode);
     http.end(); triviaPage=TRV_ERROR; needRedrawNow(); return;
   }
-  String body = http.getString();
+  String body = rpHttpBody(http);
   http.end();
 
   int rc = triviaJsonGetInt(body, "response_code");
@@ -18290,7 +18290,7 @@ bool apodTranslateChunk(const String& text, String& outTranslated){
   if(!http.begin(client,url)) return false;
   int code = rpHttpGetRetry(http,client,url,12000,false);   // NET_ADAPTIF_V1
   if(code!=HTTP_CODE_OK){ http.end(); return false; }
-  String body = http.getString();
+  String body = rpHttpBody(http);
   http.end();
   String raw = apodJsonGetStringRaw(body,"translatedText");
   if(raw.length()==0) return false;
@@ -18668,7 +18668,7 @@ void apodFetchAndProcess(String dateParam){
       http.addHeader("Accept","application/json");
       code = http.GET();
     }
-    body = http.getString();
+    body = rpHttpBody(http);
     http.end();
     if(code!=HTTP_CODE_OK){
       String msg = apodHtmlToText(apodJsonDecode(apodJsonGetStringRaw(body,"message"))); // v119: error WordPress = {"code","message","data"}
@@ -19249,7 +19249,7 @@ void neoFetchAndProcess(String dateParam){
     neoPage=NEO_ERROR; vibError(); needRedrawNow(); return;
   }
   int code=rpHttpGetRetry(http,client,url,15000,false);   // NET_ADAPTIF_V1
-  String body=http.getString();
+  String body=rpHttpBody(http);
   http.end();
   if(code!=HTTP_CODE_OK){
     String msg=apodJsonUnescape(apodJsonGetStringRaw(body,"error_message"));
@@ -19662,7 +19662,7 @@ void epicFetchAndProcess(String dateParam){
     epicPage=EPIC_ERROR; vibError(); needRedrawNow(); return;
   }
   int code=rpHttpGetRetry(http,client,url,15000,false);   // NET_ADAPTIF_V1
-  String body=http.getString();
+  String body=rpHttpBody(http);
   http.end();
   if(code!=HTTP_CODE_OK){
     epicErrorMsg="Gagal ambil data EPIC (HTTP "+String(code)+")."+nasaHttpErrHint(code)+" Citra EPIC gak selalu ada tiap hari -- coba tanggal lain.";
@@ -20042,7 +20042,7 @@ void imgLibFetchAndProcess(String query){
     imgLibPage=ILIB_ERROR; vibError(); needRedrawNow(); return;
   }
   int code=rpHttpGetRetry(http,client,url,15000,false);   // NET_ADAPTIF_V1
-  String body=http.getString();
+  String body=rpHttpBody(http);
   http.end();
   if(code!=HTTP_CODE_OK){
     imgLibErrorMsg="Gagal mencari di NASA Image Library (HTTP "+String(code)+")."+nasaHttpErrHint(code);
@@ -20535,7 +20535,7 @@ void micTranscribeAndFill(uint8_t* wavBuf, size_t wavLen){
     http.end();
     return;
   }
-  String respStr = http.getString();
+  String respStr = rpHttpBody(http);
   http.end();
 
   int textIdx = respStr.indexOf("\"text\":");
