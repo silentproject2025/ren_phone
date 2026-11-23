@@ -250,6 +250,14 @@ jobs:
           } >> "$F"
           tail -n 10 "$F"
 
+      # NYX-NOIDFPATCH: patch IDF LE Audio tidak cocok dgn tag v5.5.5
+      - name: Buang patch IDF LE Audio (tidak cocok dgn v5.5.5)
+        run: |
+          cd "$HOME/lib-builder"
+          echo "=== build.sh sekitar pemeriksaan patch ==="; sed -n '360,392p' build.sh
+          ls patches/idf/*.diff && rm -v patches/idf/*.diff
+          ls patches/idf
+
       - name: Build library esp32s3 (LAMA)
         env:
           AR_REPO_URL: https://github.com/espressif/arduino-esp32.git
