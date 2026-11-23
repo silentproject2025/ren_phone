@@ -268,6 +268,17 @@ jobs:
             env -u GITHUB_REPOSITORY ./build.sh -t esp32s3 -A "$AR_BRANCH"
           fi
 
+      - name: Diagnostik patch IDF (hanya saat gagal)
+        if: failure()
+        run: |
+          cd "$HOME/lib-builder"
+          echo "=== lib-builder commit ==="; git log -1 --oneline
+          echo "=== folder patches ==="; ls -R patches 2>/dev/null | head -60
+          echo "=== IDF HEAD ==="; git -C esp-idf log -1 --oneline; git -C esp-idf describe --tags 2>/dev/null || true
+          echo "=== status IDF ==="; git -C esp-idf status --short | head -40
+          echo "=== marker konflik ==="; grep -rl '^<<<<<<<' esp-idf/components 2>/dev/null | head || true
+          echo "=== skrip patch ==="; grep -rn "apply cleanly" tools build.sh 2>/dev/null | head || true
+
       - name: Cek hasil + paketkan
         run: |
           cd "$HOME/lib-builder"
