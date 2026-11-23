@@ -2462,16 +2462,16 @@ void handleWebRoot() {
   html += "table{width:100%;border-collapse:collapse;margin-top:10px;} td,th{padding:10px;text-align:left;border-bottom:1px solid #333;}</style>";
   html += "</head><body><h2>ESP32 Web File Manager</h2>";
   
-  html += "<div class='card'><h3>Upload File ke ESP32</h3>";   // FFAT_UPLOAD_V1
-  html += "<form method='POST' action='/upload' enctype='multipart/form-data' onsubmit=\"var t=document.getElementById('fsT'),d=document.getElementById('dirT');this.action='/upload?fs='+(t?t.value:'sd')+'&dir='+encodeURIComponent(d?d.value:'');\">";
+  html += "<div class='card'><h3>Upload File ke ESP32</h3>";   // FFAT_UPLOAD_V1 / WEBFM_UPLOAD_UX_V1
   html += "<select id='fsT' style='margin-bottom:10px;padding:8px;background:#2a2a2a;color:#fff;border:1px solid #444;border-radius:6px;'>";
-  if (sdReady) html += String("<option value='sd'") + (sdReady ? " selected" : "") + ">SD Card</option>";
-  if (ffatReady) html += String("<option value='ffat'") + (!sdReady ? " selected" : "") + ">Flash internal (FFat) &mdash; sisa " + String((unsigned long)(FFat.totalBytes()-FFat.usedBytes())/1024) + " KB</option>";
+  if (sdReady) html += String("<option value='sd'") + (" selected") + ">SD Card</option>";
+  if (ffatReady) html += String("<option value='ffat'") + ((!sdReady ? " selected" : "")) + ">Flash internal (FFat) &mdash; sisa " + String((unsigned long)(FFat.totalBytes()-FFat.usedBytes())/1024) + " KB</option>";
   html += "</select><br>";
-  html += "<input id='dirT' type='text' placeholder='Folder tujuan (opsional), mis. /apps/hello' style='margin-bottom:10px;padding:8px;width:90%;background:#2a2a2a;color:#fff;border:1px solid #444;border-radius:6px;'><br>";   // NYXFS_DUAL_V1
-  html += "<input type='file' name='upload' required style='margin-bottom:10px;'><br>";
-  html += "<input type='submit' class='btn' value='Upload File'>";
-  html += "</form></div>";
+  html += "<input id='dirT' type='text' value='" + String("") + "' placeholder='Folder tujuan (opsional), mis. /apps/hello' style='margin-bottom:10px;padding:8px;width:90%;background:#2a2a2a;color:#fff;border:1px solid #444;border-radius:6px;'>";   // NYXFS_DUAL_V1
+  html += "<div id='dz'><b>Tarik &amp; lepas</b> file atau folder ke sini<br><span style='font-size:12px'>atau ketuk area ini untuk memilih file</span></div>";
+  html += "<button type='button' id='bF' class='ubt'>Pilih file</button><button type='button' id='bD' class='ubt'>Pilih folder</button>";
+  html += "<input type='file' id='fi' multiple style='display:none'><input type='file' id='fd' webkitdirectory style='display:none'>";
+  html += "<div id='ul'></div><div id='sm'></div><script src='/up.js'></script></div>";
 
   html += "<div class='card'><h3>Gemini API Key</h3>";
   bool hasKeyWeb = (geminiApiKey.length() > 0 && geminiApiKey != "YOUR_GEMINI_API_KEY_HERE");
@@ -2641,11 +2641,90 @@ void handleWebEditPost() {
   webServer.send(303);
 }
 
+// WEBFM_UPLOAD_UX_V1 -- JS/CSS halaman upload (dilayani dari flash lewat /up.js)
+static const char WEBUP_JS[] PROGMEM = R"JS((function(){
+var d=document,$=function(i){return d.getElementById(i)};
+var st=d.createElement('style');
+st.textContent="#dz{border:2px dashed #555;border-radius:12px;padding:22px 10px;text-align:center;color:#bbb;cursor:pointer;margin:6px 0 10px;transition:.15s}"
++"#dz.hv{border-color:#00e5ff;background:#0b2a30;color:#fff}#dz b{color:#00e5ff}"
++".ubt{background:#2a2a2a;color:#fff;border:1px solid #555;border-radius:6px;padding:8px 12px;margin:0 6px 8px 0;cursor:pointer}"
++".ur{background:#262626;border-radius:8px;padding:8px 10px;margin:6px 0;font-size:13px}"
++".un{word-break:break-all}.ub{height:6px;background:#3a3a3a;border-radius:3px;margin:6px 0 4px;overflow:hidden}"
++".ub i{display:block;height:100%;width:0;background:#00e5ff;transition:width .1s}"
++".us{color:#aaa;font-size:12px}.ur.ok .ub i{background:#4caf50}.ur.ok .us{color:#4caf50}"
++".ur.er .ub i{background:#ff5252}.ur.er .us{color:#ff5252}#sm{font-weight:bold;margin:8px 0 0}";
+d.head.appendChild(st);
+var dz=$('dz'),fi=$('fi'),fd=$('fd'),ul=$('ul'),sm=$('sm'),fsT=$('fsT'),dirT=$('dirT');
+var q=[],busy=false,fails=0,done=0;
+function fmt(n){return n<1024?n+' B':n<1048576?(n/1024).toFixed(1)+' KB':(n/1048576).toFixed(2)+' MB'}
+function base(){var x=(dirT.value||'').trim().replace(/\\/g,'/');if(x&&x[0]!='/')x='/'+x;while(x.length>1&&x.slice(-1)=='/')x=x.slice(0,-1);return x=='/'?'':x}
+function add(f,rel){
+ var r=d.createElement('div');r.className='ur';
+ r.innerHTML='<div class="un"></div><div class="ub"><i></i></div><div class="us">Menunggu</div>';
+ r.firstChild.textContent=(rel?rel+'/':'')+f.name+' ('+fmt(f.size)+')';
+ ul.appendChild(r);q.push({f:f,rel:rel,row:r});
+}
+function bad(it,msg){it.row.className='ur er';it.row.querySelector('.us').textContent=msg;fails++}
+function go(){if(!busy){if(!q.length)return;fails=0;done=0;sm.textContent='';next()}}
+function fin(){
+ sm.textContent=done+' file terunggah'+(fails?', '+fails+' gagal':'');
+ sm.style.color=fails?'#ff5252':'#4caf50';
+ if(!fails&&done)setTimeout(function(){location.reload()},1200);
+}
+function next(){
+ if(!q.length){busy=false;fin();return}
+ busy=true;
+ var it=q.shift(),bar=it.row.querySelector('i'),sx=it.row.querySelector('.us');
+ var dir=base()+(it.rel?'/'+it.rel:'');
+ if(dir.length>119||dir.indexOf('..')>=0){bad(it,'Jalur folder terlalu panjang / tidak valid');next();return}
+ var x=new XMLHttpRequest(),t0=Date.now();
+ x.open('POST','/upload?ajax=1&fs='+encodeURIComponent(fsT.value)+'&dir='+encodeURIComponent(dir));
+ x.upload.onprogress=function(e){
+  if(!e.lengthComputable)return;
+  var p=e.loaded/e.total*100;bar.style.width=p+'%';
+  sx.textContent=e.loaded>=e.total?'Menyimpan ke penyimpanan...':Math.round(p)+'% \u00b7 '+Math.round(e.loaded/1024/Math.max(.1,(Date.now()-t0)/1000))+' KB/s';
+ };
+ x.onload=function(){
+  if(x.status==200){it.row.className='ur ok';bar.style.width='100%';sx.textContent='Selesai ('+((Date.now()-t0)/1000).toFixed(1)+' dtk)';done++}
+  else bad(it,(x.responseText||'Gagal')+' ['+x.status+']');
+  next();
+ };
+ x.onerror=function(){bad(it,'Koneksi terputus');next()};
+ var fm=new FormData();fm.append('upload',it.f,it.f.name);
+ x.send(fm);
+}
+function readAll(r){return new Promise(function(ok){var a=[];(function g(){r.readEntries(function(b){if(b.length){a=a.concat([].slice.call(b));g()}else ok(a)},function(){ok(a)})})()})}
+function walk(en,path){
+ if(en.isFile)return new Promise(function(ok){en.file(function(f){add(f,path);ok()},ok)});
+ if(en.isDirectory){var p=path?path+'/'+en.name:en.name;
+  return readAll(en.createReader()).then(function(l){return l.reduce(function(pr,e){return pr.then(function(){return walk(e,p)})},Promise.resolve())})}
+ return Promise.resolve();
+}
+['dragenter','dragover'].forEach(function(n){dz.addEventListener(n,function(e){e.preventDefault();dz.classList.add('hv')})});
+['dragleave','drop'].forEach(function(n){dz.addEventListener(n,function(){dz.classList.remove('hv')})});
+dz.addEventListener('drop',function(e){
+ e.preventDefault();
+ var it=e.dataTransfer.items,es=[],i;
+ if(it&&it.length&&it[0].webkitGetAsEntry){
+  for(i=0;i<it.length;i++){var en=it[i].webkitGetAsEntry();if(en)es.push(en)}
+  es.reduce(function(pr,en){return pr.then(function(){return walk(en,'')})},Promise.resolve()).then(go);
+ }else{[].forEach.call(e.dataTransfer.files,function(f){add(f,'')});go()}
+});
+dz.onclick=function(){fi.click()};
+$('bF').onclick=function(){fi.click()};
+$('bD').onclick=function(){fd.click()};
+fi.onchange=function(){[].forEach.call(fi.files,function(f){add(f,'')});fi.value='';go()};
+fd.onchange=function(){[].forEach.call(fd.files,function(f){
+ var rp=f.webkitRelativePath||f.name,k=rp.lastIndexOf('/');add(f,k>0?rp.slice(0,k):'')});fd.value='';go()};
+window.onbeforeunload=function(){if(busy)return 'Upload masih berjalan'};
+})();)JS";
+static bool   webUpOk      = false;   // WEBFM_UPLOAD_UX_V1: hasil upload terakhir (utk balasan ?ajax=1)
 static bool   ffatUpToFfat = false;   // FFAT_UPLOAD_V1
 static bool   ffatUpFail   = false;
 static String ffatUpName;
 void handleUploadStream() {
   HTTPUpload& upload = webServer.upload();
+  if (upload.status == UPLOAD_FILE_START) webUpOk = false;   // WEBFM_UPLOAD_UX_V1
   if (upload.status == UPLOAD_FILE_START) webUpAuthed = webFmActive() && webCheckCred() && webCsrfOk();   // WEBAUTH_V1
   if (!webUpAuthed) return;
   if (upload.status == UPLOAD_FILE_START) {
@@ -2653,7 +2732,7 @@ void handleUploadStream() {
     if (!filename.startsWith("/")) filename = "/" + filename;
     // NYXFS_DUAL_V1: folder tujuan opsional (?dir=/apps/<id>) -- harus diawali '/', tanpa '..'
     String upDir = webServer.arg("dir"); upDir.trim();
-    bool dirOk = upDir.length() > 1 && upDir.startsWith("/") && upDir.indexOf("..") < 0 && upDir.indexOf("//") < 0 && upDir.length() < 48;
+    bool dirOk = upDir.length() > 1 && upDir.startsWith("/") && upDir.indexOf("..") < 0 && upDir.indexOf("//") < 0 && upDir.length() < 120;
     if (dirOk) {
       if (upDir.endsWith("/")) upDir.remove(upDir.length() - 1);
       int sl = filename.lastIndexOf('/'); String bn = filename.substring(sl + 1);
@@ -2676,14 +2755,16 @@ void handleUploadStream() {
     } else {
       uploadFile = SD_MMC.open(filename, FILE_WRITE);
     }
+    webUpOk = (bool)uploadFile;   // WEBFM_UPLOAD_UX_V1
   } else if (upload.status == UPLOAD_FILE_WRITE) {
     if (uploadFile && !ffatUpFail) {
       size_t w = uploadFile.write(upload.buf, upload.currentSize);
       if (ffatUpToFfat && w != upload.currentSize) ffatUpFail = true;   // FFat penuh -> file dibuang di akhir
+      if (w != upload.currentSize) webUpOk = false;   // WEBFM_UPLOAD_UX_V1 (SD/FFat penuh)
     }
   } else if (upload.status == UPLOAD_FILE_END) {
     if (uploadFile) uploadFile.close();
-    if (ffatUpToFfat && ffatUpFail) { FFat.remove(ffatUpName); ffatUpFail = false; needRedrawNow(); return; }
+    if (ffatUpToFfat && ffatUpFail) { FFat.remove(ffatUpName); ffatUpFail = false; webUpOk = false; needRedrawNow(); return; }
     // v47: kalau yg baru selesai diupload PERSIS wallpaper.jpg, langsung
     // reload wallpaper skrg jg (live, gak perlu restart ESP32)
     String fn = upload.filename; if (!fn.startsWith("/")) fn = "/" + fn;
@@ -2800,9 +2881,19 @@ void startWebServer(){
   webServer.on("/save", HTTP_POST, handleWebEditPost);
   webServer.on("/upload", HTTP_POST, [](){
     if (!webGuard(true)) return;   // WEBAUTH_V1
+    if (webServer.arg("ajax") == "1") {   // WEBFM_UPLOAD_UX_V1
+      if (webUpOk) webServer.send(200, "text/plain", "OK");
+      else webServer.send(507, "text/plain", "Gagal menyimpan (penyimpanan penuh / tidak bisa menulis)");
+      return;
+    }
     webServer.sendHeader("Location", "/");
     webServer.send(303);
   }, handleUploadStream);
+  webServer.on("/up.js", HTTP_GET, [](){   // WEBFM_UPLOAD_UX_V1
+    if (!webGuard(false)) return;
+    webServer.sendHeader("Cache-Control", "no-store");
+    webServer.send_P(200, "application/javascript", WEBUP_JS);
+  });
   webServer.on("/delete", HTTP_GET, handleWebDelete);
   webServer.on("/download", HTTP_GET, handleWebDownload);
   webServer.on("/apikey", HTTP_GET, handleApiKeyGet);
