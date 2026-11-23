@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- Improved: WiFi Sensing is more reliable and needs less babysitting. It now ignores CSI packets from other transmitters or PHY modes and drops glitch packets, pings the gateway every 25 ms for a steadier signal, adapts its motion threshold to the room's noise level after calibration, remembers the calibration and sensitivity per router, gives a finer breathing-rate estimate, and shows a packet-quality colour
 - Improved: uploading in the Web File Manager is much easier. Drag and drop files or whole folders onto the upload box (subfolders are created automatically), or use the Choose files / Choose folder buttons. Uploads run as a queue with a progress bar, speed and a clear success or failure message per file (for example when the storage is full), and the file list refreshes by itself when everything is done
 - Confirmed: the ELF feature (Nyx Apps) was tested again on a real phone and works
 - Improved: Trivia, Astronomy (APOD), NEO, EPIC, the NASA image library, translation and image downloads no longer refuse to start when internal RAM is low. The start threshold drops from 20 KB to 12 KB (same as Gemini), the attempt is made anyway, and a failed connection (`HTTP -1`) is retried up to 3 times. Background apps are now only closed for memory when less than 16 KB is free (was 24 KB)

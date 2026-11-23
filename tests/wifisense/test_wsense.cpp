@@ -19,6 +19,8 @@ template <class F> void run(float sec, F amp) {
 // ---- simulasi paket CSI LLTF 64 subcarrier ----
 struct SubSim { float A[64], ph[64], sgn[64]; bool sens[64]; };
 static SubSim ss; static float ssNoiseMul = 1.0f; static bool ssShort = false;
+static int ssForeign = 0, ssClass = 0, ssGlitch = 0, ssPkt = 0;   // WSENSE_V2
+static const uint8_t kOtherMac[6] = {0x02,0x11,0x22,0x33,0x44,0x55};
 static float ssWalk[64];
 static void ssInit() {
   std::uniform_real_distribution<float> u(0, 1);
@@ -35,16 +37,22 @@ static void stepSub(float hz, float depth, float walk) {
   g_ms += 10; t += 0.01f;
   if (c++ % 5 == 0) {
     int8_t buf[128]; memset(buf, 0, sizeof(buf));
+    ssPkt++; float gain = 1.0f; const uint8_t* mac = g_bssid; unsigned mode = 1;   // WSENSE_V2
+    if (ssForeign && ssPkt % 3 == 0) { mac = kOtherMac; gain = 3.0f; }
+    if (ssClass && ssPkt % 4 == 1) { mode = 0; gain *= 1.3f; }
+    if (ssGlitch && ssPkt % 200 == 7) gain *= 4.0f;
     for (int k = 0; k < 64; k++) {
       if (walk > 0) ssWalk[k] = 0.7f * ssWalk[k] + gauss(walk);
       float amp = ss.A[k] * (1.0f + gauss(0.005f * ssNoiseMul) + ssWalk[k]
                              + (ss.sens[k] && depth > 0 ? ss.sgn[k] * depth * sinf(2 * (float)M_PI * hz * t) : 0.0f));
       if (walk <= 0) ssWalk[k] = 0;
+      amp *= gain;
       float re = amp * cosf(ss.ph[k]), im = amp * sinf(ss.ph[k]);
       int ri = (int)lrintf(re), ii = (int)lrintf(im);
       buf[2 * k] = (int8_t)max(-127, min(127, ii)); buf[2 * k + 1] = (int8_t)max(-127, min(127, ri));
     }
-    wifi_csi_info_t info; info.buf = buf; info.len = ssShort ? 64 : 128;
+    wifi_csi_info_t info; memset(&info, 0, sizeof(info)); info.buf = buf; info.len = ssShort ? 64 : 128;
+    info.rx_ctrl.sig_mode = mode; memcpy(info.mac, mac, 6);
     wsCsiCb(nullptr, &info);
   }
   wsenseLoopPoll();
@@ -89,11 +97,13 @@ int main() {
   printf("  info: state=%s bpm=%.1f rasio=%.1f (target 18)\n", nm(wsState), wsBr, wsBrRatio);
 
   printf("\nH. False positive: ruang kosong, noise 1%% (3x lebih berisik dari kalibrasi), 5 menit\n");
-  { int moving = 0, still = 0, total = 0; static float t2 = 0;
+  { int moving = 0, still = 0, total = 0, lastMv = 0, lastTot = 0; static float t2 = 0;
     for (int i = 0; i < 30000; i++) { g_ms += 10; t2 += 0.01f;
       if (i % 5 == 0) { wsBinSum = wsBinSum + 40.0f * (1 + gauss(0.01f)); wsBinCnt = wsBinCnt + 1; wsPktTotal = wsPktTotal + 1; }
-      wsenseLoopPoll(); if (i > 6000 && i % 100 == 0) { total++; if (wsState == WS_MOVING) moving++; if (wsState == WS_STILL) still++; } }
-    printf("  info: GERAK palsu %d/%d, DIAM palsu %d/%d  (perlu kalibrasi ulang kalau noise ruangan naik)\n", moving, total, still, total); }
+      wsenseLoopPoll(); if (i > 6000 && i % 100 == 0) { total++; if (wsState == WS_MOVING) moving++; if (wsState == WS_STILL) still++; }
+      if (i >= 18000 && i % 100 == 0) { lastTot++; if (wsState == WS_MOVING) lastMv++; } }
+    printf("  info: GERAK palsu %d/%d, DIAM palsu %d/%d  (perlu kalibrasi ulang kalau noise ruangan naik)\n", moving, total, still, total);
+    CHECK(lastMv * 10 <= lastTot, "WSENSE_V2 baseline adaptif: GERAK palsu di 2 menit terakhir %d/%d (<=10%%), adaptasi x%.2f", lastMv, lastTot, wsAdaptMul); }
 
   printf("\nF. Gambar & sentuh tidak crash\n");
   LGFX_Sprite sp; drawWsense(sp); wsenseTouch(10, 214, false, true); wsenseTouch(100, 214, false, true);
@@ -156,6 +166,39 @@ int main() {
   wsMulti = true; ssShort = true; runSub(20, 0.f, 0.f, 0.f); ssShort = false;
   CHECK(!wsUseSub, "multi mati otomatis saat data per-subcarrier tidak ada (label=Rata)");
   LGFX_Sprite sp2; drawWsense(sp2); wsenseExit(); CHECK(wsSub == nullptr, "keluar app membebaskan ring PSRAM");
+
+  // ================= WSENSE_V2 =================
+  printf("\n=== N. WSENSE_V2 ===\n");
+  printf("\nN1. Kalibrasi tersimpan: dimuat lagi saat app dibuka (BSSID sama), diabaikan untuk router lain\n");
+  { float keepS = wsBaseS, keepM = wsBaseM; int keepSens = wsSens;
+    wsBaseS = 0.5f; wsBaseM = 0.5f; wsSens = 4;
+    wsenseEnter();
+    CHECK(fabsf(wsBaseM - keepM) < 1e-6f && fabsf(wsBaseS - keepS) < 1e-6f && wsSens == keepSens, "dasar (S=%.4f M=%.4f) & sensitivitas (%d) pulih dari penyimpanan", wsBaseS, wsBaseM, wsSens);
+    wsenseExit();
+    g_bssid[5] ^= 0x55; wsBaseM = 0.5f;
+    wsenseEnter();
+    CHECK(fabsf(wsBaseM - 0.5f) < 1e-6f, "router lain (BSSID beda): kalibrasi tidak dipakai");
+    wsenseExit(); g_bssid[5] ^= 0x55; wsBaseM = keepM; }
+
+  wsenseEnter(); wsMulti = true; runSub(45, 0.f, 0.f, 0.f);
+  CHECK(wsUseSub && wsState == WS_EMPTY, "N2 start: multi aktif, state=%s", nm(wsState));
+  printf("\nN2. Paket dari pemancar lain (3x lebih kuat) + kelas PHY lain (skala 1,3x) bercampur 5 menit -> tidak jadi 'gerak'\n");
+  { uint32_t d0 = wsDropTotal; int mv = 0, tot = 0; ssForeign = 1; ssClass = 1;
+    for (int i = 0; i < 30000; i++) { stepSub(0.f, 0.f, 0.f); if (i > 3000 && i % 100 == 0) { tot++; if (wsState == WS_MOVING) mv++; } }
+    ssForeign = 0; ssClass = 0;
+    CHECK(wsDropTotal - d0 > 500 && mv * 20 <= tot, "paket dibuang=%u, GERAK palsu %d/%d", (unsigned)(wsDropTotal - d0), mv, tot); }
+  printf("\nN3. Paket glitch (amplitudo 4x, 1 dari 200 paket) 5 menit\n");
+  { int mv = 0, tot = 0; ssGlitch = 1;
+    for (int i = 0; i < 30000; i++) { stepSub(0.f, 0.f, 0.f); if (i > 3000 && i % 100 == 0) { tot++; if (wsState == WS_MOVING) mv++; } }
+    ssGlitch = 0;
+    CHECK(mv * 20 <= tot, "GERAK palsu %d/%d (glitch disaring)", mv, tot); }
+  wsenseExit();
+
+  printf("\nN4. Interpolasi puncak: napas 16,47/mnt (0,2745 Hz) di antara dua bin spektrum (16,2 dan 16,8)\n");
+  wsenseEnter(); wsMulti = false;
+  run(70, [](float t){ return 40.0f * (1 + 0.015f * sinf(2 * (float)M_PI * 0.2745f * t) + gauss(0.003f)); });
+  CHECK(fabsf(wsBr - 16.47f) <= 0.20f, "bpm=%.2f (target 16,47 +-0,20; tanpa interpolasi paling dekat 16,2 atau 16,8)", wsBr);
+  wsenseExit();
 
   printf("\n%s (%d gagal)\n", fails ? "ADA YANG GAGAL" : "SEMUA LULUS", fails);
   return fails ? 1 : 0;

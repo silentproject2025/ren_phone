@@ -8,8 +8,8 @@
 // CARA KERJA
 //   1. Callback CSI (esp_wifi_set_csi_rx_cb) dipanggil tiap paket dari router diterima.
 //      Di sana cuma dihitung rata-rata amplitudo subcarrier (ringan, tanpa alokasi).
-//   2. Supaya paketnya rutin (~20/dtk, bukan cuma beacon ~10/dtk) HP mem-ping gateway
-//      tiap 50 ms (esp_ping). Kalau ping tidak tersedia, jatuh ke beacon saja:
+//   2. Supaya paketnya rutin (~40/dtk, bukan cuma beacon ~10/dtk) HP mem-ping gateway
+//      tiap 25 ms (esp_ping). Kalau ping tidak tersedia, jatuh ke beacon saja:
 //      gerak masih terbaca, napas biasanya tidak.
 //   3. Amplitudo dirata-ratakan per 100 ms (10 Hz) -> deret waktu x[n].
 //   4. GERAK  : RMS selisih antar-sampel (2 dtk) / rata-rata, dibanding ambang hasil
@@ -34,6 +34,14 @@
 //   Kalau PSRAM kurang / paket CSI tanpa LLTF (< 128 byte) / < 8 subcarrier hidup, otomatis
 //   jatuh ke mode rata-rata lama. Ketuk label "Multi N"/"Rata" di pojok grafik utk berganti
 //   (A/B di ruanganmu). Dasar kalibrasi disimpan terpisah per mode.
+//
+// PENINGKATAN WSENSE_V2
+//   * Filter paket: hanya dari AP kita (MAC sumber = BSSID) dan satu kelas PHY (sig_mode + lebar kanal);
+//     paket glitch (rata-rata amplitudo meloncat >40% sesaat) dibuang. Paket yg dibuang dihitung di wsDropTotal.
+//   * Baseline adaptif: persentil-25 skor gerak dilacak terus (naik 0,15%/bin, turun 0,45%/bin = kuantil 25%),
+//     ambang dikali rasio terhadap nilai saat kalibrasi (dibatasi 0,6x .. 3x). Hanya aktif sesudah kalibrasi.
+//   * Kalibrasi & sensitivitas disimpan (Preferences \"wsense\", kunci BSSID router) dan dimuat saat app dibuka.
+//   * Napas: interpolasi parabola di puncak spektrum -> bpm tidak lagi terkunci ke kelipatan 0,6.
 //
 // BATAS YANG JUJUR
 //   * BELUM DIUJI di perangkat keras (mode multi baru diuji dgn simulasi di tests/wifisense). Ambang (sensitivitas, rasio puncak napas) perlu
@@ -79,7 +87,7 @@
 #define WS_CAL_MS      15000UL
 #define WS_GRAPH_N     150                 // 15 detik terakhir digambar
 #define WS_DEF_BASE    0.006f              // skor dasar bawaan (sebelum kalibrasi)
-#define WS_PING_MS     50
+#define WS_PING_MS     25
 // ---- mode multi-subcarrier (WSENSE_MULTI_V1) ----
 #define WS_NSUB        64                  // subcarrier LLTF (128 byte pertama buffer CSI)
 #define WS_SUB_MIN_AMP 2.0f                // rata-rata amplitudo < ini = subcarrier null/guard -> dilewati
@@ -121,6 +129,23 @@ static float    wsBrRing[5]  = {0,0,0,0,0}; static int wsBrRingN = 0, wsBrRingI 
 static float    wsBrRatio    = 0;
 static WsState  wsState      = WS_OFF;
 
+// ---- WSENSE_V2: filter paket, baseline adaptif, kalibrasi tersimpan ----
+#define WS_Q_UP        0.0015f             // pelacak kuantil-25: naik/bin bila skor >= Q (relatif)
+#define WS_Q_DN        0.0045f             // turun/bin bila skor < Q  (UP*0,75 = DN*0,25 -> kuantil 25%)
+#define WS_ADAPT_MIN   0.6f
+#define WS_ADAPT_MAX   3.0f
+#define WS_CAL_BUF     160                 // skor selama kalibrasi 15 dtk (150 bin) utk persentil-25
+static uint8_t  wsBssid[6]   = {0};
+static bool     wsBssidOk    = false;
+static uint8_t  wsLockCls    = 0xFF;        // kelas PHY yg dikunci (sig_mode | cwb<<2); 0xFF = belum
+static uint16_t wsRejRun     = 0, wsOutRun = 0;
+static uint32_t wsDropTotal  = 0;           // paket CSI yg dibuang filter (info/diagnosa)
+static float    wsAmpEma     = 0;           // rata-rata amplitudo paket (EMA) utk deteksi glitch
+static float    wsQ[2]       = {0, 0};      // kuantil-25 skor gerak berjalan: [0]=rata-rata, [1]=multi
+static float    wsQref[2]    = {0, 0};      // nilai saat kalibrasi (0 = belum dikalibrasi -> tanpa adaptasi)
+static float    wsAdaptMul   = 1.0f;
+static float    wsCalBuf[WS_CAL_BUF];
+
 // ---- mode multi-subcarrier ----
 static bool      wsMulti     = true;        // pilihan pengguna
 static bool      wsUseSub    = false;       // mode yg SEDANG dipakai (multi hanya kalau datanya cukup)
@@ -142,6 +167,28 @@ static float     wsBaseS     = WS_DEF_BASE; // dasar mode rata-rata
 static float     wsBaseM     = WS_DEF_BASE_M; // dasar mode multi
 static inline float& wsBaseRef() { return wsUseSub ? wsBaseM : wsBaseS; }
 #define wsBase (wsBaseRef())
+static inline float wsThr() { return wsBase * wsAdaptMul * wsSensMul[wsSens]; }   // WSENSE_V2: ambang gerak efektif
+
+struct WsCalRec { uint8_t ver; uint8_t bssid[6]; uint8_t sens; float baseS, baseM, qrefS, qrefM; };
+static bool wsFin(float v, float lo, float hi) { return v == v && v >= lo && v <= hi; }
+static void wsCalLoad() {                                // kalibrasi tersimpan untuk router (BSSID) yg sama
+  if (!wsBssidOk) return;
+  Preferences p; if (!p.begin("wsense", false)) return;
+  WsCalRec r; size_t n = p.getBytes("cal", &r, sizeof(r)); p.end();
+  if (n != sizeof(r) || r.ver != 1 || memcmp(r.bssid, wsBssid, 6) != 0) return;
+  if (!wsFin(r.baseS, 0.0005f, 1.0f) || !wsFin(r.baseM, 0.0005f, 1.0f) || !wsFin(r.qrefS, 0.0f, 1.0f) || !wsFin(r.qrefM, 0.0f, 1.0f) || r.sens > 4) return;
+  wsBaseS = r.baseS; wsBaseM = r.baseM; wsSens = r.sens;
+  wsQref[0] = wsQ[0] = r.qrefS; wsQref[1] = wsQ[1] = r.qrefM; wsAdaptMul = 1.0f;
+  if (!wsMsg[0]) snprintf(wsMsg, sizeof(wsMsg), "Kalibrasi tersimpan dimuat");
+}
+static void wsCalSave() {
+  if (!wsBssidOk) return;
+  WsCalRec r; memset(&r, 0, sizeof(r));
+  r.ver = 1; memcpy(r.bssid, wsBssid, 6); r.sens = (uint8_t)wsSens;
+  r.baseS = wsBaseS; r.baseM = wsBaseM; r.qrefS = wsQref[0]; r.qrefM = wsQref[1];
+  Preferences p; if (!p.begin("wsense", false)) return;
+  p.putBytes("cal", &r, sizeof(r)); p.end();
+}
 
 #if WSENSE_PING
 static esp_ping_handle_t wsPing = nullptr;
@@ -154,6 +201,15 @@ static esp_ping_handle_t wsPing = nullptr;
 static void wsCsiCb(void* ctx, wifi_csi_info_t* info) {
   (void)ctx;
   if (!info || !info->buf || info->len < 16) return;
+  // WSENSE_V2: hanya paket dari AP kita + satu kelas PHY (pemancar / mode lain menggeser skala amplitudo)
+  if (wsBssidOk && memcmp(info->mac, wsBssid, 6) != 0) { wsDropTotal++; return; }
+  const uint8_t cls = (uint8_t)((info->rx_ctrl.sig_mode & 3) | ((info->rx_ctrl.cwb & 1) << 2));
+  if (wsLockCls == 0xFF) wsLockCls = cls;
+  if (cls != wsLockCls) {
+    if (++wsRejRun < 40) { wsDropTotal++; return; }
+    wsLockCls = cls;                                     // kelas lama hilang >40 paket berturut-turut -> pindah
+  }
+  wsRejRun = 0;
   const int8_t* b = info->buf;
   int n = info->len / 2;
   const bool haveSub = (info->len >= 2 * WS_NSUB);      // LLTF utuh -> simpan per subcarrier
@@ -168,8 +224,15 @@ static void wsCsiCb(void* ctx, wifi_csi_info_t* info) {
     sum += a; cnt++;
   }
   if (cnt < 8) return;
+  const float pm = sum / (float)cnt;
+  if (wsAmpEma > 0.0f && fabsf(pm / wsAmpEma - 1.0f) > 0.4f) {   // glitch: loncatan >40% sesaat
+    if (++wsOutRun < 10) { wsDropTotal++; return; }
+    wsAmpEma = pm;                                       // bertahan >=10 paket = perubahan nyata, terima
+  }
+  wsOutRun = 0;
+  wsAmpEma = (wsAmpEma > 0.0f) ? wsAmpEma + (pm - wsAmpEma) * 0.02f : pm;
   portENTER_CRITICAL(&wsMux);
-  wsBinSum += sum / (float)cnt;
+  wsBinSum += pm;
   wsBinCnt++;
   wsPktTotal++;
   if (haveSub) { for (int k = 0; k < WS_NSUB; k++) wsSubSum[k] += sub[k]; wsSubCnt++; }
@@ -191,6 +254,8 @@ static void wsResetSeries() {
   if (wsSub) memset(wsSub, 0, (size_t)WS_N * WS_NSUB * sizeof(uint16_t));
   wsNValid = 0; wsUseSub = false; wsBrK = -1; wsBrUsed = 0; wsSubIdle = 0;
   wsPktPrev = 0; wsPktRate = 0;
+  wsLockCls = 0xFF; wsRejRun = 0; wsOutRun = 0; wsAmpEma = 0;            // WSENSE_V2
+  wsQ[0] = wsQref[0]; wsQ[1] = wsQref[1]; wsAdaptMul = 1.0f;
 }
 
 static bool wsStart() {
@@ -199,7 +264,10 @@ static bool wsStart() {
   if (WiFi.status() != WL_CONNECTED) { snprintf(wsMsg, sizeof(wsMsg), "Sambungkan WiFi dulu"); return false; }
   if (!wsSub) wsSub = (uint16_t*)heap_caps_malloc((size_t)WS_N * WS_NSUB * sizeof(uint16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
   if (!wsSub) snprintf(wsMsg, sizeof(wsMsg), "PSRAM kurang: mode rata-rata");
+  { uint8_t* bs = WiFi.BSSID(); wsBssidOk = false;      // WSENSE_V2: kunci kalibrasi & filter paket ke AP ini
+    if (bs) { for (int i = 0; i < 6; i++) if (bs[i]) wsBssidOk = true; if (wsBssidOk) memcpy(wsBssid, bs, 6); } }
   wsResetSeries();
+  wsCalLoad();
   WiFi.setSleep(false);                                  // mode hemat daya bikin paket jarang
   wifi_csi_config_t cfg;
   memset(&cfg, 0, sizeof(cfg));
@@ -312,11 +380,20 @@ static void wsPushBin(float v) {
   { float sm = (wsMulti && wsSub) ? wsSubMotion() : -1.0f;   // WSENSE_MULTI_V1
     wsUseSub = (sm >= 0);
     if (wsUseSub) wsScore = sm; }
+  { int mi = wsUseSub ? 1 : 0;                            // WSENSE_V2: baseline adaptif (kuantil-25 berjalan)
+    if (wsScore > 0) {
+      if (wsQ[mi] <= 0) wsQ[mi] = wsScore;
+      else wsQ[mi] += wsQ[mi] * (wsScore < wsQ[mi] ? -WS_Q_DN : WS_Q_UP);
+    }
+    float am = 1.0f;
+    if (wsQref[mi] > 0 && wsQ[mi] > 0) { am = wsQ[mi] / wsQref[mi]; if (am < WS_ADAPT_MIN) am = WS_ADAPT_MIN; if (am > WS_ADAPT_MAX) am = WS_ADAPT_MAX; }
+    wsAdaptMul = am; }
 
   if (wsCal) {                                          // kumpulkan data ruang kosong
+    if (wsCalN < WS_CAL_BUF) wsCalBuf[wsCalN] = wsScore;
     wsCalSum += wsScore; wsCalSq += wsScore * wsScore; wsCalN++;
   }
-  float thr = wsBase * wsSensMul[wsSens];
+  float thr = wsThr();
   bool mv = wsMoving ? (wsScore > 0.7f * thr) : (wsScore > thr);   // histeresis: tidak berkedip di ambang
   if (mv) { wsLastMove = millis(); if (wsLastMove == 0) wsLastMove = 1; }
   wsMoving = mv;
@@ -333,7 +410,12 @@ static void wsFinishCal() {
   if (b > bmax)  b = bmax;
   // wsBase dikalikan wsSensMul[] saat dibandingkan, jadi simpan sebagai dasar (bagi 3 = sens default)
   wsBase = b / 1.5f;
-  snprintf(wsMsg, sizeof(wsMsg), "Kalibrasi selesai (dasar %.3f)", (double)wsBase);
+  { int mi = wsUseSub ? 1 : 0; int n = wsCalN < WS_CAL_BUF ? wsCalN : WS_CAL_BUF;   // WSENSE_V2: acuan adaptasi = persentil-25 skor kalibrasi
+    for (int i = 1; i < n; i++) { float v = wsCalBuf[i]; int j = i - 1; while (j >= 0 && wsCalBuf[j] > v) { wsCalBuf[j + 1] = wsCalBuf[j]; j--; } wsCalBuf[j + 1] = v; }
+    float q = wsCalBuf[n / 4]; if (q < 0.25f * m) q = 0.25f * m; if (q < 1e-6f) q = 1e-6f;
+    wsQref[mi] = wsQ[mi] = q; wsAdaptMul = 1.0f; }
+  wsCalSave();
+  snprintf(wsMsg, sizeof(wsMsg), "Kalibrasi tersimpan (dasar %.3f)", (double)wsBase);
 }
 
 // Goertzel: daya pada frekuensi f (Hz) untuk deret terdetrend+berjendela
@@ -356,10 +438,19 @@ static float wsPrep(float* d) {
   return sqrtf(varsum / WS_N);
 }
 
+// WSENSE_V2: interpolasi parabola (pada amplitudo = sqrt daya) di sekitar puncak -> offset bin -0,5..+0,5
+static float wsParab(const float* P, int b, int n) {
+  if (b <= 0 || b >= n - 1) return 0;
+  float y0 = sqrtf(P[b - 1]), y1 = sqrtf(P[b]), y2 = sqrtf(P[b + 1]);
+  float den = y0 - 2.0f * y1 + y2; if (den >= -1e-12f) return 0;
+  float d = 0.5f * (y0 - y2) / den; if (d > 0.5f) d = 0.5f; if (d < -0.5f) d = -0.5f;
+  return d;
+}
+
 // hasil deteksi napas -> median 5 estimasi / peluruhan keyakinan
-static void wsBrCommit(bool ok, int best) {
+static void wsBrCommit(bool ok, int best, float frac) {
   if (ok) {
-    float bpm = (0.10f + 0.01f * best) * 60.0f;
+    float bpm = (0.10f + 0.01f * ((float)best + frac)) * 60.0f;
     wsBrRing[wsBrRingI] = bpm; wsBrRingI = (wsBrRingI + 1) % 5; if (wsBrRingN < 5) wsBrRingN++;
     float t[5]; for (int i = 0; i < wsBrRingN; i++) t[i] = wsBrRing[i];
     for (int i = 1; i < wsBrRingN; i++) { float v = t[i]; int j = i - 1; while (j >= 0 && t[j] > v) { t[j + 1] = t[j]; j--; } t[j + 1] = v; }
@@ -393,7 +484,7 @@ static void wsBreathing() {
   bool calm   = wsMovHist < 80;                         // hampir tidak ada gerak besar 30 dtk terakhir
   bool strong = rms > wsBaseS * 0.5f;                   // ada variasi di atas noise ruang kosong
   bool peak   = wsBrRatio >= 6.0f && best > 0 && best < WS_NF - 1;
-  wsBrCommit(calm && strong && peak, best);
+  wsBrCommit(calm && strong && peak, best, wsParab(P, best, WS_NF));
 }
 
 // ---- napas multi-subcarrier: jumlahkan spektrum tiap subcarrier (tanpa fase) ----
@@ -409,7 +500,7 @@ static void wsBrFinishMulti() {
   float thr = 1.0f + 5.0f / sqrtf(keff);                // K=1 -> 6 (sama dgn jalur rata-rata), K=52 -> ~2,2
   bool calm = wsMovHist < 80;
   bool peak = wsBrRatio >= thr && best > 0 && best < WS_NF - 1;
-  wsBrCommit(calm && peak, best);
+  wsBrCommit(calm && peak, best, wsParab(wsPn, best, WS_NF));
 }
 
 static void wsBrStartMulti() {
@@ -552,8 +643,10 @@ void drawWsense(LGFX_Sprite& s) {
   int iy = cy + ch + 6;
   s.setTextSize(1); s.setTextColor(T().subtext);
   snprintf(b, sizeof(b), "Paket %.0f/dtk", (double)wsPktRate);
+  if (wsRun) s.setTextColor(wsPktRate >= 25.0f ? WS_RGB(48,209,88) : (wsPktRate >= 12.0f ? WS_RGB(255,214,10) : T().danger));   // WSENSE_V2: kualitas paket
   s.setCursor(12, iy); s.print(b);
-  float thr = wsBase * wsSensMul[wsSens];
+  s.setTextColor(T().subtext);
+  float thr = wsThr();
   snprintf(b, sizeof(b), "Gerak %.1fx", (double)(thr > 0 ? wsScore / thr : 0));
   s.setCursor(SCR_W / 3 + 4, iy); s.print(b);
   if (wsBr > 0) snprintf(b, sizeof(b), "Napas ~%.0f/mnt", (double)wsBr);
@@ -569,7 +662,10 @@ void drawWsense(LGFX_Sprite& s) {
     if (wsUseSub) { snprintf(tb, sizeof(tb), "Multi %d", wsNValid); tg = tb; }
     else tg = wsMulti ? "Multi.." : "Rata";
     s.setTextSize(1); s.setTextColor(T().subtext);
-    int tw = s.textWidth(tg); s.setCursor(gx + gw - tw - 8, gy + 8); s.print(tg); }
+    int tw = s.textWidth(tg); s.setCursor(gx + gw - tw - 8, gy + 8); s.print(tg);
+    if (wsRun && fabsf(wsAdaptMul - 1.0f) > 0.15f) {    // WSENSE_V2: baseline adaptif sedang bergeser
+      char ab[16]; snprintf(ab, sizeof(ab), "Adaptif x%.1f", (double)wsAdaptMul);
+      s.setCursor(gx + 8, gy + 8); s.print(ab); } }
   int n = wsCount < WS_GRAPH_N ? wsCount : WS_GRAPH_N;
   if (n > 3) {
     float m = 0; for (int k = 0; k < n; k++) m += wsAt(k); m /= n;
@@ -627,6 +723,7 @@ void wsenseTouch(int x, int y, bool held, bool isNew) {
   { int tgy = 26 + 18 + 46 + 6 + 14;                    // = gy di drawWsense (jaga tetap sama)
     if (y >= tgy && y <= tgy + 20 && x > SCR_W - 100) {  // ganti mode multi <-> rata-rata
       wsMulti = !wsMulti; wsBrK = -1; wsBrRingN = 0; wsBr = 0; wsMovHist = 0;
+      wsQ[0] = wsQref[0]; wsQ[1] = wsQref[1]; wsAdaptMul = 1.0f;   // WSENSE_V2
       snprintf(wsMsg, sizeof(wsMsg), wsMulti ? "Mode multi-subcarrier" : "Mode rata-rata");
       needRedraw = true; return;
     } }
@@ -640,8 +737,8 @@ void wsenseTouch(int x, int y, bool held, bool isNew) {
       if (!wsRun) { snprintf(wsMsg, sizeof(wsMsg), "Mulai dulu"); }
       else if (wsCal) { wsCal = false; wsMsg[0] = 0; }                   // ketuk lagi = batal
       else { wsCal = true; wsCalT0 = millis(); wsCalSum = wsCalSq = 0; wsCalN = 0; wsMsg[0] = 0; }
-    } else if (i == 2) { if (wsSens > 0) wsSens--; }
-    else               { if (wsSens < 4) wsSens++; }
+    } else if (i == 2) { if (wsSens > 0) { wsSens--; wsCalSave(); } }
+    else               { if (wsSens < 4) { wsSens++; wsCalSave(); } }
     needRedraw = true;
     return;
   }
