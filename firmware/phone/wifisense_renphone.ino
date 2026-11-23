@@ -161,7 +161,7 @@ static bool wsStart() {
     pc.target_addr = tgt; pc.count = ESP_PING_COUNT_INFINITE;
     pc.interval_ms = WS_PING_MS; pc.timeout_ms = 1000; pc.data_size = 1;
     esp_ping_callbacks_t cbs; memset(&cbs, 0, sizeof(cbs));
-    if (esp_ping_new_session(&pc, &cbs, &wsPing) == ESP_OK) esp_ping_start_session(wsPing);
+    if (esp_ping_new_session(&pc, &cbs, &wsPing) == ESP_OK) esp_ping_start(wsPing);
     else wsPing = nullptr;
   }
   #endif
@@ -178,7 +178,7 @@ static void wsStop() {
 #if WSENSE_CSI
   if (wsCsiOk) { esp_wifi_set_csi(false); esp_wifi_set_csi_rx_cb(nullptr, nullptr); }
   #if WSENSE_PING
-  if (wsPing) { esp_ping_stop_session(wsPing); esp_ping_delete_session(wsPing); wsPing = nullptr; }
+  if (wsPing) { esp_ping_stop(wsPing); esp_ping_delete_session(wsPing); wsPing = nullptr; }
   #endif
 #endif
   wsCsiOk = false; wsRun = false; wsCal = false; wsState = WS_OFF;
