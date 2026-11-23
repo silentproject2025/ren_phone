@@ -47,7 +47,7 @@
 #define CHAT_TZ_SEC    (7*3600)      // WIB (UTC+7); ubah kalau beda zona waktu
 #define CHAT_TOP       (STATUS_H+22)
 #define CHAT_PORT      8883
-#define CHAT_MIN_BLOCK 22000          // CHAT_RAM_FIX_V1: blok kontigu RAM internal minimum utk TLS (dulu 30000)
+#define CHAT_MIN_BLOCK 12000          // blok kontigu RAM internal minimum utk TLS: sama dgn ambang Gemini (mbedTLS di PSRAM); dulu 22000 / 30000
 #define CHAT_TOPIC_BASE "renphone/chat/m/"
 #define CHAT_TOPIC_TYPING "renphone/chat/t"
 #define CHAT_TYPE_SHOW_MS  4500UL     // indikator mengetik bertahan segini sejak paket terakhir
@@ -409,6 +409,7 @@ void chatEnter() {
   chatCfgEdit = -1;
   chatOutState = 0; chatReplyOn = false;
   chatPeerTypeUntil = 0; chatPeerName[0] = 0; chatTypeAnim = 0.0f; chatTypeSentMs = 0; chatTypeSendReq = false;
+  rpHeapEnsure(CHAT_MIN_BLOCK + 4000, 1200);   // RAM_V5: bersihkan RAM internal aktif (konteks UI) sebelum task TLS jalan
   chatBcWait = bcShouldFetch(BC_SVC_CHAT, chatHost, chatUser, chatPass) && bcRequest(BC_SVC_CHAT);   // BROKERCFG_V1
   chatCfgMode = !chatConfigured() && !chatBcWait;
   chatConn = 0;

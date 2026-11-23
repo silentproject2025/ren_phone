@@ -168,7 +168,7 @@ bool bcShouldFetch(uint8_t svc, const String& h, const String& u, const String& 
 bool bcRequest(uint8_t svc) {
   if (svc > 1 || sizeof(RP_REG_URL) <= 1) return false;
   if (bcSt[svc] == BC_BUSY) return true;
-  rpHeapEnsure(BC_WANT_BLOCK, 1500);            // RAM_V5: lepas cadangan + buang cache app latar (konteks UI), tunggu <=1,5 dtk
+  rpHeapEnsure(BC_MIN_INT_BLOCK, 1500);         // RAM_V5: pastikan minimal ambang (konteks UI); Chat/Catur sudah membersihkan RAM sendiri
   bcSt[svc] = BC_BUSY;
   if (!bcWorkerH) {
     if (createTaskPsramStack(bcWorker, "bcfg", 12288, NULL, &bcStack, &bcTCB, &bcWorkerH, 0) != pdPASS) {
