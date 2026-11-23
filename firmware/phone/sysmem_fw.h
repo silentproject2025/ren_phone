@@ -59,22 +59,22 @@ static inline void* rpAllocPs(size_t n) {
 // ---------------------------------------------------------------------
 class RpBodySink : public Stream {
  public:
-  explicit RpBodySink(size_t maxBytes) : _max(maxBytes) {}
-  ~RpBodySink() { if (_buf) free(_buf); }
+  explicit RpBodySink(size_t maxBytes) : mMaxBytes(maxBytes) {}
+  ~RpBodySink() { if (mBuf) free(mBuf); }
   size_t write(uint8_t c) override { return write(&c, 1); }
   size_t write(const uint8_t* b, size_t n) override {
     if (!n) return 0;
-    if (_len + n > _max) n = (_max > _len) ? (_max - _len) : 0;   // potong di batas, jangan bocor
+    if (mLen + n > mMaxBytes) n = (mMaxBytes > mLen) ? (mMaxBytes - mLen) : 0;   // potong di batas, jangan bocor
     if (!n) return 0;
-    if (_len + n + 1 > _cap) {
-      size_t nc = _cap ? _cap : 2048;
-      while (nc < _len + n + 1) nc *= 2;
-      uint8_t* nb = (uint8_t*)heap_caps_realloc(_buf, nc, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-      if (!nb) nb = (uint8_t*)realloc(_buf, nc);                   // PSRAM penuh: heap biasa
+    if (mLen + n + 1 > mCap) {
+      size_t nc = mCap ? mCap : 2048;
+      while (nc < mLen + n + 1) nc *= 2;
+      uint8_t* nb = (uint8_t*)heap_caps_realloc(mBuf, nc, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+      if (!nb) nb = (uint8_t*)realloc(mBuf, nc);                   // PSRAM penuh: heap biasa
       if (!nb) return 0;
-      _buf = nb; _cap = nc;
+      mBuf = nb; mCap = nc;
     }
-    memcpy(_buf + _len, b, n); _len += n; _buf[_len] = 0;
+    memcpy(mBuf + mLen, b, n); mLen += n; mBuf[mLen] = 0;
     return n;
   }
   int available() override { return 0; }
@@ -84,11 +84,11 @@ class RpBodySink : public Stream {
   // String dgn satu alokasi pas (reserve sekali, lalu salin)
   String toString() {
     String s;
-    if (_buf && _len && s.reserve(_len)) s.concat((const char*)_buf, (unsigned int)_len);
+    if (mBuf && mLen && s.reserve(mLen)) s.concat((const char*)mBuf, (unsigned int)mLen);
     return s;
   }
  private:
-  uint8_t* _buf = nullptr; size_t _len = 0, _cap = 0, _max;
+  uint8_t* mBuf = nullptr; size_t mLen = 0, mCap = 0, mMaxBytes;
 };
 
 static inline String rpHttpBody(HTTPClient& http, size_t maxBytes = 256 * 1024) {
