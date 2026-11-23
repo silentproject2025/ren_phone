@@ -18,6 +18,7 @@
 #include <esp_heap_caps.h>
 
 const char* devRegId();                         // devreg_renphone.ino
+bool rpHeapEnsure(size_t need, unsigned long maxMs);   // phone.ino
 
 #define BC_IDLE   0
 #define BC_BUSY   1
@@ -25,7 +26,7 @@ const char* devRegId();                         // devreg_renphone.ino
 #define BC_FAIL   3
 #define BC_SVC_CHAT   0
 #define BC_SVC_CHESS  1
-#define BC_MIN_INT_BLOCK 26000                  // blok RAM internal utk handshake TLS (sama dgn devreg)
+#define BC_MIN_INT_BLOCK 22000                  // blok RAM internal utk handshake TLS (sama dgn devreg)
 
 static volatile uint8_t bcSt[2] = {BC_IDLE, BC_IDLE};
 static char bcH[2][96], bcU[2][64], bcP[2][96];
@@ -130,6 +131,7 @@ bool bcShouldFetch(uint8_t svc, const String& h, const String& u, const String& 
 bool bcRequest(uint8_t svc) {
   if (svc > 1 || sizeof(RP_REG_URL) <= 1) return false;
   if (bcSt[svc] == BC_BUSY) return true;
+  rpHeapEnsure(BC_MIN_INT_BLOCK, 1500);   // RAM_V5
   bcSt[svc] = BC_BUSY;
   if (xTaskCreatePinnedToCore(bcTask, "bcfg", 10240, (void*)(uintptr_t)svc, 1, NULL, 0) != pdPASS) {
     bcSt[svc] = BC_IDLE;
