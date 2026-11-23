@@ -34,7 +34,7 @@ const char* devRegId();                     // devreg_renphone.ino
 #define BS_OP_PUT 1
 #define BS_OP_GET 2
 #define BS_OP_DEL 3
-#define BS_MIN_INT_BLOCK 26000              // blok RAM internal utk handshake TLS (sama dgn devreg)
+#define BS_MIN_INT_BLOCK 22000              // blok RAM internal utk handshake TLS (sama dgn devreg)
 #define BS_RESP_MAX      150000             // balasan get_backup terbesar yg diterima
 
 static volatile bool bsBusy = false, bsReady = false, bsRestart = false;
