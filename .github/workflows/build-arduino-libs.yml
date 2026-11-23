@@ -286,6 +286,8 @@ jobs:
           echo "=== status IDF ==="; git -C esp-idf status --short | head -40
           echo "=== marker konflik ==="; grep -rl '^<<<<<<<' esp-idf/components 2>/dev/null | head || true
           echo "=== skrip patch ==="; grep -rn "apply cleanly" tools build.sh 2>/dev/null | head || true
+          echo "=== build.sh 340-400 ==="; sed -n '340,400p' build.sh
+          echo "=== kata kunci patch di tools ==="; grep -rn "patches/idf\|symbolic-ref\|git apply\|conflict" build.sh tools/*.sh | head -40
 
       - name: Cek hasil + paketkan
         run: |
