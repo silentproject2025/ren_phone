@@ -6614,7 +6614,7 @@ void remoteEnter(); void remoteExit(); void drawRemote(LGFX_Sprite&); void remot
 void remotePointerTick(bool,bool,int,int);
 void rcLoopPoll(); void rcRegisterRoutes(); bool rcApIsUp(); bool rcInputPoll(int*,int*); void rcFrameMark();
 
-AppDef apps[46] = {
+AppDef apps[] = {  // ukuran otomatis
   { "Jam",        'J', 0, clockEnter,    clockExit,    drawClock,        clockTouch,    SCR_CLOCK },
   { "Kalkulator", '+', 0, calcEnter,     calcExit,     drawCalc,         calcTouch,     SCR_CALC },
   { "Orientasi3D", '3', 0, sensorEnter,   sensorExit,   drawSensor,       sensorTouch,   SCR_SENSOR },
@@ -6687,6 +6687,7 @@ AppDef apps[46] = {
   { "WiFi Sensing", 'x', 0, wsenseEnter, wsenseExit, drawWsense, wsenseTouch, SCR_WSENSE },
 };
 #define APP_COUNT 47
+static_assert(sizeof(apps)/sizeof(apps[0]) == APP_COUNT, "APP_COUNT harus sama dengan jumlah entri apps[]");
 
 // =============================================
 // NOTIFIKASI BADGE (BARU) -- angka kecil merah di pojok ikon app, mirip
