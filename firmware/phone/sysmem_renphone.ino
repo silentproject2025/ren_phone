@@ -53,9 +53,14 @@ static sysmem::Mgr& smMgr() {
     b.totalBytes = smB_total; b.nowMs = smB_now; b.delayMs = smB_delay;
     smM.init(b);
 #ifndef RP_CONTIG_HOLD_KB
-#define RP_CONTIG_HOLD_KB 24     // 0 = matikan cadangan kontigu. Bisa ditimpa: -DRP_CONTIG_HOLD_KB=32
+#define RP_CONTIG_HOLD_KB 32     // 0 = matikan cadangan kontigu. Bisa ditimpa: -DRP_CONTIG_HOLD_KB=24 (32 agar catur, 30 KB, ikut tertolong)
 #endif
     smM.cfg.holdContig = (uint32_t)RP_CONTIG_HOLD_KB * 1024u;
+    // FRAG_V2: cadangan dulu cuma bekerja sekali (setelah dilepas butuh blok terbesar >= hold+12 KB & jeda 5 dtk,
+    // syarat yg nyaris mustahil di heap terfragmentasi). Margin & jeda diperkecil supaya cadangan cepat diambil lagi
+    // oleh smTick() begitu TLS selesai. holdFreeMin (64 KB) tetap: cadangan tidak boleh menguras RAM internal.
+    smM.cfg.holdMargin  = 4u * 1024u;
+    smM.cfg.holdQuietMs = 1000u;
     //            id          nama        budget int  budget psram  priv
     smM.setOwner(SM_O_SYSTEM, "system",   0,          0,            true);
     smM.setOwner(SM_O_UI,     "ui",       0,          0);
