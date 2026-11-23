@@ -145,6 +145,7 @@ static void chatCfgSave() {
 static bool chatConfigured() { return chatHost.length() > 3 && chatUser.length() > 0 && chatPass.length() > 0; }
 
 static bool chatBcWait = false;               // BROKERCFG_V1: sedang menunggu kredensial dari cloud
+static bool chatBcForce = false;              // BROKERCFG_V1: ambil ulang manual (tombol "Ambil ulang") -> boleh menimpa config lama
 static bool chatCfgFromSd() {
   if (!sdReady || !SD_MMC.exists("/chat.cfg")) return false;
   File f = SD_MMC.open("/chat.cfg", FILE_READ);
@@ -418,7 +419,7 @@ void chatEnter() {
 }
 
 void chatExit() {
-  chatBcWait = false;   // BROKERCFG_V1
+  chatBcWait = false; chatBcForce = false;   // BROKERCFG_V1
   chatActive = false;     // task melepas koneksi TLS sendiri
   chatConn = 0;
 }
@@ -463,15 +464,17 @@ void chatLoopPoll() {
       chatBcWait = false;
       String h, u, w;
       if (st == BC_OK && bcTake(BC_SVC_CHAT, h, u, w)) {
-        if (bcMayOverwrite(BC_SVC_CHAT, chatHost, chatUser, chatPass)) {
+        if (chatBcForce || bcMayOverwrite(BC_SVC_CHAT, chatHost, chatUser, chatPass)) {
           chatHost = h; chatUser = u; chatPass = w;
           chatCfgSave();
           bcMarkApplied(BC_SVC_CHAT, chatHost, chatUser, chatPass);
+          if (chatBcForce) showToast(RPTR("Broker diperbarui"), 1800);
         }
       } else {
         bcAck(BC_SVC_CHAT);
-        if (!chatConfigured()) { static char bm[40]; snprintf(bm, sizeof(bm), "Gagal ambil broker (%d)", bcLastCode(BC_SVC_CHAT)); showToast(bm, 3200); }
+        if (!chatConfigured() || chatBcForce) { static char bm[40]; snprintf(bm, sizeof(bm), "Gagal ambil broker (%d)", bcLastCode(BC_SVC_CHAT)); showToast(bm, 3200); }
       }
+      chatBcForce = false;
       chatCfgMode = !chatConfigured();
       chatActive = !chatCfgMode;
       chatConn = 0;
@@ -641,11 +644,11 @@ void drawChat(LGFX_Sprite& s) {
   uint16_t dot = (chatConn == 1) ? (uint16_t)T().good : ((chatConn == 2) ? (uint16_t)T().danger : (uint16_t)T().subtext);
   nyxAaCircle(s, 46, 30, 3, dot);
   String stt = (chatConn == 1) ? String("terhubung") : ((chatConn == 2) ? String(chatErrBuf) : String("menyambung..."));
-  int maxSt = (SCR_W - 54 - 58) / 6;
+  int maxSt = (SCR_W - 54 - 76) / 6;
   if ((int)stt.length() > maxSt) stt = stt.substring(0, maxSt > 2 ? maxSt - 2 : maxSt) + "..";
   s.setTextColor(T().subtext); s.setCursor(54, 26); s.print(stt.c_str());
-  iosRR(s, SCR_W - 52, 24, 48, 18, 5, T().surface2);
-  s.setTextColor(T().accent); chatPrintCentered(s, SCR_W - 52, 48, 29, RPTR("Atur"));
+  iosRR(s, SCR_W - 70, 24, 66, 18, 5, T().surface2);
+  s.setTextColor(chatBcWait ? (uint16_t)T().subtext : (uint16_t)T().accent); chatPrintCentered(s, SCR_W - 70, 66, 29, RPTR("Ambil ulang"));
 
   // ---- area pesan (bubble) ----
   int inputY = (kbVisible ? kbY() : backY()) - 26;
@@ -897,6 +900,19 @@ static void chatResend() {
   needRedraw = true;
 }
 
+// Tombol header "Ambil ulang": minta kredensial baru dari Supabase. Config lama TIDAK dihapus dulu,
+// jadi kalau gagal (WiFi/RAM/server) Chat tetap memakai config yang sudah ada.
+static void chatRefetch() {
+  if (WiFi.status() != WL_CONNECTED) { showToast(RPTR("WiFi belum tersambung"), 2000); return; }
+  if (!bcRequest(BC_SVC_CHAT)) { showToast(RPTR("Tidak bisa mulai ambil broker"), 2200); return; }
+  chatBcForce = true;
+  chatBcWait = true;
+  chatActive = false;                           // putuskan sesi lama selagi menunggu
+  chatConn = 0;
+  showToast(RPTR("Mengambil broker..."), 1500);
+  needRedraw = true;
+}
+
 static void chatCfgFinish() {
   chatCfgSave();
   chatCfgMode = !chatConfigured();
@@ -959,11 +975,8 @@ void chatTouch(int x, int y, bool held, bool isNew) {
     lpStart = millis(); lpX = x; lpY = y; lpFired = false;
     if (chatReplyOn && x >= SCR_W - 30 && y >= inputY - 20 && y < inputY - 2) { chatReplyOn = false; needRedraw = true; return; }
     if (isBack(x, y)) { navBack(); return; }
-    if (x >= SCR_W - 52 && x <= SCR_W - 4 && y >= 24 && y <= 42) {
-      chatActive = false;
-      chatCfgMode = true;
-      chatCfgEdit = -1;
-      needRedraw = true;
+    if (x >= SCR_W - 70 && x <= SCR_W - 4 && y >= 24 && y <= 42) {
+      if (!chatBcWait) chatRefetch();
       return;
     }
     if (y >= inputY && y <= inputY + 22) {

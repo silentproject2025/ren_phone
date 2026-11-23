@@ -3323,6 +3323,7 @@ static int           chsAnimFrom = 0, chsAnimTo = 0;
 // ---- BROKER MQTT KHUSUS CATUR: terpisah total dari app Chat (NVS "chess": bhost/buser/bpass; SD: /chess.cfg) ----
 static String chsBHost = "", chsBUser = "", chsBPass = "";
 static bool   chsBcWait = false;                // BROKERCFG_V1: sedang menunggu kredensial dari cloud
+static bool   chsBcForce = false;               // BROKERCFG_V1: ambil ulang manual (tombol "Ambil ulang") -> boleh menimpa config lama
 static int8_t chsBEdit = -1;                    // field yg sedang diketik di layar Broker (-1 = tidak ada)
 static void chsBrokerLoad() {
   Preferences p;
@@ -4167,7 +4168,7 @@ static void chsFreeMasks();
 static void chsVwClose();
 static void chsBenchPollIf();
 void chessExit() {
-  chsBcWait = false;        // BROKERCFG_V1
+  chsBcWait = false; chsBcForce = false;        // BROKERCFG_V1
   chsActive = false;        // task melepas koneksi TLS sendiri
   chsConn = 0;
   chsAnimOn = false;
@@ -4186,15 +4187,17 @@ void chessLoopPoll() {
       chsBcWait = false;
       String h, u, w;
       if (st == BC_OK && bcTake(BC_SVC_CHESS, h, u, w)) {
-        if (chsBEdit < 0 && bcMayOverwrite(BC_SVC_CHESS, chsBHost, chsBUser, chsBPass)) {
+        if (chsBcForce || (chsBEdit < 0 && bcMayOverwrite(BC_SVC_CHESS, chsBHost, chsBUser, chsBPass))) {
           chsBHost = h; chsBUser = u; chsBPass = w;
           chsBrokerSave();
           bcMarkApplied(BC_SVC_CHESS, chsBHost, chsBUser, chsBPass);
+          if (chsBcForce) showToast(RPTR("Broker Catur diperbarui"), 1800);
         }
       } else {
         bcAck(BC_SVC_CHESS);
-        if (!chsBrokerOk()) { static char bm[40]; snprintf(bm, sizeof(bm), "Gagal ambil broker (%d)", bcLastCode(BC_SVC_CHESS)); showToast(bm, 3200); }
+        if (!chsBrokerOk() || chsBcForce) { static char bm[40]; snprintf(bm, sizeof(bm), "Gagal ambil broker (%d)", bcLastCode(BC_SVC_CHESS)); showToast(bm, 3200); }
       }
+      chsBcForce = false;
       needRedraw = true;
     }
   }
@@ -4617,10 +4620,10 @@ static void chsDrawSetup(LGFX_Sprite& s) {
   String nm = chatName.length() ? chatName : String("HP");
   s.setTextColor(T().subtext); s.setCursor(10, 102); s.print(RPTR("Pemain: ")); s.setTextColor(T().text); s.print(nm.c_str());
   s.setCursor(10, 116);
-  if (chsBrokerOk()) { s.setTextColor(T().good); String hh; int pt; chsBrokerHostPort(hh, pt); char hb[40]; chsClip(hh.c_str(), hb, (SCR_W - 130) / 6); s.print("Broker: "); s.print(hb); }
+  if (chsBrokerOk()) { s.setTextColor(T().good); String hh; int pt; chsBrokerHostPort(hh, pt); char hb[40]; chsClip(hh.c_str(), hb, (SCR_W - 146) / 6); s.print("Broker: "); s.print(hb); }
   else { s.setTextColor(T().danger); s.print(RPTR("Broker belum diatur")); }
-  nyxAaRR(s, SCR_W - 8 - 50, 110, 50, 18, 8, chsPressCol(5, blend565(T().surface2, 0xFFFF, 20)));
-  s.setTextColor(T().accent); chsPrintC(s, SCR_W - 8 - 50, 50, 115, RPTR("Atur"));
+  nyxAaRR(s, SCR_W - 8 - 66, 110, 66, 18, 8, chsPressCol(5, blend565(T().surface2, 0xFFFF, 20)));
+  s.setTextColor(chsBcWait ? (uint16_t)T().subtext : (uint16_t)T().accent); chsPrintC(s, SCR_W - 8 - 66, 66, 115, RPTR("Ambil ulang"));
   iosRR(s, 8, 134, 70, 26, 7, chsPressCol(3, T().surface2));
   s.setTextColor(T().accent); chsPrintC(s, 8, 70, 143, RPTR("Acak"));
   bool ok = chsBrokerOk() && chsRoomStr.length() >= 3;
@@ -5452,7 +5455,15 @@ static void chsTouchSetup(int x, int y, bool isNew) {
     return;
   }
   if (isBack(x, y)) { navBack(); return; }
-  if (y >= 106 && y <= 130) { chsPress(5); chsScr = 2; chsBEdit = -1; needRedraw = true; return; }      // baris broker -> layar Broker
+  if (y >= 106 && y <= 130) {                                                                          // baris broker -> ambil ulang dari Supabase
+    chsPress(5);
+    if (chsBcWait) { needRedraw = true; return; }
+    if (WiFi.status() != WL_CONNECTED) { showToast(RPTR("WiFi belum tersambung"), 2000); needRedraw = true; return; }
+    if (!bcRequest(BC_SVC_CHESS)) { showToast(RPTR("Tidak bisa mulai ambil broker"), 2200); needRedraw = true; return; }
+    chsBcForce = true; chsBcWait = true;
+    showToast(RPTR("Mengambil broker Catur..."), 1500);
+    needRedraw = true; return;
+  }
   if (y >= 62 && y <= 96) { kbTarget = &chsRoomStr; kbVisible = true; kbMode = KB_LOWER; needRedraw = true; return; }
   if (y >= 134 && y <= 160) {
     if (x >= 8 && x <= 78) { chsPress(3); chsRandomRoom(); needRedraw = true; }
