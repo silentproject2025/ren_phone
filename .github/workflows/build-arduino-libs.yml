@@ -255,8 +255,9 @@ jobs:
         run: |
           cd "$HOME/lib-builder"
           echo "=== build.sh sekitar pemeriksaan patch ==="; sed -n '360,392p' build.sh
-          ls patches/idf/*.diff && rm -v patches/idf/*.diff
-          ls patches/idf
+          sed -i 's|^if ! git -C "\$IDF_PATH" apply --3way .*; then$|if false; then  # NYX-NOIDFPATCH|' build.sh
+          grep -n 'NYX-NOIDFPATCH' build.sh || { echo "::error::patch build.sh gagal diterapkan"; exit 1; }
+          sed -n '381,390p' build.sh
 
       - name: Build library esp32s3 (LAMA)
         env:
