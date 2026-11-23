@@ -195,6 +195,7 @@ jobs:
             echo 'CONFIG_MBEDTLS_DYNAMIC_BUFFER=y'
             echo 'CONFIG_MBEDTLS_DYNAMIC_FREE_CONFIG_DATA=y'
             echo 'CONFIG_FREERTOS_TASK_CREATE_ALLOW_EXT_MEM=y'
+            echo 'CONFIG_ESP_WIFI_CSI_ENABLED=y'   # WSENSE_LIBS_CSI: CSI WiFi untuk app WiFi Sensing
             if [ -n "$AI" ]; then echo "CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=$AI"; fi
             if [ "${{ inputs.psram_cache_line_64b }}" = "true" ]; then
               echo 'CONFIG_ESP32S3_DATA_CACHE_LINE_64B=y'
@@ -294,6 +295,8 @@ jobs:
             grep -q '^CONFIG_FREERTOS_PLACE_FUNCTIONS_INTO_FLASH=y' "$OUT/sdkconfig" && echo "OK   FREERTOS_PLACE_FUNCTIONS_INTO_FLASH=y" || echo "::warning::FREERTOS_PLACE_FUNCTIONS_INTO_FLASH tidak aktif di sdkconfig hasil"
           fi
           grep -E '^CONFIG_ESP_WIFI_(DYNAMIC_(RX|TX)_BUFFER_NUM|STATIC_RX_BUFFER_NUM|RX_BA_WIN)=' "$OUT/sdkconfig" || echo "::warning::opsi buffer WiFi tidak ditemukan di sdkconfig hasil"
+          echo "=== WSENSE_LIBS_CSI: CSI WiFi di hasil build ==="
+          grep -q '^CONFIG_ESP_WIFI_CSI_ENABLED=y' "$OUT/sdkconfig" && echo "OK   CONFIG_ESP_WIFI_CSI_ENABLED=y" || echo "::warning::CONFIG_ESP_WIFI_CSI_ENABLED tidak aktif di sdkconfig hasil build"
           echo "=== NYX-ELF: elf_loader di hasil build ==="
           if [ "${{ inputs.elf_loader }}" = "true" ]; then
             for OPT in CONFIG_ELF_LOADER CONFIG_ELF_LOADER_LOAD_PSRAM; do
