@@ -4085,7 +4085,7 @@ const char* (*kbMaps[5])[10]={kbL,kbU,kbN,kbE1,kbE2};
 
 // KB-FIX: semua baris 10 tuts, grid rata & di-tengah.
 int kbKeyW(){ return (SCR_W-8-18)/10; }
-int kbKeyH(){ return 22; }
+int kbKeyH(){ return SCR_H >= 300 ? 28 : 24; }   // KB_BIGGER_V1 (dulu 22)
 // KAMUS (kamus_renphone.ino): baris saran kata + autokoreksi tepat di atas tuts.
 int  kbBarH();                                   // tinggi baris saran; 0 bila field ini tidak memakainya
 void kbBarDraw(LGFX_Sprite& s,int yTop);
