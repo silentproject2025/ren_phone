@@ -94,7 +94,7 @@ If the touch panel sends false touches, the system rejects points in dead boxes,
 - **Wallpaper.** Put `wallpaper.jpg` on the SD card, or upload it through the Web File Manager. It applies to Home and the Lock Screen and takes effect immediately without a restart.
 - **Edit Home.** Reorder icons and hide apps from the grid. A *Reset* button with confirmation is provided.
 - **Profile.** An avatar and owner-name card at the top of Settings; the photo is picked from the SD card.
-- **About Phone.** Device and system information.
+- **About Phone.** Device and system information. A scrolling page with an identity card (logo or owner photo, name, NyxOS version, board), three quick tiles (battery, free RAM, chip temperature) and sections for Devices, Software, Processor, Memory, Power, Network and System. Firmware, RAM, PSRAM, SD card and battery show a usage bar (orange from 75 %, red from 90 %; the battery bar turns orange at 30 % and red at 15 %). A value that does not fit next to its label drops to a second line. Drag to scroll (it glides after you lift your finger); tap the title to jump to the top.
 - **Backup & Restore.** Save and restore all settings to the SD card, opened from Settings → About. See [System tools](./system-tools.md#settings-backup-and-restore-beta).
 
 ## Emoji `BETA`

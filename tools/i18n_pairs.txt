@@ -867,3 +867,21 @@ Lawan ::: Them
 Kamu ::: You
 # --- Telepon UI v2 ---
 Perangkat ::: Devices
+# --- About Phone (ABOUT_UX_V1): judul bagian, kunci baris, petak ringkasan ---
+Perangkat Lunak ::: Software
+Prosesor ::: Processor
+Daya ::: Power
+Sistem ::: System
+Pemilik ::: Owner
+Papan ::: Board
+Suhu chip ::: Chip temp
+Suhu ::: Temp
+Alamat IP ::: IP address
+Versi firmware ::: Firmware version
+RAM bebas ::: Free RAM
+mengisi ::: charging
+Reset terakhir ::: Last reset
+Layar saat itu ::: Screen then
+RAM saat itu ::: RAM then
+Lokasi crash ::: Crash location
+Log crash ::: Crash log

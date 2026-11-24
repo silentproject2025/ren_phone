@@ -1,26 +1,34 @@
 // =====================================================================
 // about_renphone.ino -- app ABOUT PHONE (SCR_ABOUT) untuk Accretion Phone / NyxOS
 // =====================================================================
-// Isi halaman:
-//   * Kartu identitas : "Accretion Phone" + "NyxOS" + versi firmware
-//   * Daftar info     : chip, CPU, suhu, flash, RAM internal, PSRAM, SD Card,
-//                       layar, baterai, WiFi (SSID/IP/MAC), uptime, build
-//   * Bisa di-scroll dengan drag jari, tombol Kembali seperti app lain.
+// Isi halaman (semua ikut ter-scroll, kecuali judul & tombol Kembali):
+//   * Kartu identitas : logo / foto pemilik, "Accretion Phone", NyxOS + versi, papan
+//   * Ringkasan cepat : 3 petak -- baterai, RAM bebas, suhu chip
+//   * Info per bagian : Perangkat, Perangkat Lunak, Prosesor, Memori, Daya,
+//                       Jaringan, Sistem. Pemakaian RAM / PSRAM / SD / firmware /
+//                       baterai ditampilkan sebagai bar (oranye >= 75%, merah >= 90%).
+//   * Nilai panjang tidak dipotong: kalau tidak muat satu baris, nilainya turun
+//     ke baris kedua (maks 2 baris).
+//   * Scroll dengan drag jari + momentum (meluncur), ketuk judul = lompat ke atas,
+//     tombol Kembali seperti app lain.
 //
 // ATURAN PROYEK YANG DIIKUTI (lihat komentar panjang di phone.ino):
 //   - TIDAK ada String yang dibuat tiap frame (RAM internal cuma ~162KB dan
 //     gampang terfragmentasi). Semua teks dibangun SEKALI per detik ke buffer
 //     char statis lewat aboutRefresh(), drawAbout() hanya membaca buffer itu.
-//   - Semua fungsi publik hanya menerima tipe primitif / LGFX_Sprite&, supaya
+//   - Semua fungsi hanya menerima tipe primitif / LGFX_Sprite&, supaya
 //     tidak kena bug prototype otomatis arduino-cli (kasus MazeGhost dkk).
+//     Karena itu tipe baris memakai #define angka, bukan enum.
 //   - Layout dihitung dari SCR_W/SCR_H, jadi jalan di landscape & portrait.
+//   - Panel digambar dengan warna rata (bukan kaca blur) supaya barisnya sama
+//     dari frame ke frame -- cocok dengan hardware scroll (lihat hwscroll).
 //   - Tidak ada alokasi heap sama sekali di app ini.
 //
 // DIPASANG ke phone.ino lewat apply_about_patch.py:
 //   enum Screen      <- SCR_ABOUT
 //   apps[] + warna   <- { "About Phone", 'i', ... }
 //   drawAppIcon()    <- case 'i'
-//   loop()           <- aboutLoopPoll()  (refresh tiap 1 detik saat app terbuka)
+//   loop()           <- aboutLoopPoll()  (refresh tiap 1 detik + momentum scroll)
 // =====================================================================
 
 // ---- identitas (ubah di sini kalau ganti nama / versi) ----
@@ -30,31 +38,92 @@
 // Nama papan TIDAK ditulis di sini: diambil dari profil build (RP_BOARD_NAME di display_conf.h),
 // jadi build ILI9341 = "Accretion v1", ST7796 = "Accretion v2", Aether = "Aether Board".
 
-#define ABOUT_MAX_ROWS     32
-#define ABOUT_KEY_LEN      18
+#define ABOUT_MAX_ROWS     44
+#define ABOUT_KEY_LEN      22
 #define ABOUT_VAL_LEN      44
 
-struct AboutRow { char k[ABOUT_KEY_LEN]; char v[ABOUT_VAL_LEN]; };
+// tipe baris (sengaja #define, bukan enum -- lihat catatan prototype di atas)
+#define AB_KV     0      // kunci kiri, nilai kanan
+#define AB_HEAD   1      // judul bagian
+#define AB_BAR    2      // kunci + nilai + bar pemakaian (makin penuh makin gawat)
+#define AB_LEVEL  3      // kunci + nilai + bar level (makin kosong makin gawat), mis. baterai
+
+struct AboutRow { uint8_t t; uint8_t pct; uint8_t ln; char k[ABOUT_KEY_LEN]; char v[ABOUT_VAL_LEN]; };
 
 static AboutRow aboutRows[ABOUT_MAX_ROWS] EXT_RAM_BSS_ATTR;
 static int      aboutRowN       = 0;
+static char     aboutTileV[3][8];         // nilai 3 petak ringkasan (diisi aboutRefresh)
+static uint16_t aboutTileC[3];            // warna nilai petak
+static int      aboutContentH   = 0;      // tinggi seluruh konten yang bisa di-scroll (px)
 static float    aboutScroll     = 0;      // px, 0 = paling atas
 static int      aboutMaxScroll  = 0;
 static int      aboutLastY      = 0;
 static bool     aboutDragging   = false;
+static float    aboutVel        = 0;      // px per ms, dipakai momentum setelah jari diangkat
+static bool     aboutGlide      = false;
+static unsigned long aboutLastMs  = 0;    // waktu event drag terakhir
+static unsigned long aboutGlideT  = 0;    // waktu langkah momentum terakhir
 static unsigned long aboutLastPoll = 0;
+
+// ---------------------------------------------------------------------
+// geometri (dipakai bareng drawAbout(), aboutTouch() & aboutRefresh())
+// ---------------------------------------------------------------------
+#define ABOUT_TITLE_Y   26                  // y judul "About Phone" (tetap di tempat)
+#define ABOUT_HERO_H    72                  // kartu identitas
+#define ABOUT_TILE_GAP  6
+#define ABOUT_TILE_H    42                  // petak ringkasan
+#define ABOUT_HEAD_H    26                  // judul bagian (sudah termasuk jarak atas)
+#define ABOUT_KV_H      22
+#define ABOUT_BAR_H     32
+#define ABOUT_PAD       10                  // jarak isi panel dari tepinya
+#define ABOUT_C_WARN    0xFCA0              // oranye (peringatan sedang)
+
+static int aboutViewTop()    { return ABOUT_TITLE_Y + 18; }
+static int aboutViewBottom() { return SCR_H - BACK_H - 3 - 6; }                     // di atas tombol Kembali
+static int aboutInnerW()     { return SCR_W - 16 - 2 * ABOUT_PAD; }                 // lebar isi panel
+static int aboutRowsStart()  { return ABOUT_HERO_H + ABOUT_TILE_GAP + ABOUT_TILE_H + 2; }   // y relatif baris pertama
+
+// tinggi satu baris. Baris KV yang nilainya tidak muat sejajar kuncinya turun jadi 2 baris teks.
+static int aboutRowH(int i) {
+  const AboutRow& r = aboutRows[i];
+  if (r.t == AB_HEAD) return ABOUT_HEAD_H;
+  if (r.t == AB_BAR || r.t == AB_LEVEL) return ABOUT_BAR_H;
+  return ABOUT_KV_H + (int)r.ln * 11;
+}
 
 // ---------------------------------------------------------------------
 // util kecil
 // ---------------------------------------------------------------------
-static void aboutAdd(const char* k, const char* v) {
+static void aboutPush(int t, const char* k, const char* v, int pct) {
   if (aboutRowN >= ABOUT_MAX_ROWS) return;
-  strncpy(aboutRows[aboutRowN].k, k, ABOUT_KEY_LEN - 1);
-  aboutRows[aboutRowN].k[ABOUT_KEY_LEN - 1] = 0;
-  strncpy(aboutRows[aboutRowN].v, v, ABOUT_VAL_LEN - 1);
-  aboutRows[aboutRowN].v[ABOUT_VAL_LEN - 1] = 0;
+  AboutRow& r = aboutRows[aboutRowN];
+  r.t = (uint8_t)t;
+  if (pct < 0) pct = 0; if (pct > 100) pct = 100;
+  r.pct = (uint8_t)pct;
+  strncpy(r.k, RPTR(k), ABOUT_KEY_LEN - 1);
+  r.k[ABOUT_KEY_LEN - 1] = 0;
+  strncpy(r.v, v, ABOUT_VAL_LEN - 1);
+  r.v[ABOUT_VAL_LEN - 1] = 0;
+  r.ln = 0;
+  if (t == AB_KV) {                         // font bawaan 6 px per huruf
+    int need = ((int)strlen(r.k) + (int)strlen(r.v) + 2) * 6;
+    if (need > aboutInnerW()) {
+      int cpl = aboutInnerW() / 6; if (cpl < 8) cpl = 8;
+      int vl = (int)strlen(r.v);
+      r.ln = (vl > cpl) ? 2 : 1;
+      if (vl > 2 * cpl) {                   // lebih dari 2 baris: potong, akhiri ".."
+        r.v[2 * cpl - 2] = '.'; r.v[2 * cpl - 1] = '.'; r.v[2 * cpl] = 0;
+      }
+    }
+  }
   aboutRowN++;
 }
+
+// dipakai juga oleh nyxAboutRows() (nyxextras_renphone.ino)
+static void aboutAdd(const char* k, const char* v) { aboutPush(AB_KV, k, v, 0); }
+static void aboutHead(const char* k)               { aboutPush(AB_HEAD, k, "", 0); }
+static void aboutBar(const char* k, const char* v, int pct)   { aboutPush(AB_BAR, k, v, pct); }
+static void aboutLevel(const char* k, const char* v, int pct) { aboutPush(AB_LEVEL, k, v, pct); }
 
 static void aboutFmtBytes(char* out, size_t n, uint64_t b) {
   if (b >= (1ULL << 30))      snprintf(out, n, "%.2f GB", (double)b / (1024.0 * 1024.0 * 1024.0));
@@ -72,68 +141,87 @@ static void aboutFmtUptime(char* out, size_t n, unsigned long ms) {
   else snprintf(out, n, "%lu m %lu d", m, s);
 }
 
+// "terpakai / total (xx%)" + persen terpakai, dipakai RAM / PSRAM / SD / firmware
+static int aboutUsage(char* out, size_t n, uint64_t used, uint64_t total) {
+  char u[16], t[16];
+  if (total == 0) { out[0] = 0; return 0; }
+  if (used > total) used = total;
+  int pct = (int)((used * 100ULL + total / 2ULL) / total);
+  aboutFmtBytes(u, sizeof(u), used);
+  aboutFmtBytes(t, sizeof(t), total);
+  snprintf(out, n, "%s / %s (%d%%)", u, t, pct);
+  return pct;
+}
+
 // Bangun ulang seluruh baris info. Dipanggil saat app dibuka & tiap ~1 detik.
 static void aboutRefresh() {
-  char a[ABOUT_VAL_LEN], b[24], c[24];
+  char a[ABOUT_VAL_LEN];
   aboutRowN = 0;
 
-  aboutAdd("Perangkat", ABOUT_DEVICE_NAME);
-  aboutAdd("Sistem", ABOUT_OS_NAME);
-  aboutAdd("Pemilik", ownerName());
+  // ---- Perangkat ----
+  aboutHead("Perangkat");
+  { const char* on = ownerName(); aboutAdd("Pemilik", (on && *on) ? on : "-"); }
+  aboutAdd("Papan", RP_BOARD_NAME);
+  aboutAdd("Layar", RP_DISP_NAME);
+
+  // ---- Perangkat Lunak ----
+  aboutHead("Perangkat Lunak");
   { char vl[16]; otaVersionLabel(vl, sizeof(vl)); int bn = otaBuildNum();
     if (bn > 0) snprintf(a, sizeof(a), "%s (build %d)", vl, bn); else snprintf(a, sizeof(a), "%s", vl); }
   aboutAdd("Versi firmware", a);
   snprintf(a, sizeof(a), "%s %s", __DATE__, __TIME__);
-  aboutAdd(RPTR("Waktu build"), a);
-  aboutAdd("Papan", RP_BOARD_NAME);
+  aboutAdd("Waktu build", a);
+  {
+    uint64_t sk = ESP.getSketchSize(), fr = ESP.getFreeSketchSpace();
+    int pct = aboutUsage(a, sizeof(a), sk, sk + fr);
+    aboutBar("Firmware", a, pct);
+  }
 
-  // ---- chip & CPU ----
+  // ---- Prosesor ----
+  aboutHead("Prosesor");
   snprintf(a, sizeof(a), "%s rev %d, %d core", ESP.getChipModel(), (int)ESP.getChipRevision(), (int)ESP.getChipCores());
   aboutAdd("Chip", a);
   snprintf(a, sizeof(a), "%u MHz", (unsigned)ESP.getCpuFreqMHz());
   aboutAdd("CPU", a);
-  snprintf(a, sizeof(a), "%.1f C", temperatureRead());
+  float tC = temperatureRead();
+  snprintf(a, sizeof(a), "%.1f C", tC);
   aboutAdd("Suhu chip", a);
 
-  // ---- memori ----
+  // ---- Memori ----
+  aboutHead("Memori");
   aboutFmtBytes(a, sizeof(a), ESP.getFlashChipSize());
   aboutAdd("Flash", a);
-  aboutFmtBytes(b, sizeof(b), ESP.getSketchSize());
-  aboutFmtBytes(c, sizeof(c), ESP.getFreeSketchSpace());
-  snprintf(a, sizeof(a), "%s / sisa %s", b, c);
-  aboutAdd("Firmware", a);
-
-  aboutFmtBytes(b, sizeof(b), heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
-  aboutFmtBytes(c, sizeof(c), ESP.getHeapSize());
-  snprintf(a, sizeof(a), "%s bebas / %s", b, c);
-  aboutAdd("RAM internal", a);
-
-  size_t psTotal = ESP.getPsramSize();
-  if (psTotal > 0) {
-    aboutFmtBytes(b, sizeof(b), ESP.getFreePsram());
-    aboutFmtBytes(c, sizeof(c), psTotal);
-    snprintf(a, sizeof(a), "%s bebas / %s", b, c);
-  } else {
-    snprintf(a, sizeof(a), "%s", RPTR("Tidak terdeteksi"));
+  {
+    uint64_t tot = ESP.getHeapSize(), fr = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+    int pct = aboutUsage(a, sizeof(a), (fr <= tot) ? (tot - fr) : 0, tot);
+    aboutBar("RAM internal", a, pct);
   }
-  aboutAdd("PSRAM", a);
-
-  // ---- SD Card ----
+  {
+    uint64_t tot = ESP.getPsramSize();
+    if (tot > 0) {
+      uint64_t fr = ESP.getFreePsram();
+      int pct = aboutUsage(a, sizeof(a), (fr <= tot) ? (tot - fr) : 0, tot);
+      aboutBar("PSRAM", a, pct);
+    } else {
+      aboutAdd("PSRAM", RPTR("Tidak terdeteksi"));
+    }
+  }
   if (sdReady) {
-    aboutFmtBytes(b, sizeof(b), SD_MMC.usedBytes());
-    aboutFmtBytes(c, sizeof(c), SD_MMC.totalBytes());
-    snprintf(a, sizeof(a), "%s terpakai / %s", b, c);
+    uint64_t tot = SD_MMC.totalBytes();
+    int pct = aboutUsage(a, sizeof(a), SD_MMC.usedBytes(), tot);
+    aboutBar("SD Card", a, pct);
   } else {
-    snprintf(a, sizeof(a), "%s", RPTR("Tidak terdeteksi"));
+    aboutAdd("SD Card", RPTR("Tidak terdeteksi"));
   }
-  aboutAdd("SD Card", a);
 
-  // ---- layar & baterai ----
-  aboutAdd(RPTR("Layar"), RP_DISP_NAME);
-  snprintf(a, sizeof(a), "%d%% (%.2f V)", battPercent, battVoltage);
-  aboutAdd(RPTR("Baterai"), a);
+  // ---- Daya ----
+  aboutHead("Daya");
+  if (battCharging) snprintf(a, sizeof(a), "%d%% (%.2f V) %s", battPercent, battVoltage, RPTR("mengisi"));
+  else              snprintf(a, sizeof(a), "%d%% (%.2f V)", battPercent, battVoltage);
+  aboutLevel("Baterai", a, battPercent);
 
-  // ---- WiFi ----
+  // ---- Jaringan ----
+  aboutHead("Jaringan");
   if (WiFi.status() == WL_CONNECTED) {
     String ssid = WiFi.SSID();
     snprintf(a, sizeof(a), "%s", ssid.c_str());
@@ -150,24 +238,30 @@ static void aboutRefresh() {
            (unsigned)(mac >> 24) & 0xFF, (unsigned)(mac >> 32) & 0xFF, (unsigned)(mac >> 40) & 0xFF);
   aboutAdd("MAC", a);
 
+  // ---- Sistem ----
+  aboutHead("Sistem");
   nyxAboutRows();   // NYX-EXTRAS-V1: reset terakhir, layar & RAM saat crash, backtrace
   aboutFmtUptime(a, sizeof(a), millis());
-  aboutAdd(RPTR("Waktu aktif"), a);
+  aboutAdd("Waktu aktif", a);
+
+  // ---- tiga petak ringkasan ----
+  snprintf(aboutTileV[0], sizeof(aboutTileV[0]), "%d%%", battPercent);
+  aboutTileC[0] = battCharging ? T().good : (battPercent <= 15 ? T().danger : (battPercent <= 30 ? ABOUT_C_WARN : T().text));
+  { uint32_t fr = (uint32_t)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024ULL);
+    snprintf(aboutTileV[1], sizeof(aboutTileV[1]), "%uK", (unsigned)fr);
+    aboutTileC[1] = (fr < 24) ? T().danger : (fr < 48 ? ABOUT_C_WARN : T().text); }
+  snprintf(aboutTileV[2], sizeof(aboutTileV[2]), "%dC", (int)(tC + 0.5f));
+  aboutTileC[2] = (tC >= 80.0f) ? T().danger : (tC >= 65.0f ? ABOUT_C_WARN : T().text);
+
+  // ---- tinggi total konten ----
+  int h = aboutRowsStart();
+  for (int i = 0; i < aboutRowN; i++) h += aboutRowH(i);
+  aboutContentH = h + 10;
 }
 
-// ---------------------------------------------------------------------
-// geometri (dipakai bareng drawAbout() & aboutTouch())
-// ---------------------------------------------------------------------
-#define ABOUT_ROW_H   20
-#define ABOUT_CARD_H  56
-
-static int aboutListTop()    { return 26 + 18 + ABOUT_CARD_H + 8; }          // di bawah judul + kartu identitas
-static int aboutListBottom() { return SCR_H - BACK_H - 3 - 6; }              // di atas tombol Kembali
-
 static void aboutClampScroll() {
-  int contentH = aboutRowN * ABOUT_ROW_H;
-  int viewH = aboutListBottom() - aboutListTop();
-  aboutMaxScroll = contentH - viewH;
+  int viewH = aboutViewBottom() - aboutViewTop();
+  aboutMaxScroll = aboutContentH - viewH;
   if (aboutMaxScroll < 0) aboutMaxScroll = 0;
   if (aboutScroll < 0) aboutScroll = 0;
   if (aboutScroll > aboutMaxScroll) aboutScroll = (float)aboutMaxScroll;
@@ -514,28 +608,47 @@ static void eggTouch(int x, int y, bool held, bool isNew) {
   needRedraw = true;
 }
 
+
 // ---------------------------------------------------------------------
 // siklus app
 // ---------------------------------------------------------------------
 void aboutEnter() {
   aboutEggOpen = false; eggTaps = 0; eggDragging = false;   // EGG_ABOUT_V1
   aboutScroll = 0;
-  aboutDragging = false;
+  aboutDragging = false; aboutGlide = false; aboutVel = 0;
   aboutRefresh();
   aboutClampScroll();
   aboutLastPoll = millis();
 }
 
 void aboutExit() {
-  aboutDragging = false;
+  aboutDragging = false; aboutGlide = false; aboutVel = 0;
 }
 
-// dipanggil dari loop() phone.ino -- refresh angka live tiap 1 detik
+// dipanggil dari loop() phone.ino -- momentum scroll + refresh angka live tiap 1 detik
 void aboutLoopPoll() {
   if (aboutEggOpen) { eggTick(); return; }                 // EGG_ABOUT_V1
-  if (millis() - aboutLastPoll < 1000UL) return;
-  aboutLastPoll = millis();
-  if (aboutDragging) return;           // jangan ganggu scroll yang sedang berjalan
+  unsigned long now = millis();
+
+  if (aboutGlide) {                                        // scroll meluncur setelah jari diangkat
+    unsigned long dt = now - aboutGlideT;
+    if (dt > 0) {
+      if (dt > 50) dt = 50;                                // loop lambat jangan bikin lompatan besar
+      aboutGlideT = now;
+      float before = aboutScroll + aboutVel * (float)dt;
+      aboutScroll = before;
+      aboutClampScroll();
+      if (aboutScroll != before) aboutVel = 0;             // mentok di ujung
+      float f = 1.0f - 0.0045f * (float)dt; if (f < 0) f = 0;
+      aboutVel *= f;
+      if (fabsf(aboutVel) < 0.02f) { aboutGlide = false; aboutVel = 0; }
+      needRedraw = true;
+    }
+  }
+
+  if (now - aboutLastPoll < 1000UL) return;
+  aboutLastPoll = now;
+  if (aboutDragging || aboutGlide) return;                 // jangan ganggu scroll yang sedang berjalan
   aboutRefresh();
   aboutClampScroll();
   needRedraw = true;
@@ -544,53 +657,157 @@ void aboutLoopPoll() {
 // ---------------------------------------------------------------------
 // gambar
 // ---------------------------------------------------------------------
+static uint16_t aboutPanelCol() { return blend565(T().bg, T().surface2, 200); }
+
+// satu baris di dalam panel; yy = y layar atas baris, px/pw = panel
+static void aboutDrawRow(LGFX_Sprite& s, int k, int yy, int px, int pw) {
+  const AboutRow& r = aboutRows[k];
+  int xl = px + ABOUT_PAD, xr = px + pw - ABOUT_PAD;
+  s.setTextSize(1);
+  if (r.t == AB_KV) {
+    s.setTextColor(T().subtext);
+    s.setCursor(xl, yy + 7); s.print(r.k);
+    s.setTextColor(T().text);
+    if (r.ln == 0) {
+      int w = (int)strlen(r.v) * 6;
+      s.setCursor(xr - w, yy + 7); s.print(r.v);
+    } else {                                               // nilai panjang: turun ke baris di bawah kunci
+      int cpl = aboutInnerW() / 6; if (cpl < 8) cpl = 8;
+      int vl = (int)strlen(r.v);
+      char t[ABOUT_VAL_LEN + 1];
+      for (int l = 0; l < (int)r.ln; l++) {
+        int st = l * cpl, n = vl - st;
+        if (n <= 0) break;
+        if (n > cpl) n = cpl;
+        memcpy(t, r.v + st, n); t[n] = 0;
+        s.setCursor(xl, yy + 18 + l * 11); s.print(t);
+      }
+    }
+  } else {                                                 // AB_BAR / AB_LEVEL
+    s.setTextColor(T().subtext);
+    s.setCursor(xl, yy + 6); s.print(r.k);
+    s.setTextColor(T().text);
+    int w = (int)strlen(r.v) * 6;
+    s.setCursor(xr - w, yy + 6); s.print(r.v);
+
+    uint16_t col;
+    if (r.t == AB_BAR) col = (r.pct >= 90) ? T().danger : (r.pct >= 75 ? ABOUT_C_WARN : T().accent);
+    else               col = battCharging ? T().good : (r.pct <= 15 ? T().danger : (r.pct <= 30 ? ABOUT_C_WARN : T().good));
+    int bw = xr - xl, by = yy + 20;
+    nyxAaRR(s, xl, by, bw, 6, 3, blend565(aboutPanelCol(), T().text, 36));
+    int fw = bw * (int)r.pct / 100;
+    if (r.pct > 0 && fw < 6) fw = 6;
+    if (fw > 0) nyxAaRR(s, xl, by, fw, 6, 3, col);
+  }
+}
+
 void drawAbout(LGFX_Sprite& s) {
   if (aboutEggOpen) { eggDraw(s); return; }                // EGG_ABOUT_V1
   iosBackdrop(s);
   drawStatusBar(s);
-  iosTitle(s, 8, 26, "About Phone");
+  iosTitle(s, 8, ABOUT_TITLE_Y, "About Phone");
 
-  // ---- kartu identitas ----
-  int cx = 8, cy = 26 + 18, cw = SCR_W - 16;
-  drawGlassPanel(s, cx, cy, cw, ABOUT_CARD_H, 12, T().surface2, 170);
+  const int top = aboutViewTop(), bot = aboutViewBottom();
+  const int px = 8, pw = SCR_W - 16;
+  const int y0 = top - (int)aboutScroll;                   // y layar untuk konten relatif 0
+  const uint16_t panel = aboutPanelCol();
 
-  // logo kecil: cakram accretion (lingkaran gelap + cincin aksen)
-  int lr = 15, lx = cx + 10 + lr, ly = cy + ABOUT_CARD_H / 2;
-  if (ownerHasAvatar()) {
-    ownerDrawAvatar(s, lx, ly, lr + 4);              // foto pemilik menggantikan logo
-  } else {
-    nyxAaCircle(s, lx, ly, lr, T().bg);
-    nyxAaCircleRing(s, lx, ly, lr, T().accent);
-    nyxAaCircleRing(s, lx, ly, lr - 3, T().accent2);
-    nyxAaCircle(s, lx, ly, 5, T().bg);
-    s.fillEllipse(lx, ly, lr + 4, 3, T().accent);   // cincin miring
-    nyxAaCircle(s, lx, ly, 4, T().bg);
+  s.setClipRect(0, top, SCR_W, bot - top);                 // supaya tidak menimpa judul / tombol Kembali
+  s.setTextSize(1);
+
+  // ---- kartu identitas (ketuk 7x = cerita tersembunyi) ----
+  if (y0 + ABOUT_HERO_H > top && y0 < bot) {
+    int hx = px, hy = y0, hw = pw, hh = ABOUT_HERO_H;
+    nyxAaRR(s, hx, hy, hw, hh, 12, blend565(panel, T().accent, 30));
+
+    // logo kecil: cakram accretion (lingkaran gelap + cincin aksen)
+    int lr = 20, lx = hx + 12 + lr, ly = hy + hh / 2;
+    if (ownerHasAvatar()) {
+      ownerDrawAvatar(s, lx, ly, lr + 4);                  // foto pemilik menggantikan logo
+    } else {
+      nyxAaCircle(s, lx, ly, lr, T().bg);
+      nyxAaCircleRing(s, lx, ly, lr, T().accent);
+      nyxAaCircleRing(s, lx, ly, lr - 4, T().accent2);
+      nyxAaCircle(s, lx, ly, 7, T().bg);
+      s.fillEllipse(lx, ly, lr + 5, 4, T().accent);        // cincin miring
+      nyxAaCircle(s, lx, ly, 5, T().bg);
+    }
+
+    int tx = lx + lr + 14;
+    bool big = (tx + (int)strlen(ABOUT_DEVICE_NAME) * 12 <= hx + hw - 8);   // portrait sempit: pakai huruf kecil tebal
+    int l2;
+    if (big) {
+      s.setTextSize(2); s.setTextColor(T().text);
+      s.setCursor(tx, hy + 12); s.print(ABOUT_DEVICE_NAME);
+      s.setTextSize(1);
+      l2 = hy + 36;
+    } else {
+      uiText(s, tx, hy + 14, ABOUT_DEVICE_NAME, T().text, false, true);
+      l2 = hy + 32;
+    }
+    s.setTextColor(T().accent);
+    s.setCursor(tx, l2); s.print(ABOUT_OS_NAME);
+    s.setTextColor(T().subtext);
+    s.print("  ");
+    { char vl[16]; otaVersionLabel(vl, sizeof(vl)); s.print(vl); }
+    s.setCursor(tx, l2 + 14); s.print(RP_BOARD_NAME);
   }
 
-  int tx = lx + lr + 12;
-  s.setTextSize(2); s.setTextColor(T().text);
-  s.setCursor(tx, cy + 10); s.print(ABOUT_DEVICE_NAME);
-  s.setTextSize(1); s.setTextColor(T().accent);
-  s.setCursor(tx, cy + 32); s.print(ABOUT_OS_NAME);
-  s.setTextColor(T().subtext);
-  s.print("  ");
-  { char vl[16]; otaVersionLabel(vl, sizeof(vl)); s.print(vl); }
+  // ---- tiga petak ringkasan ----
+  {
+    int ty = y0 + ABOUT_HERO_H + ABOUT_TILE_GAP;
+    if (ty + ABOUT_TILE_H > top && ty < bot) {
+      int tw = (pw - 2 * ABOUT_TILE_GAP) / 3;
+      const char* lab[3] = { RPTR("Baterai"), RPTR("RAM bebas"), RPTR("Suhu") };
+      for (int i = 0; i < 3; i++) {
+        int tx0 = px + i * (tw + ABOUT_TILE_GAP);
+        nyxAaRR(s, tx0, ty, tw, ABOUT_TILE_H, 10, panel);
+        int vw = (int)strlen(aboutTileV[i]) * 12;
+        s.setTextSize(2); s.setTextColor(aboutTileC[i]);
+        s.setCursor(tx0 + (tw - vw) / 2, ty + 6); s.print(aboutTileV[i]);
+        int lw = (int)strlen(lab[i]) * 6;
+        s.setTextSize(1); s.setTextColor(T().subtext);
+        s.setCursor(tx0 + (tw - lw) / 2, ty + 28); s.print(lab[i]);
+      }
+    }
+  }
 
-  // ---- daftar info (di-clip supaya tidak menimpa judul / tombol Kembali) ----
-  int top = aboutListTop(), bot = aboutListBottom();
-  s.setClipRect(0, top, SCR_W, bot - top);
-  s.setTextSize(1);
-  int keyX = 12;
-  int valX = SCR_W * 2 / 5; if (valX < 110) valX = 110;
-  int y0 = top - (int)aboutScroll;
-  for (int i = 0; i < aboutRowN; i++) {
-    int ry = y0 + i * ABOUT_ROW_H;
-    if (ry + ABOUT_ROW_H < top || ry > bot) continue;   // di luar layar, lewati
-    s.setTextColor(T().subtext);
-    s.setCursor(keyX, ry + 6); s.print(aboutRows[i].k);
-    s.setTextColor(T().text);
-    s.setCursor(valX, ry + 6); s.print(aboutRows[i].v);
-    if (i < aboutRowN - 1) s.drawFastHLine(keyX, ry + ABOUT_ROW_H - 1, SCR_W - 2 * keyX, T().divider);
+  // ---- bagian info: judul kecil + satu panel per bagian ----
+  {
+    int ry = y0 + aboutRowsStart();
+    int i = 0;
+    while (i < aboutRowN) {
+      if (aboutRows[i].t != AB_HEAD) { i++; continue; }    // pengaman; baris pertama selalu judul
+      int j = i + 1, gh = 0;
+      while (j < aboutRowN && aboutRows[j].t != AB_HEAD) { gh += aboutRowH(j); j++; }
+
+      if (ry + ABOUT_HEAD_H > top && ry < bot) {           // judul bagian (huruf besar, warna aksen)
+        char up[ABOUT_KEY_LEN];
+        int n = 0;
+        for (; aboutRows[i].k[n] && n < ABOUT_KEY_LEN - 1; n++) {
+          char ch = aboutRows[i].k[n];
+          up[n] = (ch >= 'a' && ch <= 'z') ? (char)(ch - 32) : ch;
+        }
+        up[n] = 0;
+        s.setTextSize(1); s.setTextColor(T().accent);
+        s.setCursor(px + 6, ry + 12); s.print(up);
+      }
+      int gy = ry + ABOUT_HEAD_H;
+      if (gh > 0 && gy + gh > top && gy < bot) {
+        nyxAaRR(s, px, gy, pw, gh, 10, panel);
+        int yy = gy;
+        for (int k = i + 1; k < j; k++) {
+          int rh = aboutRowH(k);
+          if (yy + rh > top && yy < bot) {
+            aboutDrawRow(s, k, yy, px, pw);
+            if (k < j - 1) s.drawFastHLine(px + ABOUT_PAD, yy + rh - 1, pw - 2 * ABOUT_PAD, T().divider);
+          }
+          yy += rh;
+        }
+      }
+      ry = gy + gh;
+      i = j;
+    }
   }
   s.clearClipRect();
 
@@ -607,29 +824,54 @@ void drawAbout(LGFX_Sprite& s) {
 }
 
 // ---------------------------------------------------------------------
-// sentuh: Kembali + drag-scroll
+// sentuh: Kembali + drag-scroll dengan momentum + ketuk judul = ke atas
 // ---------------------------------------------------------------------
 void aboutTouch(int x, int y, bool held, bool isNew) {
   if (aboutEggOpen) { eggTouch(x, y, held, isNew); return; }   // EGG_ABOUT_V1
+  unsigned long now = millis();
+  int top = aboutViewTop(), bot = aboutViewBottom();
+
   if (isNew) {
+    aboutGlide = false; aboutVel = 0;                      // sentuhan baru menghentikan luncuran
     if (isBack(x, y)) { navBack(); return; }
+    if (y >= 20 && y < top) {                              // ketuk area judul -> kembali ke atas
+      aboutScroll = 0; aboutDragging = false; needRedraw = true;
+      return;
+    }
     // EGG_ABOUT_V1: 7x ketuk kartu identitas -> cerita tersembunyi
-    if (y >= 26 + 18 && y <= 26 + 18 + ABOUT_CARD_H) {
-      unsigned long now = millis();
+    int hy = top - (int)aboutScroll;
+    if (y >= top && y <= bot && y >= hy && y <= hy + ABOUT_HERO_H) {
       if (now - eggLastTap > 1500UL) eggTaps = 0;
       eggLastTap = now;
       if (++eggTaps >= 7) { eggOpen(); return; }
     }
-    aboutDragging = (y >= aboutListTop() && y <= aboutListBottom());
+    aboutDragging = (y >= top && y <= bot);
     aboutLastY = y;
+    aboutLastMs = now;
     return;
   }
-  if (!held) { aboutDragging = false; return; }
+
+  if (!held) {                                             // jari diangkat
+    if (aboutDragging) {
+      aboutDragging = false;
+      if (now - aboutLastMs < 90UL && fabsf(aboutVel) > 0.05f && aboutMaxScroll > 0) {
+        if (aboutVel > 3.0f) aboutVel = 3.0f;
+        if (aboutVel < -3.0f) aboutVel = -3.0f;
+        aboutGlide = true; aboutGlideT = now;
+      } else {
+        aboutVel = 0;
+      }
+    }
+    return;
+  }
   if (!aboutDragging) return;
 
   int dy = aboutLastY - y;
   aboutLastY = y;
   if (dy == 0) return;
+  unsigned long dt = now - aboutLastMs; if (dt < 1) dt = 1;
+  aboutLastMs = now;
+  aboutVel = aboutVel * 0.5f + ((float)dy / (float)dt) * 0.5f;   // kecepatan dirata-rata, px per ms
   aboutScroll += (float)dy;
   aboutClampScroll();
   needRedraw = true;
