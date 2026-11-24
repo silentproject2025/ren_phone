@@ -4094,8 +4094,13 @@ void kbSugOnChar(String& t,char c);              // dipanggil SEBELUM karakter c
 bool kbSugBackspace(String& t);                  // true = hapus tadi membatalkan autokoreksi
 // kbY() = tepi ATAS keyboard (termasuk baris saran) -- layar lain memakainya utk batas area, jadi ikut bergeser otomatis.
 // kbKeysY() = tepi atas deretan tuts.
-int kbY(){ return SCR_H - 4*(kbKeyH()+2) - 4 - kbBarH(); }
-int kbKeysY(){ return kbY() + kbBarH(); }
+// KB_FLOAT_V1: baris input mengambang di atas tuts utk field yang kotaknya tersembunyi (AI Chat)
+int  kbFloatKind();                              // 0 = tidak ada, 1 = pertanyaan AI, 2 = kunci API (didefinisikan dekat drawAiChat)
+void kbFloatTap(int x,int y);                    // ketukan di baris itu (didefinisikan dekat drawAiChat)
+#define KB_FLOAT_H 26
+int kbFloatH(){ return (kbVisible && kbFloatKind()>0) ? KB_FLOAT_H : 0; }
+int kbY(){ return SCR_H - 4*(kbKeyH()+2) - 4 - kbBarH() - kbFloatH(); }
+int kbKeysY(){ return kbY() + kbFloatH() + kbBarH(); }
 int kbLeft(){ return (SCR_W - (10*kbKeyW()+18))/2; }
 int kbOffCol(int row){ (void)row; return kbLeft(); }
 
@@ -4148,6 +4153,32 @@ void drawKb(LGFX_Sprite& s){
   s.fillRect(0,yTop-3,SCR_W,SCR_H-yTop+3,blend565(T().bg,T().surface,175));
   s.drawFastHLine(0,yTop-3,SCR_W,T().divider);
   kbBarDraw(s,yTop);                               // baris saran kata (kamus); kosong bila field tidak mendukung
+  { int fk=kbFloatKind();                          // KB_FLOAT_V1: baris input mengambang
+    if(fk>0 && kbTarget){
+      const int by=yTop+2, bh=22;
+      int bw = (fk==1) ? SCR_W-98 : SCR_W-8;
+      nyxAaRR(s,4,by,bw,bh,6,T().surface);
+      String d=*kbTarget; bool empty=(d.length()==0);
+      if(d.length()>80) d=d.substring(d.length()-80);
+      if(fk==2 && d.length()>6){ String m; for(int i=0;i<(int)d.length()-6;i++) m+="*"; m+=d.substring(d.length()-6); d=m; }
+      if(empty) d = (fk==1) ? String("Ketik pertanyaan...") : String("Tempel/ketik API key...");
+      int maxW=bw-20;
+      while(d.length()>1 && s.textWidth(d.c_str())>maxW){          // tampilkan UJUNG teks
+        d.remove(0,1);
+        while(d.length()>1 && (((uint8_t)d.charAt(0))&0xC0)==0x80) d.remove(0,1);   // jangan potong di tengah karakter UTF-8
+      }
+      s.setTextSize(1); s.setTextColor(empty?T().subtext:T().text);
+      s.setCursor(10,by+6); s.print(d.c_str());
+      if(!empty){ int cx=10+s.textWidth(d.c_str())+1; s.fillRect(cx,by+4,1,bh-8,T().accent); }
+      if(fk==1){                                                    // X (hapus semua) + Kirim, posisi sama dgn kotak lama
+        bool has=kbTarget->length()>0, ld=aiLoading;
+        nyxAaRR(s,SCR_W-90,by,30,bh,6,has?(uint16_t)T().danger:(uint16_t)T().surface2);
+        s.setTextColor(has?(uint16_t)0xFFFF:(uint16_t)T().subtext); s.setCursor(SCR_W-90+15-3,by+6); s.print("X");
+        nyxAaRR(s,SCR_W-56,by,52,bh,6,ld?(uint16_t)T().surface2:(uint16_t)T().accent);
+        s.setTextColor(ld?(uint16_t)T().subtext:(uint16_t)T().bg); s.setCursor(SCR_W-48,by+6); s.print(RPTR("Kirim"));
+      }
+    }
+  }
   auto* lay=kbMaps[(int)kbMode];
   bool emo=(kbMode==KB_EMO1||kbMode==KB_EMO2);
   if(emo) s.setFont(emjF(&lgfx::fonts::Font0));          // halaman emoji: Font0 + sprite (lihat emoji_renphone.ino)
@@ -4233,6 +4264,7 @@ void kbTouch(int x,int y){
   kbUxNormalize();                                 // KB_UX_V1
   int yTop=kbY(), y0=kbKeysY();
   if(y<yTop-2) return;
+  { int fh=kbFloatH(); if(fh>0 && y<yTop+fh){ kbFloatTap(x,y); needRedraw=true; return; } }   // KB_FLOAT_V1
   if(y0>yTop && y<y0){ kbBarTouch(x,y); needRedraw=true; return; }   // baris saran kata (ketuk saran / ganti mode)
   int kw=kbKeyW(), kh=kbKeyH(), L=kbLeft(), R=SCR_W-L;
   int cell=kh+2;
@@ -10663,6 +10695,25 @@ void drawAiTypingDots(LGFX_Sprite& s, int x, int y, uint16_t color){
 // gambar & area sentuh nilainya beda2.
 #define AI_MIC_BTN_W 44
 int aiMicBtnX(){ return (SCR_W-118) - 6 - AI_MIC_BTN_W; }
+
+// KB_FLOAT_V1: field yang memakai baris input mengambang (kotaknya tersembunyi selagi keyboard terbuka)
+int kbFloatKind(){
+  if(!kbTarget) return 0;
+  if(kbTarget==&aiPrompt) return 1;
+  if(kbTarget==&geminiApiKey) return 2;
+  return 0;
+}
+void kbFloatTap(int x,int y){
+  (void)y;
+  if(kbFloatKind()!=1) return;
+  if(x>=SCR_W-90 && x<=SCR_W-60){                     // X: kosongkan pertanyaan
+    if(aiPrompt.length()){ aiPrompt=""; showToast(RPTR("Pertanyaan dihapus")); }
+  } else if(x>=SCR_W-56 && !aiLoading){               // Kirim: sama dgn tombol Kirim di aiTouch(), lalu tutup keyboard
+    saveGeminiKey();
+    triggerGeminiAI();
+    kbVisible=false; kbTarget=nullptr;
+  }
+}
 
 void drawAiChat(LGFX_Sprite& s){
   iosBackdrop(s); drawStatusBar(s);
