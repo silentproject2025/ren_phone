@@ -18,6 +18,7 @@
 
 
 #include <stdio.h>
+#include "esp_attr.h"   /* PSRAM_BSS_V2 */
 FILE *DG_Fopen(const char *path, const char *mode); // DOOM_FFAT_PRELOAD_V1
 #include <string.h>
 #include <stdlib.h>
@@ -149,7 +150,7 @@ int             testcontrols_mousespeed;
  
 wbstartstruct_t wminfo;               	// parms for world map / intermission 
  
-byte		consistancy[MAXPLAYERS][BACKUPTICS]; 
+byte		consistancy[MAXPLAYERS][BACKUPTICS] EXT_RAM_BSS_ATTR; 
  
 #define MAXPLMOVE		(forwardmove[1]) 
  

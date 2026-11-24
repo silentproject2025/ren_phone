@@ -17,6 +17,7 @@
 //
 
 #include <stdio.h>
+#include "esp_attr.h"   /* PSRAM_BSS_V2 */
 
 #include "i_system.h"
 #include "z_zone.h"
@@ -563,8 +564,8 @@ P_SpawnMobj
 //
 // P_RemoveMobj
 //
-mapthing_t	itemrespawnque[ITEMQUESIZE];
-int		itemrespawntime[ITEMQUESIZE];
+mapthing_t	itemrespawnque[ITEMQUESIZE] EXT_RAM_BSS_ATTR;
+int		itemrespawntime[ITEMQUESIZE] EXT_RAM_BSS_ATTR;
 int		iquehead;
 int		iquetail;
 

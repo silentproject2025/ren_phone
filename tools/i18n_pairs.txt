@@ -862,3 +862,6 @@ Tes Speaker ::: Test Speaker
 Pindai ::: Scan
 Nada uji selesai ::: Test tone finished
 Speaker gagal dibuka ::: Speaker failed to open
+# --- Panggilan (CALL_RXLEVEL_V1) ---
+Lawan ::: Them
+Kamu ::: You

@@ -82,5 +82,6 @@ Without TURN, calls over the internet on CGNAT networks can be silent or one-way
 - **Not encrypted:** SIP runs over plain TCP/UDP (no TLS yet) and RTP audio is not encrypted. The password is sent as a *hash digest*.
 - One-way latency is estimated at **300–500 ms** (because of A2DP).
 - The standby mode is **off by default** to save RAM and battery. Incoming calls are rejected automatically while NES or DOOM is running.
+- During a call two small bars show the voice level: *Them* (the other person, measured from the received audio) above *You* (your microphone; red while muted).
 - The microphone is shared with other features. Close Voice Memo and Mic Level before calling; Wake Word is paused automatically.
 - The original patch also modified `rplink.h` and the CAM firmware. Reflashing the CAM firmware is optional, but makes audio about 140 ms faster.

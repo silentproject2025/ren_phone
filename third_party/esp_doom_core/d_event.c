@@ -20,11 +20,12 @@
 //
 
 #include <stdlib.h>
+#include "esp_attr.h"   /* PSRAM_BSS_V2 */
 #include "d_event.h"
 
 #define MAXEVENTS 64
 
-static event_t events[MAXEVENTS];
+static event_t events[MAXEVENTS] EXT_RAM_BSS_ATTR;
 static int eventhead;
 static int eventtail;
 
