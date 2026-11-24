@@ -515,6 +515,12 @@ jobs:
         with:
           path: site
 
+      - name: Debug artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts --jq '.artifacts[] | [.name, .size_in_bytes, .expired] | @tsv'
+
       - name: Deploy ke GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
