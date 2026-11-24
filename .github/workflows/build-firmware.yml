@@ -554,11 +554,15 @@ jobs:
           if [ -f CHANGELOG.md ]; then
             # ambil isi bagian "## ...<VER>..."; kalau tak ada bagian utk versi ini -> bagian "## " pertama
             sec() { awk -v pat="$1" 'BEGIN{on=0} /^## /{ if(on) exit; if(pat=="" || index($0, pat)) on=1; next } on{print}' CHANGELOG.md; }
-            sec "$VER" > cl_sec.txt
+            # prioritas: "## Unreleased" (kerjaan terbaru) -> "## <VER>" -> "## " pertama
+            sec "Unreleased" > cl_sec.txt
+            [ -s cl_sec.txt ] || sec "$VER" > cl_sec.txt
             [ -s cl_sec.txt ] || sec "" > cl_sec.txt
+            # ringkas: tiap butir "- ..." cukup kalimat pertamanya (maks 200 char)
+            awk '/^[*+-] /{ i=index($0, ". "); if(i>0 && i<200) $0=substr($0,1,i); else if(length($0)>200) $0=substr($0,1,197) "..." } {print}' cl_sec.txt > cl_sec2.txt && mv cl_sec2.txt cl_sec.txt
             { sed -e 's/\*\*//g' -e 's/`//g' -e 's/^[*+] /- /' -e 's/^### *//' cl_sec.txt \
                 | LC_ALL=C tr -cd '\11\12\40-\176' | sed -e 's/[[:space:]]*$//' | cat -s \
-                | head -c 1400 > changelog.txt; } || true
+                | awk 'BEGIN{n=0} { n+=length($0)+1; if(n>1400) exit; print }' > changelog.txt; } || true   # potong per baris utuh, bukan di tengah kalimat
             sed -i -e '/./,$!d' changelog.txt 2>/dev/null || true     # buang baris kosong di awal
             rm -f cl_sec.txt
             [ -s changelog.txt ] || rm -f changelog.txt                # kosong -> tidak dipublikasikan
