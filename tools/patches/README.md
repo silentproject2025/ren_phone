@@ -28,6 +28,8 @@ python3 tools/patches/apply_nyxapp_patch.py           # apply (keeps a .bak_* ba
 | `apply_spk_ffat_patch.py` | `SPK_FFAT_V1` | History (Music from FFat, `[SPK-RAM]` meter, calls through the speaker without TWS) |
 | `apply_store_ui_patch.py` | `NYXSTORE_UI_V2` | History (Nyx Store redesign) |
 | `apply_webfm_idle.py` | `WEBFM_IDLE_V1` | History (Web File Manager only answers while File Explorer is open and for 10 minutes after) |
+| `apply_ram_report_patch.py` | `RAM_REPORT_V1` | History (adds the static-RAM report step to `build-firmware.yml`; needs `tools/ram_report.py`) |
+| `apply_psram_bss_patch.py` | `PSRAM_BSS_V1` | History (marks seven large BSS arrays `EXT_RAM_BSS_ATTR` and enables `CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY` in `build-arduino-libs.yml`) |
 | `apply_webfm_upload_ux.py` | `WEBFM_UPLOAD_UX_V1` | History (drag-and-drop upload queue) |
 
 Older scripts (written for the former flat layout) are archived in [`../legacy-patches/`](../legacy-patches/).
