@@ -856,5 +856,17 @@ static const I18nPair I18N_DICT[] = {
   { "Lokasi crash", "Crash location" },
   { "Log crash", "Crash log" },
   { "Pilih jaringan di bawah", "Pick a network below" },
+  { "Belum dicek", "Not checked yet" },
+  { "Ketuk Cek update untuk cari versi baru", "Tap Check for updates to look for a new version" },
+  { "Tanda tangan valid", "Signature verified" },
+  { "Lanjutan", "Advanced" },
+  { "Firmware layar", "Display firmware" },
+  { "Ketuk 2x untuk layar lain", "Tap twice to target the other display" },
+  { "Kembali ke versi lama", "Roll back to old version" },
+  { "Slot OTA sebelumnya", "Previous OTA slot" },
+  { "Kembalikan", "Roll back" },
+  { "URL manual", "Manual URL" },
+  { "Isi", "Enter" },
+  { "Siap diunduh", "Ready to download" },
 };
 static const int I18N_DICT_N = (int)(sizeof(I18N_DICT)/sizeof(I18N_DICT[0]));

@@ -541,6 +541,9 @@ int otaLatestBuild() { return otaLatestNum; }
 int otaState() {      // 0 belum dicek, 1 sudah terbaru, 2 ada update
   return otaCheckedOk ? otaStateVal : 0;
 }
+// UPD_UI_V4: info utk kartu status app Update
+int  otaExpectSize()  { return otaCheckedOk ? otaExpSize : 0; }      // byte, dari info.txt (0 = tidak tahu)
+bool otaSigVerified() { return otaCheckedOk && otaSigOk; }           // info.txt lolos tanda tangan
 
 // =====================================================================
 // PEMERIKSAAN SEBELUM/SELAMA FLASH (dipanggil dari updInstallFromURL / FromSD)
