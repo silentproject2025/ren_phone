@@ -383,6 +383,45 @@ static void musFfInfoFn(void* p) {
   musFile.close();
 }
 
+// BT_FFAT_V1: lagu FFat lewat Bluetooth. Semua sentuhan FFat di worker; File sendiri (bukan mffPlayF milik spkTask).
+static File musBtFfF;
+static volatile bool musBtFfOpen = false;
+static int musBtFfFail = 0;
+struct MusBtFfOp { const char* path; uint32_t off; uint8_t* dst; int n; int ret; };
+static void musBtFfOpenFn(void* p) {
+  MusBtFfOp* o = (MusBtFfOp*)p;
+  if (musBtFfF) musBtFfF.close();
+  musBtFfF = FFat.open(o->path, FILE_READ);
+  o->ret = 0;
+  if (musBtFfF) {
+    if (o->off > 0 && o->off < (uint32_t)musBtFfF.size()) musBtFfF.seek(o->off);   // lewati tag ID3 (lihat musStartTrack)
+    o->ret = 1;
+  }
+}
+static void musBtFfReadFn(void* p) {
+  MusBtFfOp* o = (MusBtFfOp*)p;
+  o->ret = musBtFfF ? (int)mffReadI(musBtFfF, o->dst, (size_t)o->n) : -1;
+}
+static void musBtFfCloseFn(void*) { if (musBtFfF) musBtFfF.close(); }
+static void musBtFfClose() {
+  if (!musBtFfOpen) return;
+  musBtFfOpen = false;
+  mffRun(musBtFfCloseFn, nullptr);
+}
+// tutup file lagu aktif, dari SD maupun FFat (BT)
+static void musCloseFile() {
+  if (musFile) musFile.close();
+  musBtFfClose();
+}
+// baca satu blok 4 KB utk dikirim ke CAM. >0 byte, 0/-1 = habis, -2 = worker FFat sedang tidak merespons (coba lagi)
+static int musBtReadBlk() {
+  if (!musUseFfat) return musFile.read(musBlk, 4096);
+  if (!musBtFfOpen) return -1;
+  MusBtFfOp o; o.path = nullptr; o.off = 0; o.dst = musBlk; o.n = 4096; o.ret = -2;
+  if (!mffRun(musBtFfReadFn, &o)) return -2;
+  return o.ret;
+}
+
 // =====================================================================
 //  COVER ART (ID3v2 APIC -> JPEG -> sprite)  -- hanya JPEG baseline
 //  Dibaca di task musik setelah audio mulai mengalir; UI cuma menggambar sprite jadi.
@@ -559,10 +598,9 @@ static bool musStartTrack(int idx, int prevHow) {
   if (idx < 0) idx = n - 1;
   if (idx >= n) idx = 0;
 
-  if (musFile) musFile.close();
+  musCloseFile();
   uint32_t sr = 0, kbps = 0, off = 0, fsz = 0;
   if (musUseFfat) {                             // SPK_FFAT_V1: lagu di flash internal
-    if (!musOutSpk) { musToast("Lagu di FFat: pilih Output SPK"); return false; }
     MusFfInfo inf; inf.path = musList[idx].c_str(); inf.sr = inf.kbps = inf.off = inf.size = 0; inf.ok = -1;
     if (!mffRun(musFfInfoFn, &inf)) { musToast("FFat tidak merespons"); return false; }
     if (inf.ok < 0) { musToast("Gagal membuka file"); return false; }
@@ -596,6 +634,12 @@ static bool musStartTrack(int idx, int prevHow) {
     musFile.close();                            // spkTask membuka file-nya sendiri
     if (!spkPlay(pth, false, off)) { musToast("Speaker gagal dimulai"); return false; }
   } else {
+    if (musUseFfat) {                           // BT_FFAT_V1
+      MusBtFfOp op; op.path = musList[idx].c_str(); op.off = off; op.dst = nullptr; op.n = 0; op.ret = 0;
+      if (!mffRun(musBtFfOpenFn, &op)) { musToast("FFat tidak merespons"); return false; }
+      if (op.ret != 1) { musToast("Gagal membuka file"); return false; }
+      musBtFfOpen = true; musBtFfFail = 0;
+    }
     rpSend(Serial1, RP_BEGIN, &sq, 1);
   }
 
@@ -646,7 +690,7 @@ static void musSendPause(bool pause) {
 static void musPlayWav(const char* path) {
   if (!musOutSpk && !musCamAlive) { musToast("Modul BT tidak terdeteksi"); return; }
   if (!musOutSpk && !musBtConn)   { musToast("TWS belum terhubung"); return; }
-  if (musFile) musFile.close();
+  musCloseFile();
   musFile = SD_MMC.open(path, FILE_READ);
   if (!musFile) { musToast("Gagal membuka memo"); return; }
   uint32_t sz = (uint32_t)musFile.size();
@@ -699,7 +743,7 @@ static void musHandleReq(uint8_t t, int32_t a, const char* s) {
       musEndCurrent(3);
       musLoaded = false; musStreaming = false;
       musCoverReady = false; musCoverWant = false;
-      if (musFile) musFile.close();
+      musCloseFile();
       spkStopPlay();
       rpSend(Serial1, RP_STOP, nullptr, 0);
       break;
@@ -721,7 +765,7 @@ static void musHandleReq(uint8_t t, int32_t a, const char* s) {
     }
     case 'r': musScanPlaylist(); break;
     case 'E': {                                   // mulai stream audio dari AVI (lihat musExtBegin)
-      if (musFile) musFile.close();
+      musCloseFile();
       spkStopPlay();                              // audio AVI selalu lewat CAM/Bluetooth; hentikan lagu speaker kalau ada
       musEndCurrent(3);
       musWavMode = false;
@@ -938,7 +982,7 @@ static void musTask(void* arg) {
     if (musHello) {
       musHello = false;
       musFastFailed = false;                      // CAM baru boot (mungkin baru di-flash): boleh coba link cepat lagi
-      if (musLoaded) { musLoaded = false; musStreaming = false; musExt = false; if (musFile) musFile.close(); musToast("Modul BT restart"); }
+      if (musLoaded) { musLoaded = false; musStreaming = false; musExt = false; musCloseFile(); musToast("Modul BT restart"); }
       uint8_t v = (uint8_t)musVol; rpSend(Serial1, RP_VOLUME, &v, 1);
       if (!musBtOn) { uint8_t m = 0; rpSend(Serial1, RP_BTMODE, &m, 1); }
     } else if (musCamAlive && !prevAlive) {
@@ -969,7 +1013,7 @@ static void musTask(void* arg) {
     }
     if (musEnded && musWavMode) {                 // memo selesai: berhenti, JANGAN lanjut ke playlist
       musEnded = false; musWavMode = false; musLoaded = false; musStreaming = false;
-      if (musFile) musFile.close();
+      musCloseFile();
     }
     if (musEnded && musExt) {                     // audio AVI habis: berhenti, JANGAN lanjut ke playlist
       musEnded = false; musExt = false; musExtEndedFlag = true;
@@ -981,7 +1025,7 @@ static void musTask(void* arg) {
       musEndCurrent(0);                            // habis alami = reward positif
       int old = musCur, i = musNextIdx(1, true);
       if (i >= 0) { if (musStartTrack(i, 3) && musShufMode != 0 && i != old) musHistPush(old); }
-      else { musLoaded = false; musStreaming = false; if (musFile) musFile.close(); }
+      else { musLoaded = false; musStreaming = false; musCloseFile(); }
     }
 
     // ---- 5b. RYNE: tick 2 Hz (vibe) + event volume/interaksi + simpan berkala ----
@@ -1041,11 +1085,15 @@ static void musTask(void* arg) {
       int32_t need = MUS_CREDIT_MIN;                 // ring CAM kecil (mis. 24KB tanpa PSRAM) -> ambang 24KB gak akan pernah tercapai
       if (musRingKb) { int32_t lim = (int32_t)(musRingKb * 1024 / 3); if (lim < need) need = lim; }
       if (freeEst > need) {
-        int n = musFile.read(musBlk, 4096);
+        int n = musBtReadBlk();
+        if (n == -2) {                            // BT_FFAT_V1: worker FFat macet -> coba lagi, menyerah setelah 3x
+          if (++musBtFfFail < 3) { vTaskDelay(pdMS_TO_TICKS(50)); continue; }
+          n = 0;
+        } else musBtFfFail = 0;
         if (n <= 0) {
           rpSend(Serial1, RP_FINISH, nullptr, 0);
           musFileDone = true; musStreaming = false;
-          if (musFile) musFile.close();
+          musCloseFile();
         } else {
           for (int off = 0; off < n; off += 1024) {
             int c = n - off; if (c > 1024) c = 1024;

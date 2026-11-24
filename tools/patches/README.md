@@ -31,6 +31,7 @@ python3 tools/patches/apply_nyxapp_patch.py           # apply (keeps a .bak_* ba
 | `apply_ram_report_patch.py` | `RAM_REPORT_V1` | History (adds the static-RAM report step to `build-firmware.yml`; needs `tools/ram_report.py`) |
 | `apply_psram_bss_patch.py` | `PSRAM_BSS_V1` | History (marks seven large BSS arrays `EXT_RAM_BSS_ATTR` and enables `CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY` in `build-arduino-libs.yml`) |
 | `apply_psram_bss2_patch.py` | `PSRAM_BSS_V2` | History (marks `dlg` and four DOOM arrays `EXT_RAM_BSS_ATTR`) |
+| `apply_bt_ffat_patch.py` | `BT_FFAT_V1` | History (Music app plays FFat tracks through the Bluetooth output too) |
 | `apply_call_rxlevel_patch.py` | `CALL_RXLEVEL_V1` | History (second in-call level bar for the other person, faster meter redraw) |
 | `apply_webfm_upload_ux.py` | `WEBFM_UPLOAD_UX_V1` | History (drag-and-drop upload queue) |
 
