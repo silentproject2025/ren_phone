@@ -147,7 +147,7 @@ typedef struct
 } col_t;
 
 // Palette converted to RGB565
-EXT_RAM_BSS_ATTR EXT_RAM_BSS_ATTR 
+
 EXT_RAM_BSS_ATTR static uint16_t rgb565_palette[256];
 
 void cmap_to_rgb565(uint16_t * out, uint8_t * in, int in_pixels)

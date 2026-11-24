@@ -107,8 +107,8 @@ static SfxData* LoadSfx(sfxinfo_t* sfx)
 }
 
 static void MixerTask(void*)
-EXT_RAM_BSS_ATTR EXT_RAM_BSS_ATTR {
-EXT_RAM_BSS_ATTR EXT_RAM_BSS_ATTR EXT_RAM_BSS_ATTR     static int32_t acc[MIX_FRAMES];
+{
+EXT_RAM_BSS_ATTR     static int32_t acc[MIX_FRAMES];
 EXT_RAM_BSS_ATTR     static int16_t out[MIX_FRAMES];
 
     #ifdef DOOM_MUSIC_SYNTH
@@ -116,7 +116,7 @@ EXT_RAM_BSS_ATTR     static int16_t out[MIX_FRAMES];
     // for the full Ultravice mixer, which outputs stereo. DoomSound's
     // pipeline is deliberately mono (see IDoomPCMOutput.h), so we
     // render into a scratch stereo buffer and downmix L+R here rather
-EXT_RAM_BSS_ATTR EXT_RAM_BSS_ATTR     // than touching mus_synth.cpp's internals.
+    // than touching mus_synth.cpp's internals.
 EXT_RAM_BSS_ATTR     static int32_t musicScratch[MIX_FRAMES * 2];
     #endif
 

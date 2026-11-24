@@ -547,7 +547,7 @@ static void ReportPeak()
 // Dedicated music bus. Needed to measure its peak without SFX
 // contaminating the reading, and it leaves the door open to limiting
 // it separately.
-EXT_RAM_BSS_ATTR EXT_RAM_BSS_ATTR static constexpr size_t MUS_MAX_FRAMES = 256;
+static constexpr size_t MUS_MAX_FRAMES = 256;
 EXT_RAM_BSS_ATTR static int32_t musBus[MUS_MAX_FRAMES * 2];
 
 // Tempo diagnostic. Reports every ~2 seconds, from inside MusSynth_Render
