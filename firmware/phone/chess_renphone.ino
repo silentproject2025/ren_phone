@@ -3646,7 +3646,7 @@ static void chsTaskFunc(void*) {
       chsConn = 2; chsSetErr("WiFi belum terhubung"); chsDirty = true;
       vTaskDelay(pdMS_TO_TICKS(1500)); continue;
     }
-    if (!smEnsureContig(30000)) {
+    if (!smEnsureContig(8192)) {
       chsConn = 2; chsSetErr("RAM padat, tutup app lain"); chsDirty = true;
       vTaskDelay(pdMS_TO_TICKS(2000)); continue;
     }
