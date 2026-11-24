@@ -52,11 +52,15 @@ By default the device has **no speaker**, so the remote party is heard through *
 1. If you want the call in earbuds, connect them first through the **Music** app. Without connected earbuds (or with the output set to **SPK**) the call uses the speaker module.
 2. **SIP mode**
    - Create a free account. Verified: <https://www.sip2sip.info> (set Server to `sip2sip.info`). An account at <https://subscribe.linphone.org> (Server `sip.linphone.org`) was tried and only works as a receiver, so it is not recommended.
-   - Open the Phone app, choose *Set*, and fill in Server, username, password and name. Alternatively, place `/sip.cfg` on the SD card (see [Configuration](../configuration.md)).
+   - Open the Phone app, tap the gear button (top right), and fill in Server, username, password and name. Alternatively, place `/sip.cfg` on the SD card (see [Configuration](../configuration.md)).
    - On the SIP tab, type the destination address (for example `friend` or `friend@sip2sip.info`) and press **Call**.
 3. **LAN mode**
    - On the LAN tab, enter the IP address of the other device, or press **Find NyxOS phone** (sends a SIP OPTIONS *broadcast*) and pick a result.
    - The receiving device must be on the same WiFi, and the **Ready to receive calls** option must be on.
+4. **Screens**
+   - Main screen: status chip (tap it to show or hide the diagnostic log), VoIP / LAN tabs, target field with a clear (x) button, **Call**, and recent calls or found phones as cards (tap a card to call).
+   - During a call: big avatar (green ring = connected, red ring = muted), timer, *Them* / *You* level bars, audio route chip, **Mute**, **Vol -**, **Vol +** and **End**. An incoming call shows round **Decline** and **Answer** buttons; with an unlocked phone it appears as a small banner first (tap the banner body for the full screen).
+   - The layout adapts to landscape (two columns) and portrait.
 
 ## TURN configuration (optional)
 

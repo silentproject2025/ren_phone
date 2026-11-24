@@ -34,5 +34,6 @@ python3 tools/patches/apply_nyxapp_patch.py           # apply (keeps a .bak_* ba
 | `apply_bt_ffat_patch.py` | `BT_FFAT_V1` | History (Music app plays FFat tracks through the Bluetooth output too) |
 | `apply_call_rxlevel_patch.py` | `CALL_RXLEVEL_V1` | History (second in-call level bar for the other person, faster meter redraw) |
 | `apply_webfm_upload_ux.py` | `WEBFM_UPLOAD_UX_V1` | History (drag-and-drop upload queue) |
+| `apply_call_ui_patch.py` | `CALL_UI_V2` | History (Phone app redesign: dialer, call screen, banner, settings) |
 
 Older scripts (written for the former flat layout) are archived in [`../legacy-patches/`](../legacy-patches/).

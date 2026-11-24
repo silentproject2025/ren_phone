@@ -865,3 +865,5 @@ Speaker gagal dibuka ::: Speaker failed to open
 # --- Panggilan (CALL_RXLEVEL_V1) ---
 Lawan ::: Them
 Kamu ::: You
+# --- Telepon UI v2 ---
+Perangkat ::: Devices

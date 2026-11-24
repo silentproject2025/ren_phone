@@ -837,5 +837,6 @@ static const I18nPair I18N_DICT[] = {
   { "Speaker gagal dibuka", "Speaker failed to open" },
   { "Lawan", "Them" },
   { "Kamu", "You" },
+  { "Perangkat", "Devices" },
 };
 static const int I18N_DICT_N = (int)(sizeof(I18N_DICT)/sizeof(I18N_DICT[0]));
