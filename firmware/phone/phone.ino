@@ -8253,7 +8253,7 @@ void uiBoostTick(){ // panggil 1x tiap putaran loop() utama
 #define SNAKE_CELL 12
 #define SNAKE_MAXLEN 500
 struct SnakeSeg{ int x,y; };
-SnakeSeg snakeBody[SNAKE_MAXLEN];
+SnakeSeg snakeBody[SNAKE_MAXLEN] EXT_RAM_BSS_ATTR;
 int  snakeCols, snakeRows, snakeLen;
 int  snakeDirX, snakeDirY;
 int  snakeFoodX, snakeFoodY;
@@ -13401,7 +13401,7 @@ struct BootDiskP{
   int8_t  jy;    // ketebalan vertikal piringan (px, -1..+1)
   uint8_t sz;    // 1 = titik kecil, 2 = titik terang berglow
 };
-BootDiskP bootDisk[BOOT_DISK_N];
+BootDiskP bootDisk[BOOT_DISK_N] EXT_RAM_BSS_ATTR;
 
 // Sudut & radius disebar merata (urutan golden-ratio + sedikit acak) spy
 // piringan gak menggumpal di satu sisi spt random murni.

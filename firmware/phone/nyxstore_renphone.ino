@@ -42,7 +42,7 @@ enum { NSW_IDLE = 0, NSW_RUN = 1, NSW_OK = 2, NSW_FAIL = 3 };
 enum { NSP_MANIFEST = 0, NSP_ELF = 1, NSP_WRITE = 2 };
 enum { NSB_INSTALL = 1, NSB_REMOVE = 2, NSB_CANCEL = 3, NSB_YES_RM = 4 };
 
-static nyxstore::Entry nsApps[NYXSTORE_MAX_APPS];
+static nyxstore::Entry nsApps[NYXSTORE_MAX_APPS] EXT_RAM_BSS_ATTR;
 static uint8_t  nsAppState[NYXSTORE_MAX_APPS];
 static int      nsN = 0, nsSub = NS_FETCH, nsSel = -1, nsPhase = NSP_MANIFEST;
 static float    nsScroll = 0;

@@ -87,7 +87,7 @@ static uint32_t  galUseTick = 0;
 static unsigned long galSlotBorn[GAL_SLOTS];   // kapan thumbnail siap (utk fade-in)
 
 // ---- data album / item ----
-static GalAlbum  galAlbums[GAL_MAX_ALBUMS];
+static GalAlbum  galAlbums[GAL_MAX_ALBUMS] EXT_RAM_BSS_ATTR;
 static int       galAlbumCount = 0;
 static bool      galAlbumsDirty = true;
 static int       galItemCount = 0;

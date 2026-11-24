@@ -30,7 +30,7 @@
 
 static bool        kmsInited = false;
 static int         kmsMode = 2;              // 0 mati | 1 saran saja | 2 saran + autokoreksi (pilihan pengguna)
-static char        kmsUserBuf[KMS_USER_MAX][KMS_MAXW + 1];
+static char        kmsUserBuf[KMS_USER_MAX][KMS_MAXW + 1] EXT_RAM_BSS_ATTR;
 static const char* kmsUserPtr[KMS_USER_MAX];
 static int         kmsUserN = 0;
 static char*       kmsSdBuf = nullptr;       // isi /kamus.txt (PSRAM), dipotong per kata di tempat

@@ -36,7 +36,7 @@
 
 struct AboutRow { char k[ABOUT_KEY_LEN]; char v[ABOUT_VAL_LEN]; };
 
-static AboutRow aboutRows[ABOUT_MAX_ROWS];
+static AboutRow aboutRows[ABOUT_MAX_ROWS] EXT_RAM_BSS_ATTR;
 static int      aboutRowN       = 0;
 static float    aboutScroll     = 0;      // px, 0 = paling atas
 static int      aboutMaxScroll  = 0;
