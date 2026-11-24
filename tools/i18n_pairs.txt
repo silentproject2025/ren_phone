@@ -885,3 +885,5 @@ Layar saat itu ::: Screen then
 RAM saat itu ::: RAM then
 Lokasi crash ::: Crash location
 Log crash ::: Crash log
+# --- Pengaturan (SETT_UX_V1) ---
+Pilih jaringan di bawah ::: Pick a network below

@@ -855,5 +855,6 @@ static const I18nPair I18N_DICT[] = {
   { "RAM saat itu", "RAM then" },
   { "Lokasi crash", "Crash location" },
   { "Log crash", "Crash log" },
+  { "Pilih jaringan di bawah", "Pick a network below" },
 };
 static const int I18N_DICT_N = (int)(sizeof(I18N_DICT)/sizeof(I18N_DICT[0]));

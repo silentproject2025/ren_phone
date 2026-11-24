@@ -52,7 +52,7 @@ The ST7796 panel can scroll its own memory, so a scroll only sends the few rows 
 
 - **Squircle icons** (rounded squares) with soft shadows and edge highlights; neon icon colors are softened automatically.
 - **Aurora background**: two soft radial glows in the theme's accent color on pages such as Settings (replaced by a flat background on screens that use hardware scroll in portrait, see above).
-- **Settings** with colored icon chips on each row, **bento-style Home widgets** (clock, battery, music, weather) and a **flat keyboard** with a press effect.
+- **Settings** with colored icon chips on each row (the pressed row is highlighted, the list glides after a flick, and the WI-FI section shows the connected network and signal), **bento-style Home widgets** (clock, battery, music, weather) and a **flat keyboard** with a press effect.
 - **App transitions**: a Home icon grows into the app screen when opened and shrinks back to its icon when closed. Toasts and the Dynamic Island appear with smoother animations.
 - **Home widget animations**: clock digits change smoothly, the battery ring fills when Home opens, and the weather icon moves gently (only while Scroll Hardware is Off, see above).
 

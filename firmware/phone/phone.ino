@@ -9817,7 +9817,8 @@ int loadSpiOcPref(){
 // PENGATURAN ala iOS -- state layout & sentuhan (daftar scroll, tap-saat-lepas)
 // =====================================================================
 enum { SR_TITLE=0, SR_SECT, SR_BRIGHT, SR_THEME, SR_FONT, SR_ROT, SR_SPI, SR_SPIAPPLY,
-       SR_SCAN, SR_WIFI, SR_NONET, SR_SSID, SR_PASS, SR_CONNECT, SR_MPU, SR_TCAL, SR_OWNER, SR_ABOUT, SR_POWER, SR_HOMEEDIT, SR_BACKUP, SR_HEAPLOG, SR_HWS, SR_LANG };
+       SR_SCAN, SR_WIFI, SR_NONET, SR_SSID, SR_PASS, SR_CONNECT, SR_MPU, SR_TCAL, SR_OWNER, SR_ABOUT, SR_POWER, SR_HOMEEDIT, SR_BACKUP, SR_HEAPLOG, SR_HWS, SR_LANG,
+       SR_WSTAT, SR_FOOT /* SETT_UX_V1 */ };
 #define SETT_MAXROWS 40
 int settRT[SETT_MAXROWS], settRG[SETT_MAXROWS], settRY[SETT_MAXROWS], settRH[SETT_MAXROWS], settRA[SETT_MAXROWS];
 const char* settRL[SETT_MAXROWS];
@@ -9826,9 +9827,13 @@ float settScroll=0;
 int settTouchMode=0;            // 0 diam, 1 menunggu (tap/scroll), 2 geser slider, 3 scroll
 int settTouchX0=0, settTouchY0=0, settTouchLastY=0;
 unsigned long settTouchT0=0, settTcalArmUntil=0;
+// SETT_UX_V1: sorotan baris yang ditekan + momentum scroll
+int settPressRow=-1;
+float settVel=0; bool settGlide=false; unsigned long settGlideT=0, settMoveT=0;
 
 void settingsEnter(){ 
   settScroll=0; settTouchMode=0; settTcalArmUntil=0;
+  settPressRow=-1; settGlide=false; settVel=0;   // SETT_UX_V1
   settSSID=String(WIFI_SSID); 
   settPass=String(WIFI_PASSWORD); 
   startWifiScan();
@@ -9851,7 +9856,7 @@ void settBuildLayout(){
   settAddRow(SR_TITLE,0,36,0,RPTR("Pengaturan"),y);
   settAddRow(SR_OWNER,g,60,0,nullptr,y); g++;   // kartu pemilik (foto + nama)
 
-  settAddRow(SR_SECT,0,22,0,RPTR("TAMPILAN"),y);
+  settAddRow(SR_SECT,0,26,0,RPTR("TAMPILAN"),y);
   settAddRow(SR_BRIGHT,g,34,0,nullptr,y);
   settAddRow(SR_THEME,g,52,0,nullptr,y);
   settAddRow(SR_FONT,g,34,0,nullptr,y);
@@ -9867,6 +9872,7 @@ void settBuildLayout(){
   g++;
 
   settAddRow(SR_SECT,0,26,0,"WI-FI",y);
+  settAddRow(SR_WSTAT,g,38,0,nullptr,y);   // SETT_UX_V1: status sambungan
   settAddRow(SR_SCAN,g,34,0,nullptr,y);
   if(!wifiScanning && scannedWifiNum==0) settAddRow(SR_NONET,g,30,0,nullptr,y);
   for(int i=0;i<scannedWifiNum && i<5;i++) settAddRow(SR_WIFI,g,32,i,nullptr,y);
@@ -9883,6 +9889,7 @@ void settBuildLayout(){
   settAddRow(SR_BACKUP,g,34,0,nullptr,y); g++;
   settAddRow(SR_POWER,g,34,0,nullptr,y); g++;
 
+  settAddRow(SR_FOOT,0,40,0,nullptr,y);   // SETT_UX_V1: footer nama + versi
   y+=14; settTotalH=y;
 }
 float settMaxScroll(){ int vis=settAreaBot()-settAreaTop(); int m=settTotalH-vis; return m>0?(float)m:0.0f; }
@@ -9908,6 +9915,16 @@ void settChevron(LGFX_Sprite& s,int cx,int cy,uint16_t col){ // ">" tipis
 #define CHIP_GRAY   0x8C72
 #define CHIP_TEAL   0x357C
 #define CHIP_PINK   0xF96A
+// SETT_UX_V1: baris yang bereaksi pada ketukan (disorot selagi ditekan). Slider / segmen / judul tidak.
+bool settPressable(int t){
+  switch(t){
+    case SR_FONT: case SR_LANG: case SR_ROT: case SR_HOMEEDIT: case SR_HEAPLOG: case SR_SPIAPPLY:
+    case SR_SCAN: case SR_WIFI: case SR_SSID: case SR_PASS: case SR_CONNECT: case SR_MPU: case SR_TCAL:
+    case SR_OWNER: case SR_ABOUT: case SR_POWER: case SR_BACKUP:
+      return true;
+  }
+  return false;
+}
 bool settHasChip(int t){
   switch(t){
     case SR_BRIGHT: case SR_THEME: case SR_FONT: case SR_LANG: case SR_ROT: case SR_HOMEEDIT: case SR_SPI:
@@ -10016,7 +10033,7 @@ void drawSettings(LGFX_Sprite& s){
   settBuildLayout();
   // CC-LONGPRESS: dibuka dari tahan-lama tile Control Center -> gulir ke bagian terkait (sekali pakai)
   if(settJumpCode){
-    int want = settJumpCode==1 ? SR_SCAN : settJumpCode==2 ? SR_THEME : settJumpCode==3 ? SR_ROT : SR_MPU;
+    int want = settJumpCode==1 ? SR_WSTAT : settJumpCode==2 ? SR_THEME : settJumpCode==3 ? SR_ROT : SR_MPU;
     int back = (settJumpCode==1 || settJumpCode==4) ? 30 : 60;   // sisakan judul bagian di atas baris tujuan
     for(int i=0;i<settRowN;i++) if(settRT[i]==want){ settScroll=(float)(settRY[i]-back); break; }
     settJumpCode=0;
@@ -10061,6 +10078,8 @@ void drawSettings(LGFX_Sprite& s){
     if(ry+rh<=top || ry>=bot) continue;
     int ty=ry+rh/2-4;
     int xl=cx+14, xr=cx+cw-14;
+    if(i==settPressRow && settTouchMode==1 && settPressable(settRT[i]))   // SETT_UX_V1
+      nyxAaRR(s, cx+3,ry+1,cw-6,rh-2,9,blend565(T().surface,T().text,34));
     if(settHasChip(settRT[i])){ // UI-POLISH-V2: chip ikon di kiri, teks bergeser
       xl=cx+44; settChip(s,settRT[i],cx+12,(settRT[i]==SR_THEME)?ry+8:ry+(rh-22)/2);
     }
@@ -10073,6 +10092,31 @@ void drawSettings(LGFX_Sprite& s){
         nyxAaRR(s, cx+2,ry+rh-14,3,10,1,T().accent);
         uiText(s,cx+11,ry+rh-13,settRL[i],blend565(T().subtext,T().text,110),false,true);
         break;
+      case SR_WSTAT: {   // SETT_UX_V1: status sambungan WiFi (titik + nama jaringan + sinyal)
+        bool on=(WiFi.status()==WL_CONNECTED);
+        int sx=cx+44, dotx=cx+23, my=ry+rh/2;
+        nyxAaCircle(s, dotx,my,5,on?T().good:T().divider);
+        if(on){
+          String nm=settFit(s,WiFi.SSID(),xr-14-sx-6);
+          s.setTextColor(T().text); s.setCursor(sx,ty-4); s.print(nm.c_str());
+          int rs=WiFi.RSSI();
+          char sb[28]; snprintf(sb,sizeof(sb),"%s  %d dBm",RPTR("Terhubung"),rs);
+          s.setTextColor(T().subtext); s.setCursor(sx,ty+6); s.print(sb);
+          int lv=(rs>-60)?3:((rs>-75)?2:1);
+          for(int b=0;b<3;b++){ int bh=3+b*3; s.fillRect(xr-14+b*5,my+4-bh,3,bh,b<lv?T().text:T().divider); }
+        } else {
+          s.setTextColor(T().text); s.setCursor(sx,ty-4); s.print(RPTR("Tidak tersambung"));
+          s.setTextColor(T().subtext); s.setCursor(sx,ty+6); s.print(RPTR("Pilih jaringan di bawah"));
+        }
+        } break;
+      case SR_FOOT: {    // SETT_UX_V1: footer
+        char vl[16]; otaVersionLabel(vl,sizeof(vl));
+        char fb[40]; snprintf(fb,sizeof(fb),"NyxOS %s",vl);
+        const char* dn="Accretion Phone";
+        s.setTextColor(T().subtext);
+        s.setCursor(cx+cw/2-s.textWidth(dn)/2,ry+8); s.print(dn);
+        s.setCursor(cx+cw/2-s.textWidth(fb)/2,ry+20); s.print(fb);
+        } break;
       case SR_BRIGHT: {
         s.setTextColor(T().text); s.setCursor(xl,ty); s.print(RPTR("Kecerahan"));
         int x0=cx+110, x1=cx+cw-50, my=ry+rh/2;
@@ -10209,9 +10253,12 @@ void drawSettings(LGFX_Sprite& s){
         s.setTextColor(T().text); s.setCursor(xl,ty); s.print("Backup & Restore");
         settChevron(s,xr-4,ty+4,T().subtext);
         break;
-      case SR_ABOUT:
+      case SR_ABOUT: {
         s.setTextColor(T().text); s.setCursor(xl,ty); s.print("About Phone");
         settChevron(s,xr-4,ty+4,T().subtext);
+        char vl[16]; otaVersionLabel(vl,sizeof(vl));   // SETT_UX_V1
+        settTextR(s,xr-12,ty,vl,T().subtext);
+        } break;
         break;
       case SR_POWER:
         s.setTextColor(T().danger); s.setCursor(xl,ty); s.print(RPTR("Daya (Matikan / Mulai Ulang)"));
@@ -10359,21 +10406,37 @@ void settTap(int x,int y){
 void settingsPointerTick(bool touched,bool wasT,int tx,int ty){
   if(wifiScanning) checkWifiScanComplete();
   settBuildLayout();
+  if(settGlide && !touched){   // SETT_UX_V1: scroll meluncur setelah jari diangkat
+    unsigned long nw=millis(), dt=nw-settGlideT;
+    if(dt>0){
+      if(dt>50) dt=50;
+      settGlideT=nw;
+      float nx=settScroll+settVel*(float)dt, mx=settMaxScroll();
+      if(nx<0.0f || nx>mx){ nx=constrain(nx,0.0f,mx); settVel=0; }
+      settScroll=nx;
+      settVel*=(1.0f-0.0045f*(float)dt);
+      if(settVel<0.02f && settVel>-0.02f){ settGlide=false; settVel=0; }
+      needRedraw=true;
+    } else settGlide=false;
+  }
   if(touched && !wasT){
     settTouchX0=tx; settTouchY0=ty; settTouchLastY=ty; settTouchT0=millis(); settTouchMode=0;
+    settGlide=false; settVel=0; settMoveT=millis(); settPressRow=-1;   // SETT_UX_V1
     if(isBack(tx,ty)){ navBack(); return; }
     if(ty>=settAreaTop() && ty<settAreaBot()){
       int r=settRowAt(ty);
       if(r>=0 && settRT[r]==SR_BRIGHT){ settTouchMode=2; settSetBrightnessFromX(tx); }
-      else settTouchMode=1;
+      else { settTouchMode=1; settPressRow=r; if(r>=0 && settPressable(settRT[r])) needRedraw=true; }   // SETT_UX_V1
     }
     return;
   }
   if(touched && wasT){
     if(settTouchMode==2){ settSetBrightnessFromX(tx); }
     else if(settTouchMode==1 || settTouchMode==3){
-      if(settTouchMode==1 && abs(ty-settTouchY0)>8) settTouchMode=3;
+      if(settTouchMode==1 && abs(ty-settTouchY0)>8){ settTouchMode=3; settPressRow=-1; needRedraw=true; }   // SETT_UX_V1
       if(settTouchMode==3){
+        { unsigned long nw=millis(), dt=nw-settMoveT; if(dt<1) dt=1; settMoveT=nw;
+          settVel=settVel*0.5f+((float)(settTouchLastY-ty)/(float)dt)*0.5f; }
         settScroll+=(float)(settTouchLastY-ty);
         float mx=settMaxScroll(); if(settScroll>mx) settScroll=mx; if(settScroll<0) settScroll=0;
         needRedraw=true;
@@ -10383,8 +10446,14 @@ void settingsPointerTick(bool touched,bool wasT,int tx,int ty){
     return;
   }
   if(!touched && wasT){
+    settPressRow=-1;   // SETT_UX_V1
     if(settTouchMode==1 && millis()-settTouchT0<600) settTap(settTouchX0,settTouchY0);
-    settTouchMode=0;
+    else if(settTouchMode==3 && millis()-settMoveT<90 && settMaxScroll()>0){
+      if(settVel>3.0f) settVel=3.0f;
+      if(settVel<-3.0f) settVel=-3.0f;
+      if(settVel>0.05f || settVel<-0.05f){ settGlide=true; settGlideT=millis(); }
+    }
+    settTouchMode=0; needRedraw=true;
   }
 }
 
