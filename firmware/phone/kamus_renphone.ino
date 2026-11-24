@@ -138,6 +138,8 @@ static int kmsEffMode() { int p = kmsPolicy(); return kmsMode < p ? kmsMode : p;
 
 // Tinggi baris saran. Dipakai kbY(): layar lain otomatis bergeser karena memakai kbY().
 int kbBarH() { return (kbVisible && kmsPolicy() > 0) ? KMS_BAR_H : 0; }
+// KB_UX_V1: field teks bebas (kapital otomatis & spasi 2x hanya di sini; sandi/URL/SSID/kunci API tidak).
+bool kbProseField() { return kbTarget && (kbTarget == &noteText || kbTarget == &chatInput); }
 
 // ---------------------------------------------------------------- belajar
 static void kmsLower(const char* src, int n, char* dst) { for (int i = 0; i < n; i++) dst[i] = kmsLow(src[i]); dst[n] = 0; }

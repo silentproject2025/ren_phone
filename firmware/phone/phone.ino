@@ -4100,11 +4100,47 @@ int kbLeft(){ return (SCR_W - (10*kbKeyW()+18))/2; }
 int kbOffCol(int row){ (void)row; return kbLeft(); }
 
 // UI-POLISH-V2: keyboard datar. Kode tuts utk efek tekan: baris*10+kolom, 100=shift, 101=123/ABC, 102=spasi, 103=hapus
+// ---- KB_UX_V1: caps lock, kapital otomatis, spasi 2x -> ". ", tahan hapus ----
+#define KB_UX_AUTOCAP   1   // 1 = awal kalimat otomatis kapital (hanya Notepad & Chat)
+#define KB_UX_DBLSPACE  1   // 1 = spasi 2x cepat setelah huruf/angka -> ". " (hanya Notepad & Chat)
+#define KB_UX_HOLDDEL   1   // 1 = tahan HAPUS -> hapus berulang, makin cepat
+bool kbProseField();                       // kamus_renphone.ino: true utk field teks bebas (Notepad, Chat)
+bool kbCaps=false;                         // caps lock (ketuk shift 2x cepat)
+uint32_t kbShiftTapMs=0, kbSpaceTapMs=0;   // waktu ketukan shift / spasi terakhir
+uint32_t kbRepArm=0;                       // kapan hapus-tahan berikutnya (0 = tidak aktif)
+int      kbRepN=0;                         // jumlah karakter yang sudah dihapus oleh tahan-hapus
+String*  kbAutoOffFor=nullptr;             // shift dimatikan manual di awal kalimat: berlaku utk field+panjang teks ini saja
+int      kbAutoOffLen=-1;
+// true bila teks berakhir di awal kalimat: kosong, baris baru, atau tanda . ! ? lalu spasi
+static bool kbSentenceStart(const String& t){
+  int n=(int)t.length();
+  if(n==0) return true;
+  if(t.charAt(n-1)=='\n') return true;
+  int i=n-1; while(i>=0 && t.charAt(i)==' ') i--;
+  if(i==n-1 || i<0) return false;          // tidak ada spasi di ujung, atau isinya spasi semua
+  char p=t.charAt(i);
+  return p=='.'||p=='!'||p=='?';
+}
+// Menaikkan LOWER -> UPPER di awal kalimat (tidak pernah menurunkan). Dipanggil dari drawKb() & kbTouch() supaya
+// yang digambar dan yang diketik selalu sama.
+static void kbAutoCapSync(){
+#if KB_UX_AUTOCAP
+  if(!kbTarget || kbCaps || kbMode!=KB_LOWER || !kbProseField()) return;
+  if(kbAutoOffFor==kbTarget && kbAutoOffLen==(int)kbTarget->length()) return;   // user baru mematikannya di sini
+  if(kbSentenceStart(*kbTarget)) kbMode=KB_UPPER;
+#endif
+}
+static void kbUxNormalize(){
+  if(kbCaps && kbMode!=KB_UPPER) kbCaps=false;   // pindah ke 123/emoji atau keyboard dibuka ulang
+  kbAutoCapSync();
+}
+
 int kbPressKey=-1;
 unsigned long kbPressUntil=0;
 #define KB_PRESS_MS 70   // KB_FASTPATH_V1 (dulu 130)
 uint32_t kbRelDue=0;   // KB_FASTPATH_V1: kapan efek tekan harus dilepas (dicek di loop())
 void drawKb(LGFX_Sprite& s){
+  kbUxNormalize();                                 // KB_UX_V1
   int yTop=kbY();                                  // tepi atas keyboard (termasuk baris saran)
   int y0=kbKeysY();                                // tepi atas deretan tuts
   bool pressing = (kbPressKey>=0 && millis()<kbPressUntil);
@@ -4156,6 +4192,7 @@ void drawKb(LGFX_Sprite& s){
     } else {
       s.fillTriangle(acx,acy-6, acx-6,acy+2, acx+6,acy+2, ic);
     s.fillRect(acx-3,acy+2,6,4,ic);
+      if(kbCaps) s.fillRect(acx-6,acy+8,12,2,ic);   // KB_UX_V1: caps lock
     }
   }
   { // 123 / ABC
@@ -4193,6 +4230,7 @@ void drawKb(LGFX_Sprite& s){
 
 void kbTouch(int x,int y){
   if(!kbVisible||!kbTarget) return;
+  kbUxNormalize();                                 // KB_UX_V1
   int yTop=kbY(), y0=kbKeysY();
   if(y<yTop-2) return;
   if(y0>yTop && y<y0){ kbBarTouch(x,y); needRedraw=true; return; }   // baris saran kata (ketuk saran / ganti mode)
@@ -4205,16 +4243,42 @@ void kbTouch(int x,int y){
     bool emo=(kbMode==KB_EMO1||kbMode==KB_EMO2);
     if(x<nmX-2){
       if(emo){ int np=emjKbPages(); kbEmoPage = (x<shX+shW/2) ? (kbEmoPage+np-1)%np : (kbEmoPage+1)%np; }   // < / >
-      else    kbMode=(kbMode==KB_UPPER?KB_LOWER:KB_UPPER);
+      else {                                                                  // KB_UX_V1: shift / caps lock
+        uint32_t nm=millis();
+        if(kbCaps){ kbCaps=false; kbMode=KB_LOWER; kbAutoOffFor=kbTarget; kbAutoOffLen=(int)kbTarget->length(); }
+        else if((uint32_t)(nm-kbShiftTapMs)<400){ kbCaps=true; kbMode=KB_UPPER; }            // 2x cepat = caps lock
+        else if(kbMode==KB_UPPER){ kbMode=KB_LOWER; kbAutoOffFor=kbTarget; kbAutoOffLen=(int)kbTarget->length(); }
+        else kbMode=KB_UPPER;
+        kbShiftTapMs=nm;
+      }
       kbPressKey=100;
     }
     else if(x<emX-2){       kbMode=((kbMode==KB_NUM||emo)?KB_LOWER:KB_NUM); kbPressKey=101; }
     else if(x<spX-2){       kbMode=(emo?KB_LOWER:KB_EMO1);               kbPressKey=104; }
-    else if(x<dlX-2){       kbSugOnChar(*kbTarget,' '); *kbTarget+=" ";  kbPressKey=102; }
+    else if(x<dlX-2){                                                         // KB_UX_V1: spasi (2x cepat -> ". ")
+      uint32_t nm=millis();
+      bool dbl=false;
+#if KB_UX_DBLSPACE
+      { int n=(int)kbTarget->length();
+        if(kbProseField() && !emo && kbMode!=KB_NUM && n>=2 && (uint32_t)(nm-kbSpaceTapMs)<450 && kbTarget->charAt(n-1)==' '){
+          char pc=kbTarget->charAt(n-2);
+          if((unsigned char)pc<128 && isalnum((unsigned char)pc)) dbl=true;
+        }
+      }
+#endif
+      if(dbl){ kbTarget->remove((unsigned int)(kbTarget->length()-1)); *kbTarget+=". "; }
+      else   { kbSugOnChar(*kbTarget,' '); *kbTarget+=" "; }
+      kbSpaceTapMs=nm; kbPressKey=102;
+      kbAutoCapSync();
+    }
     else {
       if(!kbSugBackspace(*kbTarget))                           // tepat setelah autokoreksi: kembalikan ketikan asli
         emjBackspace(*kbTarget);                               // hapus 1 karakter UTF-8 utuh (emoji = 3 byte)
       kbPressKey=103;
+      kbAutoCapSync();                                         // KB_UX_V1
+#if KB_UX_HOLDDEL
+      kbRepArm=millis()+380; kbRepN=0;                         // KB_UX_V1: tahan hapus mulai berulang setelah 380 ms
+#endif
     }
     kbPressUntil=millis()+KB_PRESS_MS;
     needRedraw=true;
@@ -4228,7 +4292,22 @@ void kbTouch(int x,int y){
   if(kbMode==KB_EMO1||kbMode==KB_EMO2){ char elb[4]; kbSugOnChar(*kbTarget,0); if(emjKbLabel(kbEmoPage,r*10+c,elb)) *kbTarget+=elb; }
   else { kbSugOnChar(*kbTarget,lay[r][c][0]); *kbTarget+=lay[r][c]; }
   kbPressKey=r*10+c; kbPressUntil=millis()+KB_PRESS_MS;
-  if(kbMode==KB_UPPER)kbMode=KB_LOWER;
+  if(kbMode==KB_UPPER && !kbCaps) kbMode=KB_LOWER;   // KB_UX_V1: caps lock tetap
+  kbAutoCapSync();                                    // KB_UX_V1
+  needRedraw=true;
+}
+
+// KB_UX_V1: tombol hapus (dipakai tahan-hapus di loop)
+bool kbBackspaceHit(int x,int y){
+  if(!kbVisible||!kbTarget) return false;
+  int cell=kbKeyH()+2, cy=kbKeysY()+3*cell, R=SCR_W-kbLeft();
+  return y>=cy && x>=R-84-2;
+}
+void kbHoldDeleteStep(){
+  if(!kbVisible||!kbTarget) return;
+  emjBackspace(*kbTarget);
+  kbPressKey=103; kbPressUntil=millis()+KB_PRESS_MS;
+  kbAutoCapSync();
   needRedraw=true;
 }
 
@@ -21598,6 +21677,21 @@ static void kbFastTick(){
   if(kbFastRelOk()) kbFastRelease(); else needRedraw=true;
 }
 
+// KB_UX_V1: tahan HAPUS. kbRepArm diisi kbTouch() saat HAPUS diketuk; di sini jari harus tetap di tombol hapus.
+static void kbHoldTick(bool touched,int tx,int ty){
+#if KB_UX_HOLDDEL
+  if(!kbRepArm) return;
+  if(!touched || !(kbVisible && kbTarget) || !kbFastOverlaysIdle() || !kbBackspaceHit(tx,ty)){ kbRepArm=0; return; }
+  uint32_t now=millis();
+  if((int32_t)(now-kbRepArm)<0) return;
+  kbHoldDeleteStep();
+  kbRepN++;
+  kbRepArm=now+(kbRepN<6 ? 90 : (kbRepN<16 ? 55 : 35));       // makin lama makin cepat
+#else
+  (void)touched; (void)tx; (void)ty;
+#endif
+}
+
 // TAP-FIX: true kalau jari yg barusan lepas sudah bergeser > slop dari titik sentuh awal (= bukan ketukan),
 // walau loop() tak sempat membaca posisi di tengah gerakan (swipe cepat saat frame berat).
 static bool homeTouchMovedAtRelease(int& lx,int& ly){
@@ -21685,6 +21779,7 @@ void loop(){
   bool newT=touched&&!wasTouched;
   if(kbQueueDrain(newT,tx,ty)) newT=false;   // KB_FASTPATH_V1: ketukan tuts sudah diputar dari antrean
   kbFastTick();                              // KB_FASTPATH_V1: lepas efek tekan (area keyboard saja)
+  kbHoldTick(touched,tx,ty);                 // KB_UX_V1: tahan HAPUS = hapus berulang
 
   if(ccAnimating){
     uiBoostKick(); // v108
