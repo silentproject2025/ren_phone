@@ -418,6 +418,35 @@ jobs:
             --build-property "compiler.c.extra_flags=-I${NOF_INCLUDE}" \
             build_sketch --output-dir build 2>&1 | tee compile.log
 
+      - name: Laporan RAM statis (RAM_REPORT_V1)
+        continue-on-error: true
+        run: |
+          set +e
+          MAP=$(ls build/*.map 2>/dev/null | head -1)
+          ELF=$(ls build/*.elf 2>/dev/null | head -1)
+          echo "map=$MAP elf=$ELF"
+          {
+            echo "### RAM statis (${{ matrix.variant }})"
+            echo '```'
+            grep -E "Global variables use|Sketch uses" compile.log
+            [ -n "$MAP" ] && python3 tools/ram_report.py "$MAP" 25
+            NM=$(find "$HOME/.arduino15" -name 'xtensa-esp32s3-elf-nm' 2>/dev/null | head -1)
+            if [ -n "$NM" ] && [ -n "$ELF" ]; then
+              echo; echo "== nm: 30 simbol RAM terbesar =="
+              "$NM" -S --size-sort -t d "$ELF" | grep -E ' [bBdD] ' | tail -30
+            fi
+            echo '```'
+          } | tee ram_report.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload laporan RAM
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: ram-report-${{ matrix.variant }}
+          path: ram_report.md
+          if-no-files-found: ignore
+
       - name: Ringkasan error (hanya jalan kalau compile gagal)
         if: failure()
         run: |
