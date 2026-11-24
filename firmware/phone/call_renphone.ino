@@ -523,7 +523,7 @@ static uint32_t regSentAt = 0, regNextAt = 0, regKeepAt = 0, regBackoff = 500;
 static uint8_t  regTries = 0;
 
 // dialog panggilan
-static CallReqHdr rq, urq;
+static CallReqHdr rq EXT_RAM_BSS_ATTR, urq EXT_RAM_BSS_ATTR;
 static struct {
   bool uac, lan, gotProv, ackd, authTried;
   char callId[72];
@@ -1364,7 +1364,7 @@ static uint32_t  turnRefreshAt = 0;
 static uint8_t   turnStale = 0;
 static char      turnPermIp[16] = "";
 static char      turnErr[40] = "";
-static uint8_t   turnReq[512], turnRsp[600], turnTx[256], turnTid[12];   // hanya dipakai callTask
+static uint8_t   turnReq[512] EXT_RAM_BSS_ATTR, turnRsp[600] EXT_RAM_BSS_ATTR, turnTx[256] EXT_RAM_BSS_ATTR, turnTid[12] EXT_RAM_BSS_ATTR;   // hanya dipakai callTask
 
 static inline void turnPut16(uint8_t* b, int v) { b[0] = (uint8_t)(v >> 8); b[1] = (uint8_t)v; }
 

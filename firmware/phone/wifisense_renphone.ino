@@ -109,7 +109,7 @@ static uint32_t wsPktPrev    = 0;
 static float    wsPktRate    = 0;
 static unsigned long wsBinT0 = 0, wsRateT0 = 0, wsBrT0 = 0, wsUiT0 = 0, wsLastMove = 0;
 
-static float    wsX[WS_N];                  // deret amplitudo (lingkar)
+static float    wsX[WS_N] EXT_RAM_BSS_ATTR;                  // deret amplitudo (lingkar)
 static int      wsHead       = 0;           // indeks tulis berikutnya
 static int      wsCount      = 0;
 static float    wsLastBin    = 0;
@@ -144,7 +144,7 @@ static float    wsAmpEma     = 0;           // rata-rata amplitudo paket (EMA) u
 static float    wsQ[2]       = {0, 0};      // kuantil-25 skor gerak berjalan: [0]=rata-rata, [1]=multi
 static float    wsQref[2]    = {0, 0};      // nilai saat kalibrasi (0 = belum dikalibrasi -> tanpa adaptasi)
 static float    wsAdaptMul   = 1.0f;
-static float    wsCalBuf[WS_CAL_BUF];
+static float    wsCalBuf[WS_CAL_BUF] EXT_RAM_BSS_ATTR;
 
 // ---- mode multi-subcarrier ----
 static bool      wsMulti     = true;        // pilihan pengguna
@@ -160,8 +160,8 @@ static int       wsBrUsed    = 0;
 static float     wsPsum[WS_NF];              // jumlah spektrum ternormalkan-median (dibatasi) -> uji kekuatan puncak
 static float     wsPn[WS_NF];                // jumlah spektrum ternormalkan-total -> LOKASI puncak (tanpa batas, tak seri)
 static int       wsSubIdle   = 0;            // bin berturut-turut tanpa paket ber-LLTF
-static float     wsD[WS_N];
-static float     wsHann[WS_N];
+static float     wsD[WS_N] EXT_RAM_BSS_ATTR;
+static float     wsHann[WS_N] EXT_RAM_BSS_ATTR;
 static bool      wsHannOk    = false;
 static float     wsBaseS     = WS_DEF_BASE; // dasar mode rata-rata
 static float     wsBaseM     = WS_DEF_BASE_M; // dasar mode multi

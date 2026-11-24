@@ -14,6 +14,19 @@ TARGETS = [
   ("nyxstore_renphone.ino", "static nyxstore::Entry nsApps[NYXSTORE_MAX_APPS]"),
   ("phone.ino",             "SnakeSeg snakeBody[SNAKE_MAXLEN]"),
   ("phone.ino",             "BootDiskP bootDisk[BOOT_DISK_N]"),
+  # tambahan (laporan top-100): WiFi Sensing (task biasa, bukan ISR), buffer sinyal panggilan, manifest Nyx Store
+  ("wifisense_renphone.ino","static float    wsX[WS_N]"),
+  ("wifisense_renphone.ino","static float     wsD[WS_N]"),
+  ("wifisense_renphone.ino","static float     wsHann[WS_N]"),
+  ("wifisense_renphone.ino","static float    wsCalBuf[WS_CAL_BUF]"),
+  ("nyxstore_renphone.ino", "static char     nsMfTxt[512]"),
+]
+# deklarasi berderet (beberapa variabel satu baris): ganti string persis
+MULTI = [
+  ("call_renphone.ino", "static uint8_t   turnReq[512], turnRsp[600], turnTx[256], turnTid[12];",
+   "static uint8_t   turnReq[512] EXT_RAM_BSS_ATTR, turnRsp[600] EXT_RAM_BSS_ATTR, turnTx[256] EXT_RAM_BSS_ATTR, turnTid[12] EXT_RAM_BSS_ATTR;"),
+  ("call_renphone.ino", "static CallReqHdr rq, urq;",
+   "static CallReqHdr rq EXT_RAM_BSS_ATTR, urq EXT_RAM_BSS_ATTR;"),
 ]
 bad = 0
 for fn, decl in TARGETS:
@@ -24,6 +37,12 @@ for fn, decl in TARGETS:
     if len(pat.findall(t)) != 1: print(f"GAGAL   {fn}: '{decl}' tidak ditemukan tepat 1x"); bad += 1; continue
     if not CHECK: f.write_text(pat.sub(decl + " " + ATTR + ";", t, count=1))
     print(f"{'cocok ' if CHECK else 'dipasang'} {fn}: {decl.split()[-1]}")
+for fn, old, new in MULTI:
+    f = P / fn; t = f.read_text()
+    if new in t: print(f"sudah   {fn}: {old.split()[-1]}..."); continue
+    if t.count(old) != 1: print(f"GAGAL   {fn}: '{old[:40]}...' tidak ditemukan tepat 1x"); bad += 1; continue
+    if not CHECK: f.write_text(t.replace(old, new, 1))
+    print(f"{'cocok ' if CHECK else 'dipasang'} {fn}: {old[:34]}...")
 # --- workflow libs: izinkan BSS di PSRAM ---
 W = pathlib.Path(".github/workflows/build-arduino-libs.yml"); w = W.read_text()
 A1 = "            echo 'CONFIG_FREERTOS_TASK_CREATE_ALLOW_EXT_MEM=y'\n"

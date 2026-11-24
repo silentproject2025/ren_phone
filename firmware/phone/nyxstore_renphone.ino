@@ -61,7 +61,7 @@ static TaskHandle_t nsTask = nullptr; static StackType_t* nsStack = nullptr; sta
 
 // ---- pasang ----
 static nyx::Manifest nsMf;
-static char     nsMfTxt[512]; static size_t nsMfLen = 0;
+static char     nsMfTxt[512] EXT_RAM_BSS_ATTR; static size_t nsMfLen = 0;
 static File     nsOut; static bool nsOutOpen = false; static uint32_t nsWritten = 0;
 static char     nsDir[48], nsTmpPath[96], nsDstPath[96];
 
