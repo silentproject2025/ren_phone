@@ -429,7 +429,7 @@ jobs:
             echo "### RAM statis (${{ matrix.variant }})"
             echo '```'
             grep -E "Global variables use|Sketch uses" compile.log
-            [ -n "$MAP" ] && python3 tools/ram_report.py "$MAP" 25
+            [ -n "$MAP" ] && python3 tools/ram_report.py "$MAP" 100
             NM=$(find "$HOME/.arduino15" -name 'xtensa-esp32s3-elf-nm' 2>/dev/null | head -1)
             if [ -n "$NM" ] && [ -n "$ELF" ]; then
               echo; echo "== nm: 30 simbol RAM terbesar =="
