@@ -13,16 +13,13 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  deploy:
+  build:
     runs-on: ubuntu-latest
     permissions:
       contents: read
       pages: write
       actions: read
       id-token: write
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - name: Ambil firmware dari Release & buat halaman flasher
         env:
@@ -515,12 +512,16 @@ jobs:
         with:
           path: site
 
-      - name: Debug artifact
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh api repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts --jq '.artifacts[] | [.name, .size_in_bytes, .expired] | @tsv'
-
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
       - name: Deploy ke GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v5
