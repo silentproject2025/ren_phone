@@ -577,6 +577,54 @@ static uint16_t inaSocColor() {
 // ===== BATT_UX_V2 BEGIN =====
 // Tampilan baru app Baterai: cincin persen, kartu statistik, grafik dgn area terisi.
 // Hanya kode gambar; pembacaan INA219, counter, dan geometri sentuh (tab, pil grafik, baris Sensor/Baterai) tidak berubah.
+// ===== BATT_FIT_V1 BEGIN =====
+// Potong teks di tempat (tambah "..") supaya lebarnya <= maxW. cap = ukuran buffer.
+static void rpFit(LGFX_Sprite& s, char* buf, size_t cap, int maxW) {
+  int L = (int)strlen(buf);
+  if (L < 2 || (int)s.textWidth(buf) <= maxW) return;
+  char t[72];
+  for (int cut = L - 1; cut > 1; cut--) {
+    int n = cut; if (n > (int)sizeof(t) - 3) n = (int)sizeof(t) - 3;
+    if (n > (int)cap - 3) n = (int)cap - 3;
+    if (n < 1) break;
+    memcpy(t, buf, n); t[n] = '.'; t[n + 1] = '.'; t[n + 2] = 0;
+    if ((int)s.textWidth(t) <= maxW) { strlcpy(buf, t, cap); return; }
+  }
+  buf[1] = 0;
+}
+
+// Tulis teks dibungkus per kata di dalam lebar maxW (maks maxLines baris; baris terakhir diberi ".." kalau masih ada sisa).
+// Mengembalikan tinggi yg terpakai.
+static int rpWrapText(LGFX_Sprite& s, int x, int y, int maxW, int lineH, int maxLines, const char* text, uint16_t col) {
+  String all = text; all.trim();
+  const int L = (int)all.length();
+  int pos = 0, n = 0;
+  s.setTextColor(col);
+  while (pos < L && n < maxLines) {
+    int cut = pos, lastSp = -1;
+    for (int i = pos; i < L; i++) {
+      if (all[i] == ' ') lastSp = i;
+      String t = all.substring(pos, i + 1);
+      if ((int)s.textWidth(t.c_str()) > maxW) { cut = i; break; }
+      cut = i + 1;
+    }
+    int brk;
+    if (cut >= L) brk = L;
+    else if (lastSp > pos) brk = lastSp;
+    else brk = (cut > pos) ? cut : pos + 1;
+    String ln = all.substring(pos, brk);
+    if (n == maxLines - 1 && brk < L) {
+      while (ln.length() > 1 && (int)s.textWidth((ln + "..").c_str()) > maxW) ln.remove(ln.length() - 1);
+      ln += "..";
+    }
+    s.setCursor(x, y + n * lineH); s.print(ln.c_str());
+    n++; pos = brk;
+    while (pos < L && all[pos] == ' ') pos++;
+  }
+  return n * lineH;
+}
+// ===== BATT_FIT_V1 END =====
+
 static void inaCard(LGFX_Sprite& s, int x, int y, int w, int h) {
   uint16_t c = blend565(T().surface2, 0xFFFF, 14);
   nyxAaRR(s, x, y, w, h, 9, c);
@@ -600,22 +648,28 @@ static void inaBolt(LGFX_Sprite& s, int x, int y, uint16_t c) {   // petir 7x14
 
 static void inaRow(LGFX_Sprite& s, int x, int w, int y, const char* k, const char* v, uint16_t vc) {
   s.setTextSize(1);
-  s.setTextColor(T().subtext); s.setCursor(x, y); s.print(k);
+  char kb[40]; strlcpy(kb, k, sizeof(kb));
+  rpFit(s, kb, sizeof(kb), w - (int)s.textWidth(v) - 10);   // BATT_FIT_V1
+  s.setTextColor(T().subtext); s.setCursor(x, y); s.print(kb);
   s.setTextColor(vc);
   s.setCursor(x + w - (int)s.textWidth(v), y); s.print(v);
 }
 
 static void inaTile(LGFX_Sprite& s, int x, int y, int w, int h, const char* k, const char* v, uint16_t vc) {
   inaCard(s, x, y, w, h);
+  s.setClipRect(x + 3, y, w - 6, h);   // BATT_FIT_V1: teks tidak bisa keluar dari kartu
   s.setTextSize(1);
   char kb[24]; strlcpy(kb, k, sizeof(kb));
   for (int kl = (int)strlen(kb); kl > 1 && (int)s.textWidth(kb) > w - 14; ) kb[--kl] = 0;   // kolom sempit: label dipotong
   s.setTextColor(T().subtext); s.setCursor(x + 9, y + 7); s.print(kb);
   int sz = 2; s.setTextSize(2);
   if ((int)s.textWidth(v) > w - 16) { sz = 1; s.setTextSize(1); }
+  char vb2[28]; strlcpy(vb2, v, sizeof(vb2));
+  rpFit(s, vb2, sizeof(vb2), w - 16);
   s.setTextColor(vc);
-  s.setCursor(x + 9, y + h - 8 - (sz == 2 ? 16 : 8)); s.print(v);
+  s.setCursor(x + 9, y + h - 8 - (sz == 2 ? 16 : 8)); s.print(vb2);
   s.setTextSize(1);
+  s.clearClipRect();
 }
 
 static float inaHistVal(int k, uint8_t m) {
@@ -652,12 +706,12 @@ static void inaDrawSummary(LGFX_Sprite& s, int top, int bottom) {
   s.setFont(emjF(&lgfx::fonts::Font0)); s.setTextSize(1);
   const int W = SCR_W, avail = bottom - top;
   if (!inaOk) {
-    inaCard(s, 6, top, W - 12, 96);
-    s.setTextColor(T().danger); s.setCursor(14, top + 8); s.print(RPTR("INA219 tidak terdeteksi"));
-    s.setTextColor(T().subtext); s.setTextWrap(true);
-    s.setCursor(14, top + 26);
-    s.print("Cek wiring: VCC 3.3V, GND, SDA = GPIO" RP_STR(RP_SENS_SDA) ", SCL = GPIO" RP_STR(RP_SENS_SCL) ". Shunt dipasang seri di kabel (+) baterai (baterai -> VIN+, beban -> VIN-). Alamat 0x40-0x4F (A0/A1). Buka tab Sensor > Scan ulang setelah memperbaiki.");
-    s.setTextWrap(false);
+    int errLines = (avail - 40) / 10; if (errLines < 3) errLines = 3; if (errLines > 8) errLines = 8;
+    inaCard(s, 6, top, W - 12, 34 + errLines * 10);
+    s.setTextColor(T().danger); s.setCursor(16, top + 9); s.print(RPTR("INA219 tidak terdeteksi"));
+    rpWrapText(s, 16, top + 26, W - 12 - 20, 10, errLines,
+               "Cek wiring: VCC 3.3V, GND, SDA = GPIO" RP_STR(RP_SENS_SDA) ", SCL = GPIO" RP_STR(RP_SENS_SCL) ". Shunt dipasang seri di kabel (+) baterai (baterai -> VIN+, beban -> VIN-). Alamat 0x40-0x4F (A0/A1). Buka tab Sensor > Scan ulang setelah memperbaiki.",
+               T().subtext);
     return;
   }
   const bool land = SCR_W > SCR_H;
@@ -763,8 +817,8 @@ static void inaDrawGraph(LGFX_Sprite& s, int top, int bottom) {
     s.setTextColor(act ? appIconInk(T().accent) : T().subtext);
     s.setCursor(x + (pw - (int)s.textWidth(nm[i])) / 2, top + 4); s.print(nm[i]);
   }
-  int gx = 10, gy = top + 22, gw = SCR_W - 20, gh = bottom - 14 - gy;
-  if (gh < 20) gh = 20;
+  int gx = 10, gy = top + 22, gw = SCR_W - 20, gh = bottom - gy;   // BATT_FIT_V1: kartu mencakup baris min/rata/maks
+  if (gh < 40) gh = 40;
   inaCard(s, gx, gy, gw, gh);
   int n = (int)inaHistCount;
   if (n < 2) {
@@ -785,7 +839,7 @@ static void inaDrawGraph(LGFX_Sprite& s, int top, int bottom) {
   float minSpan = (m == 1) ? 0.05f : 10.0f;
   if (span < minSpan) { float mid = (hi + lo) / 2; lo = mid - minSpan / 2; hi = mid + minSpan / 2; span = minSpan; }
   lo -= span * 0.08f; hi += span * 0.08f; span = hi - lo;
-  int ix0 = gx + 6, iw = gw - 12, iy0 = gy + 6, ih = gh - 12;
+  int ix0 = gx + 6, iw = gw - 12, iy0 = gy + 6, ih = gh - 12 - 14;
   // garis bantu putus-putus (4 bagian)
   for (int q = 1; q < 4; q++) {
     int yy = iy0 + (ih * q) / 4;
@@ -838,7 +892,8 @@ static void inaDrawGraph(LGFX_Sprite& s, int top, int bottom) {
   char b[48];
   if (m == 1) snprintf(b, sizeof(b), "min %.2f  rata %.2f  maks %.2f V", mn, sum / n, mx);
   else snprintf(b, sizeof(b), "min %.0f  rata %.0f  maks %.0f %s", mn, sum / n, mx, (m == 0) ? "mA" : "mW");
-  s.setTextColor(T().subtext); s.setCursor(10, bottom - 10); s.print(b);
+  rpFit(s, b, sizeof(b), gw - 16);
+  s.setTextColor(T().subtext); s.setCursor(gx + 8, gy + gh - 15); s.print(b);
 }
 // ===== BATT_UX_V2 END =====
 
@@ -891,11 +946,13 @@ static void inaDrawList(LGFX_Sprite& s, uint8_t tab, int top) {
     iosRR(s, 6, y, SCR_W - 12, rh - 2, 4, T().surface2);
     inaRowInfo(tab, (uint8_t)r, lb, vb, (int)sizeof(lb));
     int ty = y + (rh - 2 - 8) / 2;
+    rpFit(s, lb, sizeof(lb), vx0 - 4 - 12);                 // BATT_FIT_V1: label tidak masuk ke area nilai
     s.setTextColor(T().subtext); s.setCursor(12, ty); s.print(lb);
     s.setTextColor(T().accent);
     s.setCursor(vx0 + 2, ty); s.print("<");
     s.setCursor(SCR_W - 18, ty); s.print(">");
     s.setTextColor(T().text);
+    rpFit(s, vb, sizeof(vb), SCR_W - 22 - (vx0 + 12));      // nilai tetap di antara dua panah
     int cx = (vx0 + 12 + SCR_W - 22) / 2;
     s.setCursor(cx - (int)s.textWidth(vb) / 2, ty); s.print(vb);
   }
@@ -905,9 +962,10 @@ static void inaDrawList(LGFX_Sprite& s, uint8_t tab, int top) {
     int bx = 6 + (i % 2) * (bw + 6);
     int yy = by + (i / 2) * 22;
     iosRR(s, bx, yy, bw, 20, 6, T().surface2);
-    const char* t = (tab == 2) ? btnS[i] : btnB[i];
+    char bt[24]; strlcpy(bt, (tab == 2) ? btnS[i] : btnB[i], sizeof(bt));
+    rpFit(s, bt, sizeof(bt), bw - 10);
     s.setTextColor(T().accent);
-    s.setCursor(bx + (bw - (int)s.textWidth(t)) / 2, yy + 6); s.print(t);
+    s.setCursor(bx + (bw - (int)s.textWidth(bt)) / 2, yy + 6); s.print(bt);
   }
 }
 

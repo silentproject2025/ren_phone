@@ -274,10 +274,13 @@ void nyxDrawAppEnergy(LGFX_Sprite& s, int top, int bottom) {
   if (rows > 8) rows = 8;
 
   if (tot < 0.05f) {
-    s.setTextColor(T().subtext); s.setTextWrap(true);
-    s.setCursor(10, y + 6);
-    s.print(RPTR("Belum ada data. Pakai HP dengan baterai (tanpa charger) beberapa menit, lalu buka tab ini lagi."));
-    s.setTextWrap(false);
+    {   // BATT_FIT_V1: pesan kosong dibungkus di dalam kartu
+      int eh = btnY - 6 - y; if (eh > 76) eh = 76;
+      if (eh >= 34) {
+        inaCard(s, 10, y, SCR_W - 20, eh);
+        rpWrapText(s, 20, y + 9, SCR_W - 20 - 20, 10, (eh - 14) / 10, RPTR("Belum ada data. Pakai HP dengan baterai (tanpa charger) beberapa menit, lalu buka tab ini lagi."), T().subtext);
+      }
+    }
   } else {
     bool used[NYX_EN_N];
     memset(used, 0, sizeof(used));

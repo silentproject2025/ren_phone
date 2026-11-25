@@ -10193,6 +10193,16 @@ String settFit(LGFX_Sprite& s,String v,int maxW){
 void settTextR(LGFX_Sprite& s,int xr,int ty,const char* str,uint16_t col){
   s.setTextColor(col); s.setCursor(xr-s.textWidth(str),ty); s.print(str);
 }
+// SETT_FIT_V1: cetak teks dipotong ".." supaya lebarnya <= maxW (tidak menabrak kontrol di kanan / keluar kartu)
+void settPrintFit(LGFX_Sprite& s,int x,int y,const char* str,int maxW,uint16_t col){
+  String v=str;
+  if(maxW<12) maxW=12;
+  if(s.textWidth(v.c_str())>maxW){
+    while(v.length()>1 && s.textWidth((v+"..").c_str())>maxW) v.remove(v.length()-1);
+    v+="..";
+  }
+  s.setTextColor(col); s.setCursor(x,y); s.print(v.c_str());
+}
 void settChevron(LGFX_Sprite& s,int cx,int cy,uint16_t col){ // ">" tipis
   s.drawLine(cx-2,cy-4,cx+2,cy,col); s.drawLine(cx+2,cy,cx-2,cy+4,col);
 }
@@ -10379,6 +10389,7 @@ void drawSettings(LGFX_Sprite& s){
     if(ry+rh<=top || ry>=bot) continue;
     int ty=ry+rh/2-4;
     int xl=cx+14, xr=cx+cw-14;
+    s.setClipRect(cx,top,cw,bot-top);   // SETT_FIT_V1: isi baris tidak bisa keluar dari kartunya
     if(i==settPressRow && settTouchMode==1 && settPressable(settRT[i]))   // SETT_UX_V1
       nyxAaRR(s, cx+3,ry+1,cw-6,rh-2,9,blend565(T().surface,T().text,34));
     if(settHasChip(settRT[i])){ // UI-POLISH-V2: chip ikon di kiri, teks bergeser
@@ -10412,7 +10423,7 @@ void drawSettings(LGFX_Sprite& s){
           const char* lb=(k==0)?"Wi-Fi":(k==1?RPTR("Rotasi"):RPTR("Tema"));
           String st=(k==0)?(wifiOn?WiFi.SSID():String(RPTR("Mati"))):(k==1?String(autoRotateEnabled?RPTR("Aktif"):RPTR("Mati")):String(themes[themeIdx].name));
           st=settFit(s,st,tw-18);
-          s.setTextColor(T().text); s.setCursor(tx+10,ty0+th-22); s.print(lb);
+          settPrintFit(s,tx+10,ty0+th-22,lb,tw-18,T().text);   // SETT_FIT_V1
           s.setTextColor(T().subtext); s.setCursor(tx+10,ty0+th-11); s.print(st.c_str());
         }
         } break;
@@ -10444,12 +10455,12 @@ void drawSettings(LGFX_Sprite& s){
           s.setTextColor(T().text); s.setCursor(sx,ty-4); s.print(nm.c_str());
           int rs=WiFi.RSSI();
           char sb[28]; snprintf(sb,sizeof(sb),"%s  %d dBm",RPTR("Terhubung"),rs);
-          s.setTextColor(T().subtext); s.setCursor(sx,ty+6); s.print(sb);
+          settPrintFit(s,sx,ty+6,sb,xr-20-sx,T().subtext);   // SETT_FIT_V1
           int lv=(rs>-60)?3:((rs>-75)?2:1);
           for(int b=0;b<3;b++){ int bh=3+b*3; s.fillRect(xr-14+b*5,my+4-bh,3,bh,b<lv?T().text:T().divider); }
         } else {
           s.setTextColor(T().text); s.setCursor(sx,ty-4); s.print(RPTR("Tidak tersambung"));
-          s.setTextColor(T().subtext); s.setCursor(sx,ty+6); s.print(RPTR("Pilih jaringan di bawah"));
+          settPrintFit(s,sx,ty+6,RPTR("Pilih jaringan di bawah"),xr-20-sx,T().subtext);   // SETT_FIT_V1
         }
         } break;
       case SR_FOOT: {    // SETT_UX_V1: footer
@@ -10461,7 +10472,7 @@ void drawSettings(LGFX_Sprite& s){
         s.setCursor(cx+cw/2-s.textWidth(fb)/2,ry+20); s.print(fb);
         } break;
       case SR_BRIGHT: {
-        s.setTextColor(T().text); s.setCursor(xl,ty); s.print(RPTR("Kecerahan"));
+        settPrintFit(s,xl,ty,RPTR("Kecerahan"),(cx+110)-8-xl,T().text);   // SETT_FIT_V1
         int x0=cx+110, x1=cx+cw-50, my=ry+rh/2;
         nyxAaRR(s, x0,my-2,x1-x0,4,2,blend565(T().surface2,0xFFFF,60));
         int kx=x0+(constrain((int)brightness,10,255)-10)*(x1-x0)/245;
@@ -10499,12 +10510,12 @@ void drawSettings(LGFX_Sprite& s){
         settChevron(s,xr-4,ry+rh/2,T().subtext);
         break;
       case SR_ROT:
-        s.setTextColor(T().text); s.setCursor(xl,ty); s.print(RPTR("Rotasi Otomatis"));
+        settPrintFit(s,xl,ty,RPTR("Rotasi Otomatis"),xr-34-8-xl,T().text);   // SETT_FIT_V1
         iosSwitch(s,xr-34,ry+(rh-20)/2,autoRotateEnabled);
         break;
       case SR_SPI: {
-        s.setTextColor(T().text); s.setCursor(xl,ty-4); s.print("SPI Overclock");
-        s.setTextColor(T().subtext); s.setCursor(xl,ty+6); s.print(spiOcPendingIdx!=spiOcIdx?RPTR("Belum diterapkan"):RPTR("Kecepatan layar"));
+        settPrintFit(s,xl,ty-4,"SPI Overclock",xr-108-8-xl,T().text);   // SETT_FIT_V1
+        settPrintFit(s,xl,ty+6,spiOcPendingIdx!=spiOcIdx?RPTR("Belum diterapkan"):RPTR("Kecepatan layar"),xr-108-8-xl,T().subtext);
         int sw=108, sx=xr-sw, sy=ry+(rh-22)/2;
         nyxAaRR(s, sx,sy,sw,22,11,T().surface2);
         int selx=sx+2+spiOcPendingIdx*(sw/2-2);
@@ -10517,8 +10528,8 @@ void drawSettings(LGFX_Sprite& s){
         } break;
       case SR_HWS: {   // HW_SCROLL_V1: pil 3 pilihan Mati / Auto / Balik
         int m=hwsModeGet();
-        s.setTextColor(T().text); s.setCursor(xl,ty-4); s.print("Scroll Hardware");
-        s.setTextColor(T().subtext); s.setCursor(xl,ty+6); s.print(currentOrient==ORIENT_LANDSCAPE ? (m==0?RPTR("Landscape: vertikal"):(m==1?RPTR("Landscape: halaman"):RPTR("Landscape: balik"))) : (m==0?RPTR("Pakai cache"):(m==1?RPTR("Portrait saja"):RPTR("Portrait, balik")))); // HOME_PAGER_V1
+        settPrintFit(s,xl,ty-4,"Scroll Hardware",xr-150-8-xl,T().text);   // SETT_FIT_V1
+        settPrintFit(s,xl,ty+6,currentOrient==ORIENT_LANDSCAPE ? (m==0?RPTR("Landscape: vertikal"):(m==1?RPTR("Landscape: halaman"):RPTR("Landscape: balik"))) : (m==0?RPTR("Pakai cache"):(m==1?RPTR("Portrait saja"):RPTR("Portrait, balik"))),xr-150-8-xl,T().subtext); // HOME_PAGER_V1
         int sw=150, sx=xr-sw, sy=ry+(rh-22)/2, segW=sw/3;
         nyxAaRR(s, sx,sy,sw,22,11,T().surface2);
         nyxAaRR(s, sx+2+m*segW,sy+2,segW-4,18,9,T().accent);
@@ -10529,8 +10540,8 @@ void drawSettings(LGFX_Sprite& s){
         }
         } break;
       case SR_KBTAP: {   // KB_TAPOFF_V1: [-] nilai [+]
-        s.setTextColor(T().text); s.setCursor(xl,ty-4); s.print(RPTR("Offset ketuk"));
-        s.setTextColor(T().subtext); s.setCursor(xl,ty+6); s.print("Keyboard (px)");
+        settPrintFit(s,xl,ty-4,RPTR("Offset ketuk"),xr-84-8-xl,T().text);   // SETT_FIT_V1
+        settPrintFit(s,xl,ty+6,"Keyboard (px)",xr-84-8-xl,T().subtext);
         int sw=84, sx=xr-sw, sy=ry+(rh-22)/2;
         nyxAaRR(s, sx,sy,sw,22,11,T().surface2);
         char vb[8]; snprintf(vb,sizeof(vb),"%+d",kbTapDy);
@@ -10539,22 +10550,22 @@ void drawSettings(LGFX_Sprite& s){
         s.setCursor(sx+sw-16,sy+7); s.print("+");
         } break;
       case SR_HEAPLOG:
-        s.setTextColor(T().text); s.setCursor(xl,ty-4); s.print("Heaplog (RAM)");
-        s.setTextColor(T().subtext); s.setCursor(xl,ty+6); s.print(rpHLWanted()!=rpHLBootOn()?RPTR("Setelah restart"):RPTR("Log RAM saat boot"));
+        settPrintFit(s,xl,ty-4,"Heaplog (RAM)",xr-34-8-xl,T().text);   // SETT_FIT_V1
+        settPrintFit(s,xl,ty+6,rpHLWanted()!=rpHLBootOn()?RPTR("Setelah restart"):RPTR("Log RAM saat boot"),xr-34-8-xl,T().subtext);
         iosSwitch(s,xr-34,ry+(rh-20)/2,rpHLWanted());
         break;
       case SR_SPIAPPLY:
         s.setTextSize(1); uiText(s,cx+cw/2-s.textWidth(RPTR("Terapkan & Mulai Ulang"))/2-1,ty,RPTR("Terapkan & Mulai Ulang"),T().accent,false,true);
         break;
       case SR_SCAN:
-        s.setTextColor(wifiScanning?T().subtext:T().accent); s.setCursor(xl,ty); s.print(RPTR("Pindai Jaringan"));
+        settPrintFit(s,xl,ty,RPTR("Pindai Jaringan"),xr-xl-(wifiScanning?76:0),wifiScanning?T().subtext:T().accent);   // SETT_FIT_V1
         if(wifiScanning){
           int dots=(int)((millis()/300)%4); char sb[12]="Memindai"; for(int d=0;d<dots;d++) strcat(sb,".");
           settTextR(s,xr,ty,sb,T().subtext); needRedraw=true; // animasi titik selagi memindai
         }
         break;
       case SR_NONET:
-        s.setTextColor(T().subtext); s.setCursor(xl,ty); s.print(RPTR("Tidak ada jaringan. Ketuk Pindai."));
+        settPrintFit(s,xl,ty,RPTR("Tidak ada jaringan. Ketuk Pindai."),xr-xl,T().subtext);   // SETT_FIT_V1
         break;
       case SR_WIFI: {
         int w=settRA[i];
@@ -10588,7 +10599,7 @@ void drawSettings(LGFX_Sprite& s){
         uiText(s,cx+cw/2-s.textWidth(RPTR("Sambungkan"))/2-1,ty,RPTR("Sambungkan"),T().accent,false,true);
         break;
       case SR_MPU:
-        s.setTextColor(mpuReady?T().accent:T().subtext); s.setCursor(xl,ty); s.print(RPTR("Kalibrasi Sensor Gerak"));
+        settPrintFit(s,xl,ty,RPTR("Kalibrasi Sensor Gerak"),xr-xl-(mpuReady?0:(int)s.textWidth(RPTR("Tidak terdeteksi"))+10),mpuReady?T().accent:T().subtext);   // SETT_FIT_V1
         if(!mpuReady) settTextR(s,xr,ty,RPTR("Tidak terdeteksi"),T().subtext);
         break;
       case SR_OWNER: {
@@ -10599,7 +10610,7 @@ void drawSettings(LGFX_Sprite& s){
         String onm=settFit(s,String(ownerName()),xr-18-tx0);
         uiText(s,tx0,acy-14,onm.c_str(),T().text,false,true);
         s.setTextSize(1);
-        s.setTextColor(T().subtext); s.setCursor(tx0,acy+6); s.print(RPTR("Ketuk untuk atur profil"));
+        settPrintFit(s,tx0,acy+6,RPTR("Ketuk untuk atur profil"),xr-18-tx0,T().subtext);   // SETT_FIT_V1
         settChevron(s,xr-4,acy,T().subtext);
         } break;
       case SR_BACKUP:
@@ -10614,16 +10625,16 @@ void drawSettings(LGFX_Sprite& s){
         } break;
         break;
       case SR_POWER:
-        s.setTextColor(T().danger); s.setCursor(xl,ty); s.print(RPTR("Daya (Matikan / Mulai Ulang)"));
+        settPrintFit(s,xl,ty,RPTR("Daya (Matikan / Mulai Ulang)"),xr-xl-16,T().danger);   // SETT_FIT_V1
         settChevron(s,xr-4,ty+4,T().subtext);
         break;
       case SR_FACTORY:
-        s.setTextColor(T().danger); s.setCursor(xl,ty); s.print(RPTR("Reset Pabrik"));
+        settPrintFit(s,xl,ty,RPTR("Reset Pabrik"),xr-xl-(millis()<settFactArmUntil?(int)s.textWidth(RPTR("Ketuk lagi: HAPUS SEMUA"))+10:16),T().danger);   // SETT_FIT_V1
         if(millis()<settFactArmUntil){ settTextR(s,xr,ty,RPTR("Ketuk lagi: HAPUS SEMUA"),T().danger); needRedraw=true; }
         else settChevron(s,xr-4,ty+4,T().subtext);
         break;
       case SR_TCAL:
-        s.setTextColor(T().danger); s.setCursor(xl,ty); s.print(RPTR("Kalibrasi Layar Sentuh"));
+        settPrintFit(s,xl,ty,RPTR("Kalibrasi Layar Sentuh"),xr-xl-(millis()<settTcalArmUntil?(int)s.textWidth(RPTR("Ketuk lagi"))+10:0),T().danger);   // SETT_FIT_V1
         if(millis()<settTcalArmUntil){ settTextR(s,xr,ty,RPTR("Ketuk lagi"),T().danger); needRedraw=true; }
         break;
     }
