@@ -1090,7 +1090,9 @@ uint16_t glassSampleAvg(LGFX_Sprite& s, int x,int y,int w,int h, int sampleN=5){
 //   2) highlight atas sekarang 2 garis gradasi (terang->pudar) bukan 1
 //      garis hairline flat -- kesan pantulan cahaya di kaca lebih lembut,
 //      bukan garis tegas.
+bool ccNoShadow=false;   // SMOOTH_FX_V1: CC tanpa bayangan (konsisten saat bergerak & diam)
 void shadowSoft(LGFX_Sprite& s, int x,int y,int w,int h,int radius){
+  if(ccNoShadow) return;
   // Nyampel warna ASLI di posisi shadow (spt glassColor di bawah), lalu
   // digelapin -- bukan asumsi T().bg polos, biar nyambung mulus di atas
   // wallpaper/konten apapun yg lg tergambar (gak ada kotak nempel patah).
@@ -5297,7 +5299,7 @@ unsigned long lastLockClockMs=0;
 #define AODFX_WAKE     3
 #define AODFX_OUT_MS   900UL
 #define AODFX_CLOCK_MS 450UL
-#define AODFX_WAKE_MS  300UL
+#define AODFX_WAKE_MS  350UL
 extern bool homeAodActive;   // definisi di bawah (v99)
 uint8_t aodFxMode=AODFX_NONE;
 bool    aodFxHome=false;       // fx milik AOD Home (true) atau lock screen (false)
@@ -5528,8 +5530,7 @@ static bool aodFxFrame(LGFX_Sprite& s,bool home){
   if(aodFxMode==AODFX_OUT){
     if(!aodSnapOk) return false;
     float e=aodEase(aodFxP(AODFX_OUT_MS));
-    aodSnap.pushSprite(&s,0,0);
-    s.fillRectAlpha(0,0,SCR_W,SCR_H,(uint8_t)(e*255.0f),0x0000);
+    (void)e; aodSnap.pushSprite(&s,0,0);   // SMOOTH_FX_V1: gambar TETAP, redupnya lewat backlight saja -> frame identik, push diff ~0 baris
     return true;
   }
   if(aodFxMode==AODFX_CLOCK){
@@ -5546,11 +5547,7 @@ static bool aodFxFrame(LGFX_Sprite& s,bool home){
     return true;
   }
   if(!aodSnapOk) return false;
-  float e=aodEase(aodFxP(AODFX_WAKE_MS));
-  uint8_t inv=(uint8_t)((1.0f-e)*255.0f);
-  aodSnap.pushSprite(&s,0,0);
-  s.fillRectAlpha(0,0,SCR_W,SCR_H,inv,0x0000);
-  if(inv>8) aodFaceText(s,inv);   // jam AOD memudar keluar selagi layar hidup memudar masuk
+  aodSnap.pushSprite(&s,0,0);   // SMOOTH_FX_V1: layar hidup tampil di backlight rendah, lalu backlight naik (tanpa alpha per frame)
   return true;
 }
 
@@ -6324,7 +6321,7 @@ static void ccDrawLiveH(LGFX_Sprite& s, int ph, bool withToast){
   int mx = ccMarginX(), pw = ccPanelW();
   int rad = min(22, ph/2); if(rad<0) rad=0;
   // v108: panel sedikit lebih pekat (215) -> latar lebih tenang/minimalis.
-  drawGlassPanel(s, mx,0,pw,ph,rad, T().surface, 215);
+  ccNoShadow=true; drawGlassPanel(s, mx,0,pw,ph,rad, T().surface, 215); ccNoShadow=false;   // SMOOTH_FX_V1
   nyxAaRR(s, SCR_W/2-12,ph-8,24,3,1,T().divider);
 
   // Progres buka panel 0..1 (ccOffset bisa overshoot dikit -> di-clamp).
@@ -14187,8 +14184,9 @@ void push(){ if(nyxThFreezeFrame()) return;
 // CC_CACHE_V1: snapshot latar. Selama CC bergerak latar (Home/app) diam -> disalin, bukan digambar ulang.
 static LGFX_Sprite ccBg(&display);
 static void ccBgFree(){ if(ccBg.getBuffer()) ccBg.deleteSprite(); ccBgValid=false; }
+extern bool nsAnimating;   // phone_notif_center.ino
 static bool ccMotionNow(){
-  return controlCenterOpen && (panelPullActive || ccAnimating) && !locked && !appSwitcherOpen
+  return ((controlCenterOpen && (panelPullActive || ccAnimating)) || (notifShadeOpen && (panelPullActive || nsAnimating))) && !locked && !appSwitcherOpen   // SMOOTH_FX_V1: shade ikut
       && !homeAodActive && !powerMenuOpen && !callOverlayActive();
 }
 static bool ccBgRestore(){

@@ -119,7 +119,7 @@ float         nsOffset = 0;
 bool          nsAnimating = false;
 float         nsAnimFromH = 0, nsAnimToH = 0;
 unsigned long nsAnimStartMs = 0;
-const float   NS_ANIM_MS = 140.0f; // v92: dulu 200ms (sama kayak Control Center) tp kerasa lambat naiknya -- dipercepat dikit (permintaan user)
+const float   NS_ANIM_MS = 200.0f; /* SMOOTH_FX_V1: 140 -> 200 ms */ // v92: dulu 200ms (sama kayak Control Center) tp kerasa lambat naiknya -- dipercepat dikit (permintaan user)
 #define NS_ROW_H 42
 #define NS_MAX_ROWS_SHOWN 6
 
