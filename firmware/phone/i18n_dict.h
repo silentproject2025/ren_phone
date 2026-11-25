@@ -889,5 +889,17 @@ static const I18nPair I18N_DICT[] = {
   { "Kustom...", "Custom..." },
   { "Kustom: ", "Custom: " },
   { "Offset ketuk", "Tap offset" },
+  { "Tampilan", "Display" },
+  { "Kinerja", "Performance" },
+  { "Sensor & Layar", "Sensor & Screen" },
+  { "Cari pengaturan", "Search settings" },
+  { "Tidak ada hasil", "No results" },
+  { "Rotasi", "Rotation" },
+  { "Aktif", "On" },
+  { "Ganti foto", "Change photo" },
+  { "Nama", "Name" },
+  { "Belum diatur", "Not set" },
+  { "Belum ada foto", "No photo" },
+  { "kali", "times" },
 };
 static const int I18N_DICT_N = (int)(sizeof(I18N_DICT)/sizeof(I18N_DICT[0]));

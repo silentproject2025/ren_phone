@@ -4123,7 +4123,10 @@ void unlockZoomHome(){
   homeWarmMarkReady();   // WARMUP-V1: panel + canvas sudah berisi Home polos penuh -> pemanasan cache/pager boleh jalan
   homeAodWake();
 }
+bool settSubBack(); bool ownerSubBack();   // UI-REVAMP: back/swipe-back keluar dari sub-menu dulu, baru keluar app
 void navBack(){
+  if(curScreen()==SCR_SETTINGS && settSubBack()){ needRedraw=true; return; }
+  if(curScreen()==SCR_OWNER && ownerSubBack()){ needRedraw=true; return; }
   if(notepadNeedsConfirm()){ notepadRequestConfirm(1); return; }
   swThumbCaptureCurrent(); // v133
   appOnExit(curScreen());
@@ -9919,7 +9922,8 @@ int loadSpiOcPref(){
 // =====================================================================
 enum { SR_TITLE=0, SR_SECT, SR_BRIGHT, SR_THEME, SR_FONT, SR_ROT, SR_SPI, SR_SPIAPPLY,
        SR_SCAN, SR_WIFI, SR_NONET, SR_SSID, SR_PASS, SR_CONNECT, SR_MPU, SR_TCAL, SR_OWNER, SR_ABOUT, SR_POWER, SR_HOMEEDIT, SR_BACKUP, SR_HEAPLOG, SR_HWS, SR_LANG,
-       SR_WSTAT, SR_FOOT /* SETT_UX_V1 */, SR_FACTORY /* FACTORY_RESET_V1 */, SR_KBTAP /* KB_TAPOFF_V1 */ };
+       SR_WSTAT, SR_FOOT /* SETT_UX_V1 */, SR_FACTORY /* FACTORY_RESET_V1 */, SR_KBTAP /* KB_TAPOFF_V1 */,
+       SR_SEARCH, SR_QUICK, SR_CAT, SR_NOHIT, SR_GAP /* UI-REVAMP */ };
 #define SETT_MAXROWS 44
 int settRT[SETT_MAXROWS], settRG[SETT_MAXROWS], settRY[SETT_MAXROWS], settRH[SETT_MAXROWS], settRA[SETT_MAXROWS];
 const char* settRL[SETT_MAXROWS];
@@ -9931,9 +9935,15 @@ unsigned long settTouchT0=0, settTcalArmUntil=0, settFactArmUntil=0;   // FACTOR
 // SETT_UX_V1: sorotan baris yang ditekan + momentum scroll
 int settPressRow=-1;
 float settVel=0; bool settGlide=false; unsigned long settGlideT=0, settMoveT=0;
+// UI-REVAMP: menu utama + sub-menu + pencarian
+int settPage=0;                 // 0 menu utama, 1 Tampilan, 2 Kinerja, 3 Wi-Fi, 4 Sensor & Layar, 5 Sistem
+String settQuery="";            // teks pencarian (kosong = tidak mencari)
+bool settKeepPage=false; float settKeepScroll=0;   // dari sub-layar (Profil/About/Backup/Atur Home) balik ke halaman & posisi yg sama
 
 void settingsEnter(){ 
-  settScroll=0; settTouchMode=0; settTcalArmUntil=0;
+  settTouchMode=0; settTcalArmUntil=0;
+  if(settKeepPage){ settScroll=settKeepScroll; } else { settPage=0; settQuery=""; settScroll=0; }   // UI-REVAMP
+  settKeepPage=false; settFocus=-1;
   settPressRow=-1; settGlide=false; settVel=0;   // SETT_UX_V1
   settSSID=String(WIFI_SSID); 
   settPass=String(WIFI_PASSWORD); 
@@ -9951,50 +9961,129 @@ void settAddRow(int type,int grp,int h,int arg,const char* lbl,int& y){
   settRowN++; y+=h;
 }
 
+// UI-REVAMP ---------------------------------------------------------------
+const char* settPageName(int p){
+  switch(p){
+    case 1: return RPTR("Tampilan");
+    case 2: return RPTR("Kinerja");
+    case 3: return "Wi-Fi";
+    case 4: return RPTR("Sensor & Layar");
+    case 5: return RPTR("Sistem");
+  }
+  return RPTR("Pengaturan");
+}
+int settCatRep(int p){   // baris wakil tiap kategori -> dipakai utk ikon (chip) & warna
+  switch(p){ case 1: return SR_THEME; case 2: return SR_SPI; case 3: return SR_SCAN; case 4: return SR_MPU; }
+  return SR_ABOUT;
+}
+// kata kunci pencarian (Indonesia + English) per baris
+const char* settKeys(int t){
+  switch(t){
+    case SR_BRIGHT:   return "kecerahan brightness terang layar";
+    case SR_THEME:    return "tema theme warna color";
+    case SR_FONT:     return "font huruf";
+    case SR_LANG:     return "bahasa language";
+    case SR_ROT:      return "rotasi rotate putar auto";
+    case SR_HOMEEDIT: return "home layar atur edit";
+    case SR_SPI:      return "spi overclock kecepatan speed";
+    case SR_HWS:      return "scroll hardware gulir";
+    case SR_HEAPLOG:  return "heaplog ram log";
+    case SR_WSTAT: case SR_SCAN: case SR_SSID: case SR_PASS: case SR_CONNECT:
+                      return "wifi wi-fi jaringan network ssid sandi password sambung connect";
+    case SR_MPU:      return "kalibrasi calibrate sensor gerak motion mpu";
+    case SR_TCAL:     return "kalibrasi calibrate layar sentuh touch";
+    case SR_KBTAP:    return "offset ketuk tap keyboard";
+    case SR_ABOUT:    return "about tentang info versi version";
+    case SR_BACKUP:   return "backup restore cadangan";
+    case SR_POWER:    return "daya power matikan restart shutdown";
+    case SR_FACTORY:  return "reset pabrik factory hapus";
+  }
+  return "";
+}
+bool settMatch(int t){   // semua kata di kolom pencarian harus ada di kata kunci baris
+  String q=settQuery; q.trim(); q.toLowerCase();
+  if(q.length()==0) return true;
+  String k=String(settKeys(t));
+  int p=0;
+  while(p<(int)q.length()){
+    int e=q.indexOf(' ',p); if(e<0) e=q.length();
+    String tok=q.substring(p,e);
+    if(tok.length()>0 && k.indexOf(tok)<0) return false;
+    p=e+1;
+  }
+  return true;
+}
+// back / swipe-back: tutup keyboard -> hapus pencarian -> kembali ke menu utama -> baru keluar app
+bool settSubBack(){
+  if(kbVisible){ kbVisible=false; kbTarget=nullptr; settFocus=-1; return true; }
+  if(settQuery.length()>0){ settQuery=""; settScroll=0; return true; }
+  if(settPage!=0){ settPage=0; settScroll=0; return true; }
+  return false;
+}
+
+#define SADD(t,h) do{ if(!sq || settMatch(t)) settAddRow((t),g,(h),0,nullptr,y); }while(0)
+#define SGRP()    do{ if(!sq) g++; }while(0)
+
 // Satu-satunya sumber posisi baris: dipakai gambar DAN hit-test (gak mungkin meleset)
 void settBuildLayout(){
   settRowN=0; int y=4; int g=1;
-  settAddRow(SR_TITLE,0,36,0,RPTR("Pengaturan"),y);
-  settAddRow(SR_OWNER,g,60,0,nullptr,y); g++;   // kartu pemilik (foto + nama)
+  const bool sq=(settQuery.length()>0);          // mode pencarian: semua baris, satu kartu, tersaring
+  const int pg=sq?0:settPage;
+  settAddRow(SR_TITLE,0,36,0,sq?RPTR("Pengaturan"):settPageName(pg),y);
 
-  settAddRow(SR_SECT,0,26,0,RPTR("TAMPILAN"),y);
-  settAddRow(SR_BRIGHT,g,34,0,nullptr,y);
-  settAddRow(SR_THEME,g,52,0,nullptr,y);
-  settAddRow(SR_FONT,g,34,0,nullptr,y);
-  settAddRow(SR_LANG,g,34,0,nullptr,y);   // I18N_V1: Bahasa / Language
-  settAddRow(SR_ROT,g,34,0,nullptr,y);
-  settAddRow(SR_HOMEEDIT,g,34,0,nullptr,y); g++;
+  if(!sq && pg==0){
+    // ---- menu utama: cari, profil, jalan pintas, kategori ----
+    settAddRow(SR_SEARCH,g,34,0,nullptr,y); g++;
+    settAddRow(SR_GAP,0,6,0,nullptr,y);
+    settAddRow(SR_OWNER,g,60,0,nullptr,y); g++;
+    settAddRow(SR_GAP,0,6,0,nullptr,y);
+    settAddRow(SR_QUICK,g,64,0,nullptr,y); g++;
+    settAddRow(SR_GAP,0,6,0,nullptr,y);
+    settAddRow(SR_BRIGHT,g,34,0,nullptr,y); g++;
+    settAddRow(SR_GAP,0,10,0,nullptr,y);
+    for(int c=1;c<=5;c++) settAddRow(SR_CAT,g,40,c,nullptr,y);
+    g++;
+    settAddRow(SR_FOOT,0,40,0,nullptr,y);
+  } else {
+    if(sq){ settAddRow(SR_SEARCH,g,34,0,nullptr,y); g++; settAddRow(SR_GAP,0,6,0,nullptr,y); }   // kolom cari tetap di atas hasil
+    else  settAddRow(SR_GAP,0,2,0,nullptr,y);
+    int firstRow=settRowN;
 
-  settAddRow(SR_SECT,0,26,0,RPTR("KINERJA"),y);
-  settAddRow(SR_SPI,g,38,0,nullptr,y);
-  if(spiOcPendingIdx!=spiOcIdx) settAddRow(SR_SPIAPPLY,g,34,0,nullptr,y);
-  settAddRow(SR_HWS,g,38,0,nullptr,y);   // HW_SCROLL_V1
-  settAddRow(SR_HEAPLOG,g,38,0,nullptr,y);   // HEAPLOG_TOGGLE_V1
-  g++;
-
-  settAddRow(SR_SECT,0,26,0,"WI-FI",y);
-  settAddRow(SR_WSTAT,g,38,0,nullptr,y);   // SETT_UX_V1: status sambungan
-  settAddRow(SR_SCAN,g,34,0,nullptr,y);
-  if(!wifiScanning && scannedWifiNum==0) settAddRow(SR_NONET,g,30,0,nullptr,y);
-  for(int i=0;i<scannedWifiNum && i<5;i++) settAddRow(SR_WIFI,g,32,i,nullptr,y);
-  settAddRow(SR_SSID,g,34,0,nullptr,y);
-  settAddRow(SR_PASS,g,34,0,nullptr,y);
-  settAddRow(SR_CONNECT,g,36,0,nullptr,y); g++;
-
-  settAddRow(SR_SECT,0,26,0,RPTR("SENSOR & LAYAR"),y);
-  settAddRow(SR_MPU,g,34,0,nullptr,y);
-  settAddRow(SR_TCAL,g,34,0,nullptr,y);
-  settAddRow(SR_KBTAP,g,38,0,nullptr,y); g++;   // KB_TAPOFF_V1
-
-  settAddRow(SR_SECT,0,26,0,RPTR("TENTANG"),y);
-  settAddRow(SR_ABOUT,g,34,0,nullptr,y);
-  settAddRow(SR_BACKUP,g,34,0,nullptr,y); g++;
-  settAddRow(SR_POWER,g,34,0,nullptr,y);
-  settAddRow(SR_FACTORY,g,34,0,nullptr,y); g++;   // FACTORY_RESET_V1
-
-  settAddRow(SR_FOOT,0,40,0,nullptr,y);   // SETT_UX_V1: footer nama + versi
+    if(sq || pg==1){   // TAMPILAN
+      SADD(SR_BRIGHT,34); SADD(SR_THEME,52); SADD(SR_FONT,34); SADD(SR_LANG,34); SADD(SR_ROT,34); SADD(SR_HOMEEDIT,34);
+      SGRP();
+    }
+    if(sq || pg==2){   // KINERJA
+      SADD(SR_SPI,38);
+      if(spiOcPendingIdx!=spiOcIdx && (!sq || settMatch(SR_SPI))) settAddRow(SR_SPIAPPLY,g,34,0,nullptr,y);
+      SADD(SR_HWS,38); SADD(SR_HEAPLOG,38);
+      SGRP();
+    }
+    if(sq || pg==3){   // WI-FI
+      SADD(SR_WSTAT,38); SADD(SR_SCAN,34);
+      if(!sq){
+        if(!wifiScanning && scannedWifiNum==0) settAddRow(SR_NONET,g,30,0,nullptr,y);
+        for(int i=0;i<scannedWifiNum && i<5;i++) settAddRow(SR_WIFI,g,32,i,nullptr,y);
+      }
+      SADD(SR_SSID,34); SADD(SR_PASS,34); SADD(SR_CONNECT,36);
+      SGRP();
+    }
+    if(sq || pg==4){   // SENSOR & LAYAR
+      SADD(SR_MPU,34); SADD(SR_TCAL,34); SADD(SR_KBTAP,38);
+      SGRP();
+    }
+    if(sq || pg==5){   // SISTEM
+      SADD(SR_ABOUT,34); SADD(SR_BACKUP,34);
+      SGRP();
+      SADD(SR_POWER,34); SADD(SR_FACTORY,34);
+      SGRP();
+    }
+    if(sq && settRowN==firstRow) settAddRow(SR_NOHIT,g,44,0,nullptr,y);   // tidak ada yang cocok
+  }
   y+=14; settTotalH=y;
 }
+#undef SADD
+#undef SGRP
 float settMaxScroll(){ int vis=settAreaBot()-settAreaTop(); int m=settTotalH-vis; return m>0?(float)m:0.0f; }
 
 String settFit(LGFX_Sprite& s,String v,int maxW){
@@ -10023,7 +10112,7 @@ bool settPressable(int t){
   switch(t){
     case SR_FONT: case SR_LANG: case SR_ROT: case SR_HOMEEDIT: case SR_HEAPLOG: case SR_SPIAPPLY:
     case SR_SCAN: case SR_WIFI: case SR_SSID: case SR_PASS: case SR_CONNECT: case SR_MPU: case SR_TCAL:
-    case SR_OWNER: case SR_ABOUT: case SR_POWER: case SR_BACKUP: case SR_FACTORY:
+    case SR_OWNER: case SR_ABOUT: case SR_POWER: case SR_BACKUP: case SR_FACTORY: case SR_CAT:
       return true;
   }
   return false;
@@ -10031,7 +10120,7 @@ bool settPressable(int t){
 bool settHasChip(int t){
   switch(t){
     case SR_BRIGHT: case SR_THEME: case SR_FONT: case SR_LANG: case SR_ROT: case SR_HOMEEDIT: case SR_SPI:
-    case SR_SCAN: case SR_SSID: case SR_PASS: case SR_MPU: case SR_TCAL: case SR_ABOUT: case SR_POWER: case SR_BACKUP: case SR_HEAPLOG: case SR_HWS: case SR_FACTORY: case SR_KBTAP:
+    case SR_SCAN: case SR_SSID: case SR_PASS: case SR_MPU: case SR_TCAL: case SR_ABOUT: case SR_POWER: case SR_BACKUP: case SR_HEAPLOG: case SR_HWS: case SR_FACTORY: case SR_KBTAP: case SR_CAT:
       return true;
   }
   return false;
@@ -10142,18 +10231,17 @@ void settChip(LGFX_Sprite& s,int type,int x,int y){ // x,y = pojok kiri-atas chi
 
 void drawSettings(LGFX_Sprite& s){
   checkWifiScanComplete();
-  settBuildLayout();
-  // CC-LONGPRESS: dibuka dari tahan-lama tile Control Center -> gulir ke bagian terkait (sekali pakai)
+  // CC-LONGPRESS: dibuka dari tahan-lama tile Control Center -> buka sub-menu terkait (sekali pakai)
   if(settJumpCode){
-    int want = settJumpCode==1 ? SR_WSTAT : settJumpCode==2 ? SR_THEME : settJumpCode==3 ? SR_ROT : SR_MPU;
-    int back = (settJumpCode==1 || settJumpCode==4) ? 30 : 60;   // sisakan judul bagian di atas baris tujuan
-    for(int i=0;i<settRowN;i++) if(settRT[i]==want){ settScroll=(float)(settRY[i]-back); break; }
+    settQuery=""; settScroll=0;
+    settPage = settJumpCode==1 ? 3 : (settJumpCode==2 || settJumpCode==3) ? 1 : 4;   // UI-REVAMP: Wi-Fi / Tampilan / Sensor & Layar
     settJumpCode=0;
   }
+  settBuildLayout();
 
   // keyboard terbuka: geser daftar supaya kolom yg lagi diisi tetap kelihatan di atas keyboard
   if(kbVisible){
-    int want=(settFocus==0)?SR_SSID:SR_PASS;
+    int want=(settFocus==2)?SR_SEARCH:(settFocus==0)?SR_SSID:SR_PASS;
     for(int i=0;i<settRowN;i++) if(settRT[i]==want){
       int vis=settAreaBot()-settAreaTop(); int bottom=settRY[i]+settRH[i]+10;
       if(bottom-(int)settScroll>vis) settScroll=(float)(bottom-vis);
@@ -10174,6 +10262,7 @@ void drawSettings(LGFX_Sprite& s){
     int g=settRG[i]; if(g==0){ i++; continue; }
     int j=i; while(j+1<settRowN && settRG[j+1]==g) j++;
     int gy=oy+settRY[i], gh=settRY[j]+settRH[j]-settRY[i];
+    if(settRT[i]==SR_SEARCH || settRT[i]==SR_QUICK){ i=j+1; continue; }   // UI-REVAMP: digambar sendiri
     if(gy+gh>top && gy<bot){
       drawGlassCard(s,cx,gy,cw,gh,14,T().surface,215);
       for(int k=i;k<j;k++){
@@ -10193,12 +10282,54 @@ void drawSettings(LGFX_Sprite& s){
     if(i==settPressRow && settTouchMode==1 && settPressable(settRT[i]))   // SETT_UX_V1
       nyxAaRR(s, cx+3,ry+1,cw-6,rh-2,9,blend565(T().surface,T().text,34));
     if(settHasChip(settRT[i])){ // UI-POLISH-V2: chip ikon di kiri, teks bergeser
-      xl=cx+44; settChip(s,settRT[i],cx+12,(settRT[i]==SR_THEME)?ry+8:ry+(rh-22)/2);
+      xl=cx+44; settChip(s,(settRT[i]==SR_CAT)?settCatRep(settRA[i]):settRT[i],cx+12,(settRT[i]==SR_THEME)?ry+8:ry+(rh-22)/2);
     }
     s.setTextSize(1);
     switch(settRT[i]){
       case SR_TITLE:
         s.setTextSize(2); uiText(s,cx+2,ry+10,settRL[i],T().text,false,true); s.setTextSize(1);
+        break;
+      case SR_SEARCH: {   // UI-REVAMP: kolom cari berbentuk pil
+        int px=cx, pw=cw, ph=rh-4, py=ry+2, my=py+ph/2;
+        bool foc=(kbVisible && settFocus==2);
+        nyxAaRR(s, px,py,pw,ph,ph/2,blend565(T().surface2,T().text,18));
+        if(foc) nyxAaRRRing(s, px,py,pw,ph,ph/2,T().accent);
+        nyxAaCircleRing(s, px+15,my-1,5,T().subtext); s.drawLine(px+19,my+3,px+22,my+6,T().subtext); s.drawLine(px+20,my+3,px+23,my+6,T().subtext);
+        bool has=settQuery.length()>0;
+        String qv=has ? (settQuery+(foc?"|":"")) : String(RPTR("Cari pengaturan"));
+        qv=settFit(s,qv,pw-34-(has?30:12));
+        s.setTextColor(has?T().text:T().subtext); s.setCursor(px+32,my-4); s.print(qv.c_str());
+        if(has){ int bx=px+pw-18; nyxAaCircle(s, bx,my,7,T().subtext); s.drawLine(bx-3,my-3,bx+3,my+3,T().bg); s.drawLine(bx-3,my+3,bx+3,my-3,T().bg); }
+        } break;
+      case SR_QUICK: {    // UI-REVAMP: 3 jalan pintas (Wi-Fi, Rotasi, Tema)
+        int gap=8, tw=(cw-2*gap)/3, th=rh-4, ty0=ry+2;
+        bool wifiOn=(WiFi.status()==WL_CONNECTED);
+        for(int k=0;k<3;k++){
+          int tx=cx+k*(tw+gap);
+          bool on=(k==0)?wifiOn:(k==1?autoRotateEnabled:false);
+          drawGlassCard(s,tx,ty0,tw,th,14,on?T().accent:T().surface,on?110:215);
+          settChip(s,(k==0)?SR_SCAN:(k==1?SR_ROT:SR_THEME),tx+10,ty0+9);
+          const char* lb=(k==0)?"Wi-Fi":(k==1?RPTR("Rotasi"):RPTR("Tema"));
+          String st=(k==0)?(wifiOn?WiFi.SSID():String(RPTR("Mati"))):(k==1?String(autoRotateEnabled?RPTR("Aktif"):RPTR("Mati")):String(themes[themeIdx].name));
+          st=settFit(s,st,tw-18);
+          s.setTextColor(T().text); s.setCursor(tx+10,ty0+th-22); s.print(lb);
+          s.setTextColor(T().subtext); s.setCursor(tx+10,ty0+th-11); s.print(st.c_str());
+        }
+        } break;
+      case SR_CAT: {      // UI-REVAMP: baris kategori -> sub-menu
+        int pg2=settRA[i];
+        const char* nm=settPageName(pg2);
+        s.setTextColor(T().text); s.setCursor(xl,ty); s.print(nm);
+        settChevron(s,xr-4,ty+4,T().subtext);
+        String v="";
+        if(pg2==1) v=String(themes[themeIdx].name);
+        else if(pg2==2){ char b[12]; snprintf(b,sizeof(b),"%dMHz",SPI_OC_OPTIONS[spiOcIdx]); v=String(b); }
+        else if(pg2==3) v=(WiFi.status()==WL_CONNECTED)?WiFi.SSID():String(RPTR("Mati"));
+        else if(pg2==5){ char vl[16]; otaVersionLabel(vl,sizeof(vl)); v=String(vl); }
+        if(v.length()){ v=settFit(s,v,xr-12-xl-s.textWidth(nm)-16); settTextR(s,xr-12,ty,v.c_str(),T().subtext); }
+        } break;
+      case SR_NOHIT:
+        s.setTextColor(T().subtext); s.setCursor(cx+cw/2-s.textWidth(RPTR("Tidak ada hasil"))/2,ty); s.print(RPTR("Tidak ada hasil"));
         break;
       case SR_SECT: // UI-POLISH-V2: batang aksen + teks tebal
         nyxAaRR(s, cx+2,ry+rh-14,3,10,1,T().accent);
@@ -10431,6 +10562,19 @@ void settTap(int x,int y){
   int r=settRowAt(y); if(r<0) return;
   const int cx=10, cw=SCR_W-20, xr=cx+cw-14;
   switch(settRT[r]){
+    case SR_SEARCH:   // UI-REVAMP: ketuk = buka keyboard; ketuk (x) = hapus
+      if(settQuery.length()>0 && x>=cx+cw-34){ settQuery=""; settScroll=0; needRedraw=true; break; }
+      settFocus=2; kbTarget=&settQuery; kbVisible=true; kbMode=KB_LOWER; needRedraw=true; break;
+    case SR_QUICK: {
+      int gap=8, tw=(cw-2*gap)/3; int k=(x-cx)/(tw+gap);
+      if(x<cx || k<0 || k>2) break;
+      if(k==0){ settPage=3; settScroll=0; }
+      else if(k==1){ autoRotateEnabled=!autoRotateEnabled; saveAutoRotatePref(); showToast(autoRotateEnabled?RPTR("Auto-rotate aktif"):RPTR("Auto-rotate mati")); }
+      else { themeIdx=(themeIdx+1)%THEME_COUNT; saveTheme(); initAppColors(); showToast(RPTR("Tema diganti")); }
+      needRedraw=true;
+      } break;
+    case SR_CAT:
+      settPage=settRA[r]; settScroll=0; settTouchMode=0; needRedraw=true; break;
     case SR_THEME: {
       int x0=cx+72, step=(cw-84)/THEME_COUNT;
       int t=(x-x0)/step;
@@ -10449,7 +10593,7 @@ void settTap(int x,int y){
       showToast(uiLang==LANG_ID?"Bahasa: Indonesia":"Language: English");
       needRedraw=true; break;
     case SR_HOMEEDIT:
-      navPush(SCR_HOMEEDIT); break;
+      settKeepPage=true; settKeepScroll=settScroll; navPush(SCR_HOMEEDIT); break;
     case SR_ROT:
       autoRotateEnabled=!autoRotateEnabled; saveAutoRotatePref();
       showToast(autoRotateEnabled?RPTR("Auto-rotate aktif"):RPTR("Auto-rotate mati"));
@@ -10518,11 +10662,11 @@ void settTap(int x,int y){
       showToast(RPTR("Menghubungkan WiFi..."));
       needRedraw=true; break;
     case SR_OWNER:
-      navPush(SCR_OWNER); break;
+      settKeepPage=true; settKeepScroll=settScroll; navPush(SCR_OWNER); break;
     case SR_ABOUT:
-      navPush(SCR_ABOUT); break;
+      settKeepPage=true; settKeepScroll=settScroll; navPush(SCR_ABOUT); break;
     case SR_BACKUP:
-      navPush(SCR_BACKUP); break;
+      settKeepPage=true; settKeepScroll=settScroll; navPush(SCR_BACKUP); break;
     case SR_POWER:
       powerMenuShow(); needRedraw=true; break;
     case SR_FACTORY:   // FACTORY_RESET_V1: ketuk 2x dalam 4 detik
@@ -22930,7 +23074,7 @@ void loop(){
         if(newT) apps[idx].touch(tx,ty,false,true);
         else if(touched && held) apps[idx].touch(tx,ty,true,false);
         else if(!touched && wasTouched) apps[idx].touch(tx,ty,false,false);
-      } else if(curScreen()==SCR_BACKUP){
+      } else if(curScreen()==SCR_BACKUP || curScreen()==SCR_OWNER){   // UI-REVAMP: Profil juga tap-saat-lepas
         // FIX Backup: ketukan baru dieksekusi saat JARI DILEPAS (supaya geser-scroll tdk memicu tombol),
         // jadi backupTouch() WAJIB dapat event lepas (held=false,isNew=false). Dispatch generik di bawah
         // tidak pernah mengirimnya -> sebelumnya tombol Backup tidak bereaksi sama sekali.

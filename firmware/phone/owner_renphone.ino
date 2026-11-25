@@ -429,27 +429,178 @@ static bool ownerUserCommit() {
 // Layout: semua statis tanpa struct/parameter (aman dari bug prototype arduino-cli).
 static int og_acx, og_acy, og_ar, og_nameY, og_nameMaxW, og_bx, og_by0, og_bw, og_bw2, og_bh, og_gap;
 
-static void ownerLayout() {
-  og_gap = 6;
-  if (SCR_W > SCR_H) {                          // landscape: foto besar di kiri, tombol 2 kolom di kanan
-    int leftW = 140;
-    og_ar = 36; og_acx = 8 + leftW / 2; og_acy = 92;
-    og_nameY = og_acy + og_ar + 8; og_nameMaxW = leftW - 4;
-    og_bx = 8 + leftW + 6; og_bw2 = SCR_W - og_bx - 8; og_by0 = 52; og_bh = 34; og_gap = 8;
-  } else {                                      // portrait: foto di atas, tombol 2 kolom di bawah
-    og_ar = 36; og_acx = SCR_W / 2; og_acy = 80;
-    og_nameY = og_acy + og_ar + 6; og_nameMaxW = SCR_W - 16;
-    og_bx = 8; og_bw2 = SCR_W - 16; og_by0 = 166; og_bh = 32;
+// UI-REVAMP: layar Profil = avatar besar + daftar aksi ala iOS (kartu kaca, ikon berwarna, bisa digulir).
+// Baris: 0 Ganti foto | 1 Nama | 2 Username || 3 Bingkai & warna | 4 Statistik || 5 Hapus foto
+static int   ol_rowY[6], ol_rowH, ol_cx, ol_cw, ol_hdrH, ol_totalH, ol_tx;   // posisi relatif ke asal konten (sebelum digulir)
+static const uint8_t ol_grp[6] = { 0, 0, 0, 1, 1, 2 };
+static const uint8_t ol_act[6] = { 0, 1, 4, 2, 3, 5 };                       // baris -> nomor aksi di ownerDoAction()
+static float ownerScroll = 0;
+static int   ownerTX0 = 0, ownerTY0 = 0, ownerTLastY = 0;
+static int   ownerPressRow = -2;                                             // -2 tak ada, -1 avatar, 0..5 baris
+static bool  ownerDrag = false;
+static unsigned long ownerTT0 = 0;
+#define OL_TOP 42
+
+static int ownerListBot() { return backY() - 4; }
+
+static void ownerListLayout() {
+  bool land = SCR_W > SCR_H;
+  ol_cx = 10; ol_cw = SCR_W - 20; ol_rowH = 38;
+  og_ar = land ? 28 : (SCR_H >= 400 ? 44 : 36);
+  if (land) {                                   // landscape: avatar di kiri, nama di kanannya (hemat tinggi)
+    og_acx = ol_cx + 6 + og_ar; og_acy = 6 + og_ar;
+    ol_tx = og_acx + og_ar + 14; og_nameMaxW = SCR_W - ol_tx - 10;
+    og_nameY = og_acy - 14;
+    ol_hdrH = og_ar * 2 + 18;
+  } else {                                      // portrait: avatar di tengah, nama di bawahnya
+    og_acx = SCR_W / 2; og_acy = 8 + og_ar;
+    og_nameY = og_acy + og_ar + 8; og_nameMaxW = SCR_W - 20;
+    ol_tx = 0;
+    ol_hdrH = og_nameY + 44;
   }
-  og_bw = (og_bw2 - 6) / 2;
+  int y = ol_hdrH;
+  for (int i = 0; i < 6; i++) {
+    if (i > 0 && ol_grp[i] != ol_grp[i - 1]) y += 12;
+    ol_rowY[i] = y; y += ol_rowH;
+  }
+  ol_totalH = y + 14;
 }
 
-// Tombol utama (2 kolom x 3 baris): 0 Pilih foto | 1 Ubah nama / 2 Bingkai | 3 Statistik / 4 Username | 5 Hapus foto
-static void ownerBtnRect(int i, int& x, int& y, int& w, int& h) {
-  ownerLayout();
-  int row = i / 2, col = i % 2;
-  h = og_bh; y = og_by0 + row * (og_bh + og_gap);
-  w = og_bw; x = og_bx + col * (og_bw + 6);
+static float ownerMaxScroll() { int vis = ownerListBot() - OL_TOP; int m = ol_totalH - vis; return m > 0 ? (float)m : 0.0f; }
+
+// ikon berwarna 22x22 (gaya sama dgn chip Pengaturan)
+static void ownerChip(LGFX_Sprite& s, int kind, int x, int y) {
+  static const uint16_t cols[5] = { CHIP_BLUE, CHIP_GREEN, CHIP_TEAL, CHIP_PURPLE, CHIP_ORANGE };
+  uint16_t col = cols[kind]; const uint16_t W = 0xFFFF; int cx = x + 11, cy = y + 11;
+  nyxAaRR(s, x, y + 1, 22, 22, 6, blend565(col, 0x0000, 70));
+  nyxAaRR(s, x, y, 22, 22, 6, col);
+  s.drawFastHLine(x + 6, y + 1, 10, blend565(col, 0xFFFF, 70));
+  switch (kind) {
+    case 0:   // foto: bingkai + gunung + matahari
+      s.drawRect(cx - 8, cy - 6, 16, 12, W); nyxAaCircle(s, cx + 3, cy - 2, 1, W);
+      s.fillTriangle(cx - 7, cy + 5, cx - 2, cy - 1, cx + 3, cy + 5, W);
+      break;
+    case 1:   // orang
+      nyxAaCircle(s, cx, cy - 3, 3, W); nyxAaRR(s, cx - 6, cy + 2, 12, 7, 3, W);
+      break;
+    case 2:   // @
+      s.setTextSize(1); s.setTextColor(W); s.setCursor(cx - 3, cy - 3); s.print("@");
+      break;
+    case 3:   // bingkai bulat
+      nyxAaCircleRing(s, cx, cy, 8, W); nyxAaCircleRing(s, cx, cy, 4, W);
+      break;
+    case 4:   // grafik batang
+      s.fillRect(cx - 6, cy + 1, 3, 6, W); s.fillRect(cx - 1, cy - 3, 3, 10, W); s.fillRect(cx + 4, cy - 7, 3, 14, W);
+      break;
+  }
+}
+
+static void ownerDrawMain(LGFX_Sprite& s) {
+  iosTitle(s, 8, 26, RPTR("Profil"));
+  ownerListLayout();
+  float mx = ownerMaxScroll(); if (ownerScroll > mx) ownerScroll = mx; if (ownerScroll < 0) ownerScroll = 0;
+  const int bot = ownerListBot();
+  const int oy = OL_TOP - (int)lroundf(ownerScroll);
+  const bool land = SCR_W > SCR_H;
+  s.setClipRect(0, OL_TOP - 2, SCR_W, bot - OL_TOP + 2);
+
+  // ---- kepala: avatar + lencana kamera + nama + username ----
+  ownerDrawAvatar(s, og_acx, oy + og_acy, og_ar);
+  int bx = og_acx + og_ar * 7 / 10, by = oy + og_acy + og_ar * 7 / 10;
+  nyxAaCircle(s, bx, by, 10, T().bg); nyxAaCircle(s, bx, by, 8, T().accent);
+  s.drawFastHLine(bx - 4, by, 9, 0xFFFF); s.drawFastVLine(bx, by - 4, 9, 0xFFFF);
+
+  char nm[OWNER_NAME_MAX + 1];
+  strncpy(nm, ownerNameBuf, OWNER_NAME_MAX); nm[OWNER_NAME_MAX] = 0;
+  s.setTextSize(2);
+  int n = (int)strlen(nm);
+  while (n > 1 && s.textWidth(nm) > og_nameMaxW) nm[--n] = 0;
+  s.setTextColor(T().text);
+  s.setCursor(land ? ol_tx : og_acx - s.textWidth(nm) / 2, oy + og_nameY);
+  s.print(nm);
+  s.setTextSize(1);
+  const char* un = devRegName();
+  char subBuf[DR_NAME_MAX + 8];
+  const char* sub = RPTR("Pemilik perangkat");
+  s.setTextColor(T().subtext);
+  if (un[0]) { snprintf(subBuf, sizeof(subBuf), "@%s%s", un, devRegNameSynced() ? "" : " ..."); sub = subBuf; s.setTextColor(T().accent); }
+  s.setCursor(land ? ol_tx : og_acx - s.textWidth(sub) / 2, oy + og_nameY + 22);
+  s.print(sub);
+
+  // ---- kartu kaca per grup + pemisah ----
+  for (int i = 0; i < 6;) {
+    int g = ol_grp[i], j = i; while (j + 1 < 6 && ol_grp[j + 1] == g) j++;
+    int gy = oy + ol_rowY[i], gh = ol_rowY[j] + ol_rowH - ol_rowY[i];
+    if (gy + gh > OL_TOP && gy < bot) {
+      drawGlassCard(s, ol_cx, gy, ol_cw, gh, 14, T().surface, 215);
+      for (int k = i; k < j; k++) {
+        int ly = oy + ol_rowY[k] + ol_rowH;
+        if (ly > OL_TOP && ly < bot) { int lx = ol_cx + 44; s.drawFastHLine(lx, ly, ol_cx + ol_cw - lx, T().divider); }
+      }
+    }
+    i = j + 1;
+  }
+
+  // ---- isi baris ----
+  bool armed = millis() < ownerDelArmUntil;
+  const char* lbl[5] = { RPTR("Ganti foto"), RPTR("Nama"), "Username", RPTR("Bingkai & warna"), RPTR("Statistik") };
+  for (int i = 0; i < 6; i++) {
+    int ry = oy + ol_rowY[i];
+    if (ry + ol_rowH <= OL_TOP || ry >= bot) continue;
+    int ty = ry + ol_rowH / 2 - 4, xl = ol_cx + 14, xr = ol_cx + ol_cw - 14;
+    if (ownerPressRow == i && !ownerDrag) nyxAaRR(s, ol_cx + 3, ry + 1, ol_cw - 6, ol_rowH - 2, 9, blend565(T().surface, T().text, 34));
+    s.setTextSize(1);
+    if (i < 5) {
+      xl = ol_cx + 44; ownerChip(s, i, ol_cx + 12, ry + (ol_rowH - 22) / 2);
+      s.setTextColor(T().text); s.setCursor(xl, ty); s.print(lbl[i]);
+      settChevron(s, xr - 4, ty + 4, T().subtext);
+      String v = ""; uint16_t vc = T().subtext;
+      if (i == 0) { if (!ownerHasAv) v = RPTR("Belum ada foto"); }
+      else if (i == 1) v = String(ownerNameBuf);
+      else if (i == 2) { if (un[0]) { v = String("@") + un; vc = T().accent; } else v = RPTR("Belum diatur"); }
+      else if (i == 3) v = String(ownerStyleName[ownerFrameStyle]);
+      else { uint32_t tot = 0; for (int k = 0; k < OWNER_STAT_MAX; k++) tot += ownerCnt[k]; v = String((unsigned)tot) + " " + RPTR("kali"); }
+      if (v.length()) {
+        int vr = xr - 12;
+        v = settFit(s, v, vr - xl - s.textWidth(lbl[i]) - (i == 3 ? 26 : 12));
+        settTextR(s, vr, ty, v.c_str(), vc);
+        if (i == 3) nyxAaCircle(s, vr - s.textWidth(v.c_str()) - 9, ty + 4, 4, ownerFrameColor());
+      }
+    } else {   // Hapus foto (merah, di tengah; ketuk 2x)
+      const char* dl = armed ? RPTR("Yakin? Ketuk lagi") : RPTR("Hapus foto");
+      s.setTextColor(ownerHasAv ? T().danger : T().subtext);
+      s.setCursor(ol_cx + ol_cw / 2 - s.textWidth(dl) / 2, ty); s.print(dl);
+    }
+  }
+  s.clearClipRect();
+  if (armed) needRedraw = true;                 // supaya label kembali sendiri saat waktu habis
+
+  // indikator gulir
+  if (mx > 0) {
+    int railTop = OL_TOP + 4, railH = (bot - OL_TOP) - 8;
+    if (railH > 20) {
+      nyxAaRR(s, SCR_W - 5, railTop, 3, railH, 1, blend565(T().surface, 0xFFFF, 50));
+      int thumbH = max(16, (int)(railH * (float)(bot - OL_TOP) / (float)ol_totalH));
+      int thumbY = railTop + (int)((railH - thumbH) * (ownerScroll / mx));
+      nyxAaRR(s, SCR_W - 5, thumbY, 3, thumbH, 1, T().accent);
+    }
+  }
+  drawBack(s);
+  drawToast(s);
+}
+
+// -1 avatar, 0..5 baris, -2 kosong
+static int ownerRowAt(int x, int y) {
+  ownerListLayout();
+  int oy = OL_TOP - (int)lroundf(ownerScroll);
+  if (y < OL_TOP || y >= ownerListBot()) return -2;
+  int dx = x - og_acx, dy = y - (oy + og_acy), rr = og_ar + 6;
+  if (dx * dx + dy * dy <= rr * rr) return -1;
+  for (int i = 0; i < 6; i++) {
+    int ry = oy + ol_rowY[i];
+    if (y >= ry && y < ry + ol_rowH && x >= ol_cx && x <= ol_cx + ol_cw) return i;
+  }
+  return -2;
 }
 
 static void ownerBtn(LGFX_Sprite& s, int x, int y, int w, int h, const char* lb, uint16_t tint, uint16_t txt) {
@@ -615,6 +766,7 @@ void ownerEnter() {
   ownerDelArmUntil = 0;
   ownerStatArmUntil = 0;
   ownerView = 0;
+  ownerScroll = 0; ownerPressRow = -2; ownerDrag = false;   // UI-REVAMP
 }
 
 void ownerExit() {
@@ -675,86 +827,18 @@ void drawOwner(LGFX_Sprite& s) {
   if (ownerView == 1) { ownerDrawPick(s);  drawBack(s); drawToast(s); return; }
   if (ownerView == 2) { ownerDrawStats(s); drawBack(s); drawToast(s); return; }
 
-  iosTitle(s, 8, 26, RPTR("Profil"));
-  ownerLayout();
-  ownerDrawAvatar(s, og_acx, og_acy, og_ar);
-
-  char nm[OWNER_NAME_MAX + 1];
-  strncpy(nm, ownerNameBuf, OWNER_NAME_MAX); nm[OWNER_NAME_MAX] = 0;
-  s.setTextSize(2);
-  int n = (int)strlen(nm);
-  while (n > 1 && s.textWidth(nm) > og_nameMaxW) nm[--n] = 0;
-  s.setTextColor(T().text);
-  s.setCursor(og_acx - s.textWidth(nm) / 2, og_nameY);
-  s.print(nm);
-  s.setTextSize(1);
-  s.setTextColor(T().subtext);
-  const char* un = devRegName();
-  char subBuf[DR_NAME_MAX + 8];
-  const char* sub = "Pemilik perangkat";
-  if (un[0]) {                                  // username publik aktif: tampil sebagai @nama ("..." = belum tersinkron)
-    snprintf(subBuf, sizeof(subBuf), "@%s%s", un, devRegNameSynced() ? "" : " ...");
-    sub = subBuf;
-    s.setTextColor(T().accent);
-  }
-  s.setCursor(og_acx - s.textWidth(sub) / 2, og_nameY + 22);
-  s.print(sub);
-
-  bool armed = millis() < ownerDelArmUntil;
-  const char* lbl[5] = { "Pilih foto", "Ubah nama", "Bingkai", "Statistik", "Username" };
-  for (int i = 0; i < 6; i++) {
-    int x, y, w, h; ownerBtnRect(i, x, y, w, h);
-    if (i < 5) ownerBtn(s, x, y, w, h, lbl[i], i == 0 ? T().accent : T().surface2, T().text);
-    else       ownerBtn(s, x, y, w, h, armed ? "Yakin?" : "Hapus foto",
-                        armed ? T().danger : T().surface2, armed ? 0xFFFF : T().danger);
-  }
-  if (armed) needRedraw = true;                 // supaya label kembali sendiri saat waktu habis
-
-  drawBack(s);
-  drawToast(s);
+  ownerDrawMain(s);                             // UI-REVAMP: avatar + daftar aksi ala iOS
 }
 
-void ownerTouch(int x, int y, bool held, bool isNew) {
-  (void)held;
-  if (!isNew) return;
+// back / swipe-back: dari sub-layar (Bingkai, Statistik) balik ke Profil dulu
+bool ownerSubBack() {
+  if (ownerEditing || ownerUserEditing) return false;
+  if (ownerView != 0) { ownerView = 0; ownerStatArmUntil = 0; return true; }
+  return false;
+}
 
-  if (ownerEditing) {
-    if (y < kbY() - 2) {
-      ownerCommitName();
-    } else {
-      kbTouch(x, y);
-      if ((int)ownerNameEdit.length() > OWNER_NAME_MAX) ownerNameEdit.remove(OWNER_NAME_MAX);
-    }
-    needRedraw = true;
-    return;
-  }
-
-  if (ownerUserEditing) {
-    if (y < kbY() - 2) {
-      ownerUserCommit();
-    } else {
-      kbTouch(x, y);
-      ownerUserClean(ownerUserEdit);
-    }
-    needRedraw = true;
-    return;
-  }
-
-  if (isBack(x, y)) {
-    if (ownerView != 0) { ownerView = 0; ownerStatArmUntil = 0; needRedraw = true; }   // dari sub-layar balik ke Profil dulu
-    else navBack();
-    return;
-  }
-  if (ownerView == 1) { ownerTouchPick(x, y);  return; }
-  if (ownerView == 2) { ownerTouchStats(x, y); return; }
-
-  int idx = -1;
-  for (int i = 0; i < 6; i++) {
-    int bx, by, bw, bh; ownerBtnRect(i, bx, by, bw, bh);
-    if (x >= bx && x <= bx + bw && y >= by && y <= by + bh) { idx = i; break; }
-  }
-  if (idx < 0) return;
-
+// aksi (nomor lama): 0 pilih foto | 1 ubah nama | 2 bingkai | 3 statistik | 4 username | 5 hapus foto
+static void ownerDoAction(int idx) {
   if (idx == 0) {                                // Pilih foto dari SD (via Galeri mode pilih)
     if (!sdReady) { showToast(RPTR("SD Card tidak terdeteksi")); needRedraw = true; return; }
     ownerPickMode = true;
@@ -785,5 +869,65 @@ void ownerTouch(int x, int y, bool held, bool isNew) {
       showToast(RPTR("Ketuk lagi untuk hapus foto"));
     }
     needRedraw = true;
+  }
+}
+
+// Event dari dispatcher: isNew = jari turun, held = jari bergerak, (!held && !isNew) = jari dilepas.
+// Layar utama: ketukan dieksekusi saat DILEPAS (supaya geser-gulir tidak memicu tombol). Sisanya tetap saat turun.
+void ownerTouch(int x, int y, bool held, bool isNew) {
+  bool rel = (!held && !isNew);
+
+  if (ownerEditing) {
+    if (!isNew) return;
+    if (y < kbY() - 2) {
+      ownerCommitName();
+    } else {
+      kbTouch(x, y);
+      if ((int)ownerNameEdit.length() > OWNER_NAME_MAX) ownerNameEdit.remove(OWNER_NAME_MAX);
+    }
+    needRedraw = true;
+    return;
+  }
+
+  if (ownerUserEditing) {
+    if (!isNew) return;
+    if (y < kbY() - 2) {
+      ownerUserCommit();
+    } else {
+      kbTouch(x, y);
+      ownerUserClean(ownerUserEdit);
+    }
+    needRedraw = true;
+    return;
+  }
+
+  if (ownerView != 0) {                          // sub-layar: Bingkai & warna / Statistik
+    if (!isNew) return;
+    if (isBack(x, y)) { ownerView = 0; ownerStatArmUntil = 0; needRedraw = true; return; }
+    if (ownerView == 1) ownerTouchPick(x, y); else ownerTouchStats(x, y);
+    return;
+  }
+
+  if (isNew) {
+    if (isBack(x, y)) { navBack(); return; }
+    ownerTX0 = x; ownerTY0 = y; ownerTLastY = y; ownerTT0 = millis(); ownerDrag = false;
+    ownerPressRow = ownerRowAt(x, y);
+    if (ownerPressRow != -2) needRedraw = true;  // sorot baris yang ditekan
+    return;
+  }
+  if (held) {
+    if (!ownerDrag && abs(y - ownerTY0) > 8) { ownerDrag = true; ownerPressRow = -2; needRedraw = true; }
+    if (ownerDrag) {
+      ownerScroll += (float)(ownerTLastY - y);
+      float mx = ownerMaxScroll(); if (ownerScroll > mx) ownerScroll = mx; if (ownerScroll < 0) ownerScroll = 0;
+      needRedraw = true;
+    }
+    ownerTLastY = y;
+    return;
+  }
+  if (rel) {
+    int r = ownerPressRow; ownerPressRow = -2; needRedraw = true;
+    if (!ownerDrag && r != -2 && millis() - ownerTT0 < 700) ownerDoAction(r == -1 ? 0 : (int)ol_act[r]);
+    ownerDrag = false;
   }
 }

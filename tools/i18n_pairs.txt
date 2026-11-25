@@ -922,3 +922,18 @@ Model dipilih ::: Model selected
 Kustom... ::: Custom...
 Kustom:  ::: Custom: 
 Offset ketuk ::: Tap offset
+# --- UI-REVAMP: Pengaturan & Profil ---
+Tampilan ::: Display
+Kinerja ::: Performance
+Sistem ::: System
+Sensor & Layar ::: Sensor & Screen
+Cari pengaturan ::: Search settings
+Tidak ada hasil ::: No results
+Rotasi ::: Rotation
+Aktif ::: On
+Ganti foto ::: Change photo
+Nama ::: Name
+Belum diatur ::: Not set
+Belum ada foto ::: No photo
+Yakin? Ketuk lagi ::: Sure? Tap again
+kali ::: times
