@@ -921,3 +921,4 @@ Pilih model ::: Choose model
 Model dipilih ::: Model selected
 Kustom... ::: Custom...
 Kustom:  ::: Custom: 
+Offset ketuk ::: Tap offset

@@ -888,5 +888,6 @@ static const I18nPair I18N_DICT[] = {
   { "Model dipilih", "Model selected" },
   { "Kustom...", "Custom..." },
   { "Kustom: ", "Custom: " },
+  { "Offset ketuk", "Tap offset" },
 };
 static const int I18N_DICT_N = (int)(sizeof(I18N_DICT)/sizeof(I18N_DICT[0]));

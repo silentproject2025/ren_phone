@@ -4154,6 +4154,15 @@ const char* kbN[3][10]={
 const char* (*kbMaps[5])[10]={kbL,kbU,kbN,kbE1,kbE2};
 
 // KB-FIX: semua baris 10 tuts, grid rata & di-tengah.
+// KB_TAPOFF_V1: offset vertikal titik ketuk untuk keyboard saja (px, + = titik ketuk digeser ke bawah).
+// Dipakai bila jari Anda sistematis mengenai baris atas/bawah dari yang dituju. Atur di Settings > Sensor & Layar.
+#define KB_TAP_DY_MAX 8
+int kbTapDy = 0;
+void saveKbTapDy(){ Preferences p; p.begin("ui",false); p.putInt("kbdy",kbTapDy); p.end(); }
+void loadKbTapDy(){
+  Preferences p; p.begin("ui",true); int v=p.getInt("kbdy",0); p.end();
+  kbTapDy = v<-KB_TAP_DY_MAX ? -KB_TAP_DY_MAX : (v>KB_TAP_DY_MAX ? KB_TAP_DY_MAX : v);
+}
 int kbKeyW(){ return (SCR_W-8-18)/10; }
 int kbKeyH(){ return SCR_H >= 300 ? 28 : 24; }   // KB_BIGGER_V1 (dulu 22)
 // KAMUS (kamus_renphone.ino): baris saran kata + autokoreksi tepat di atas tuts.
@@ -4348,6 +4357,7 @@ void drawKb(LGFX_Sprite& s){
 
 void kbTouch(int x,int y){
   if(!kbVisible||!kbTarget) return;
+  y += kbTapDy;                                    // KB_TAPOFF_V1
   kbUxNormalize();                                 // KB_UX_V1
   int yTop=kbY(), y0=kbKeysY();
   if(y<yTop-2) return;
@@ -4422,6 +4432,7 @@ void kbTouch(int x,int y){
 bool kbBackspaceHit(int x,int y){
   if(!kbVisible||!kbTarget) return false;
   int cell=kbKeyH()+2, cy=kbKeysY()+3*cell, R=SCR_W-kbLeft();
+  y += kbTapDy;                                  // KB_TAPOFF_V1
   return y>=cy && x>=R-84-2;
 }
 void kbHoldDeleteStep(){
@@ -9908,7 +9919,7 @@ int loadSpiOcPref(){
 // =====================================================================
 enum { SR_TITLE=0, SR_SECT, SR_BRIGHT, SR_THEME, SR_FONT, SR_ROT, SR_SPI, SR_SPIAPPLY,
        SR_SCAN, SR_WIFI, SR_NONET, SR_SSID, SR_PASS, SR_CONNECT, SR_MPU, SR_TCAL, SR_OWNER, SR_ABOUT, SR_POWER, SR_HOMEEDIT, SR_BACKUP, SR_HEAPLOG, SR_HWS, SR_LANG,
-       SR_WSTAT, SR_FOOT /* SETT_UX_V1 */, SR_FACTORY /* FACTORY_RESET_V1 */ };
+       SR_WSTAT, SR_FOOT /* SETT_UX_V1 */, SR_FACTORY /* FACTORY_RESET_V1 */, SR_KBTAP /* KB_TAPOFF_V1 */ };
 #define SETT_MAXROWS 44
 int settRT[SETT_MAXROWS], settRG[SETT_MAXROWS], settRY[SETT_MAXROWS], settRH[SETT_MAXROWS], settRA[SETT_MAXROWS];
 const char* settRL[SETT_MAXROWS];
@@ -9972,7 +9983,8 @@ void settBuildLayout(){
 
   settAddRow(SR_SECT,0,26,0,RPTR("SENSOR & LAYAR"),y);
   settAddRow(SR_MPU,g,34,0,nullptr,y);
-  settAddRow(SR_TCAL,g,34,0,nullptr,y); g++;
+  settAddRow(SR_TCAL,g,34,0,nullptr,y);
+  settAddRow(SR_KBTAP,g,38,0,nullptr,y); g++;   // KB_TAPOFF_V1
 
   settAddRow(SR_SECT,0,26,0,RPTR("TENTANG"),y);
   settAddRow(SR_ABOUT,g,34,0,nullptr,y);
@@ -10019,7 +10031,7 @@ bool settPressable(int t){
 bool settHasChip(int t){
   switch(t){
     case SR_BRIGHT: case SR_THEME: case SR_FONT: case SR_LANG: case SR_ROT: case SR_HOMEEDIT: case SR_SPI:
-    case SR_SCAN: case SR_SSID: case SR_PASS: case SR_MPU: case SR_TCAL: case SR_ABOUT: case SR_POWER: case SR_BACKUP: case SR_HEAPLOG: case SR_HWS: case SR_FACTORY:
+    case SR_SCAN: case SR_SSID: case SR_PASS: case SR_MPU: case SR_TCAL: case SR_ABOUT: case SR_POWER: case SR_BACKUP: case SR_HEAPLOG: case SR_HWS: case SR_FACTORY: case SR_KBTAP:
       return true;
   }
   return false;
@@ -10043,6 +10055,7 @@ void settChip(LGFX_Sprite& s,int type,int x,int y){ // x,y = pojok kiri-atas chi
     case SR_BACKUP:   col=CHIP_TEAL;   break;
     case SR_HEAPLOG:  col=CHIP_GRAY;   break;
     case SR_HWS:      col=CHIP_TEAL;   break;   // HW_SCROLL_V1
+    case SR_KBTAP:    col=CHIP_ORANGE; break;   // KB_TAPOFF_V1
     case SR_POWER:    col=CHIP_RED;    break;
     case SR_FACTORY:  col=CHIP_RED;    break;   // FACTORY_RESET_V1
     default: return;
@@ -10103,6 +10116,10 @@ void settChip(LGFX_Sprite& s,int type,int x,int y){ // x,y = pojok kiri-atas chi
     case SR_BACKUP:    // panah turun ke baki
       s.fillRect(cx-1,cy-8,3,8,W); s.fillTriangle(cx-5,cy-1,cx+5,cy-1,cx,cy+5,W);
       s.fillRect(cx-7,cy+7,15,2,W);
+      break;
+    case SR_KBTAP:     // KB_TAPOFF_V1: tuts + panah atas-bawah
+      s.drawRect(cx-8,cy-3,16,11,W); s.fillRect(cx-5,cy+4,10,2,W);
+      s.fillTriangle(cx,cy-9,cx-3,cy-5,cx+3,cy-5,W);
       break;
     case SR_HWS:       // HW_SCROLL_V1: panah atas-bawah
       s.fillTriangle(cx,cy-8,cx-5,cy-2,cx+5,cy-2,W); s.fillTriangle(cx,cy+8,cx-5,cy+2,cx+5,cy+2,W);
@@ -10280,6 +10297,16 @@ void drawSettings(LGFX_Sprite& s){
           s.setCursor(sx+k*segW+segW/2-s.textWidth(hl[k])/2,sy+7); s.print(hl[k]);
         }
         } break;
+      case SR_KBTAP: {   // KB_TAPOFF_V1: [-] nilai [+]
+        s.setTextColor(T().text); s.setCursor(xl,ty-4); s.print(RPTR("Offset ketuk"));
+        s.setTextColor(T().subtext); s.setCursor(xl,ty+6); s.print("Keyboard (px)");
+        int sw=84, sx=xr-sw, sy=ry+(rh-22)/2;
+        nyxAaRR(s, sx,sy,sw,22,11,T().surface2);
+        char vb[8]; snprintf(vb,sizeof(vb),"%+d",kbTapDy);
+        s.setTextColor(T().text); s.setCursor(sx+sw/2-s.textWidth(vb)/2,sy+7); s.print(vb);
+        s.setTextColor(T().accent); s.setCursor(sx+10,sy+7); s.print("-");
+        s.setCursor(sx+sw-16,sy+7); s.print("+");
+        } break;
       case SR_HEAPLOG:
         s.setTextColor(T().text); s.setCursor(xl,ty-4); s.print("Heaplog (RAM)");
         s.setTextColor(T().subtext); s.setCursor(xl,ty+6); s.print(rpHLWanted()!=rpHLBootOn()?RPTR("Setelah restart"):RPTR("Log RAM saat boot"));
@@ -10430,6 +10457,16 @@ void settTap(int x,int y){
     case SR_SPI: {
       int sw=108, sx=xr-sw;
       if(x>=sx && x<=sx+sw){ spiOcPendingIdx=(x<sx+sw/2)?0:1; needRedraw=true; }
+      } break;
+    case SR_KBTAP: {   // KB_TAPOFF_V1
+      int sw=84, sx=xr-sw;
+      if(x>=sx && x<=sx+sw){
+        int d=kbTapDy;
+        if(x<sx+sw/3) d--; else if(x>sx+sw*2/3) d++;
+        if(d<-KB_TAP_DY_MAX) d=-KB_TAP_DY_MAX;
+        if(d>KB_TAP_DY_MAX) d=KB_TAP_DY_MAX;
+        if(d!=kbTapDy){ kbTapDy=d; saveKbTapDy(); char tb[32]; snprintf(tb,sizeof(tb),"Offset: %+d px",kbTapDy); showToast(tb); needRedraw=true; }
+      }
       } break;
     case SR_HWS: {   // HW_SCROLL_V1
       int sw=150, sx=xr-sw;
@@ -21950,6 +21987,7 @@ void setup(){
   loadNote();
   loadGeminiKey();
   loadAiModel();   // AI_MODEL_PICK_V1
+  loadKbTapDy();   // KB_TAPOFF_V1
   loadWallpaper(); // v47: muat wallpaper custom kalau ada (fallback warna solid tema kalau gak ada)
   canvasApp.setPsram(true);
   rpHL("sebelum_canvasApp");
