@@ -120,6 +120,7 @@ static int      wsSens       = 2;           // indeks 0 (rendah) .. 4 (tinggi)
 static bool     wsMoving     = false;
 static uint8_t  wsHist[WS_GRAPH_N];                // WSENSE_VIZ_V1: riwayat skor gerak / ambang (x50, maks 255)
 static int      wsHistHead   = 0, wsHistN = 0;
+static uint8_t  wsView       = 0;                  // WSENSE_MAN_V1: 0 = grafik, 1 = orang-lidi
 static int      wsMovHist    = 0;           // bin gerak dalam jendela napas (hitung kasar, peluruhan)
 
 static bool     wsCal        = false;
@@ -597,7 +598,7 @@ void wsenseLoopPoll() {
   }
   if (wsBrK >= 0) wsBreathingStep();
   wsUpdateState();
-  if (now - wsUiT0 >= 200UL) { wsUiT0 = now; needRedraw = true; }
+  if (now - wsUiT0 >= (wsView ? 100UL : 200UL)) { wsUiT0 = now; needRedraw = true; }   // WSENSE_MAN_V1
 }
 
 // ---------------------------------------------------------------------
@@ -624,6 +625,59 @@ static void wsBtn(LGFX_Sprite& s, int i, const char* label, uint16_t col, bool o
 // ---------------------------------------------------------------------
 // gambar
 // ---------------------------------------------------------------------
+// ---------------------------------------------------------------------
+// WSENSE_MAN_V1: orang-lidi. SIMBOL status + intensitas gerak + laju napas, bukan pose sebenarnya.
+//   cx = tengah, top = ujung kepala, h = tinggi total, st = WsState, ratio = skor gerak / ambang
+// ---------------------------------------------------------------------
+static void wsDrawMan(LGFX_Sprite& s, int cx, int top, int h, int st, float ratio, bool big) {
+  uint16_t col; bool ghost = false;
+  switch (st) {
+    case WS_MOVING: col = WS_RGB(255,159,10); break;
+    case WS_STILL:  col = WS_RGB(48,209,88);  break;
+    case WS_HOLD:   col = WS_RGB(255,214,10); break;
+    default:        col = blend565(T().surface2, T().subtext, 150); ghost = true; break;   // kosong / tidak aktif
+  }
+  float t = millis() / 1000.0f;
+  int r = (int)(h * 0.11f + 0.5f); if (r < 3) r = 3;
+  int th = big ? 3 : 2;                                  // tebal garis
+  float sw = 0, bob = 0, breath = 0, hz = 0;
+  if (st == WS_MOVING) {                                 // jalan di tempat: makin besar gerakan, makin cepat & lebar
+    float a = ratio < 1.0f ? 1.0f : (ratio > 3.0f ? 3.0f : ratio);
+    float ph = t * 6.2832f * (1.0f + 0.35f * a);
+    float amp = 0.5f + 0.2f * a; if (amp > 1.0f) amp = 1.0f;
+    sw = sinf(ph) * amp; bob = fabsf(sinf(ph)) * h * 0.02f;
+  } else if (st == WS_HOLD) {
+    sw = sinf(t * 9.0f) * 0.15f;                         // bergetar kecil
+  } else if (st == WS_STILL) {
+    hz = (wsBr > 0) ? wsBr / 60.0f : 0.25f;              // laju napas hasil deteksi
+    breath = sinf(t * 6.2832f * hz);
+  }
+  int hy   = top + r - (int)bob;                         // pusat kepala
+  int shY  = top + 2 * r + (int)(h * 0.04f) - (int)bob + (int)(breath * (big ? 2.0f : 1.0f));
+  int hipY = shY + (int)(h * 0.32f);
+  int legL = (int)(h * 0.36f), armL = (int)(h * 0.28f);
+  int fw = (int)(h * 0.09f), sx = (int)(h * 0.14f);
+  int footY = hipY + legL + (int)bob;
+  int handY = shY + (st == WS_HOLD ? (int)(armL * 0.45f) : (int)(armL * 0.95f));
+  float lUp = sw > 0 ? sw : 0, rUp = sw < 0 ? -sw : 0;   // kaki kiri naik saat sw > 0, kanan saat sw < 0
+  int lFootY = footY - (int)(lUp * h * 0.12f), rFootY = footY - (int)(rUp * h * 0.12f);
+  int lHandY = handY - (int)(rUp * armL * 0.5f), rHandY = handY - (int)(lUp * armL * 0.5f);   // lengan berlawanan dgn kaki
+  auto ln = [&](int x0, int y0, int x1, int y1) {
+    for (int o = 0; o < th; o++) s.drawLine(x0 + o - th / 2, y0, x1 + o - th / 2, y1, col);
+  };
+  if (ghost) nyxAaCircleRing(s, cx, hy, r, col); else nyxAaCircle(s, cx, hy, r, col);
+  ln(cx, hy + r, cx, hipY);                              // leher + badan
+  ln(cx, shY + 3, cx - sx, lHandY);                      // lengan kiri
+  ln(cx, shY + 3, cx + sx, rHandY);                      // lengan kanan
+  ln(cx, hipY, cx - fw, lFootY);                         // kaki kiri
+  ln(cx, hipY, cx + fw, rFootY);                         // kaki kanan
+  if (st == WS_STILL && big) {                           // cincin napas: membesar & memudar tiap tarikan napas
+    float fr = t * hz - floorf(t * hz);
+    int rr = (int)(h * 0.10f + fr * h * 0.16f);
+    nyxAaCircleRing(s, cx, shY + (int)(h * 0.08f), rr, blend565(T().surface2, col, (int)(200.0f * (1.0f - fr))));
+  }
+}
+
 void drawWsense(LGFX_Sprite& s) {
   iosBackdrop(s);
   drawStatusBar(s);
@@ -640,9 +694,15 @@ void drawWsense(LGFX_Sprite& s) {
     case WS_EMPTY:  txt = "Kosong";             sub = "Tidak ada gerak / napas";            col = T().subtext;        break;
     default:        txt = "Tidak aktif";        sub = wsMsg[0] ? wsMsg : "Ketuk Mulai";     col = T().danger;         break;
   }
-  nyxAaCircle(s, cx + 20, cy + ch / 2, 8, col);
+  (void)col;
+  { float rN0 = (wsThr() > 0) ? wsScore / wsThr() : 0;                    // WSENSE_MAN_V1: ikon orang-lidi kecil
+    wsDrawMan(s, cx + 20, cy + 6, ch - 12, wsState, rN0, false); }
   s.setTextSize(2); s.setTextColor(T().text); s.setCursor(cx + 38, cy + 8); s.print(txt);
   s.setTextSize(1); s.setTextColor(T().subtext); s.setCursor(cx + 38, cy + 30); s.print(sub);
+  { const char* pl = wsView ? "Grafik" : "Orang";                         // pil: ketuk kartu = ganti tampilan
+    int pw2 = s.textWidth(pl) + 16, px2 = cx + cw - pw2 - 8;
+    nyxAaRR(s, px2, cy + ch / 2 - 9, pw2, 18, 9, blend565(T().surface2, T().text, 40));
+    s.setTextColor(T().text); s.setCursor(px2 + 8, cy + ch / 2 - 4); s.print(pl); }
 
   // ---- angka ----
   char b[64];
@@ -669,7 +729,8 @@ void drawWsense(LGFX_Sprite& s) {
   s.setTextSize(1);
   { // strip atas: judul (kiri) + mode (kanan, bisa diketuk)
     char hl[40];
-    if (wsRun && fabsf(wsAdaptMul - 1.0f) > 0.15f) snprintf(hl, sizeof(hl), "Gerak vs ambang  (Adaptif x%.1f)", (double)wsAdaptMul);
+    if (wsView) snprintf(hl, sizeof(hl), "Simbol kehadiran");
+    else if (wsRun && fabsf(wsAdaptMul - 1.0f) > 0.15f) snprintf(hl, sizeof(hl), "Gerak vs ambang  (Adaptif x%.1f)", (double)wsAdaptMul);
     else snprintf(hl, sizeof(hl), "Gerak vs ambang");
     s.setTextColor(T().subtext); s.setCursor(gx + 8, gy + 8); s.print(hl);
     char tb[16]; const char* tg;
@@ -685,6 +746,24 @@ void drawWsense(LGFX_Sprite& s) {
     s.drawFastHLine(gx + 8, gy + HDR, gw - 16, T().divider);
     s.drawFastHLine(gx + 8, gy + gh - FTR, gw - 16, T().divider);
   }
+  if (wsView == 1) {                                     // WSENSE_MAN_V1: tampilan orang-lidi
+    int ph = bot - top, capH = 12;
+    int fh = ph - capH - 4; if (fh > 150) fh = 150;
+    float rN = (wsThr() > 0) ? wsScore / wsThr() : 0;
+    if (fh >= 40) {
+      wsDrawMan(s, gx + gw / 2, top + (ph - capH - fh) / 2, fh, wsState, rN, true);
+      char cp[40]; cp[0] = 0;
+      switch (wsState) {
+        case WS_MOVING: snprintf(cp, sizeof(cp), "Gerak %.1fx ambang", (double)rN); break;
+        case WS_STILL:  if (wsBr > 0) snprintf(cp, sizeof(cp), "Napas ~%.0f/mnt", (double)wsBr); break;
+        case WS_HOLD:   snprintf(cp, sizeof(cp), "Menunggu tenang..."); break;
+        case WS_EMPTY:  snprintf(cp, sizeof(cp), "Tidak ada orang terdeteksi"); break;
+        default:        snprintf(cp, sizeof(cp), "Ketuk Mulai"); break;
+      }
+      s.setTextSize(1); s.setTextColor(T().subtext);
+      int cw2 = s.textWidth(cp); s.setCursor(gx + (gw - cw2) / 2, bot - 9); s.print(cp);
+    }
+  } else {
   // ---- grafik 1: batang gerak / ambang ----
   {
     int pb = top + p1H;                                  // dasar batang
@@ -741,6 +820,7 @@ void drawWsense(LGFX_Sprite& s) {
       s.setCursor(pxL + 2, (t2 + b2) / 2 - 4); s.print(wsRun ? "Mengumpulkan data..." : "-");
     }
   }
+  }  // WSENSE_MAN_V1: akhir cabang grafik
   // ---- strip bawah: pesan (kiri, dipotong bila kepanjangan) + Sens n/5 (kanan) ----
   { char sb[12]; snprintf(sb, sizeof(sb), "Sens %d/5", wsSens + 1);
     int sw = s.textWidth(sb);
@@ -777,6 +857,7 @@ void wsenseTouch(int x, int y, bool held, bool isNew) {
   (void)held;
   if (!isNew) return;
   if (isBack(x, y)) { navBack(); return; }
+  if (y >= 26 + 18 && y <= 26 + 18 + 46) { wsView ^= 1; needRedraw = true; return; }   // WSENSE_MAN_V1: kartu status = ganti tampilan
   { int tgy = 26 + 18 + 46 + 6 + 14;                    // = gy di drawWsense (jaga tetap sama)
     if (y >= tgy && y <= tgy + 20 && x > SCR_W - 100) {  // ganti mode multi <-> rata-rata
       wsMulti = !wsMulti; wsBrK = -1; wsBrRingN = 0; wsBr = 0; wsMovHist = 0; wsHistN = 0;
