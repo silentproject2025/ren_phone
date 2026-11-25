@@ -1157,7 +1157,7 @@ void drawGlassPanel(LGFX_Sprite& s, int x,int y,int w,int h,int radius, uint16_t
 
 // Varian lingkaran (dipakai tombol Control Center)
 void drawGlassCircle(LGFX_Sprite& s, int cx,int cy,int r, uint16_t tint, uint8_t tintAlpha){
-  { uint16_t sb=glassSampleAvg(s,cx-r,cy-r+2,r*2,r*2,3); nyxAaCircle(s, cx,cy+2,r+1,blend565(sb,0x0000,45)); } // v-baru: bayangan lembut, nyampel warna asli spt shadowSoft()
+  if(!ccNoShadow){ uint16_t sb=glassSampleAvg(s,cx-r,cy-r+2,r*2,r*2,3); nyxAaCircle(s, cx,cy+2,r+1,blend565(sb,0x0000,45)); } // v-baru: bayangan lembut, nyampel warna asli spt shadowSoft()
   // v51: sama kayak drawGlassPanel -- gradasi bilinear gantiin mosaic flat
   // v49 (yg bikin "pecah"). Diklip ke kotak inscribed di dlm lingkaran.
   // v96: grid/mosaic diperhalus, pola sama persis dgn drawGlassPanel di atas
@@ -6303,12 +6303,16 @@ static void ccDrawHeader(LGFX_Sprite& s){
 }
 // ===== CC_UX_V2 END =====
 
-static void ccDrawLiveH(LGFX_Sprite& s, int ph, bool withToast){
+static void ccDrawLiveH_impl(LGFX_Sprite& s, int ph, bool withToast);
+static void ccDrawLiveH(LGFX_Sprite& s, int ph, bool withToast){   // CC_NO_SHADOW_V1
+  ccNoShadow=true; ccDrawLiveH_impl(s,ph,withToast); ccNoShadow=false;
+}
+static void ccDrawLiveH_impl(LGFX_Sprite& s, int ph, bool withToast){
   if(ph<=0) return;
   int mx = ccMarginX(), pw = ccPanelW();
   int rad = min(22, ph/2); if(rad<0) rad=0;
   // v108: panel sedikit lebih pekat (215) -> latar lebih tenang/minimalis.
-  ccNoShadow=true; drawGlassPanel(s, mx,0,pw,ph,rad, T().surface, 215); ccNoShadow=false;   // SMOOTH_FX_V1
+  drawGlassPanel(s, mx,0,pw,ph,rad, T().surface, 215);   // CC_NO_SHADOW_V1: flag ccNoShadow dipasang oleh pembungkus ccDrawLiveH
   nyxAaRR(s, SCR_W/2-12,ph-8,24,3,1,T().divider);
 
   // Progres buka panel 0..1 (ccOffset bisa overshoot dikit -> di-clamp).
@@ -6478,7 +6482,7 @@ void drawControlCenter(LGFX_Sprite& s){
   const bool motion = controlCenterOpen && (panelPullActive || ccAnimating);
   if(!motion) ccCacheValid=false;                // panel diam: isi bisa berubah (tema, toggle) -> cache basi
   else if(ccCacheEnsure(s)){                     // dibangun di frame pertama sesi (ph masih 0) -> tdk ada patah di tengah gerakan
-    if(ph>0){ ccCacheBlit(s,ph); drawToast(s); }
+    if(ph>0){ ccCacheBlit(s,ph); ccNoShadow=true; drawToast(s); ccNoShadow=false; }   // CC_NO_SHADOW_V1
     return;
   }
   if(ph<=0) return;
