@@ -5962,6 +5962,7 @@ void ccTick(){
     if(now-ccPressMs>=CC_PRESS_MS) ccPressIdx=-1;
     needRedraw=true;
   }
+  { static unsigned long hdrMs=0; if(now-hdrMs>2000UL){ hdrMs=now; needRedraw=true; } }   // CC_UX_V3: segarkan strip info
 }
 void ccSliderSet(int x){
   int sx=ccGridX(), sw=ccPanelW()-ccGap()*2;
@@ -6082,6 +6083,26 @@ extern float inaI; extern bool inaOk;   // ina219_renphone.ino
 static int ccHdrY(){ return STATUS_H+4; }
 static int ccHdrH(){ return 20; }
 static int ccHdrSplit(){ return ccGridX() + (ccPanelW()-ccGap()*2)/2; }
+// CC_UX_V3: nama Wi-Fi ter-cache 2 dtk (dipakai strip info & label tile) + pemotong teks ".."
+static const char* ccSsid(){
+  static char ssid[24]; static unsigned long ssidMs=0;
+  if(!ssidMs || millis()-ssidMs>2000UL){
+    ssidMs=millis(); ssid[0]=0;
+    if(wifiConnected && WiFi.status()==WL_CONNECTED){ String t=WiFi.SSID(); strlcpy(ssid,t.c_str(),sizeof(ssid)); }
+  }
+  return ssid;
+}
+static void ccFitLabel(LGFX_Sprite& s, char* buf, size_t cap, int maxW){
+  int L=(int)strlen(buf);
+  if(L<2 || (int)s.textWidth(buf)<=maxW) return;
+  char t[28];
+  for(int cut=L-1; cut>1; cut--){
+    int n=cut; if(n>(int)sizeof(t)-3) n=(int)sizeof(t)-3; if(n>(int)cap-3) n=(int)cap-3; if(n<1) break;
+    memcpy(t,buf,n); t[n]='.'; t[n+1]='.'; t[n+2]=0;
+    if((int)s.textWidth(t)<=maxW){ strlcpy(buf,t,cap); return; }
+  }
+  buf[1]=0;
+}
 static void ccDrawHeader(LGFX_Sprite& s){
   const int gx=ccGridX(), fw=ccPanelW()-ccGap()*2, y=ccHdrY(), h=ccHdrH(), gp=6;
   const int cwid=(fw-gp)/2, ty=y+(h-8)/2;
@@ -6090,6 +6111,7 @@ static void ccDrawHeader(LGFX_Sprite& s){
 
   // kiri: baterai
   nyxAaRR(s, gx,y,cwid,h,h/2,chipC);
+  s.drawLine(gx+cwid-12,y+h/2-3,gx+cwid-9,y+h/2,T().subtext); s.drawLine(gx+cwid-9,y+h/2,gx+cwid-12,y+h/2+3,T().subtext);   // CC_UX_V3: bisa diketuk
   {
     const int bx=gx+9, by=y+(h-9)/2;
     nyxAaRRRing(s, bx,by,16,9,2,T().text);
@@ -6103,7 +6125,7 @@ static void ccDrawHeader(LGFX_Sprite& s){
     if(battCharging) snprintf(sb,sizeof(sb),"Mengisi");
     else if(inaOk)   snprintf(sb,sizeof(sb),"%.0f mA",fabsf(inaI));
     if(sb[0]){
-      int sw=s.textWidth(sb), sx=gx+cwid-10-sw;
+      int sw=s.textWidth(sb), sx=gx+cwid-20-sw;
       if(sx>tx+(int)s.textWidth(pb)+6){ s.setTextColor(battCharging?T().good:T().subtext); s.setCursor(sx,ty); s.print(sb); }
     }
   }
@@ -6112,19 +6134,16 @@ static void ccDrawHeader(LGFX_Sprite& s){
   {
     const int rx=gx+cwid+gp, rw=fw-cwid-gp;
     nyxAaRR(s, rx,y,rw,h,h/2, wifiConnected ? blend565(chipC,T().accent,50) : chipC);
+    s.drawLine(rx+rw-12,y+h/2-3,rx+rw-9,y+h/2,T().subtext); s.drawLine(rx+rw-9,y+h/2,rx+rw-12,y+h/2+3,T().subtext);   // CC_UX_V3
     const int wx=rx+14, wy=y+h/2+4;
     const uint16_t ic=wifiConnected?T().text:T().subtext;
     nyxAaCircle(s, wx,wy,1,ic);
     s.drawArc(wx,wy,5,4,225,315,ic);
     s.drawArc(wx,wy,9,8,225,315,ic);
     if(!wifiConnected) s.drawLine(wx-7,wy-9,wx+7,wy+1,ic);
-    static char ssid[24]; static unsigned long ssidMs=0;
-    if(!ssidMs || millis()-ssidMs>2000UL){
-      ssidMs=millis(); ssid[0]=0;
-      if(wifiConnected && WiFi.status()==WL_CONNECTED){ String t=WiFi.SSID(); strlcpy(ssid,t.c_str(),sizeof(ssid)); }
-    }
+    const char* ssid=ccSsid();
     char tb[24]; strlcpy(tb, (wifiConnected && ssid[0]) ? ssid : RPTR("Mati"), sizeof(tb));
-    const int maxW=rw-(wx+12-rx)-10;
+    const int maxW=rw-(wx+12-rx)-20;
     int L=(int)strlen(tb);
     while(L>1 && (int)s.textWidth(tb)>maxW){ tb[--L]=0; }
     s.setTextColor(wifiConnected?T().text:T().subtext); s.setCursor(wx+12,ty); s.print(tb);
@@ -6181,6 +6200,7 @@ static void ccDrawLiveH(LGFX_Sprite& s, int ph, bool withToast){
     if(a>0.05f) nyxAaRR(s, tx-2,ty-2,tw2+4,th2+4,trad+2,blend565(T().surface,T().accent,(uint8_t)(70.0f*a)));
     nyxAaRR(s, tx,ty,tw2,th2,trad,fillC);
     nyxAaRRRing(s, tx,ty,tw2,th2,trad,blend565(fillC,0xFFFF,50));
+    s.drawFastHLine(tx+trad,ty+1,max(0,tw2-2*trad),blend565(fillC,0xFFFF,a>0.5f?90:40));   // CC_UX_V3: kilap tipis
     if(li>=0.85f){ // ikon + label baru muncul setelah tile hampir penuh
       static const char* ccLbl[CC_ITEMS]={"Wi-Fi","Pesawat","DND","Tema","Rotasi","Goyang","Kunci","LED","Senyap","BT","Tangkap"};
       uint16_t icC = lerpColor565(T().text, T().bg, a);
@@ -6192,9 +6212,15 @@ static void ccDrawLiveH(LGFX_Sprite& s, int ph, bool withToast){
       drawCCIcon(s, i, ccx, bcy, ir, a>0.5f, icC, badgeC);
       if(a>0.5f) nyxAaCircle(s, tx+tw2-9, ty+9, 2, T().bg);
       s.setFont(emjF(&lgfx::fonts::Font0)); s.setTextSize(1);
+      // CC_UX_V3: label = status (nama Wi-Fi, nama tema, status BT), dipotong ".." supaya tetap di dalam tile
+      char lbuf[20]; strlcpy(lbuf, ccLbl[i], sizeof(lbuf));
+      if(i==0 && wifiConnected && ccSsid()[0]) strlcpy(lbuf, ccSsid(), sizeof(lbuf));
+      else if(i==3) strlcpy(lbuf, themes[themeIdx].name, sizeof(lbuf));
+      else if(i==9) strlcpy(lbuf, btCcConnected() ? RPTR("Terhubung") : (btCcEnabled() ? RPTR("Aktif") : "BT"), sizeof(lbuf));
+      ccFitLabel(s, lbuf, sizeof(lbuf), tw2-8);
       s.setTextColor(lerpColor565(T().subtext, T().bg, a));
-      s.setCursor(ccx-s.textWidth(ccLbl[i])/2, ty+th2-13);
-      s.print(ccLbl[i]);
+      s.setCursor(ccx-s.textWidth(lbuf)/2, ty+th2-13);
+      s.print(lbuf);
     }
   }
 
@@ -6202,7 +6228,15 @@ static void ccDrawLiveH(LGFX_Sprite& s, int ph, bool withToast){
   if(openP>0.7f){
     char bp[8]; sprintf(bp,"%d%%",(int)(brightness*100/255));
     s.setFont(emjF(&lgfx::fonts::Font0)); s.setTextSize(1);
-    s.setTextColor(T().subtext); s.setCursor(gx,ccSliderLabelY()); s.print(RPTR("Kecerahan"));
+    {   // CC_UX_V3: ikon matahari kecil di depan label
+      int sxn=gx+5, syn=ccSliderLabelY()+4;
+      nyxAaCircle(s, sxn,syn,2,T().subtext);
+      for(int k=0;k<8;k++){
+        float an=(float)k*PI/4.0f;
+        s.drawLine(sxn+(int)lroundf(cosf(an)*4.0f),syn+(int)lroundf(sinf(an)*4.0f),sxn+(int)lroundf(cosf(an)*6.0f),syn+(int)lroundf(sinf(an)*6.0f),T().subtext);
+      }
+    }
+    s.setTextColor(T().subtext); s.setCursor(gx+16,ccSliderLabelY()); s.print(RPTR("Kecerahan"));
     s.setTextColor(T().text);    s.setCursor(gx+(pw-gap*2)-s.textWidth(bp),ccSliderLabelY()); s.print(bp);
   }
   int sx=gx, sw=pw-gap*2, sy=ccSliderTrackY();
@@ -6347,6 +6381,7 @@ void ccHoldTick(bool touched,int tx,int ty){
 static void ccJump(int destI,int jump){
   Screen dest=(Screen)destI; Screen cur=curScreen();
   if(cur==SCR_NES||cur==SCR_DOOM){ showToast(RPTR("Keluar dari game dulu")); needRedraw=true; return; }
+  vibTap();   // CC_UX_V3
   ccOffset=0; ccAnimating=false; controlCenterOpen=false;
   if(jump) settJumpCode=jump;
   if(cur==dest){ needRedraw=true; return; }
