@@ -5832,7 +5832,8 @@ int ccCircleD(){
 }
 int ccCardH(){ return currentOrient==ORIENT_LANDSCAPE ? 54 : 50; } // v109: TILE BESAR (ikon + label), bukan lingkaran polos lagi
 int ccGridX(){ return ccMarginX()+ccGap(); }
-int ccGridTop(){ return STATUS_H+6; }
+#define CC_HDR_H 24   // CC_UX_V2: tinggi strip info (baterai | Wi-Fi) di atas tile
+int ccGridTop(){ return STATUS_H+6+CC_HDR_H; }
 int ccGridH(){ return CC_ROWS*ccCardH() + (CC_ROWS-1)*ccGap(); }
 int ccSliderLabelY(){ return ccGridTop()+ccGridH()+8; }
 int ccSliderTrackY(){ return ccSliderLabelY()+14; } // v109: label Kecerahan + persen balik lagi, track turun dikit
@@ -6054,6 +6055,63 @@ void drawCCIcon(LGFX_Sprite& s, int idx, int cx, int cy, int r, bool active, uin
   }
 }
 
+// ===== CC_UX_V2 BEGIN =====
+// Strip info di atas tile: kiri baterai (persen + status), kanan Wi-Fi (nama jaringan). Ketuk kiri = app Baterai,
+// ketuk kanan = Pengaturan > Wi-Fi.
+extern float inaI; extern bool inaOk;   // ina219_renphone.ino
+static int ccHdrY(){ return STATUS_H+4; }
+static int ccHdrH(){ return 20; }
+static int ccHdrSplit(){ return ccGridX() + (ccPanelW()-ccGap()*2)/2; }
+static void ccDrawHeader(LGFX_Sprite& s){
+  const int gx=ccGridX(), fw=ccPanelW()-ccGap()*2, y=ccHdrY(), h=ccHdrH(), gp=6;
+  const int cwid=(fw-gp)/2, ty=y+(h-8)/2;
+  const uint16_t chipC=blend565(T().surface2,0xFFFF,24);
+  s.setFont(emjF(&lgfx::fonts::Font0)); s.setTextSize(1);
+
+  // kiri: baterai
+  nyxAaRR(s, gx,y,cwid,h,h/2,chipC);
+  {
+    const int bx=gx+9, by=y+(h-9)/2;
+    nyxAaRRRing(s, bx,by,16,9,2,T().text);
+    s.fillRect(bx+16,by+3,2,3,T().text);
+    int fwb=(12*battPercent)/100; if(fwb<1 && battPercent>0) fwb=1;
+    if(fwb>0) nyxAaRR(s, bx+2,by+2,fwb,5,1,battColor());
+    char pb[8]; snprintf(pb,sizeof(pb),"%d%%",battPercent);
+    const int tx=bx+24;
+    s.setTextColor(T().text); s.setCursor(tx,ty); s.print(pb);
+    char sb[16]; sb[0]=0;
+    if(battCharging) snprintf(sb,sizeof(sb),"Mengisi");
+    else if(inaOk)   snprintf(sb,sizeof(sb),"%.0f mA",fabsf(inaI));
+    if(sb[0]){
+      int sw=s.textWidth(sb), sx=gx+cwid-10-sw;
+      if(sx>tx+(int)s.textWidth(pb)+6){ s.setTextColor(battCharging?T().good:T().subtext); s.setCursor(sx,ty); s.print(sb); }
+    }
+  }
+
+  // kanan: Wi-Fi
+  {
+    const int rx=gx+cwid+gp, rw=fw-cwid-gp;
+    nyxAaRR(s, rx,y,rw,h,h/2, wifiConnected ? blend565(chipC,T().accent,50) : chipC);
+    const int wx=rx+14, wy=y+h/2+4;
+    const uint16_t ic=wifiConnected?T().text:T().subtext;
+    nyxAaCircle(s, wx,wy,1,ic);
+    s.drawArc(wx,wy,5,4,225,315,ic);
+    s.drawArc(wx,wy,9,8,225,315,ic);
+    if(!wifiConnected) s.drawLine(wx-7,wy-9,wx+7,wy+1,ic);
+    static char ssid[24]; static unsigned long ssidMs=0;
+    if(!ssidMs || millis()-ssidMs>2000UL){
+      ssidMs=millis(); ssid[0]=0;
+      if(wifiConnected && WiFi.status()==WL_CONNECTED){ String t=WiFi.SSID(); strlcpy(ssid,t.c_str(),sizeof(ssid)); }
+    }
+    char tb[24]; strlcpy(tb, (wifiConnected && ssid[0]) ? ssid : RPTR("Mati"), sizeof(tb));
+    const int maxW=rw-(wx+12-rx)-10;
+    int L=(int)strlen(tb);
+    while(L>1 && (int)s.textWidth(tb)>maxW){ tb[--L]=0; }
+    s.setTextColor(wifiConnected?T().text:T().subtext); s.setCursor(wx+12,ty); s.print(tb);
+  }
+}
+// ===== CC_UX_V2 END =====
+
 static void ccDrawLiveH(LGFX_Sprite& s, int ph, bool withToast){
   if(ph<=0) return;
   int mx = ccMarginX(), pw = ccPanelW();
@@ -6068,6 +6126,7 @@ static void ccDrawLiveH(LGFX_Sprite& s, int ph, bool withToast){
   // v108: semua isi di-clip ke tinggi panel -> gak ada yg meluber selagi
   // panel masih membuka/menutup.
   s.setClipRect(mx,0,pw,max(1,ph-10));
+  if(openP>0.30f) ccDrawHeader(s);   // CC_UX_V2
 
   int cw=ccCardW(), ch=ccCardH(), gap=ccGap(), top=ccGridTop(), gx=ccGridX();
   int d=ccCircleD(), crad=d/2;
@@ -6106,7 +6165,12 @@ static void ccDrawLiveH(LGFX_Sprite& s, int ph, bool withToast){
       static const char* ccLbl[CC_ITEMS]={"Wi-Fi","Pesawat","DND","Tema","Rotasi","Goyang","Kunci","LED","Senyap","BT","Tangkap"};
       uint16_t icC = lerpColor565(T().text, T().bg, a);
       int ir = iconR>14 ? 14 : iconR;
-      drawCCIcon(s, i, ccx, ty+th2/2-7, ir, a>0.5f, icC, fillC);
+      // CC_UX_V2: ikon di atas lingkaran lembut + titik kecil di pojok tile yang aktif
+      int bcy=ty+th2/2-7, br=ir+3; if(br>15) br=15;
+      uint16_t badgeC=blend565(fillC,0xFFFF,(uint8_t)(a>0.5f?46:20));
+      nyxAaCircle(s, ccx,bcy,br,badgeC);
+      drawCCIcon(s, i, ccx, bcy, ir, a>0.5f, icC, badgeC);
+      if(a>0.5f) nyxAaCircle(s, tx+tw2-9, ty+9, 2, T().bg);
       s.setFont(emjF(&lgfx::fonts::Font0)); s.setTextSize(1);
       s.setTextColor(lerpColor565(T().subtext, T().bg, a));
       s.setCursor(ccx-s.textWidth(ccLbl[i])/2, ty+th2-13);
@@ -6136,8 +6200,10 @@ static void ccDrawLiveH(LGFX_Sprite& s, int ph, bool withToast){
       s.drawFastHLine(sx+6,trY+1,max(0,fw2-12),blend565(T().accent,0xFFFF,110));
     }
     if(sp>=1.0f && fillW>trH){
-      int gh = ccSliderDrag ? 10 : 6;       // grip memanjang sedikit selagi di-drag
-      nyxAaRR(s, sx+fillW-7,trY+(trH-gh)/2,3,gh,1,0xFFFF);
+      // CC_UX_V2: kenop bulat (membesar sedikit selagi di-drag)
+      int kr = ccSliderDrag ? 8 : 6, kx2 = sx+(fillW<trH?trH:fillW)-7;
+      nyxAaCircle(s, kx2,trY+trH/2+1,kr,blend565(T().surface,0x0000,90));
+      nyxAaCircle(s, kx2,trY+trH/2,kr,0xFFFF);
     }
   }
   s.clearClipRect();
@@ -6257,10 +6323,24 @@ void ccHoldTick(bool touched,int tx,int ty){
   }
 }
 
+// CC_UX_V2: ketuk strip info = pindah ke app terkait (panel ditutup instan, sama spt tahan-lama tile)
+static void ccJump(int destI,int jump){
+  Screen dest=(Screen)destI; Screen cur=curScreen();
+  if(cur==SCR_NES||cur==SCR_DOOM){ showToast(RPTR("Keluar dari game dulu")); needRedraw=true; return; }
+  ccOffset=0; ccAnimating=false; controlCenterOpen=false;
+  if(jump) settJumpCode=jump;
+  if(cur==dest){ needRedraw=true; return; }
+  navPush(dest);
+}
+
 void ccTouch(int x,int y){
   int ph=(int)ccOffset;
   if(y> ph-9 && y<=ph+4){ closeControlCenter(); return; }
   if(y>ph) { closeControlCenter(); return; }
+  if(y>=ccHdrY() && y<=ccHdrY()+ccHdrH()+2){   // CC_UX_V2
+    if(x<ccHdrSplit()) ccJump((int)SCR_BATTERY,0); else ccJump((int)SCR_SETTINGS,1);
+    return;
+  }
 
   int cw=ccCardW(), ch=ccCardH(), gap=ccGap(), top=ccGridTop(), gx=ccGridX();
   for(int i=0;i<CC_ITEMS;i++){
@@ -21742,176 +21822,193 @@ uint16_t hwmonLoadColor(int pct){
   return (pct>=85)?T().danger : (pct>=55)?T().accent : T().good;
 }
 
-// Bar horizontal 1 core + histori batang bergeser di bawahnya. Lebar
-// mengikuti param w yg dikasih caller, biar Core0/Core1 otomatis
-// berdampingan (landscape) atau numpuk (portrait) -- lihat drawHwmon().
-void hwmonDrawCoreBar(LGFX_Sprite& s, int x, int y, int w, const char* label, int usage, int mn, int mx, uint8_t* hist){
-  s.setTextColor(T().text); s.setTextSize(1);
-  s.setCursor(x, y);
-  s.print(label);
-
-  char pctBuf[8]; sprintf(pctBuf,"%d%%",usage);
-  int pw=s.textWidth(pctBuf);
-  s.setTextColor(hwmonLoadColor(usage));
-  s.setCursor(x+w-pw, y);
-  s.print(pctBuf);
-
-  int barY=y+12, barH=16;
-  nyxAaRRRing(s, x,barY,w,barH,4,T().text);
-  int fillW = constrain((w-4)*usage/100, 0, w-4);
-  if(fillW>0) nyxAaRR(s, x+2,barY+2,fillW,barH-4,3,hwmonLoadColor(usage));
-
-  // v50: histori digambar ulang jadi "grafik ala monitor sistem Linux"
-  // (kayak conky/htop) -- bg item pekat, garis hijau neon nyambung antar
-  // titik histori, area gelap di bawah garis, + garis grid putus2 di
-  // tengah (patokan 50%). Gantiin batang warna-warni per-titik yg lama.
-  int histY0=barY+barH+4, histH=26;
-  s.fillRect(x, histY0, w, histH, 0x0000); // bg item pekat ala terminal
-  for(int gx=x; gx<x+w; gx+=4) s.drawPixel(gx, histY0+histH/2, T().divider); // grid putus2 di tengah (50%)
-  uint16_t lineCol = 0x07E0;                        // hijau neon terang -- garis grafik
-  uint16_t areaCol = blend565(0x0000, lineCol, 60); // hijau gelap -- area terisi di bawah garis
-  int gw=w/HWMON_HIST_LEN; if(gw<1) gw=1;
-  int prevPx=-1, prevPy=-1;
-  for(int i=0;i<HWMON_HIST_LEN;i++){
-    int hgt=(histH*hist[i])/100; if(hgt<1) hgt=1;
-    int px = x+i*gw, py = histY0+histH-hgt;
-    s.fillRect(px, py, gw>1?gw:1, hgt, areaCol);           // area terisi di bawah garis
-    if(prevPx>=0) s.drawLine(prevPx,prevPy, px,py, lineCol); // garis penghubung antar titik histori
-    prevPx=px; prevPy=py;
-  }
-  if(prevPx>=0) s.drawPixel(prevPx,prevPy,lineCol);
-  s.drawRect(x, histY0, w, histH, T().divider); // bingkai kotak grafik
-
-  s.setTextColor(T().subtext); s.setTextSize(1);
-  s.setCursor(x, histY0+histH+6);
-  char mmBuf[24]; sprintf(mmBuf,"min %d%%  maks %d%%", mn, mx);
-  s.print(mmBuf);
+// ===== HWMON_UX_V2 BEGIN =====
+// Tampilan baru HWmonitor: kartu per core (persen besar + bar + grafik gaya terminal), kartu Memori,
+// dan 4 chip info (CPU / Suhu / Uptime / Baterai). Cara hitung beban CPU, RAM, PSRAM dan area sentuh
+// tombol (Reset, Tes Speaker) tidak berubah.
+static void hwmonCard(LGFX_Sprite& s, int x, int y, int w, int h) {
+  uint16_t c = blend565(T().surface2, 0xFFFF, 14);
+  nyxAaRR(s, x, y, w, h, 9, c);
+  nyxAaRRRing(s, x, y, w, h, 9, blend565(c, 0xFFFF, 34));
 }
 
-void drawHwmon(LGFX_Sprite& s){
+static void hwmonBar(LGFX_Sprite& s, int x, int y, int w, int h, int pct, uint16_t col) {
+  nyxAaRR(s, x, y, w, h, h / 2, blend565(T().surface, 0xFFFF, 34));
+  int fw = constrain((w * pct) / 100, 0, w);
+  if (fw > 0) nyxAaRR(s, x, y, fw < h ? h : fw, h, h / 2, col);
+}
+
+// kartu 1 core; tinggi total = 58 + gh (dikembalikan)
+static int hwmonCoreCard(LGFX_Sprite& s, int x, int y, int w, int gh, const char* label, int usage, int mn, int mx, uint8_t* hist) {
+  const int pad = 9, ih = 58 + gh;
+  hwmonCard(s, x, y, w, ih);
+  const int ix = x + pad, iw = w - 2 * pad;
+  const uint16_t lc = hwmonLoadColor(usage);
+  s.setTextSize(1); s.setTextColor(T().subtext); s.setCursor(ix, y + 9); s.print(label);
+  char pb[8]; snprintf(pb, sizeof(pb), "%d%%", usage);
+  s.setTextSize(2); s.setTextColor(lc);
+  s.setCursor(ix + iw - (int)s.textWidth(pb), y + 5); s.print(pb);
+  s.setTextSize(1);
+  hwmonBar(s, ix, y + 26, iw, 8, usage, lc);
+
+  // grafik gaya monitor sistem Linux (v50): latar pekat, garis hijau neon, area gelap di bawah garis
+  const int gy = y + 40;
+  s.fillRect(ix, gy, iw, gh, 0x0000);
+  for (int q = 1; q < 4; q++) {
+    int yy = gy + (gh * q) / 4;
+    for (int gx = ix; gx < ix + iw; gx += (q == 2 ? 4 : 8)) s.drawPixel(gx, yy, T().divider);
+  }
+  const uint16_t lineCol = 0x07E0;
+  const uint16_t areaCol = blend565(0x0000, lineCol, 60);
+  int prevPx = -1, prevPy = -1;
+  for (int i = 0; i < HWMON_HIST_LEN; i++) {
+    int hgt = (gh * hist[i]) / 100; if (hgt < 1) hgt = 1;
+    int px = ix + (i * (iw - 1)) / (HWMON_HIST_LEN - 1), py = gy + gh - hgt;
+    if (prevPx >= 0) {
+      for (int xi = prevPx; xi <= px; xi++) {
+        float t = (px == prevPx) ? 0.0f : (float)(xi - prevPx) / (float)(px - prevPx);
+        int yi = (int)(prevPy + t * (py - prevPy));
+        s.drawFastVLine(xi, yi, gy + gh - yi, areaCol);
+      }
+      s.drawLine(prevPx, prevPy, px, py, lineCol);
+    }
+    prevPx = px; prevPy = py;
+  }
+  s.drawRect(ix, gy, iw, gh, T().divider);
+
+  s.setTextColor(T().subtext);
+  s.setCursor(ix, gy + gh + 5);
+  char mm[28]; snprintf(mm, sizeof(mm), "min %d%%  maks %d%%", mn, mx);
+  s.print(mm);
+  return ih;
+}
+
+static void hwmonChip(LGFX_Sprite& s, int x, int y, int w, int h, const char* k, const char* v, uint16_t vc) {
+  hwmonCard(s, x, y, w, h);
+  s.setTextSize(1);
+  s.setTextColor(T().subtext); s.setCursor(x + (w - (int)s.textWidth(k)) / 2, y + 6); s.print(k);
+  s.setTextColor(vc);          s.setCursor(x + (w - (int)s.textWidth(v)) / 2, y + h - 14); s.print(v);
+}
+
+void drawHwmon(LGFX_Sprite& s) {
   s.fillSprite(T().bg);
   drawStatusBar(s);
-  s.setTextColor(0x07FF); s.setTextSize(1); s.setCursor(8,26); s.print("HWmonitor");
+  s.setFont(emjF(&lgfx::fonts::Font0)); s.setTextSize(1);
 
-  iosRR(s,SCR_W-84,24,78,18,4,T().surface2);
-  s.setTextColor(T().accent); s.setCursor(SCR_W-78,29); s.print("Reset Min/Max");
+  {   // ikon chip kecil + judul
+    const uint16_t cc = 0x07FF;
+    nyxAaRR(s, 9, 26, 12, 12, 3, cc);
+    nyxAaRR(s, 12, 29, 6, 6, 1, T().bg);
+    for (int k = 0; k < 3; k++) { int px = 11 + k * 4; s.drawFastVLine(px, 23, 3, cc); s.drawFastVLine(px, 38, 3, cc); }
+    iosTitle(s, 28, 26, "HWmonitor");
+  }
+  {   // tombol (area sentuh sama persis dgn hwmonTouch)
+    const uint16_t pc = blend565(T().surface2, 0xFFFF, 14);
+    const char* rs = "Reset";
+    nyxAaRR(s, SCR_W - 84, 24, 78, 18, 9, pc);
+    s.setTextColor(T().accent); s.setCursor(SCR_W - 84 + (78 - (int)s.textWidth(rs)) / 2, 29); s.print(rs);
+    const char* ts = RPTR("Tes Speaker");
+    nyxAaRR(s, SCR_W - 168, 24, 78, 18, 9, pc);
+    s.setTextColor(T().accent); s.setCursor(SCR_W - 168 + (78 - (int)s.textWidth(ts)) / 2, 29); s.print(ts);
+  }
 
-  iosRR(s,SCR_W-168,24,78,18,4,T().surface2);
-  s.setTextColor(T().accent); s.setCursor(SCR_W-162,29); s.print(RPTR("Tes Speaker"));
-
-  bool wide = (SCR_W >= 300); // landscape: 2 kolom berdampingan; portrait: numpuk vertikal
+  const bool land = SCR_W > SCR_H;
+  const int gh = !land ? 40 : (SCR_H >= 300 ? 28 : 18);
   int top = 50;
-  if(wide){
-    int colW = (SCR_W-28-16)/2;
-    hwmonDrawCoreBar(s, 14,         top, colW, "Core 0", hwmonUsage0, hwmonMinUsage0, hwmonMaxUsage0, hwmonHist0);
-    hwmonDrawCoreBar(s, 14+colW+16, top, colW, "Core 1", hwmonUsage1, hwmonMinUsage1, hwmonMaxUsage1, hwmonHist1);
-    top += 78;
+  if (land) {
+    int colW = (SCR_W - 12 - 6) / 2;
+    hwmonCoreCard(s, 6,            top, colW, gh, "Core 0", hwmonUsage0, hwmonMinUsage0, hwmonMaxUsage0, hwmonHist0);
+    hwmonCoreCard(s, 6 + colW + 6, top, colW, gh, "Core 1", hwmonUsage1, hwmonMinUsage1, hwmonMaxUsage1, hwmonHist1);
+    top += 58 + gh + 6;
   } else {
-    int colW = SCR_W-28;
-    hwmonDrawCoreBar(s, 14, top, colW, "Core 0", hwmonUsage0, hwmonMinUsage0, hwmonMaxUsage0, hwmonHist0);
-    top += 78;
-    hwmonDrawCoreBar(s, 14, top, colW, "Core 1", hwmonUsage1, hwmonMinUsage1, hwmonMaxUsage1, hwmonHist1);
-    top += 78;
+    int colW = SCR_W - 12;
+    hwmonCoreCard(s, 6, top, colW, gh, "Core 0", hwmonUsage0, hwmonMinUsage0, hwmonMaxUsage0, hwmonHist0);
+    top += 58 + gh + 6;
+    hwmonCoreCard(s, 6, top, colW, gh, "Core 1", hwmonUsage1, hwmonMinUsage1, hwmonMaxUsage1, hwmonHist1);
+    top += 58 + gh + 6;
   }
-  top += 10;
 
-  // RAM internal
-  // FRAG_V3: cadangan kontigu (sysmem) BUKAN pemakaian nyata -- ia dilepas otomatis saat dibutuhkan. Jadi
-  // persen & warna dihitung TANPA cadangan, dan cadangan digambar sbg segmen terpisah di bar + dijelaskan
-  // di baris "Blok Terbesar" (angka nyata tetap tampil, tidak ada yang disembunyikan).
+  // ---- kartu Memori ----
+  // FRAG_V3: cadangan kontigu (sysmem) BUKAN pemakaian nyata -- dilepas otomatis saat dibutuhkan. Persen & warna
+  // dihitung TANPA cadangan; cadangan digambar sbg segmen terpisah di bar RAM + dijelaskan di baris "Blok Terbesar".
   size_t ramHold = smHoldBytes();
-  size_t ramUsedRaw = hwmonHeapTotal>hwmonHeapFree ? hwmonHeapTotal-hwmonHeapFree : 0;
-  if(ramHold>ramUsedRaw) ramHold=0;                                   // jaga-jaga data tidak sinkron
+  size_t ramUsedRaw = hwmonHeapTotal > hwmonHeapFree ? hwmonHeapTotal - hwmonHeapFree : 0;
+  if (ramHold > ramUsedRaw) ramHold = 0;
   size_t ramUsed = ramUsedRaw - ramHold;
-  int ramPct = hwmonHeapTotal>0 ? (int)(ramUsed*100UL/hwmonHeapTotal) : 0;
-  s.setTextColor(T().text); s.setTextSize(1); s.setCursor(14, top);
-  s.print(RPTR("RAM Internal"));
-  char ramBuf[40]; sprintf(ramBuf,"%d%%  (%u / %u KB)", ramPct,
-                           (unsigned)(ramUsed/1024), (unsigned)(hwmonHeapTotal/1024));
-  int rw=s.textWidth(ramBuf);
-  s.setTextColor(hwmonLoadColor(ramPct)); s.setCursor(SCR_W-14-rw, top);
-  s.print(ramBuf);
-  top += 12;
-  nyxAaRRRing(s, 14, top, SCR_W-28, 14, 4, T().text);
-  int ramFillW = constrain((SCR_W-28-4)*ramPct/100, 0, SCR_W-28-4);
-  if(ramFillW>0) nyxAaRR(s, 16, top+2, ramFillW, 10, 3, hwmonLoadColor(ramPct));
-  if(ramHold>0 && hwmonHeapTotal>0){                                  // FRAG_V3: segmen cadangan (warna beda, bukan merah)
-    int holdW = (int)((SCR_W-28-4)*(unsigned long)ramHold/hwmonHeapTotal);
-    if(holdW<3) holdW=3;
-    int holdX = 16+ramFillW;
-    if(holdX+holdW > SCR_W-16) holdW = SCR_W-16-holdX;
-    if(holdW>0) nyxAaRR(s, holdX, top+2, holdW, 10, 3, T().accent2);
-  }
-  top += 22;
-
-  // v60: "Blok Terbesar" -- BEDA dari "RAM Internal" di atas (yg itu
-  // TOTAL kepake vs total kapasitas). Ini ukuran blok KOSONG BERSAMBUNG
-  // terbesar yg tersisa -- angka INI yg nentuin sukses/gagalnya koneksi
-  // TLS (HTTPS), krn TLS butuh SATU blok kontigu ~20-30KB, bukan cuma
-  // "total sisa" yg bisa aja kepencar jadi banyak potongan kecil
-  // (fragmented). User bisa RAM Internal 61% kepake (39% sisa) tp
-  // Blok Terbesar-nya msh di bawah 20KB krn fragmented -- makanya app
-  // NASA/transkrip msh bisa gagal HTTP -1 walau "RAM Internal" keliatan
-  // masih longgar.
-  // RAM_V2: cadangan kontigu (smHoldBytes) sengaja dipegang sysmem dan dilepas otomatis saat ada yg butuh
-  // blok besar (TLS dll), jadi blok yg benar-benar bisa didapat = max(blok bebas, cadangan).
+  int ramPct = hwmonHeapTotal > 0 ? (int)(ramUsed * 100UL / hwmonHeapTotal) : 0;
+  // RAM_V2: blok yg benar-benar bisa didapat = max(blok bebas, cadangan) (cadangan dilepas otomatis utk TLS dll)
   uint32_t lbHold = smHoldBytes();
   size_t lbEff = hwmonHeapLargestBlock > lbHold ? hwmonHeapLargestBlock : lbHold;
   bool lbLow = lbEff < 20000;
-  s.setTextColor(T().text); s.setCursor(14, top);
-  s.print(RPTR("Blok Terbesar"));
+  bool hint = lbLow || lbHold;
+  const int memH = 9 + 24 + 8 + 12 + (hint ? 12 : 0) + 8 + (hwmonPsramTotal > 0 ? 24 : 12) + 7;
+  hwmonCard(s, 6, top, SCR_W - 12, memH);
+  const int ix = 15, iw = SCR_W - 30;
+  int y = top + 9;
+
+  s.setTextColor(T().text); s.setCursor(ix, y); s.print(RPTR("RAM Internal"));
+  char ramBuf[40]; snprintf(ramBuf, sizeof(ramBuf), "%d%%  (%u / %u KB)", ramPct, (unsigned)(ramUsed / 1024), (unsigned)(hwmonHeapTotal / 1024));
+  s.setTextColor(hwmonLoadColor(ramPct)); s.setCursor(ix + iw - (int)s.textWidth(ramBuf), y); s.print(ramBuf);
+  hwmonBar(s, ix, y + 13, iw, 9, ramPct, hwmonLoadColor(ramPct));
+  if (ramHold > 0 && hwmonHeapTotal > 0) {   // FRAG_V3: segmen cadangan (warna beda, bukan merah)
+    int fillW = constrain((iw * ramPct) / 100, 0, iw);
+    if (ramPct > 0 && fillW < 9) fillW = 9;
+    int holdW = (int)((unsigned long)iw * (unsigned long)ramHold / hwmonHeapTotal);
+    if (holdW < 4) holdW = 4;
+    if (fillW + holdW > iw) holdW = iw - fillW;
+    if (holdW > 0) nyxAaRR(s, ix + fillW, y + 13, holdW, 9, holdW < 9 ? holdW / 2 : 4, T().accent2);
+  }
+  y += 24 + 8;
+
+  // "Blok Terbesar" = blok kosong BERSAMBUNG terbesar. Ini yg menentukan sukses/gagalnya koneksi TLS (HTTPS),
+  // yg butuh SATU blok ~20-30 KB -- RAM bisa terlihat longgar tapi terfragmentasi (lihat catatan v60).
+  s.setTextColor(T().text); s.setCursor(ix, y); s.print(RPTR("Blok Terbesar"));
   char lbBuf[32];
-  if(lbHold) sprintf(lbBuf,"%u KB + %uK", (unsigned)(hwmonHeapLargestBlock/1024), (unsigned)(lbHold/1024));   // FRAG_V3: blok bebas + cadangan
-  else       sprintf(lbBuf,"%u KB", (unsigned)(hwmonHeapLargestBlock/1024));
-  int lbw=s.textWidth(lbBuf);
-  s.setTextColor(lbLow?T().danger:T().good); s.setCursor(SCR_W-14-lbw, top);
-  s.print(lbBuf);
-  top += 14;
-  if(lbLow){
-    s.setTextColor(T().subtext); s.setTextSize(1); s.setCursor(14, top);
-    s.print(RPTR("(<20KB -> app internet bs gagal HTTP -1)"));
-  } else if(lbHold){                                                  // FRAG_V3: legenda segmen cadangan di bar RAM
-    s.fillRect(14, top+1, 6, 6, T().accent2);
-    s.setTextColor(T().subtext); s.setTextSize(1); s.setCursor(24, top);
-    s.print(RPTR("Cadangan, dilepas otomatis"));
+  if (lbHold) snprintf(lbBuf, sizeof(lbBuf), "%u KB + %uK", (unsigned)(hwmonHeapLargestBlock / 1024), (unsigned)(lbHold / 1024));
+  else        snprintf(lbBuf, sizeof(lbBuf), "%u KB", (unsigned)(hwmonHeapLargestBlock / 1024));
+  s.setTextColor(lbLow ? T().danger : T().good); s.setCursor(ix + iw - (int)s.textWidth(lbBuf), y); s.print(lbBuf);
+  y += 12;
+  if (lbLow) {
+    s.setTextColor(T().subtext); s.setCursor(ix, y); s.print(RPTR("(<20KB -> app internet bs gagal HTTP -1)")); y += 12;
+  } else if (lbHold) {
+    nyxAaRR(s, ix, y + 1, 7, 7, 2, T().accent2);
+    s.setTextColor(T().subtext); s.setCursor(ix + 12, y); s.print(RPTR("Cadangan, dilepas otomatis")); y += 12;
   }
-  top += 20;
+  y += 8;
 
-  // PSRAM (kalau modul ini punya & terdeteksi)
-  if(hwmonPsramTotal>0){
-    int psPct = (int)(100 - (hwmonPsramFree*100UL/hwmonPsramTotal));
-    s.setTextColor(T().text); s.setCursor(14, top);
-    s.print("PSRAM");
-    char psBuf[40]; sprintf(psBuf,"%d%%  (%u / %u KB)", psPct,
-                             (unsigned)((hwmonPsramTotal-hwmonPsramFree)/1024), (unsigned)(hwmonPsramTotal/1024));
-    int pw2=s.textWidth(psBuf);
-    s.setTextColor(hwmonLoadColor(psPct)); s.setCursor(SCR_W-14-pw2, top);
-    s.print(psBuf);
-    top += 12;
-    nyxAaRRRing(s, 14, top, SCR_W-28, 14, 4, T().text);
-    int psFillW = constrain((SCR_W-28-4)*psPct/100, 0, SCR_W-28-4);
-    if(psFillW>0) nyxAaRR(s, 16, top+2, psFillW, 10, 3, hwmonLoadColor(psPct));
-    top += 22;
+  if (hwmonPsramTotal > 0) {
+    int psPct = (int)(100 - (hwmonPsramFree * 100UL / hwmonPsramTotal));
+    s.setTextColor(T().text); s.setCursor(ix, y); s.print("PSRAM");
+    char psBuf[40]; snprintf(psBuf, sizeof(psBuf), "%d%%  (%u / %u KB)", psPct, (unsigned)((hwmonPsramTotal - hwmonPsramFree) / 1024), (unsigned)(hwmonPsramTotal / 1024));
+    s.setTextColor(hwmonLoadColor(psPct)); s.setCursor(ix + iw - (int)s.textWidth(psBuf), y); s.print(psBuf);
+    hwmonBar(s, ix, y + 13, iw, 9, psPct, hwmonLoadColor(psPct));
   } else {
-    s.setTextColor(T().subtext); s.setCursor(14, top);
-    s.print(RPTR("PSRAM: tidak terdeteksi"));
-    top += 22;
+    s.setTextColor(T().subtext); s.setCursor(ix, y); s.print(RPTR("PSRAM: tidak terdeteksi"));
   }
+  top += memH + 6;
 
-  // Info chip: freq, suhu on-die, uptime, baterai (baca variabel battPercent yg sudah ada)
-  unsigned long upS = millis()/1000;
-  int uh=upS/3600, um=(upS%3600)/60, us=upS%60;
-  char infoBuf[80];
-  sprintf(infoBuf,"CPU %dMHz | Suhu %.1fC | Uptime %02d:%02d:%02d | Bat %d%%",
-          ESP.getCpuFreqMHz(), temperatureRead(), uh, um, us, battPercent);
-  s.setTextColor(T().subtext); s.setTextSize(1); s.setTextWrap(true);
-  s.setCursor(14, top);
-  s.print(infoBuf);
-  s.setTextWrap(false);
+  // ---- chip info: CPU, suhu on-die, uptime, baterai ----
+  if (top + 30 <= SCR_H - 4) {
+    unsigned long upS = millis() / 1000;
+    int uh = upS / 3600, um = (upS % 3600) / 60, us = upS % 60;
+    float tc = temperatureRead();
+    char c0[12], c1[12], c2[12], c3[12];
+    snprintf(c0, sizeof(c0), "%dMHz", (int)ESP.getCpuFreqMHz());
+    snprintf(c1, sizeof(c1), "%.1fC", tc);
+    snprintf(c2, sizeof(c2), "%02d:%02d:%02d", uh, um, us);
+    snprintf(c3, sizeof(c3), "%d%%", battPercent);
+    const int cw = (SCR_W - 12 - 3 * 6) / 4;
+    const uint16_t tcol = tc >= 80.0f ? T().danger : tc >= 65.0f ? (uint16_t)0xFD20 : T().text;
+    hwmonChip(s, 6,               top, cw, 30, "CPU",    c0, T().text);
+    hwmonChip(s, 6 + (cw + 6),    top, cw, 30, "Suhu",   c1, tcol);
+    hwmonChip(s, 6 + 2 * (cw + 6), top, cw, 30, "Uptime", c2, T().text);
+    hwmonChip(s, 6 + 3 * (cw + 6), top, cw, 30, "Baterai", c3, battColor());
+  }
 
   drawBack(s);
   drawToast(s);
 }
+// ===== HWMON_UX_V2 END =====
 
 void hwmonTouch(int x,int y,bool held,bool isNew){
   if(!isNew) return;

@@ -574,70 +574,48 @@ static uint16_t inaSocColor() {
   return (inaSoc <= 15) ? T().danger : (inaSoc <= 35) ? (uint16_t)0xFD20 : T().good;
 }
 
-static void inaRow(LGFX_Sprite& s, int y, const char* k, const char* v, uint16_t vc) {
-  s.setTextColor(T().subtext); s.setCursor(12, y); s.print(k);
-  s.setTextColor(vc);
-  s.setCursor(SCR_W - 12 - (int)s.textWidth(v), y); s.print(v);
+// ===== BATT_UX_V2 BEGIN =====
+// Tampilan baru app Baterai: cincin persen, kartu statistik, grafik dgn area terisi.
+// Hanya kode gambar; pembacaan INA219, counter, dan geometri sentuh (tab, pil grafik, baris Sensor/Baterai) tidak berubah.
+static void inaCard(LGFX_Sprite& s, int x, int y, int w, int h) {
+  uint16_t c = blend565(T().surface2, 0xFFFF, 14);
+  nyxAaRR(s, x, y, w, h, 9, c);
+  nyxAaRRRing(s, x, y, w, h, 9, blend565(c, 0xFFFF, 34));
 }
 
-static void inaDrawSummary(LGFX_Sprite& s, int top, int bottom) {
-  (void)bottom;
-  s.setTextSize(1);
-  if (!inaOk) {
-    s.setTextColor(T().danger); s.setCursor(12, top + 6); s.print(RPTR("INA219 tidak terdeteksi"));
-    s.setTextColor(T().subtext); s.setTextWrap(true);
-    s.setCursor(12, top + 24);
-    s.print("Cek wiring: VCC 3.3V, GND, SDA = GPIO" RP_STR(RP_SENS_SDA) ", SCL = GPIO" RP_STR(RP_SENS_SCL) ". Shunt dipasang seri di kabel (+) baterai (baterai -> VIN+, beban -> VIN-). Alamat 0x40-0x4F (A0/A1). Buka tab Sensor > Scan ulang setelah memperbaiki.");
-    s.setTextWrap(false);
-    return;
-  }
-  uint16_t bc = inaSocColor();
-  int iw = 84, ih = 34, ix = 10, iy = top + 2;
-  nyxAaRRRing(s, ix, iy, iw, ih, 5, T().text);
-  nyxAaRR(s, ix + iw, iy + ih / 2 - 5, 5, 10, 2, T().text);
-  int fw = ((iw - 6) * inaSoc) / 100;
-  if (fw > 0) nyxAaRR(s, ix + 3, iy + 3, fw, ih - 6, 3, bc);
-  char pb[8]; snprintf(pb, sizeof(pb), "%d%%", inaSoc);
-  s.setTextSize(3); s.setTextColor(bc);
-  int px = ix + iw + 16;
-  s.setCursor(px, iy + 5); s.print(pb);
-  int pw = (int)s.textWidth(pb);
-  s.setTextSize(1); s.setTextColor(T().text);
-  s.setCursor(px + pw + 8, iy + 14); s.print(inaStatusText());
+static void inaRing(LGFX_Sprite& s, int cx, int cy, int ro, int ri, float pct, uint16_t track, uint16_t col) {
+  s.fillArc(cx, cy, ri, ro, 0.0f, 180.0f, track);
+  s.fillArc(cx, cy, ri, ro, 180.0f, 360.0f, track);
+  if (pct <= 0.0f) return;
+  if (pct > 100.0f) pct = 100.0f;
+  float a1 = 270.0f + 3.6f * pct;
+  if (a1 <= 360.0f) s.fillArc(cx, cy, ri, ro, 270.0f, a1, col);
+  else { s.fillArc(cx, cy, ri, ro, 270.0f, 360.0f, col); s.fillArc(cx, cy, ri, ro, 0.0f, a1 - 360.0f, col); }
+}
 
-  int y = iy + ih + 8; const int lh = 14;
-  char v[40]; uint16_t c;
-  snprintf(v, sizeof(v), "%.3f V", inaBatV);
-  inaRow(s, y, "Tegangan baterai", v, T().text); y += lh;
-  snprintf(v, sizeof(v), "%+.1f mA", inaI);
-  c = inaCharging ? T().good : T().text;
-  inaRow(s, y, inaCharging ? "Arus (mengisi)" : "Arus (memakai)", v, c); y += lh;
-  snprintf(v, sizeof(v), "%.1f mW", fabsf(inaP));
-  inaRow(s, y, "Daya", v, T().text); y += lh;
-  if (inaCapLearn > 0) snprintf(v, sizeof(v), "%.0f mAh (%.0f%%)", (double)inaCapLearn, (double)(100.0f * inaCapLearn / (float)inaCapMah));
-  else snprintf(v, sizeof(v), "%s", inaLrnActive ? RPTR("mengukur...") : RPTR("belum terukur"));
-  inaRow(s, y, "Kapasitas terukur", v, T().text); y += lh;
-  snprintf(v, sizeof(v), "-%.0f / +%.0f mAh", inaMahOut, inaMahIn);
-  inaRow(s, y, "Sesi keluar / masuk", v, T().text); y += lh;
-  {
-    char d[16]; float h = -1; const char* lb = RPTR("Sisa waktu");
-    if (inaCharging) {
-      lb = RPTR("Penuh dalam");
-      if (-inaIavg > 5.0f) h = ((100.0f - inaSocF) / 100.0f * inaCapEff()) / (-inaIavg);
-    } else if (inaIavg > 5.0f) {
-      h = (inaSocF / 100.0f * inaCapEff()) / inaIavg;
-    }
-    inaFmtDur(d, sizeof(d), h);
-    snprintf(v, sizeof(v), "~%s", d);
-    inaRow(s, y, lb, v, T().text); y += lh;
-  }
-  if (inaOvf) {
-    inaRow(s, y, "PERINGATAN", "OVERFLOW: turunkan gain/R", T().danger);
-  } else {
-    char kb[28]; snprintf(kb, sizeof(kb), "Siklus (boot ke-%lu)", (unsigned long)inaBootCount);
-    snprintf(v, sizeof(v), "%.2f", (double)inaCycles);
-    inaRow(s, y, kb, v, T().subtext);
-  }
+static void inaBolt(LGFX_Sprite& s, int x, int y, uint16_t c) {   // petir 7x14
+  s.fillTriangle(x + 3, y, x - 3, y + 7, x + 1, y + 7, c);
+  s.fillTriangle(x - 1, y + 6, x + 4, y + 6, x - 2, y + 13, c);
+}
+
+static void inaRow(LGFX_Sprite& s, int x, int w, int y, const char* k, const char* v, uint16_t vc) {
+  s.setTextSize(1);
+  s.setTextColor(T().subtext); s.setCursor(x, y); s.print(k);
+  s.setTextColor(vc);
+  s.setCursor(x + w - (int)s.textWidth(v), y); s.print(v);
+}
+
+static void inaTile(LGFX_Sprite& s, int x, int y, int w, int h, const char* k, const char* v, uint16_t vc) {
+  inaCard(s, x, y, w, h);
+  s.setTextSize(1);
+  char kb[24]; strlcpy(kb, k, sizeof(kb));
+  for (int kl = (int)strlen(kb); kl > 1 && (int)s.textWidth(kb) > w - 14; ) kb[--kl] = 0;   // kolom sempit: label dipotong
+  s.setTextColor(T().subtext); s.setCursor(x + 9, y + 7); s.print(kb);
+  int sz = 2; s.setTextSize(2);
+  if ((int)s.textWidth(v) > w - 16) { sz = 1; s.setTextSize(1); }
+  s.setTextColor(vc);
+  s.setCursor(x + 9, y + h - 8 - (sz == 2 ? 16 : 8)); s.print(v);
+  s.setTextSize(1);
 }
 
 static float inaHistVal(int k, uint8_t m) {
@@ -647,20 +625,147 @@ static float inaHistVal(int k, uint8_t m) {
   return (float)inaHistP[idx];
 }
 
+// garis arus kecil (10 menit terakhir) utk kartu ringkasan
+static void inaSpark(LGFX_Sprite& s, int x, int y, int w, int h, uint16_t col) {
+  int n = (int)inaHistCount;
+  if (n < 2 || w < 8 || h < 8) {
+    s.setTextSize(1); s.setTextColor(T().subtext);
+    s.setCursor(x, y + h / 2 - 4); s.print(RPTR("Mengumpulkan data..."));
+    return;
+  }
+  float lo = 0, hi = 0;
+  for (int k = 0; k < n; k++) { float v = inaHistVal(k, 0); if (v < lo) lo = v; if (v > hi) hi = v; }
+  if (hi - lo < 20.0f) { hi += 10.0f; lo -= 10.0f; }
+  float span = hi - lo;
+  int zy = y + (int)((hi - 0.0f) / span * (float)(h - 1));
+  for (int gx = x; gx < x + w; gx += 4) s.drawPixel(gx, zy, T().divider);
+  int px = x, py = zy;
+  for (int i = 0; i < w; i++) {
+    int k = (n == 1) ? 0 : (i * (n - 1)) / (w - 1);
+    int yy = y + (int)((hi - inaHistVal(k, 0)) / span * (float)(h - 1));
+    if (i > 0) s.drawLine(px, py, x + i, yy, col);
+    px = x + i; py = yy;
+  }
+}
+
+static void inaDrawSummary(LGFX_Sprite& s, int top, int bottom) {
+  s.setFont(emjF(&lgfx::fonts::Font0)); s.setTextSize(1);
+  const int W = SCR_W, avail = bottom - top;
+  if (!inaOk) {
+    inaCard(s, 6, top, W - 12, 96);
+    s.setTextColor(T().danger); s.setCursor(14, top + 8); s.print(RPTR("INA219 tidak terdeteksi"));
+    s.setTextColor(T().subtext); s.setTextWrap(true);
+    s.setCursor(14, top + 26);
+    s.print("Cek wiring: VCC 3.3V, GND, SDA = GPIO" RP_STR(RP_SENS_SDA) ", SCL = GPIO" RP_STR(RP_SENS_SCL) ". Shunt dipasang seri di kabel (+) baterai (baterai -> VIN+, beban -> VIN-). Alamat 0x40-0x4F (A0/A1). Buka tab Sensor > Scan ulang setelah memperbaiki.");
+    s.setTextWrap(false);
+    return;
+  }
+  const bool land = SCR_W > SCR_H;
+  const uint16_t bc = inaSocColor();
+
+  // ---- teks nilai ----
+  char vV[16], vI[20], vP[20], vT[20], vCap[28], vSes[28], vCyc[16];
+  snprintf(vV, sizeof(vV), "%.3f V", inaBatV);
+  snprintf(vI, sizeof(vI), fabsf(inaI) >= 100.0f ? "%+.0f mA" : "%+.1f mA", inaI);
+  snprintf(vP, sizeof(vP), "%.0f mW", fabsf(inaP));
+  const char* tlb = RPTR("Sisa waktu"); float hrs = -1;
+  if (inaCharging) {
+    tlb = RPTR("Penuh dalam");
+    if (-inaIavg > 5.0f) hrs = ((100.0f - inaSocF) / 100.0f * inaCapEff()) / (-inaIavg);
+  } else if (inaIavg > 5.0f) {
+    hrs = (inaSocF / 100.0f * inaCapEff()) / inaIavg;
+  }
+  { char d[16]; inaFmtDur(d, sizeof(d), hrs); snprintf(vT, sizeof(vT), "~%s", d); }
+  if (inaCapLearn > 0) snprintf(vCap, sizeof(vCap), "%.0f mAh (%.0f%%)", (double)inaCapLearn, (double)(100.0f * inaCapLearn / (float)inaCapMah));
+  else snprintf(vCap, sizeof(vCap), "%s", inaLrnActive ? RPTR("mengukur...") : RPTR("belum terukur"));
+  snprintf(vSes, sizeof(vSes), "-%.0f / +%.0f mAh", inaMahOut, inaMahIn);
+  snprintf(vCyc, sizeof(vCyc), "%.2f", (double)inaCycles);
+
+  // ---- kartu cincin ----
+  int R = land ? (avail - 24) / 2 : 54;
+  if (R > 58) R = 58;
+  if (R < 32) R = 32;
+  const int ringW = (R >= 48) ? 9 : 7;
+  int cardW, cardH, gcx, gcy;
+  if (land) { cardW = 2 * R + 24; cardH = avail; gcx = 6 + cardW / 2; gcy = top + 10 + R; }
+  else      { cardW = W - 12;     cardH = 2 * R + 18; gcx = 6 + 12 + R; gcy = top + cardH / 2; }
+  inaCard(s, 6, top, cardW, cardH);
+  inaRing(s, gcx, gcy, R, R - ringW, (float)inaSoc, blend565(T().surface, 0xFFFF, 30), bc);
+  {
+    char pb[8]; snprintf(pb, sizeof(pb), "%d%%", inaSoc);
+    int sz = (R >= 46) ? 3 : 2;
+    s.setTextSize(sz); s.setTextColor(bc);
+    int ph = sz * 8;
+    s.setCursor(gcx - (int)s.textWidth(pb) / 2, gcy - ph / 2 - 6); s.print(pb);
+    s.setTextSize(1); s.setTextColor(T().text);
+    const char* st = inaStatusText();
+    int sw = (int)s.textWidth(st);
+    int sx = gcx - sw / 2, sy = gcy + ph / 2 - 1;
+    if (inaCharging) { inaBolt(s, sx - 6, sy - 3, T().good); sx += 5; }
+    s.setCursor(sx, sy); s.print(st);
+  }
+  if (!land) {   // sisi kanan kartu: sisa waktu + garis arus
+    int rx = gcx + R + 16, rw = (W - 14) - rx;
+    s.setTextSize(1); s.setTextColor(T().subtext); s.setCursor(rx, top + 10); s.print(tlb);
+    s.setTextSize(2); s.setTextColor(T().text);
+    if ((int)s.textWidth(vT) > rw) s.setTextSize(1);
+    s.setCursor(rx, top + 22); s.print(vT);
+    s.setTextSize(1); s.setTextColor(T().subtext); s.setCursor(rx, top + 46); s.print(RPTR("Arus"));
+    inaSpark(s, rx, top + 58, rw, cardH - 58 - 12, bc);
+  } else if (avail - (10 + 2 * R) >= 78) {   // landscape yg lega: sisa waktu di bawah cincin
+    int ry = gcy + R + 8;
+    s.setTextSize(1); s.setTextColor(T().subtext);
+    s.setCursor(gcx - (int)s.textWidth(tlb) / 2, ry); s.print(tlb);
+    s.setTextSize(2); s.setTextColor(T().text);
+    s.setCursor(gcx - (int)s.textWidth(vT) / 2, ry + 12); s.print(vT);
+    s.setTextSize(1);
+  }
+
+  // ---- 4 kartu angka + baris rincian ----
+  int tx0, tw, ty0;
+  if (land) { tx0 = 6 + cardW + 6; tw = W - 6 - tx0; ty0 = top; }
+  else      { tx0 = 6; tw = W - 12; ty0 = top + cardH + 6; }
+  const int colW = (tw - 6) / 2;
+  int th = 44;
+  const int remain = bottom - ty0;
+  if (remain < 2 * th + 6 + 3 * 14 + 8) th = (remain - 6 - 3 * 14 - 8) / 2;
+  if (th < 32) th = 32;
+  if (th > 44) th = 44;
+  const bool timeTile = land && (avail - (10 + 2 * R) < 78);   // landscape sempit: sisa waktu jadi kartu
+  const uint16_t cI = inaCharging ? T().good : T().text;
+  inaTile(s, tx0,              ty0,          colW, th, "Tegangan", vV, T().text);
+  inaTile(s, tx0 + colW + 6,   ty0,          colW, th, inaCharging ? "Arus (mengisi)" : "Arus (memakai)", vI, cI);
+  inaTile(s, tx0,              ty0 + th + 6, colW, th, "Daya", vP, T().text);
+  if (timeTile) inaTile(s, tx0 + colW + 6, ty0 + th + 6, colW, th, tlb, vT, T().text);
+  else          inaTile(s, tx0 + colW + 6, ty0 + th + 6, colW, th, "Kapasitas", vCap, T().text);
+
+  int y = ty0 + 2 * th + 6 + 8; const int lh = 14;
+  const int rx0 = tx0 + 4, rw0 = tw - 8;
+  if (timeTile && y + 8 <= bottom) { inaRow(s, rx0, rw0, y, "Kapasitas terukur", vCap, T().text); y += lh; }
+  if (y + 8 <= bottom) { inaRow(s, rx0, rw0, y, "Sesi keluar / masuk", vSes, T().text); y += lh; }
+  if (y + 8 <= bottom) {
+    if (inaOvf) inaRow(s, rx0, rw0, y, "PERINGATAN", "OVERFLOW: turunkan gain/R", T().danger);
+    else {
+      char kb[28]; snprintf(kb, sizeof(kb), "Siklus (boot ke-%lu)", (unsigned long)inaBootCount);
+      inaRow(s, rx0, rw0, y, kb, vCyc, T().subtext);
+    }
+  }
+}
+
 static void inaDrawGraph(LGFX_Sprite& s, int top, int bottom) {
   static const char* nm[3] = {"Arus", "Tegangan", "Daya"};
   int pw = (SCR_W - 16 - 8) / 3;
-  s.setTextSize(1);
+  s.setFont(emjF(&lgfx::fonts::Font0)); s.setTextSize(1);
   for (int i = 0; i < 3; i++) {
     int x = 8 + i * (pw + 4);
     bool act = (i == inaGraphMetric);
-    iosRR(s, x, top, pw, 16, 5, act ? T().accent : T().surface2);
-    s.setTextColor(act ? (uint16_t)0xFFFF : T().subtext);
+    nyxAaRR(s, x, top, pw, 16, 8, act ? T().accent : blend565(T().surface2, 0xFFFF, 14));
+    s.setTextColor(act ? appIconInk(T().accent) : T().subtext);
     s.setCursor(x + (pw - (int)s.textWidth(nm[i])) / 2, top + 4); s.print(nm[i]);
   }
   int gx = 10, gy = top + 22, gw = SCR_W - 20, gh = bottom - 14 - gy;
   if (gh < 20) gh = 20;
-  iosRR(s, gx, gy, gw, gh, 5, T().surface2);
+  inaCard(s, gx, gy, gw, gh);
   int n = (int)inaHistCount;
   if (n < 2) {
     s.setTextColor(T().subtext);
@@ -680,24 +785,62 @@ static void inaDrawGraph(LGFX_Sprite& s, int top, int bottom) {
   float minSpan = (m == 1) ? 0.05f : 10.0f;
   if (span < minSpan) { float mid = (hi + lo) / 2; lo = mid - minSpan / 2; hi = mid + minSpan / 2; span = minSpan; }
   lo -= span * 0.08f; hi += span * 0.08f; span = hi - lo;
-  int ix0 = gx + 4, iw = gw - 8, iy0 = gy + 4, ih = gh - 8;
+  int ix0 = gx + 6, iw = gw - 12, iy0 = gy + 6, ih = gh - 12;
+  // garis bantu putus-putus (4 bagian)
+  for (int q = 1; q < 4; q++) {
+    int yy = iy0 + (ih * q) / 4;
+    for (int xx = ix0; xx < ix0 + iw; xx += 5) s.drawPixel(xx, yy, T().divider);
+  }
+  int baseY = iy0 + ih - 1;
   if (m != 1 && lo < 0 && hi > 0) {
     int zy = iy0 + (int)((hi - 0) / span * ih);
-    s.drawFastHLine(ix0, zy, iw, T().divider);
+    s.drawFastHLine(ix0, zy, iw, blend565(T().divider, 0xFFFF, 90));
+    baseY = zy;
   }
+  const uint16_t areaC = blend565(blend565(T().surface2, 0xFFFF, 14), T().accent, 80);
   float step = (float)iw / (float)(INA_HIST_N - 1);
   float px = 0, py = 0;
   for (int k = 0; k < n; k++) {
     float x = (float)(ix0 + iw) - (float)(n - 1 - k) * step;
     float y = (float)iy0 + (hi - inaHistVal(k, m)) / span * (float)ih;
-    if (k > 0) s.drawLine((int)px, (int)py, (int)x, (int)y, T().accent);
+    if (k > 0) {
+      int xa = (int)px, xb = (int)x;
+      for (int xi = xa; xi <= xb; xi++) {
+        float t = (xb == xa) ? 0.0f : (float)(xi - xa) / (float)(xb - xa);
+        int yi = (int)(py + t * (y - py));
+        int y0 = yi < baseY ? yi : baseY, y1 = yi < baseY ? baseY : yi;
+        s.drawFastVLine(xi, y0, y1 - y0 + 1, areaC);
+      }
+    }
     px = x; py = y;
+  }
+  px = 0; py = 0;
+  for (int k = 0; k < n; k++) {
+    float x = (float)(ix0 + iw) - (float)(n - 1 - k) * step;
+    float y = (float)iy0 + (hi - inaHistVal(k, m)) / span * (float)ih;
+    if (k > 0) { s.drawLine((int)px, (int)py, (int)x, (int)y, T().accent); s.drawLine((int)px, (int)py + 1, (int)x, (int)y + 1, T().accent); }
+    px = x; py = y;
+  }
+  nyxAaCircle(s, (int)px, (int)py, 3, T().accent);
+  nyxAaCircle(s, (int)px, (int)py, 1, 0xFFFF);
+  // nilai terakhir (kanan atas grafik)
+  {
+    float cur = inaHistVal(n - 1, m); char cb[24];
+    if (m == 1) snprintf(cb, sizeof(cb), "%.3f V", cur);
+    else snprintf(cb, sizeof(cb), (m == 0) ? "%+.0f mA" : "%.0f mW", cur);
+    s.setTextSize(2); s.setTextColor(T().text);
+    int cw2 = (int)s.textWidth(cb);
+    if (cw2 > gw / 2) { s.setTextSize(1); cw2 = (int)s.textWidth(cb); }
+    nyxAaRR(s, gx + gw - cw2 - 14, gy + 5, cw2 + 10, (s.fontHeight() + 4), 6, blend565(T().surface2, 0x0000, 90));
+    s.setCursor(gx + gw - cw2 - 9, gy + 7); s.print(cb);
+    s.setTextSize(1);
   }
   char b[48];
   if (m == 1) snprintf(b, sizeof(b), "min %.2f  rata %.2f  maks %.2f V", mn, sum / n, mx);
   else snprintf(b, sizeof(b), "min %.0f  rata %.0f  maks %.0f %s", mn, sum / n, mx, (m == 0) ? "mA" : "mW");
   s.setTextColor(T().subtext); s.setCursor(10, bottom - 10); s.print(b);
 }
+// ===== BATT_UX_V2 END =====
 
 // ---- tab Sensor (2) & Baterai (3): baris nilai + tombol ----
 static int inaRowsFor(uint8_t tab) { return (tab == 2) ? 7 : 4; }
@@ -777,24 +920,36 @@ void battExit()  { inaSaveCounters(false); }
 void drawBatteryApp(LGFX_Sprite& s) {
   s.fillSprite(T().bg);
   drawStatusBar(s);
+  s.setFont(emjF(&lgfx::fonts::Font0));
   s.setTextSize(1);
-  s.setTextColor(0x07E0); s.setCursor(8, 26); s.print(RPTR("Daya (INA219)"));
+  {   // BATT_UX_V2: ikon baterai kecil + judul
+    uint16_t ic = inaOk ? inaSocColor() : T().subtext;
+    nyxAaRRRing(s, 10, 26, 15, 9, 2, T().text);
+    s.fillRect(25, 29, 2, 3, T().text);
+    int fw = inaOk ? (11 * inaSoc) / 100 : 0;
+    if (fw > 0) nyxAaRR(s, 12, 28, fw, 5, 1, ic);
+    iosTitle(s, 32, 26, RPTR("Baterai"));
+  }
 
   char chip[16]; uint16_t cc = T().good;
   if (!inaOk) { snprintf(chip, sizeof(chip), "OFFLINE"); cc = T().danger; }
   else if (inaOvf) { snprintf(chip, sizeof(chip), "OVERFLOW"); cc = T().danger; }
   else if (!inaActive) { snprintf(chip, sizeof(chip), "STANDBY"); cc = T().accent; }
   else snprintf(chip, sizeof(chip), "0x%02X OK", inaAddr);
-  int cw = (int)s.textWidth(chip) + 12;
-  iosRR(s, SCR_W - cw - 6, 24, cw, 13, 4, T().surface2);
-  s.setTextColor(cc); s.setCursor(SCR_W - cw, 27); s.print(chip);
+  int cw = (int)s.textWidth(chip) + 18;
+  nyxAaRR(s, SCR_W - cw - 6, 23, cw, 15, 7, blend565(T().surface2, 0xFFFF, 14));
+  nyxAaCircle(s, SCR_W - cw + 4, 30, 2, cc);
+  s.setTextColor(cc); s.setCursor(SCR_W - cw + 10, 27); s.print(chip);
 
-  int tw = (SCR_W - 12) / 5;
-  for (int i = 0; i < 5; i++) {
-    int x = 6 + i * tw; bool act = (i == inaTab);
-    iosRR(s, x + 1, INA_TAB_Y, tw - 2, INA_TAB_H, 5, act ? T().accent : T().surface2);
-    s.setTextColor(act ? (uint16_t)0xFFFF : T().subtext);
-    s.setCursor(x + (tw - (int)s.textWidth(INA_TAB_NAME[i])) / 2, INA_TAB_Y + 5); s.print(INA_TAB_NAME[i]);
+  {   // tab: kontrol segmen (satu wadah, segmen aktif berwarna aksen) -- area sentuh sama seperti sebelumnya
+    int tw = (SCR_W - 12) / 5;
+    nyxAaRR(s, 6, INA_TAB_Y, tw * 5, INA_TAB_H, INA_TAB_H / 2, blend565(T().surface2, 0xFFFF, 14));
+    for (int i = 0; i < 5; i++) {
+      int x = 6 + i * tw; bool act = (i == inaTab);
+      if (act) nyxAaRR(s, x + 2, INA_TAB_Y + 2, tw - 4, INA_TAB_H - 4, (INA_TAB_H - 4) / 2, T().accent);
+      s.setTextColor(act ? appIconInk(T().accent) : T().subtext);
+      s.setCursor(x + (tw - (int)s.textWidth(INA_TAB_NAME[i])) / 2, INA_TAB_Y + (INA_TAB_H - 8) / 2); s.print(INA_TAB_NAME[i]);
+    }
   }
 
   int top = INA_TOP, bottom = inaBottom();
