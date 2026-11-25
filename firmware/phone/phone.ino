@@ -5750,18 +5750,8 @@ void drawLockScreen(LGFX_Sprite& s){
     drawMusicMini(s,20,cy0,cw,46,true); // v110: ctrl=true -> tombol play/pause & next tampil (hit-test di lockScreenInput)
   }
 
-  // hint geser (pill kaca + chevron)
-  const char* hint="Geser ke atas utk buka";
-  int hw=(int)s.textWidth(hint);
-  if(lift<12){ // v110: hint disembunyikan begitu jari mulai menarik ke atas
-  int hintPillY = SCR_H-38;
-  drawGlassPanel(s, SCR_W/2-hw/2-14, hintPillY, hw+28, 26, 13, T().surface, 130);
-  int chevY = hintPillY-9;
-  s.drawLine(SCR_W/2-6,chevY+4, SCR_W/2,chevY,   fg2);
-  s.drawLine(SCR_W/2,  chevY,   SCR_W/2+6,chevY+4,fg2);
-  s.setTextColor(fg2); s.setTextSize(1);
-  s.setCursor(SCR_W/2-hw/2, SCR_H-24);
-  s.print(hint);
+  // NO_SWIPE_HINT_V1: teks "Geser ke atas utk buka" (pill + chevron) dihapus; cukup indikator home bar
+  if(lift<12){ // v110: indikator disembunyikan begitu jari mulai menarik ke atas
   nyxAaRR(s, SCR_W/2-22, SCR_H-9, 44, 4, 2, fg2);   // LOCK_UX_V2: indikator ala home bar
   }
   if(chgAnimActive && !chgCacheReady){ s.pushSprite(&transShot,0,0); chgCacheReady=true; chgCacheW=SCR_W; chgCacheH=SCR_H; } // v125: cache frame bersih
