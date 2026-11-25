@@ -355,6 +355,7 @@ jobs:
           cp firmware/phone/devreg_conf.h     build_sketch/
           cp firmware/phone/devreg_renphone.ino build_sketch/
           cp firmware/phone/brokercfg_renphone.ino build_sketch/   # BROKERCFG_V1: kredensial broker Chat/Catur dari Supabase
+          cp firmware/phone/factory_renphone.ino build_sketch/     # FACTORY_RESET_V1: Reset Pabrik
           cp firmware/phone/wifisense_renphone.ino build_sketch/   # WSENSE_V1: WiFi Sensing (CSI)
 
           mkdir -p build_sketch/src

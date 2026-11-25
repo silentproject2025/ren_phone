@@ -13,7 +13,11 @@ def sub(s, o, n, l):
     return s.replace(o, n)
 if not os.path.exists(os.path.join("firmware", "phone", "factory_renphone.ino")): sys.exit("GAGAL: factory_renphone.ino tidak ada")
 ph = rd(PH)
-if M in ph: print("sudah terpasang (%s)" % M); sys.exit(0)
+WFP = os.path.join(".github", "workflows", "build-firmware.yml")
+if M in ph and (not os.path.exists(WFP) or "factory_renphone.ino" in rd(WFP)): print("sudah terpasang (%s)" % M); sys.exit(0)
+if M in ph:   # phone.ino sudah terpasang, hanya workflow yang kurang
+    wf = rd(WFP); a = "          cp firmware/phone/brokercfg_renphone.ino build_sketch/   # BROKERCFG_V1: kredensial broker Chat/Catur dari Supabase\n"
+    wr(WFP, sub(wf, a, a + "          cp firmware/phone/factory_renphone.ino build_sketch/     # FACTORY_RESET_V1: Reset Pabrik\n", "workflow")); print("workflow diperbaiki"); sys.exit(0)
 ph = sub(ph, "       SR_WSTAT, SR_FOOT /* SETT_UX_V1 */ };", "       SR_WSTAT, SR_FOOT /* SETT_UX_V1 */, SR_FACTORY /* %s */ };" % M, "enum")
 ph = sub(ph, "#define SETT_MAXROWS 40", "#define SETT_MAXROWS 44", "maxrows")
 ph = sub(ph, "unsigned long settTouchT0=0, settTcalArmUntil=0;", "unsigned long settTouchT0=0, settTcalArmUntil=0, settFactArmUntil=0;   // %s" % M, "arm")
@@ -31,4 +35,11 @@ cl = sub(cl, "## Unreleased\n", "## Unreleased\n- New: *Reset Pabrik* (Factory r
 d = rd(D)
 if "Factory reset" not in d:
     d = d.rstrip("\n") + "\n\n## Factory reset `BETA`\n\n*Settings > About > Factory reset* (tap twice within 4 seconds) erases all settings stored in NVS and the settings copies, API key, broker logins and AI memory on the SD card, then restarts. Your own files on the SD card (photos, music, books, memos) and the firmware stay. Afterwards the phone starts like a new one and asks for screen calibration.\n"
+WF = os.path.join(".github", "workflows", "build-firmware.yml")
+if os.path.exists(WF):   # workflow menyalin .ino satu per satu: berkas baru harus didaftarkan
+    wf = rd(WF)
+    if "factory_renphone.ino" not in wf:
+        a = "          cp firmware/phone/brokercfg_renphone.ino build_sketch/   # BROKERCFG_V1: kredensial broker Chat/Catur dari Supabase\n"
+        wf = sub(wf, a, a + "          cp firmware/phone/factory_renphone.ino build_sketch/     # FACTORY_RESET_V1: Reset Pabrik\n", "workflow")
+        wr(WF, wf)
 wr(PH, ph); wr(CL, cl); wr(D, d); print("terpasang (%s)" % M)
