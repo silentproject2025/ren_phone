@@ -118,6 +118,8 @@ static float    wsScore      = 0;           // RMS selisih jendela 2 dtk (ternor
 static const float wsSensMul[5] = { 6.0f, 4.0f, 3.0f, 2.2f, 1.6f };
 static int      wsSens       = 2;           // indeks 0 (rendah) .. 4 (tinggi)
 static bool     wsMoving     = false;
+static uint8_t  wsHist[WS_GRAPH_N];                // WSENSE_VIZ_V1: riwayat skor gerak / ambang (x50, maks 255)
+static int      wsHistHead   = 0, wsHistN = 0;
 static int      wsMovHist    = 0;           // bin gerak dalam jendela napas (hitung kasar, peluruhan)
 
 static bool     wsCal        = false;
@@ -246,6 +248,7 @@ static void wsCsiCb(void* ctx, wifi_csi_info_t* info) {
 static void wsResetSeries() {
   wsHead = 0; wsCount = 0; wsLastBin = 0; wsScore = 0; wsMoving = false; wsMovHist = 0;
   wsBr = 0; wsBrRatio = 0; wsBrRingN = 0; wsBrRingI = 0; wsLastMove = 0;
+  wsHistHead = 0; wsHistN = 0;                           // WSENSE_VIZ_V1
   portENTER_CRITICAL(&wsMux);
   wsBinSum = 0; wsBinCnt = 0; wsPktTotal = 0;
   memset(wsSubSum, 0, sizeof(wsSubSum)); wsSubCnt = 0;
@@ -398,6 +401,9 @@ static void wsPushBin(float v) {
   if (mv) { wsLastMove = millis(); if (wsLastMove == 0) wsLastMove = 1; }
   wsMoving = mv;
   wsMovHist = wsMovHist * 995 / 1000 + (mv ? 10 : 0);   // peluruhan lambat ~ 30 dtk
+  { float rr = (thr > 0) ? wsScore / thr : 0;            // WSENSE_VIZ_V1: simpan rasio skor/ambang utk grafik batang
+    int q = (int)(rr * 50.0f + 0.5f); if (q < 0) q = 0; if (q > 255) q = 255;
+    wsHist[wsHistHead] = (uint8_t)q; wsHistHead = (wsHistHead + 1) % WS_GRAPH_N; if (wsHistN < WS_GRAPH_N) wsHistN++; }
 }
 
 static void wsFinishCal() {
@@ -654,54 +660,92 @@ void drawWsense(LGFX_Sprite& s) {
   s.setTextColor(wsBr > 0 ? WS_RGB(48,209,88) : T().subtext);
   s.setCursor(SCR_W - 12 - s.textWidth(b), iy); s.print(b);           // WSENSE_TIDY_V1: rata kanan
 
-  // ---- grafik 15 dtk terakhir (simpangan dari rata-rata, auto-skala) ----
+  // ---- grafik 15 dtk terakhir: (1) batang GERAK vs AMBANG, (2) gelombang SINYAL (WSENSE_VIZ_V1) ----
   int gx = 8, gy = iy + 14, gw = SCR_W - 16, gh = wsGraphBottom() - gy;
   if (gh < 30) gh = 30;
   drawGlassPanel(s, gx, gy, gw, gh, 10, T().surface2, 140);
-  { char tb[16]; const char* tg;                        // label mode (ketuk utk ganti)
+  const int HDR = 19, FTR = 17;                          // tinggi strip atas / bawah di dalam panel
+  const uint16_t ORG = WS_RGB(255,159,10);
+  s.setTextSize(1);
+  { // strip atas: judul (kiri) + mode (kanan, bisa diketuk)
+    char hl[40];
+    if (wsRun && fabsf(wsAdaptMul - 1.0f) > 0.15f) snprintf(hl, sizeof(hl), "Gerak vs ambang  (Adaptif x%.1f)", (double)wsAdaptMul);
+    else snprintf(hl, sizeof(hl), "Gerak vs ambang");
+    s.setTextColor(T().subtext); s.setCursor(gx + 8, gy + 8); s.print(hl);
+    char tb[16]; const char* tg;
     if (wsUseSub) { snprintf(tb, sizeof(tb), "Multi %d", wsNValid); tg = tb; }
     else tg = wsMulti ? "Multi.." : "Rata";
-    s.setTextSize(1); s.setTextColor(T().subtext);
     int tw = s.textWidth(tg); s.setCursor(gx + gw - tw - 8, gy + 8); s.print(tg);
-    if (wsRun && fabsf(wsAdaptMul - 1.0f) > 0.15f) {    // WSENSE_V2: baseline adaptif sedang bergeser
-      char ab[16]; snprintf(ab, sizeof(ab), "Adaptif x%.1f", (double)wsAdaptMul);
-      s.setCursor(gx + 8, gy + 8); s.print(ab); } }
-  int n = wsCount < WS_GRAPH_N ? wsCount : WS_GRAPH_N;
-  if (n > 3) {
-    float m = 0; for (int k = 0; k < n; k++) m += wsAt(k); m /= n;
-    float mx = 0.01f * m;                               // lantai skala 1% dari rata-rata
-    for (int k = 0; k < n; k++) { float a = fabsf(wsAt(k) - m); if (a > mx) mx = a; }
-    int pTop = gy + 21, pBot = gy + gh - 18;                           // WSENSE_TIDY_V1: di antara strip atas & bawah
-    if (pBot - pTop < 16) { pTop = gy + 4; pBot = gy + gh - 4; }       // grafik sangat pendek: pakai seluruh panel
-    int mid = (pTop + pBot) / 2, half = (pBot - pTop) / 2 - 2;
-    s.drawFastHLine(gx + 4, mid, gw - 8, T().divider);
-    int px = 0, py = 0;
-    for (int k = 0; k < n; k++) {
-      int xx = gx + 4 + (int)((long)(gw - 8) * (n - 1 - k) / (n - 1));   // terbaru di kanan
-      int yy = mid - (int)((wsAt(k) - m) / mx * half);
-      if (k > 0) s.drawLine(px, py, xx, yy, wsMoving ? WS_RGB(255,159,10) : T().accent);
-      px = xx; py = yy;
+  }
+  int top = gy + HDR + 3, bot = gy + gh - FTR - 3, H = bot - top;
+  bool two = (H >= 90);                                  // layar pendek: hanya grafik Gerak
+  int p1H = two ? (H * 58 / 100) : H;
+  int pxL = gx + 8, pw = gw - 16;
+  if (gh >= 70) {                                        // garis pemisah strip atas & bawah
+    s.drawFastHLine(gx + 8, gy + HDR, gw - 16, T().divider);
+    s.drawFastHLine(gx + 8, gy + gh - FTR, gw - 16, T().divider);
+  }
+  // ---- grafik 1: batang gerak / ambang ----
+  {
+    int pb = top + p1H;                                  // dasar batang
+    if (wsHistN > 3) {
+      float ymax = 2.0f;                                 // skala: ambang di tengah, naik otomatis bila ada lonjakan
+      for (int i = 0; i < wsHistN; i++) {
+        float r = wsHist[((wsHistHead - 1 - i) % WS_GRAPH_N + WS_GRAPH_N) % WS_GRAPH_N] / 50.0f;
+        if (r * 1.1f > ymax) ymax = r * 1.1f;
+      }
+      if (ymax > 5.0f) ymax = 5.0f;
+      const uint16_t lowC = blend565(T().surface2, T().accent, 210);
+      for (int i = 0; i < wsHistN; i++) {                // i = 0 terbaru (paling kanan)
+        float r = wsHist[((wsHistHead - 1 - i) % WS_GRAPH_N + WS_GRAPH_N) % WS_GRAPH_N] / 50.0f;
+        int x1 = pxL + pw - (int)((long)i * pw / WS_GRAPH_N);
+        int x0 = pxL + pw - (int)((long)(i + 1) * pw / WS_GRAPH_N);
+        if (x1 <= x0) continue;
+        int hh = (int)(r / ymax * p1H); if (hh > p1H) hh = p1H; if (hh < 1 && r > 0.0f) hh = 1;
+        if (hh > 0) s.fillRect(x0, pb - hh, x1 - x0, hh, r >= 1.0f ? ORG : lowC);
+      }
+      int ty = pb - (int)(p1H / ymax);                   // garis ambang (rasio 1,0), putus-putus
+      const uint16_t thC = blend565(T().surface2, ORG, 170);
+      for (int x = pxL; x < pxL + pw; x += 8) s.drawFastHLine(x, ty, (x + 4 <= pxL + pw) ? 4 : pxL + pw - x, thC);
+    } else {
+      s.setTextColor(T().subtext);
+      s.setCursor(pxL + 2, top + p1H / 2 - 4); s.print(wsRun ? "Mengumpulkan data..." : "-");
     }
-  } else {
-    s.setTextColor(T().subtext); s.setTextSize(1);
-    s.setCursor(gx + 10, gy + gh / 2 - 4); s.print(wsRun ? "Mengumpulkan data..." : "-");
+    s.drawFastHLine(pxL, pb, pw, T().divider);
   }
-  // bar skor gerak di tepi atas grafik
-  if (wsRun) {
-    float r = thr > 0 ? wsScore / thr : 0; if (r > 1.5f) r = 1.5f;
-    int bw = (int)((gw - 16) * r / 1.5f);
-    s.fillRect(gx + 8, gy + 3, gw - 16, 2, T().divider);
-    s.fillRect(gx + 8, gy + 3, bw, 2, r >= 1.0f ? WS_RGB(255,159,10) : T().accent);
+  // ---- grafik 2: gelombang sinyal (dihaluskan 3 titik) ----
+  if (two) {
+    int ly = top + p1H + 3;                              // baris judul
+    s.setTextColor(T().subtext); s.setCursor(pxL, ly); s.print("Sinyal WiFi");
+    int t2 = ly + 11, b2 = bot, h2 = b2 - t2;
+    int n = wsCount < WS_GRAPH_N ? wsCount : WS_GRAPH_N;
+    int ns = n - 2;                                      // jumlah titik setelah penghalusan
+    if (ns > 3 && h2 >= 12) {
+      float m = 0;
+      for (int k = 0; k < ns; k++) m += (wsAt(k) + wsAt(k + 1) + wsAt(k + 2)) / 3.0f;
+      m /= ns;
+      float mx = 0.01f * m;                              // lantai skala 1% dari rata-rata
+      for (int k = 0; k < ns; k++) { float a = fabsf((wsAt(k) + wsAt(k + 1) + wsAt(k + 2)) / 3.0f - m); if (a > mx) mx = a; }
+      if (mx < 1e-3f) mx = 1e-3f;
+      int mid = (t2 + b2) / 2, half = h2 / 2 - 1;
+      s.drawFastHLine(pxL, mid, pw, T().divider);
+      int px = 0, py = 0;
+      uint16_t lc = wsMoving ? ORG : (uint16_t)T().accent;
+      for (int k = 0; k < ns; k++) {
+        int xx = pxL + (int)((long)pw * (ns - 1 - k) / (ns - 1));   // terbaru di kanan
+        int yy = mid - (int)(((wsAt(k) + wsAt(k + 1) + wsAt(k + 2)) / 3.0f - m) / mx * half);
+        if (k > 0) s.drawLine(px, py, xx, yy, lc);
+        px = xx; py = yy;
+      }
+    } else if (ns <= 3) {
+      s.setCursor(pxL + 2, (t2 + b2) / 2 - 4); s.print(wsRun ? "Mengumpulkan data..." : "-");
+    }
   }
-  if (gh >= 70) {                                                      // WSENSE_TIDY_V1: garis pemisah strip atas & bawah
-    s.drawFastHLine(gx + 8, gy + 19, gw - 16, T().divider);
-    s.drawFastHLine(gx + 8, gy + gh - 17, gw - 16, T().divider);
-  }
-  { char sb[12]; snprintf(sb, sizeof(sb), "Sens %d/5", wsSens + 1);   // strip bawah kanan: sensitivitas
+  // ---- strip bawah: pesan (kiri, dipotong bila kepanjangan) + Sens n/5 (kanan) ----
+  { char sb[12]; snprintf(sb, sizeof(sb), "Sens %d/5", wsSens + 1);
     int sw = s.textWidth(sb);
-    s.setTextSize(1); s.setTextColor(T().subtext);
-    s.setCursor(gx + gw - sw - 8, gy + gh - 12); s.print(sb);
-    char mb[64]; mb[0] = 0; uint16_t mc = T().subtext;                 // strip bawah kiri: pesan (dipotong bila kepanjangan)
+    s.setTextColor(T().subtext); s.setCursor(gx + gw - sw - 8, gy + gh - 12); s.print(sb);
+    char mb[64]; mb[0] = 0; uint16_t mc = T().subtext;
     if (wsCal) {
       int sec = (int)((WS_CAL_MS - (millis() - wsCalT0)) / 1000UL);
       snprintf(mb, sizeof(mb), "Kalibrasi... %d dtk (jangan ada orang)", sec < 0 ? 0 : sec);
@@ -735,7 +779,7 @@ void wsenseTouch(int x, int y, bool held, bool isNew) {
   if (isBack(x, y)) { navBack(); return; }
   { int tgy = 26 + 18 + 46 + 6 + 14;                    // = gy di drawWsense (jaga tetap sama)
     if (y >= tgy && y <= tgy + 20 && x > SCR_W - 100) {  // ganti mode multi <-> rata-rata
-      wsMulti = !wsMulti; wsBrK = -1; wsBrRingN = 0; wsBr = 0; wsMovHist = 0;
+      wsMulti = !wsMulti; wsBrK = -1; wsBrRingN = 0; wsBr = 0; wsMovHist = 0; wsHistN = 0;
       wsQ[0] = wsQref[0]; wsQ[1] = wsQref[1]; wsAdaptMul = 1.0f;   // WSENSE_V2
       snprintf(wsMsg, sizeof(wsMsg), wsMulti ? "Mode multi-subcarrier" : "Mode rata-rata");
       needRedraw = true; return;
