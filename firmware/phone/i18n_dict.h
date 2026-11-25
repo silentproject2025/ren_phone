@@ -884,5 +884,9 @@ static const I18nPair I18N_DICT[] = {
   { "Ide menu makan malam", "Dinner menu ideas" },
   { "Tunggu jawaban selesai", "Wait for the answer to finish" },
   { "Percakapan baru dimulai", "New conversation started" },
+  { "Pilih model", "Choose model" },
+  { "Model dipilih", "Model selected" },
+  { "Kustom...", "Custom..." },
+  { "Kustom: ", "Custom: " },
 };
 static const int I18N_DICT_N = (int)(sizeof(I18N_DICT)/sizeof(I18N_DICT[0]));

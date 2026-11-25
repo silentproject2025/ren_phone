@@ -3214,6 +3214,48 @@ volatile bool aiSoftStopTriggered = false;
 // Nama model sementara utk satu pemanggilan (diisi app lain, mis. adu Catur vs Gemini, lalu dikosongkan lagi). nullptr/"" = bawaan.
 const char* gemModelOverride = nullptr;
 
+// AI_MODEL_PICK_V1: pilihan model AI Chat. Disimpan di NVS (namespace "gemini", key "model"), bukan di SD.
+// Daftar preset sengaja pendek karena nama model Gemini cepat berganti; "Kustom" menerima ID model apa pun
+// (mis. gemini-2.5-pro) lewat keyboard. Catur tetap memakai CHS_GEM_MODEL lewat gemModelOverride.
+struct AiModelOpt { const char* label; const char* id; };
+static const AiModelOpt AI_MODELS[] = {
+  { "3.5 Flash-Lite", "gemini-3.5-flash-lite" },   // bawaan: cepat dan hemat
+  { "3.5 Flash",      "gemini-3.5-flash"      },
+  { "3.6 Flash",      "gemini-3.6-flash"      },
+  { "3.7 Flash",      "gemini-3.7-flash"      },
+  { "2.5 Flash",      "gemini-2.5-flash"      },
+};
+#define AI_MODEL_N ((int)(sizeof(AI_MODELS)/sizeof(AI_MODELS[0])))
+String aiModelId   = AI_MODELS[0].id;   // model yang dipakai AI Chat
+String aiModelEdit = "";                // buffer keyboard untuk ID kustom
+bool   aiModelMenu = false;             // popup pemilih terbuka
+
+// ID model masuk ke URL, jadi hanya huruf kecil, angka, titik, minus, garis bawah (maks 48).
+String aiModelSanitize(String v){
+  v.trim(); v.toLowerCase();
+  if(v.startsWith("models/")) v.remove(0,7);
+  String o;
+  for(size_t i=0;i<v.length() && o.length()<48;i++){
+    char c=v.charAt(i);
+    if((c>='a'&&c<='z')||(c>='0'&&c<='9')||c=='.'||c=='-'||c=='_') o+=c;
+  }
+  return o;
+}
+void saveAiModel(){ Preferences p; p.begin(GEMINI_NVS_NS,false); p.putString("model",aiModelId); p.end(); }
+void loadAiModel(){
+  Preferences p; p.begin(GEMINI_NVS_NS,true); String v=p.getString("model",""); p.end();
+  v=aiModelSanitize(v);
+  aiModelId = v.length() ? v : String(AI_MODELS[0].id);
+}
+int aiModelIndex(){ for(int i=0;i<AI_MODEL_N;i++) if(aiModelId==AI_MODELS[i].id) return i; return -1; }   // -1 = kustom
+const char* aiModelLabel(){ int i=aiModelIndex(); return i>=0 ? AI_MODELS[i].label : aiModelId.c_str(); }
+// Dipanggil saat keyboard ID kustom ditutup.
+void aiModelCommitEdit(){
+  String v=aiModelSanitize(aiModelEdit);
+  if(v.length()){ aiModelId=v; saveAiModel(); showToast(RPTR("Model dipilih")); }
+  aiModelEdit="";
+}
+
 bool doGeminiHttpRequest(const String& promptText, String& outResponse) {
   bool ok = false;
   WiFiClientSecure client;
@@ -3238,7 +3280,7 @@ bool doGeminiHttpRequest(const String& promptText, String& outResponse) {
 
   // FIX v7: model diganti dari gemini-2.5-flash-lite -> gemini-3.5-flash-lite
   String url = String("https://generativelanguage.googleapis.com/v1beta/models/") +
-               ((gemModelOverride && gemModelOverride[0]) ? gemModelOverride : "gemini-3.5-flash-lite") +
+               ((gemModelOverride && gemModelOverride[0]) ? gemModelOverride : aiModelId.c_str()) +
                ":generateContent?key=" + geminiApiKey;
 
   Serial.printf("[Gemini] Free DRAM internal: %u bytes (blok terbesar: %u)\n",
@@ -4199,7 +4241,7 @@ void drawKb(LGFX_Sprite& s){
       String d=*kbTarget; bool empty=(d.length()==0);
       if(d.length()>80) d=d.substring(d.length()-80);
       if(fk==2 && d.length()>6){ String m; for(int i=0;i<(int)d.length()-6;i++) m+="*"; m+=d.substring(d.length()-6); d=m; }
-      if(empty) d = (fk==1) ? String("Ketik pertanyaan...") : (fk==3 ? String("Ketik nama branch...") : String("Tempel/ketik API key..."));
+      if(empty) d = (fk==1) ? String("Ketik pertanyaan...") : (fk==3 ? String("Ketik nama branch...") : (fk==4 ? String("ID model, mis. gemini-2.5-pro") : String("Tempel/ketik API key...")));
       int maxW=bw-20;
       while(d.length()>1 && s.textWidth(d.c_str())>maxW){          // tampilkan UJUNG teks
         d.remove(0,1);
@@ -10832,6 +10874,7 @@ int kbFloatKind(){
   if(!kbTarget) return 0;
   if(kbTarget==&aiPrompt) return 1;
   if(kbTarget==&geminiApiKey) return 2;
+  if(kbTarget==&aiModelEdit) return 4;   // AI_MODEL_PICK_V1
   if(otaIsNewBranchTarget(kbTarget)) return 3;   // KB_FLOAT_BRANCH_V1
   return 0;
 }
@@ -10895,6 +10938,49 @@ int aiChipY(int i){ return AI_CHAT_TOP+58+i*22; }
 int aiInputRight(){ return aiPrompt.length() ? SCR_W-94 : SCR_W-60; }   // kolom input melebar saat tombol X tidak perlu
 bool aiEmptyState(){ return aiHistN==0 && !aiLastPrompt.length() && !aiLoading && !aiResponse.length(); }
 
+// AI_MODEL_PICK_V1 ---------------------------------------------------------
+#define AI_MENU_RH 22
+void aiModelMenuRect(int& x,int& y,int& w,int& h){
+  x=8; y=46; w=(SCR_W-16<230)?SCR_W-16:230; h=20+(AI_MODEL_N+1)*AI_MENU_RH+4;
+}
+void drawAiModelMenu(LGFX_Sprite& s){
+  int x,y,w,h; aiModelMenuRect(x,y,w,h);
+  s.fillRect(0,AI_CHAT_TOP,SCR_W,SCR_H-AI_CHAT_TOP,blend565(T().bg,0x0000,140));   // redupkan latar
+  nyxAaRR(s,x-1,y-1,w+2,h+2,11,T().divider);
+  nyxAaRR(s,x,y,w,h,10,T().surface);
+  s.setTextColor(T().subtext); s.setCursor(x+10,y+6); s.print(RPTR("Pilih model"));
+  int cur = aiModelIndex();
+  int maxCh = (w-34)/6;
+  for(int i=0;i<=AI_MODEL_N;i++){
+    int ry = y+20+i*AI_MENU_RH;
+    bool custom = (i==AI_MODEL_N);
+    bool sel = custom ? (cur<0) : (cur==i);
+    if(sel) iosRR(s,x+4,ry,w-8,AI_MENU_RH-3,8,T().accent);
+    uint16_t fg = sel ? (uint16_t)T().bg : (uint16_t)T().text;
+    nyxAaCircle(s,x+16,ry+9,4,sel?fg:(uint16_t)T().divider);
+    if(!sel) nyxAaCircle(s,x+16,ry+9,2,T().surface);
+    String t = custom ? ((cur<0) ? String(RPTR("Kustom: "))+aiModelId : String(RPTR("Kustom..."))) : String(AI_MODELS[i].label);
+    if((int)t.length()>maxCh) t = t.substring(0,maxCh-1)+"~";
+    s.setTextColor(fg); s.setCursor(x+28,ry+6); s.print(t.c_str());
+  }
+}
+// true = sentuhan sudah ditangani
+void aiModelMenuTouch(int tx,int ty){
+  int x,y,w,h; aiModelMenuRect(x,y,w,h);
+  if(tx<x||tx>x+w||ty<y||ty>y+h){ aiModelMenu=false; return; }          // ketuk di luar = tutup
+  int i=(ty-(y+20))/AI_MENU_RH;
+  if(ty<y+20||i<0||i>AI_MODEL_N) return;
+  vibTap();
+  aiModelMenu=false;
+  if(i<AI_MODEL_N){
+    aiModelId=AI_MODELS[i].id; saveAiModel();
+    showToast(RPTR("Model dipilih"));
+  } else {
+    aiModelEdit = (aiModelIndex()<0) ? aiModelId : String("");
+    kbTarget=&aiModelEdit; kbVisible=true; kbMode=KB_LOWER;
+  }
+}
+
 void drawAiChat(LGFX_Sprite& s){
   iosBackdrop(s); drawStatusBar(s);
   s.setTextWrap(false); s.setTextSize(1);
@@ -10911,10 +10997,12 @@ void drawAiChat(LGFX_Sprite& s){
     else if(micTranscribing){ dc = T().accent2; st = RPTR("menyalin"); }
     else if(aiLoading){ dc = T().accent2; st = RPTR("berpikir"); }
     else if(!online){ dc = T().danger; st = RPTR("offline"); }
-    else { dc = T().good; st = "Gemini"; }
+    else { dc = T().good; st = aiModelLabel(); }   // AI_MODEL_PICK_V1: nama model aktif
     nyxAaCircle(s,58,30,3,dc);
     int room = (micBtnX-6-65)/6;
-    if(room >= (int)strlen(st)){ s.setTextColor(T().subtext); s.setCursor(65,26); s.print(st); }
+    int chevX = 63;
+    if(room >= (int)strlen(st)){ s.setTextColor(T().subtext); s.setCursor(65,26); s.print(st); chevX = 65+(int)strlen(st)*6+3; }
+    s.fillTriangle(chevX,28,chevX+6,28,chevX+3,32,T().subtext);   // panah kecil: judul bisa diketuk
   }
   uint16_t micCol = micRecording ? T().danger : (micTranscribing ? T().surface2 : T().accent2);
   iosRR(s,micBtnX,24,micBtnW,18,9,micCol);
@@ -11072,6 +11160,7 @@ void drawAiChat(LGFX_Sprite& s){
   }
 
   if(kbVisible) drawKb(s); else drawBack(s);
+  if(aiModelMenu && !kbVisible) drawAiModelMenu(s);   // AI_MODEL_PICK_V1
   drawToast(s);
 }
 
@@ -11082,9 +11171,17 @@ void aiTouch(int x,int y,bool held,bool isNew){
   if(kbVisible){
     if(!isNew) return;
     int y0=kbY();
-    if(y<y0-2){ kbVisible=false; kbTarget=nullptr; }
+    if(y<y0-2){
+      if(kbTarget==&aiModelEdit) aiModelCommitEdit();   // AI_MODEL_PICK_V1
+      kbVisible=false; kbTarget=nullptr;
+    }
     else kbTouch(x,y);
     needRedraw=true;
+    return;
+  }
+
+  if(aiModelMenu){                                      // AI_MODEL_PICK_V1: popup pemilih model
+    if(isNew){ aiModelMenuTouch(x,y); needRedraw=true; }
     return;
   }
 
@@ -11095,6 +11192,12 @@ void aiTouch(int x,int y,bool held,bool isNew){
   if(isNew){
     dragging = false;
     if(isBack(x,y)){ navBack(); return; }
+
+    if(y>=20 && y<=43 && x<aiMicBtnX()-2){                    // judul / nama model: buka pemilih model
+      if(aiLoading){ showToast(RPTR("Tunggu jawaban selesai")); return; }
+      aiModelMenu=true; vibTap(); needRedraw=true;
+      return;
+    }
 
     if(x>=SCR_W-72 && x<=SCR_W-4 && y>=24 && y<=42){          // API Key
       kbTarget = &geminiApiKey;
@@ -21846,6 +21949,7 @@ void setup(){
   emjInit();  // emoji: muat set dari SD (/emoji.bin) SEBELUM teks apa pun dinormalisasi (loadNote dst)
   loadNote();
   loadGeminiKey();
+  loadAiModel();   // AI_MODEL_PICK_V1
   loadWallpaper(); // v47: muat wallpaper custom kalau ada (fallback warna solid tema kalau gak ada)
   canvasApp.setPsram(true);
   rpHL("sebelum_canvasApp");

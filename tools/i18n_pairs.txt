@@ -917,3 +917,7 @@ Buat timer 10 menit ::: Set a 10 minute timer
 Ide menu makan malam ::: Dinner menu ideas
 Tunggu jawaban selesai ::: Wait for the answer to finish
 Percakapan baru dimulai ::: New conversation started
+Pilih model ::: Choose model
+Model dipilih ::: Model selected
+Kustom... ::: Custom...
+Kustom:  ::: Custom: 
