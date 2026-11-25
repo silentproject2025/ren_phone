@@ -5505,26 +5505,52 @@ void drawLockScreen(LGFX_Sprite& s){
   uint16_t fg  = wallpaperReady ? (uint16_t)0xFFFF : T().text;
   uint16_t fg2 = wallpaperReady ? (uint16_t)0xDEFB : T().subtext;
 
-  // chip baterai (kanan atas)
-  {
+  // LOCK_UX_V2 -- tata letak baru: [chip Wi-Fi/IP kiri | chip baterai kanan], lalu tumpukan gembok > tanggal > jam
+  // dengan jarak tetap (tanggal TIDAK lagi menimpa angka jam), lalu kartu notifikasi.
+  s.setFont(emjF(&lgfx::fonts::Font0)); s.setTextSize(1);
+  {   // chip Wi-Fi + IP (kiri atas); tidak digambar kalau belum tersambung
+    char ipb[20];
+    if(lockIpString(ipb,sizeof(ipb))){
+      int iw=(int)s.textWidth(ipb), pw=iw+34, px=10, py=8;
+      drawGlassCard(s,px,py,pw,20,10,T().surface,140);
+      int wx=px+13, wy=py+14;
+      nyxAaCircle(s,wx,wy,1,fg);
+      s.drawArc(wx,wy,5,4,225,315,fg);
+      s.drawArc(wx,wy,9,8,225,315,fg);
+      s.setTextColor(fg); s.setCursor(px+25,py+6); s.print(ipb);
+    }
+  }
+  {   // chip baterai (kanan atas); petir kecil kalau sedang mengisi
     char pb[8]; sprintf(pb,"%d%%",battPercent);
-    s.setTextSize(1);
-    int pw=s.textWidth(pb)+36, px=SCR_W-pw-10, py=8;
+    int extra=battCharging?9:0;
+    int pw=(int)s.textWidth(pb)+36+extra, px=SCR_W-pw-10, py=8;
     drawGlassCard(s,px,py,pw,20,10,T().surface,140);
     uint16_t bc=battColor();
     nyxAaRRRing(s, px+9,py+5,16,10,3,fg2);
     s.fillRect(px+25,py+8,2,4,fg2);
     int fw=(10*battPercent)/100; if(fw>0) nyxAaRR(s, px+11,py+7,fw,6,1,bc);
-    s.setTextColor(fg); s.setCursor(px+31,py+6); s.print(pb);
+    int tx2=px+31;
+    if(battCharging){
+      s.fillTriangle(tx2+4,py+4, tx2,py+11, tx2+3,py+11, T().good);
+      s.fillTriangle(tx2+2,py+10, tx2+6,py+10, tx2+2,py+16, T().good);
+      tx2+=9;
+    }
+    s.setTextColor(fg); s.setCursor(tx2,py+6); s.print(pb);
   }
 
-  // jam besar (font sans tebal) + bayangan lembut
+  // jam besar: ukuran terbesar (2..4) yg lebarnya <= 62% layar
   s.setFont(emjF(&lgfx::fonts::FreeSansBold9pt7b));
-  s.setTextSize(3);
+  int csz=4;
+  for(;csz>2;csz--){ s.setTextSize(csz); if((int)s.textWidth(tb)<=SCR_W*62/100) break; }
+  s.setTextSize(csz);
   int tw = s.textWidth(tb);
   int fh = s.fontHeight();
   int tx = SCR_W/2 - tw/2;
-  int ty = SCR_H/2-70-lift;
+  // tumpukan (atas->bawah): gembok 20px, jarak 6, tanggal 18px, jarak 8, jam. Diletakkan di sekitar 34% tinggi layar.
+  int stackH = 52+fh;
+  int top = SCR_H*34/100 - stackH/2; if(top<34) top=34;
+  top -= lift;
+  int ty = top+52;
   {
     uint16_t under=glassSampleAvg(s,tx,ty,tw,fh,3);
     uint16_t sh=blend565(under,0x0000,170);
@@ -5532,37 +5558,23 @@ void drawLockScreen(LGFX_Sprite& s){
     s.setTextColor(blend565(under,0x0000,110)); s.setCursor(tx+2,ty+2); s.print(tb);
   }
   s.setTextColor(fg); s.setCursor(tx,ty); s.print(tb);
+
+  // gembok + tanggal DI ATAS jam
   s.setTextSize(1);
-  s.setFont(emjF(&lgfx::fonts::Font0)); // lock screen selalu Klasik (bukan font custom pilihan user)
-
-  // gembok kecil + tanggal di atas jam
-  int lockIconY = ty-22;
-  nyxAaRRRing(s, SCR_W/2-7,lockIconY-1,14,11,2,fg);
-  s.drawArc(SCR_W/2,lockIconY-3,6,5,180,360,fg);
-  if(ok){
-    int dw=(int)s.textWidth(db);
-    uiText(s,SCR_W/2-dw/2,ty+2,db,fg2,true,false);
-  }
-
-  // v111: chip IP WiFi (kaca) tepat di bawah jam -- teks agak besar & terang
   {
-    char ipb[20];
-    if(lockIpString(ipb,sizeof(ipb))){
-      s.setTextSize(1);
-      char line[28]; snprintf(line,sizeof(line),"IP  %s",ipb);
-      int iw=(int)s.textWidth(line);
-      int ipY=ty+fh+2;
-      if(homeMusStarted() && homeMusLoaded()){ int mTop=SCR_H-100-lift; if(ipY>mTop-26) ipY=mTop-26; }
-      int cwid=iw+24;
-      drawGlassCard(s,SCR_W/2-cwid/2,ipY,cwid,20,10,T().surface,140);
-      s.setTextColor(fg); s.setCursor(SCR_W/2-iw/2,ipY+6); s.print(line);
+    int lockIconY = top+10;
+    nyxAaRRRing(s, SCR_W/2-7,lockIconY-1,14,11,2,fg);
+    s.drawArc(SCR_W/2,lockIconY-3,6,5,180,360,fg);
+    if(ok){
+      int dw=(int)s.textWidth(db);
+      uiText(s,SCR_W/2-dw/2,top+26,db,fg2,true,false);
     }
   }
+  s.setFont(emjF(&lgfx::fonts::Font0)); // lock screen selalu Klasik (bukan font custom pilihan user)
 
-  // NOTIF-LOCK: kartu notifikasi di antara jam/IP dan kartu musik (atau hint kalau tak ada musik)
+  // NOTIF-LOCK: kartu notifikasi di antara jam dan kartu musik (atau hint kalau tak ada musik)
   {
-    int ipBottom=ty+fh+2+20;
-    lockNotifTop=ipBottom+8;
+    lockNotifTop=ty+lift+fh+10;
     lockNotifBottom=(homeMusStarted() && homeMusLoaded()) ? SCR_H-100-6 : SCR_H-52-6;
     lockNotifDraw(s,lift,fg,fg2);
   }
@@ -5585,6 +5597,7 @@ void drawLockScreen(LGFX_Sprite& s){
   s.setTextColor(fg2); s.setTextSize(1);
   s.setCursor(SCR_W/2-hw/2, SCR_H-24);
   s.print(hint);
+  nyxAaRR(s, SCR_W/2-22, SCR_H-9, 44, 4, 2, fg2);   // LOCK_UX_V2: indikator ala home bar
   }
   if(chgAnimActive && !chgCacheReady){ s.pushSprite(&transShot,0,0); chgCacheReady=true; chgCacheW=SCR_W; chgCacheH=SCR_H; } // v125: cache frame bersih
   drawChargeAnim(s); // v125: overlay animasi mengisi daya (kalau lagi aktif)
@@ -5635,8 +5648,12 @@ void unlockFollowDraw(float u){   // v126: unlock geser; v127: unlock anim (para
   if(off>0){ display.setClipRect(0,edge,SCR_W,off); canvas.pushSprite(0,par); }                // Home (naik pelan, parallax)
   display.clearClipRect();
   if(off>0 && off<SCR_H){                              // garis tepi lembut: kesan lapisan terangkat
-    display.fillRect(0,edge,SCR_W,1,blend565(T().bg,TFT_WHITE,70));
-    display.fillRect(0,edge+1,SCR_W,2,blend565(T().bg,TFT_BLACK,150));
+    // LOCK_UX_V2: bayangan 3 tingkat + pegangan kecil di tepi jendela Home
+    display.fillRect(0,edge,SCR_W,1,blend565(T().bg,TFT_WHITE,90));
+    display.fillRect(0,edge+1,SCR_W,1,blend565(T().bg,TFT_BLACK,170));
+    display.fillRect(0,edge+2,SCR_W,1,blend565(T().bg,TFT_BLACK,110));
+    display.fillRect(0,edge+3,SCR_W,1,blend565(T().bg,TFT_BLACK,55));
+    if(off>=16) display.fillRoundRect(SCR_W/2-16,edge+8,32,4,2,blend565(T().bg,TFT_WHITE,170));
   }
   display.endWrite();
   ufPX0=off; ufHasPrev=true;
@@ -5708,6 +5725,7 @@ void chargeAnimTick(){
 
 void lockScreenInput(bool touched,bool newT,int tx,int ty){
   static int startY=0; static int startX=0; static unsigned long startMs=0;
+  static bool commitBuzz=false;   // LOCK_UX_V2: sudah getar utk ambang unlock?
   if(newT && aodActive){ aodWake(); return; } // v96: sentuhan pertama pas AOD cuma "bangunin", belum mulai gestur unlock
   if(lockNotifInput(touched,newT,tx,ty)) return; // NOTIF-LOCK: geser kartu notifikasi ke samping = hapus (gestur unlock dibatalkan)
   if(newT && homeMusStarted() && homeMusLoaded()){ // v110: ketuk tombol di kartu musik = kontrol, BUKAN mulai swipe unlock
@@ -5719,7 +5737,7 @@ void lockScreenInput(bool touched,bool newT,int tx,int ty){
     }
   }
   if(newT){
-    startY=ty; startX=tx; startMs=millis();
+    startY=ty; startX=tx; startMs=millis(); commitBuzz=false;
     lockDragging=true; lockDragY=0; needRedraw=true;
     unlockFollowActive=false; unlockMaxDy=0;
     if(chgAnimActive){ chgAnimActive=false; chgCacheReady=false; }   // v125: sentuhan = tutup animasi mengisi daya
@@ -5733,6 +5751,8 @@ void lockScreenInput(bool touched,bool newT,int tx,int ty){
         float p=(float)dy/((float)SCR_H*0.80f); if(p<0.0f) p=0.0f; if(p>1.0f) p=1.0f;
         if(dy>unlockMaxDy) unlockMaxDy=dy;
         unlockP=p;
+        if(!commitBuzz && p>=0.20f){ commitBuzz=true; vibExit(); }       // LOCK_UX_V2: "pasti terbuka" kalau dilepas sekarang
+        else if(commitBuzz && p<0.12f) commitBuzz=false;
         if(fabsf(p-unlockLastP)>0.004f){ unlockFollowDraw(p); unlockLastP=p; }
         needRedraw=false;
       }

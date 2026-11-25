@@ -682,7 +682,7 @@ void diMenuTouch(int x,int y){
 //  - geser kartu ke kiri/kanan: ikut jari; lepas jauh/cepat = terlempar keluar & dihapus dari histori,
 //    lepas pendek = membal balik. Gestur ini membatalkan gestur "geser naik utk buka" yg sedang menunggu.
 // =================================================================
-#define LN_CARD_H   34
+#define LN_CARD_H   40   // LOCK_UX_V2 (dulu 34)
 #define LN_GAP      4
 #define LN_MAX      3
 #define LN_ANIM_MS  320UL
@@ -722,17 +722,28 @@ void lockNotifDraw(LGFX_Sprite& s,int lift,uint16_t fg,uint16_t fg2){
     if(i==lnOutIdx){ dx=(int)lroundf(lnOutFrom+((float)lnOutDir*(float)SCR_W-lnOutFrom)*lnEase((float)(now-lnOutT0)/(float)LN_OUT_MS)); }
     else if(i==lnDragIdx) dx=(int)lroundf(lnDragDx);
     int x=x0+dx;
-    drawGlassCard(s,x,y,w,LN_CARD_H,12,T().surface,150);
+    drawGlassCard(s,x,y,w,LN_CARD_H,14,T().surface,150);
     int cy=y+LN_CARD_H/2;
-    drawAppIcon(s,e.icon,x+19,cy,11,e.color);
-    String t=e.title; int maxCh=(w-56)/6; if((int)t.length()>maxCh) t=t.substring(0,maxCh-2)+"..";
+    drawAppIcon(s,e.icon,x+23,cy,12,e.color);
+    String t=e.title; int maxCh=(w-62)/6; if((int)t.length()>maxCh) t=t.substring(0,maxCh-2)+"..";
     s.setTextSize(1);
-    s.setTextColor(fg); s.setCursor(x+38,cy-9); s.print(t.c_str());
+    uiText(s,x+44,cy-11,t.c_str(),fg,false,true);   // LOCK_UX_V2: judul tebal
     char ageStr[16];
     if(age<60000UL) strcpy(ageStr,"baru saja");
     else if(age<3600000UL) snprintf(ageStr,sizeof(ageStr),"%lu mnt lalu",age/60000UL);
     else snprintf(ageStr,sizeof(ageStr),"%lu jam lalu",age/3600000UL);
-    s.setTextColor(fg2); s.setCursor(x+38,cy+3); s.print(ageStr);
+    s.setTextColor(fg2); s.setCursor(x+44,cy+3); s.print(ageStr);
+  }
+  // LOCK_UX_V2: ada notifikasi yg tidak muat -> pil kecil "+N lagi" di bawah kartu terakhir (kalau ada tempat)
+  int more=notifHistCount-n;
+  if(more>0 && lnOutIdx<0){
+    int py=lnCardY(n);
+    if(py+16<=lockNotifBottom+LN_GAP){
+      char mb[24]; snprintf(mb,sizeof(mb),"+%d lagi",more);
+      int mw=(int)s.textWidth(mb)+20;
+      drawGlassCard(s,SCR_W/2-mw/2,py,mw,16,8,T().surface,130);
+      s.setTextColor(fg2); s.setCursor(SCR_W/2-mw/2+10,py+4); s.print(mb);
+    }
   }
 }
 
