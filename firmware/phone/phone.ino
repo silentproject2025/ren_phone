@@ -4140,6 +4140,8 @@ int kbOffCol(int row){ (void)row; return kbLeft(); }
 bool kbProseField();                       // kamus_renphone.ino: true utk field teks bebas (Notepad, Chat)
 bool kbCaps=false;                         // caps lock (ketuk shift 2x cepat)
 uint32_t kbShiftTapMs=0, kbSpaceTapMs=0;   // waktu ketukan shift / spasi terakhir
+#define KB_CAPS_DBL_MS 450                 // KB_CAPS_V2: jeda maks. antar 2 ketukan shift = caps lock
+uint32_t kbEvtMs=0;                        // KB_CAPS_V2: waktu sentuh asli ketukan yg sedang diputar ulang (0 = pakai millis())
 uint32_t kbRepArm=0;                       // kapan hapus-tahan berikutnya (0 = tidak aktif)
 int      kbRepN=0;                         // jumlah karakter yang sudah dihapus oleh tahan-hapus
 String*  kbAutoOffFor=nullptr;             // shift dimatikan manual di awal kalimat: berlaku utk field+panjang teks ini saja
@@ -4166,6 +4168,14 @@ static void kbAutoCapSync(){
 static void kbUxNormalize(){
   if(kbCaps && kbMode!=KB_UPPER) kbCaps=false;   // pindah ke 123/emoji atau keyboard dibuka ulang
   kbAutoCapSync();
+}
+
+// KB_CAPS_V2: tuts tanda baca (; , . ?) TIDAK berubah saat caps lock, seperti keyboard HP.
+// Shift 1x tetap memakai peta kbU (: ! @ #) supaya simbol itu masih bisa diketik.
+static inline bool kbPunctKey(int r,int c){ return (r==1&&c==9) || (r==2&&c>=7); }
+static const char* kbKeyLabel(int r,int c){
+  if(kbMode==KB_UPPER && kbCaps && kbPunctKey(r,c)) return kbL[r][c];
+  return kbMaps[(int)kbMode][r][c];
 }
 
 int kbPressKey=-1;
@@ -4223,7 +4233,7 @@ void drawKb(LGFX_Sprite& s){
       bool pr=(kbPressKey==r*10+c);
       int in=pr?1:0;                                           // ditekan: mengecil 1px tiap sisi
       nyxAaRR(s, kx+in,ry+in,kw-2*in,kh-2*in,kr,pr?keyP:keyC);
-      const char* lb=lay[r][c];
+      const char* lb=(kbMode==KB_UPPER) ? kbKeyLabel(r,c) : lay[r][c];   // KB_CAPS_V2
       char elb[4];
       if(emo) lb = emjKbLabel(kbEmoPage, r*10+c, elb) ? elb : "";   // halaman emoji: dinamis dari set aktif
       s.setTextSize(2); s.setTextColor(T().text);
@@ -4249,9 +4259,16 @@ void drawKb(LGFX_Sprite& s){
       s.fillTriangle(shX+8,acy, shX+14,acy-5, shX+14,acy+5, T().text);                  // < halaman sebelumnya
       s.fillTriangle(shX+shW-8,acy, shX+shW-14,acy-5, shX+shW-14,acy+5, T().text);      // > halaman berikutnya
     } else {
-      s.fillTriangle(acx,acy-6, acx-6,acy+2, acx+6,acy+2, ic);
-    s.fillRect(acx-3,acy+2,6,4,ic);
-      if(kbCaps) s.fillRect(acx-6,acy+8,12,2,ic);   // KB_UX_V1: caps lock
+      if(up){                                                                 // KB_CAPS_V2: 1x / caps lock = panah penuh
+        s.fillTriangle(acx,acy-6, acx-6,acy+2, acx+6,acy+2, ic);
+        s.fillRect(acx-3,acy+2,6,4,ic);
+        if(kbCaps) s.fillRect(acx-6,acy+8,12,2,ic);                           // caps lock: + garis bawah
+      } else {                                                                // mati = panah kosong (garis tepi)
+        s.drawLine(acx,acy-6, acx-6,acy+2, ic);  s.drawLine(acx-6,acy+2, acx-3,acy+2, ic);
+        s.drawLine(acx-3,acy+2, acx-3,acy+6, ic); s.drawLine(acx-3,acy+6, acx+3,acy+6, ic);
+        s.drawLine(acx+3,acy+6, acx+3,acy+2, ic); s.drawLine(acx+3,acy+2, acx+6,acy+2, ic);
+        s.drawLine(acx+6,acy+2, acx,acy-6, ic);
+      }
     }
   }
   { // 123 / ABC
@@ -4304,9 +4321,10 @@ void kbTouch(int x,int y){
     if(x<nmX-2){
       if(emo){ int np=emjKbPages(); kbEmoPage = (x<shX+shW/2) ? (kbEmoPage+np-1)%np : (kbEmoPage+1)%np; }   // < / >
       else {                                                                  // KB_UX_V1: shift / caps lock
-        uint32_t nm=millis();
+        uint32_t nm=kbEvtMs ? kbEvtMs : millis();                              // KB_CAPS_V2: waktu sentuh asli
+        int32_t dt=(int32_t)(nm-kbShiftTapMs); if(dt<0) dt=0;
         if(kbCaps){ kbCaps=false; kbMode=KB_LOWER; kbAutoOffFor=kbTarget; kbAutoOffLen=(int)kbTarget->length(); }
-        else if((uint32_t)(nm-kbShiftTapMs)<400){ kbCaps=true; kbMode=KB_UPPER; }            // 2x cepat = caps lock
+        else if(dt<KB_CAPS_DBL_MS){ kbCaps=true; kbMode=KB_UPPER; }            // 2x cepat = caps lock
         else if(kbMode==KB_UPPER){ kbMode=KB_LOWER; kbAutoOffFor=kbTarget; kbAutoOffLen=(int)kbTarget->length(); }
         else kbMode=KB_UPPER;
         kbShiftTapMs=nm;
@@ -4350,7 +4368,8 @@ void kbTouch(int x,int y){
   if(x<L||c<0||c>9) return;
   auto* lay=kbMaps[(int)kbMode];
   if(kbMode==KB_EMO1||kbMode==KB_EMO2){ char elb[4]; kbSugOnChar(*kbTarget,0); if(emjKbLabel(kbEmoPage,r*10+c,elb)) *kbTarget+=elb; }
-  else { kbSugOnChar(*kbTarget,lay[r][c][0]); *kbTarget+=lay[r][c]; }
+  else { const char* kc=(kbMode==KB_UPPER) ? kbKeyLabel(r,c) : lay[r][c];   // KB_CAPS_V2
+         kbSugOnChar(*kbTarget,kc[0]); *kbTarget+=kc; }
   kbPressKey=r*10+c; kbPressUntil=millis()+KB_PRESS_MS;
   if(kbMode==KB_UPPER && !kbCaps) kbMode=KB_LOWER;   // KB_UX_V1: caps lock tetap
   kbAutoCapSync();                                    // KB_UX_V1
@@ -22085,13 +22104,15 @@ static bool kbQueueDrain(bool newT,int tx,int ty){
     if((uint32_t)(now-qms)>600) continue;                // basi (loop sempat macet lama)
     if(qy<yMin) continue;                                // di luar tuts: biar jalur biasa yg urus
     if(!(kbVisible && kbTarget)) break;                  // keyboard ditutup tuts sebelumnya (mis. Enter)
+    kbEvtMs=qms;                                         // KB_CAPS_V2: kbTouch memakai waktu sentuh asli
     if(curScreen()==SCR_HOME){
-      if(kbTarget==&homeSearchInput) kbTouch(qx,qy); else continue;
+      if(kbTarget==&homeSearchInput) kbTouch(qx,qy); else { kbEvtMs=0; continue; }
     } else {
       int idx=appIndexForScreen(curScreen());
-      if(idx<0) continue;
+      if(idx<0){ kbEvtMs=0; continue; }
       apps[idx].touch(qx,qy,false,true);
     }
+    kbEvtMs=0;
     needRedraw=true;
     if(newT && abs(qx-tx)<=24 && abs(qy-ty)<=24) matched=true;
   }

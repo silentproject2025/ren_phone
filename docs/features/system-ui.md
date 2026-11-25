@@ -24,7 +24,7 @@ NyxOS delivers a modern-phone experience on a small screen (320×240, or 480×32
 | **Dynamic Island** | A pill-shaped element at the top of the screen that changes with events. |
 | **App Switcher** | Switch between apps. Each card shows a **preview** of the app's last screen (kept in PSRAM, not on the SD card); swipe a card up to close it; a **Close all** chip sits at the top right. `BETA` |
 | **Always-On Display** | Low-power display while the screen is dimmed. |
-| **On-screen keyboard** | Available in every app. Shift twice quickly = caps lock; in Notepad and Chat the first letter of a sentence is capitalised automatically and a double space types `. `; holding Backspace repeats. |
+| **On-screen keyboard** | Available in every app. Shift once = one capital letter, shift twice quickly = caps lock (the keys `; , . ?` stay the same); in Notepad and Chat the first letter of a sentence is capitalised automatically and a double space types `. `; holding Backspace repeats. |
 | **8 themes** | Aurora, Dark, AMOLED, Light, Pastel, iOS, Full Dark and **Nyx** (violet-tinted black with violet and teal accents; the default theme, changeable in Settings). |
 | **Power menu** | Shut down completely (deep sleep; wake with the BOOT or RST button) and Restart. Opened by long-pressing the Lock button, or via Settings → About → Power. |
 
