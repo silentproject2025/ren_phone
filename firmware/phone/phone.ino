@@ -5283,28 +5283,141 @@ bool aodActive=false;
 unsigned long lastLockActivityMs=0;
 unsigned long lastLockClockMs=0;
 
+// =================================================================
+// AOD_FX_V1: transisi halus layar <-> AOD (lock screen & Home).
+//  MASUK : OUT (0,9 dtk) frame terakhir memudar ke hitam + lampu latar turun  ->  CLOCK (0,45 dtk) jam AOD muncul
+//  BANGUN: WAKE (0,3 dtk) layar hidup memudar naik dari hitam + lampu latar naik, lalu flag AOD dimatikan
+// Selama fx jalan flag aodActive / homeAodActive SUDAH true, jadi semua syarat lama (hardware scroll, overlay,
+// pager, dll yg berhenti saat AOD) tetap berlaku; gambarnya saja yg dipegang fungsi aodFxFrame().
+// Potret layar disimpan di aodSnap (PSRAM); kalau tidak muat, jatuh ke perilaku lama (instan).
+// =================================================================
+#define AODFX_NONE     0
+#define AODFX_OUT      1
+#define AODFX_CLOCK    2
+#define AODFX_WAKE     3
+#define AODFX_OUT_MS   900UL
+#define AODFX_CLOCK_MS 450UL
+#define AODFX_WAKE_MS  300UL
+extern bool homeAodActive;   // definisi di bawah (v99)
+uint8_t aodFxMode=AODFX_NONE;
+bool    aodFxHome=false;       // fx milik AOD Home (true) atau lock screen (false)
+bool    aodFxNeedSnap=false;   // WAKE: frame hidup belum dirender
+unsigned long aodFxT0=0;
+float   aodFxBlCur=200.0f, aodFxBl0=200.0f;
+LGFX_Sprite aodSnap(&display);
+bool    aodSnapOk=false;
+
+static void aodSnapFree(){ if(aodSnap.getBuffer()) aodSnap.deleteSprite(); aodSnapOk=false; }
+static bool aodSnapAlloc(){
+  if(canvas.getColorDepth()!=16 || !canvas.getBuffer()) return false;
+  const int W=canvas.width(), H=canvas.height();
+  if(aodSnap.getBuffer() && (aodSnap.width()!=W || aodSnap.height()!=H)) aodSnapFree();
+  if(!aodSnap.getBuffer()){
+    const size_t bytes=(size_t)W*(size_t)H*2;
+    if(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) < bytes + 1500000UL) return false;   // sisakan PSRAM utk app lain
+    aodSnap.setColorDepth(16); aodSnap.setPsram(true);
+    if(!aodSnap.createSprite(W,H)){ aodSnapFree(); return false; }
+  }
+  return true;
+}
+static bool aodSnapTake(){   // salin frame terakhir di canvas
+  if(!aodSnapAlloc()) return false;
+  memcpy(aodSnap.getBuffer(), canvas.getBuffer(), (size_t)canvas.width()*(size_t)canvas.height()*2);
+  aodSnapOk=true;
+  return true;
+}
+static float aodEase(float t){ if(t<0.0f) t=0.0f; if(t>1.0f) t=1.0f; return t*t*(3.0f-2.0f*t); }
+static float aodFxP(unsigned long dur){
+  float p=(float)(millis()-aodFxT0)/(float)dur;
+  return p<0.0f ? 0.0f : (p>1.0f ? 1.0f : p);
+}
+// Interpolasi kecerahan di ruang persepsi (gamma ~2,2) supaya redup/terangnya terasa rata.
+static float aodBlMix(float a,float b,float e){
+  float pa=powf(a<1.0f?1.0f:a,0.45f), pb=powf(b<1.0f?1.0f:b,0.45f);
+  float v=powf(pa+(pb-pa)*e,1.0f/0.45f);
+  if(v<1.0f) v=1.0f; if(v>255.0f) v=255.0f;
+  return v;
+}
+static void aodSetBl(float v){
+  if(v<0.0f) v=0.0f; if(v>255.0f) v=255.0f;
+  aodFxBlCur=v; display.setBrightness((uint8_t)(v+0.5f));
+}
+void aodFxReset(bool home){   // bangun instan / kunci ulang membatalkan fx milik pemanggil yg sama
+  if(aodFxMode!=AODFX_NONE && aodFxHome!=home) return;
+  aodFxMode=AODFX_NONE; aodFxNeedSnap=false; aodSnapFree();
+}
+// Dipanggil SESAAT SEBELUM flag AOD dinyalakan, saat canvas masih berisi frame terakhir.
+bool aodFxBegin(bool home){
+  aodFxHome=home; aodFxNeedSnap=false;
+  if(aodSnapTake()){
+    aodFxMode=AODFX_OUT; aodFxT0=millis(); aodFxBl0=(float)brightness; aodFxBlCur=aodFxBl0;
+    return true;
+  }
+  aodFxMode=AODFX_NONE; aodSetBl((float)AOD_BRIGHTNESS);   // fallback: instan seperti dulu
+  return false;
+}
+// Mulai bangun halus. false = tak bisa (PSRAM tipis) -> pemanggil memakai bangun instan.
+bool aodFxWake(bool home){
+  if(aodFxMode==AODFX_WAKE) return true;
+  if(!aodSnapAlloc()) return false;
+  aodFxHome=home; aodFxMode=AODFX_WAKE; aodFxNeedSnap=true;
+  aodFxBl0=aodFxBlCur; aodFxT0=millis();
+  needRedraw=true;
+  return true;
+}
+// Dipanggil tiap loop() dari lockIdleTick() / homeIdleTick().
+void aodFxStep(){
+  if(aodFxMode==AODFX_NONE) return;
+  uiBoostKick(); needRedraw=true;
+  if(aodFxMode==AODFX_OUT){
+    float p=aodFxP(AODFX_OUT_MS);
+    if(p>=1.0f){ aodSetBl((float)AOD_BRIGHTNESS); aodSnapFree(); aodFxMode=AODFX_CLOCK; aodFxT0=millis(); }
+    else aodSetBl(aodBlMix(aodFxBl0,(float)AOD_BRIGHTNESS,aodEase(p)));
+  } else if(aodFxMode==AODFX_CLOCK){
+    if(aodFxP(AODFX_CLOCK_MS)>=1.0f) aodFxMode=AODFX_NONE;
+  } else if(aodFxMode==AODFX_WAKE){
+    if(aodFxNeedSnap) return;   // frame hidup belum siap: timer mulai setelah itu (lihat aodFxFrame)
+    float p=aodFxP(AODFX_WAKE_MS);
+    if(p>=1.0f){
+      aodFxMode=AODFX_NONE; aodSnapFree(); aodSetBl((float)brightness);
+      if(aodFxHome) homeAodActive=false; else aodActive=false;
+      needRedraw=true;
+    } else aodSetBl(aodBlMix(aodFxBl0,(float)brightness,aodEase(p)));
+  }
+}
+
 // Dipanggil pas layar BARU dikunci (CC/boot) -- reset state AOD spy gak
 // langsung "meredup" instan kalau kebetulan lastLockActivityMs lama.
 void lockScreenReset(){
   homeJiggle=false; homeGoneIdx=-1;
   lastLockActivityMs=millis(); lastLockClockMs=millis();
-  if(aodActive){ aodActive=false; display.setBrightness((uint8_t)brightness); }
+  aodFxMode=AODFX_NONE; aodFxNeedSnap=false; aodSnapFree();   // AOD_FX_V1
+  if(aodActive || homeAodActive){ aodActive=false; homeAodActive=false; display.setBrightness((uint8_t)brightness); }
 }
-void aodWake(){
+void aodWake(){   // instan -- dipakai pemanggil lain (panggilan, remote, charger)
+  aodFxReset(false);   // AOD_FX_V1
   if(aodActive){ aodActive=false; display.setBrightness((uint8_t)brightness); needRedraw=true; }
   lastLockActivityMs=millis();
+}
+void aodWakeSmooth(){   // AOD_FX_V1: sentuhan = bangun halus
+  lastLockActivityMs=millis();
+  if(!aodActive) return;
+  if(aodFxMode==AODFX_WAKE) return;
+  if(aodFxWake(false)) return;
+  aodWake();   // fallback instan
 }
 // Dipanggil TIAP loop() selagi locked (lihat pemanggilannya di loop()) --
 // urus transisi ke AOD kalau sudah idle cukup lama + jaga jam AOD/lock
 // biasa tetap update berkala walau gak disentuh.
 void lockIdleTick(bool touched){
   lockNotifTick();   // NOTIF-LOCK: animasi kartu masuk / hapus / balik
-  if(touched){ aodWake(); return; }
+  aodFxStep();       // AOD_FX_V1: langkah animasi redup / bangun
+  if(touched){ aodWakeSmooth(); return; }
   // v110: swipe batal -> jam & kartu musik "meluncur" balik pelan (peluruhan eksponensial), bukan loncat langsung ke 0
   if(!lockDragging && lockDragY>0.5f){ lockDragY*=0.70f; if(lockDragY<0.5f) lockDragY=0; needRedraw=true; }
   if(!aodActive && millis()-lastLockActivityMs>AOD_IDLE_MS){
+    aodFxBegin(false);   // AOD_FX_V1: potret frame + mulai redup halus (atau instan kalau PSRAM tipis)
     aodActive=true;
-    display.setBrightness(AOD_BRIGHTNESS);
     needRedraw=true;
   }
   { // v111: IP baru dapat / berubah -> langsung gambar ulang, gak nunggu refresh jam 15 dtk
@@ -5331,17 +5444,26 @@ unsigned long lastHomeAodClockMs=0;
 
 // Dipanggil pas ADA aktivitas nyata di Home (sentuhan, ATAU baru pindah
 // ke Home dr layar lain) -- reset timer & bangunin kalau lg AOD Home.
-void homeAodWake(){
+void homeAodWake(){   // instan -- dipakai pemanggil lain (nav, panggilan, remote, dll)
+  aodFxReset(true);   // AOD_FX_V1
   if(homeAodActive){ homeAodActive=false; display.setBrightness((uint8_t)brightness); needRedraw=true; }
   lastHomeActivityMs=millis();
+}
+void homeAodWakeSmooth(){   // AOD_FX_V1: sentuhan = bangun halus
+  lastHomeActivityMs=millis();
+  if(!homeAodActive) return;
+  if(aodFxMode==AODFX_WAKE) return;
+  if(aodFxWake(true)) return;
+  homeAodWake();   // fallback instan
 }
 // Dipanggil TIAP loop() selagi !locked && curScreen()==SCR_HOME (lihat
 // pemanggilannya di loop()) -- pola PERSIS lockIdleTick() di atas.
 void homeIdleTick(bool touched){
-  if(touched){ homeAodWake(); return; }
+  aodFxStep();   // AOD_FX_V1
+  if(touched){ homeAodWakeSmooth(); return; }
   if(!homeAodActive && millis()-lastHomeActivityMs>HOME_AOD_IDLE_MS){
+    aodFxBegin(true);   // AOD_FX_V1
     homeAodActive=true;
-    display.setBrightness(AOD_BRIGHTNESS);
     needRedraw=true;
   }
   if(homeAodActive && millis()-lastHomeAodClockMs>AOD_CLOCK_REFRESH_MS){
@@ -5353,18 +5475,7 @@ void homeIdleTick(bool touched){
 // drawLockScreen() di atas. Sengaja diduplikat kecil di sini (bukan
 // manggil drawLockScreen()) krn struct/state Home & Lock beda & gak perlu
 // dipaksa nyambung cuma buat ~10 baris gambar jam.
-void drawHomeAod(LGFX_Sprite& s){
-  struct tm t; bool ok=ntpSynced&&getLocalTime(&t);
-  char tb[6]; if(ok) sprintf(tb,"%02d:%02d",t.tm_hour,t.tm_min); else strcpy(tb,"--:--");
-  s.fillSprite(0x0000);
-  s.setFont(emjF(&lgfx::fonts::FreeSansBold9pt7b));
-  s.setTextSize(2);
-  int tw=s.textWidth(tb);
-  s.setTextColor(0x39C7); // abu redup -- konsisten sama AOD lock screen
-  s.setCursor(SCR_W/2-tw/2, SCR_H/2-16);
-  s.print(tb);
-  s.setFont(emjF(&lgfx::fonts::Font0));
-}
+void drawHomeAod(LGFX_Sprite& s);   // AOD_FX_V1: definisi dipindah ke bawah, setelah lockIpString()
 
 // v111: IP WiFi ditampilkan langsung di lock screen (& AOD versi redup)
 // supaya gampang dibaca tanpa harus buka app Remote/About. Kalau WiFi belum
@@ -5375,6 +5486,78 @@ static bool lockIpString(char* out,size_t n){
   if((uint32_t)ip==0) return false;
   snprintf(out,n,"%u.%u.%u.%u",ip[0],ip[1],ip[2],ip[3]);
   return true;
+}
+
+// AOD_FX_V1: wajah AOD (dipakai lock screen & Home): jam, tanggal, jumlah notifikasi, IP -- abu redup.
+extern int notifHistCount;   // phone_notif_center.ino
+void drawLockScreen(LGFX_Sprite& s);
+void drawHome(LGFX_Sprite& s,float sc);
+static void aodFaceText(LGFX_Sprite& s,uint8_t k){   // hanya teks (tanpa mengisi latar); k = 0..255 kecerahan
+  struct tm t; bool ok=ntpSynced&&getLocalTime(&t);
+  char tb[6]; if(ok) sprintf(tb,"%02d:%02d",t.tm_hour,t.tm_min); else strcpy(tb,"--:--");
+  const uint16_t col=blend565(0x0000,0x39C7,k);   // abu redup, sama spt AOD lama
+  s.setFont(emjF(&lgfx::fonts::FreeSansBold9pt7b));
+  s.setTextSize(2);
+  int tw=s.textWidth(tb);
+  s.setTextColor(col);
+  s.setCursor(SCR_W/2-tw/2, SCR_H/2-16);
+  s.print(tb);
+  s.setFont(emjF(&lgfx::fonts::Font0));
+  s.setTextSize(1); s.setTextColor(col);
+  int y=SCR_H/2+34;
+  if(ok){
+    const char* dn[]={RPTR("Minggu"),RPTR("Senin"),RPTR("Selasa"),RPTR("Rabu"),RPTR("Kamis"),RPTR("Jumat"),RPTR("Sabtu")};
+    const char* mn[]={"Jan","Feb","Mar","Apr",RPTR("Mei"),"Jun","Jul",RPTR("Agu"),"Sep",RPTR("Okt"),"Nov",RPTR("Des")};
+    char db[32]; snprintf(db,sizeof(db),"%s, %d %s",dn[t.tm_wday],t.tm_mday,mn[t.tm_mon]);
+    s.setCursor(SCR_W/2-(int)s.textWidth(db)/2, y); s.print(db); y+=14;
+  }
+  if(notifHistCount>0){
+    char nb[32]; snprintf(nb,sizeof(nb),"%d %s",notifHistCount,RPTR("Notifikasi"));
+    s.setCursor(SCR_W/2-(int)s.textWidth(nb)/2, y); s.print(nb); y+=14;
+  }
+  char ipb[20];
+  if(lockIpString(ipb,sizeof(ipb))){
+    s.setCursor(SCR_W/2-(int)s.textWidth(ipb)/2, y); s.print(ipb);
+  }
+}
+static void aodFace(LGFX_Sprite& s,uint8_t k){ s.fillSprite(0x0000); aodFaceText(s,k); }
+
+// Gambar frame saat fx jalan. true = frame sudah digambar (pemanggil langsung return).
+static bool aodFxFrame(LGFX_Sprite& s,bool home){
+  if(aodFxMode==AODFX_NONE) return false;
+  if(aodFxMode==AODFX_OUT){
+    if(!aodSnapOk) return false;
+    float e=aodEase(aodFxP(AODFX_OUT_MS));
+    aodSnap.pushSprite(&s,0,0);
+    s.fillRectAlpha(0,0,SCR_W,SCR_H,(uint8_t)(e*255.0f),0x0000);
+    return true;
+  }
+  if(aodFxMode==AODFX_CLOCK){
+    aodFace(s,(uint8_t)(aodEase(aodFxP(AODFX_CLOCK_MS))*255.0f));
+    return true;
+  }
+  // WAKE
+  if(aodFxNeedSnap){   // render layar hidup SEKALI, simpan; frame ini masih tampil sbg AOD biasa (timer mulai sesudahnya)
+    if(home){ homeAodActive=false; drawHome(s,homeScrollY); hpHomeCover(s); hpDrawDots(s); homeAodActive=true; }
+    else    { aodActive=false; drawLockScreen(s); aodActive=true; }
+    s.pushSprite(&aodSnap,0,0); aodSnapOk=true;
+    aodFxNeedSnap=false; aodFxT0=millis();
+    aodFace(s,255);
+    return true;
+  }
+  if(!aodSnapOk) return false;
+  float e=aodEase(aodFxP(AODFX_WAKE_MS));
+  uint8_t inv=(uint8_t)((1.0f-e)*255.0f);
+  aodSnap.pushSprite(&s,0,0);
+  s.fillRectAlpha(0,0,SCR_W,SCR_H,inv,0x0000);
+  if(inv>8) aodFaceText(s,inv);   // jam AOD memudar keluar selagi layar hidup memudar masuk
+  return true;
+}
+
+// Tampilan AOD Home -- wajah yang sama dgn AOD lock screen, plus fx transisi.
+void drawHomeAod(LGFX_Sprite& s){
+  if(aodFxFrame(s,true)) return;
+  aodFace(s,255);
 }
 
 // =================================================================
@@ -5469,23 +5652,8 @@ void drawLockScreen(LGFX_Sprite& s){
   // "sekilas lihat doang", bukan menu interaktif. Ketuk dikit langsung
   // membangunkan ke lock screen penuh (lihat lockScreenInput()).
   if(aodActive){
-    s.fillSprite(0x0000);
-    s.setFont(emjF(&lgfx::fonts::FreeSansBold9pt7b));
-    s.setTextSize(2);
-    int tw=s.textWidth(tb);
-    s.setTextColor(0x39C7); // abu redup -- sengaja gak putih penuh, senada semangat "hemat/AOD"
-    s.setCursor(SCR_W/2-tw/2, SCR_H/2-16);
-    s.print(tb);
-    s.setFont(emjF(&lgfx::fonts::Font0));
-    {
-      char ipb[20];
-      if(lockIpString(ipb,sizeof(ipb))){
-        s.setTextSize(1); s.setTextColor(0x39C7);
-        int iw=(int)s.textWidth(ipb);
-        s.setCursor(SCR_W/2-iw/2, SCR_H/2+50);
-        s.print(ipb);
-      }
-    }
+    if(aodFxFrame(s,false)) return;   // AOD_FX_V1: transisi redup / bangun
+    aodFace(s,255);                   // AOD_FX_V1: wajah AOD baru (jam, tanggal, notifikasi, IP)
     return;
   }
 
@@ -5726,7 +5894,7 @@ void chargeAnimTick(){
 void lockScreenInput(bool touched,bool newT,int tx,int ty){
   static int startY=0; static int startX=0; static unsigned long startMs=0;
   static bool commitBuzz=false;   // LOCK_UX_V2: sudah getar utk ambang unlock?
-  if(newT && aodActive){ aodWake(); return; } // v96: sentuhan pertama pas AOD cuma "bangunin", belum mulai gestur unlock
+  if(newT && aodActive){ aodWakeSmooth(); return; } // AOD_FX_V1 (dulu aodWake instan); v96: sentuhan pertama pas AOD cuma "bangunin", belum mulai gestur unlock
   if(lockNotifInput(touched,newT,tx,ty)) return; // NOTIF-LOCK: geser kartu notifikasi ke samping = hapus (gestur unlock dibatalkan)
   if(newT && homeMusStarted() && homeMusLoaded()){ // v110: ketuk tombol di kartu musik = kontrol, BUKAN mulai swipe unlock
     int mcy0=SCR_H-100-(int)lockDragY, mpc, mnc;
@@ -22780,7 +22948,7 @@ void loop(){
   if(!locked && curScreen()==SCR_HOME && !controlCenterOpen && !notifShadeOpen && !diMenuOpen){
     homeIdleTick(touched);
     if(homeAodActive){
-      if(newT) homeAodWake(); // sentuhan pertama cuma bangunin ke Home normal, gak langsung ngetrigger tap ikon di baliknya
+      if(newT) homeAodWakeSmooth(); // AOD_FX_V1 (dulu homeAodWake instan); sentuhan pertama cuma bangunin ke Home normal, gak langsung ngetrigger tap ikon di baliknya
       if(needRedraw){ renderCurrentFrame(); push(); needRedraw=false; }
       wasTouched=touched; delay(1); return;
     }
