@@ -3052,6 +3052,32 @@ float aiRespScrollY = 0;   // posisi scroll layar AI Chat (dipakai jg oleh trigg
 int   aiRespMaxScroll = 0;
 float aiRespScrollVel = 0; // v12: kecepatan scroll (low-pass) -> momentum halus stlh jari dilepas
 
+// CHAT_UI_V2: riwayat TAMPILAN AI Chat (RAM/PSRAM saja, hilang saat restart). Memory Gemini di SD
+// (ai_memory.txt) TIDAK berubah. Yang disimpan di sini hanya tanya-jawab SEBELUM giliran yang sedang
+// tampil; giliran terbaru selalu digambar dari aiLastPrompt / aiResponse (utuh, tidak dipotong).
+#define AIH_MAX   6
+#define AIH_Q_LEN 160
+#define AIH_A_LEN 900
+struct AiHist { char q[AIH_Q_LEN]; char a[AIH_A_LEN]; };
+AiHist* aiHist = nullptr;    // PSRAM, dialokasikan saat pertama dipakai
+int aiHistN = 0;
+int aiFollow = 1;            // 1 = ikuti dasar chat, 2 = lompat ke awal jawaban terbaru (sekali), 0 = bebas (user menggeser)
+void aiHistClear(){ aiHistN = 0; }
+void aiHistPushPrev(){       // dipanggil triggerGeminiAI() SEBELUM pertanyaan baru menimpa aiLastPrompt / aiResponse
+  if(!aiLastPrompt.length() || !aiResponse.length()) return;
+  if(aiResponse.startsWith("Error:") || aiResponse.startsWith("Menghubungi Gemini")) return;
+  if(!aiHist){
+    aiHist = (AiHist*)heap_caps_calloc(AIH_MAX, sizeof(AiHist), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if(!aiHist) return;
+  }
+  if(aiHistN >= AIH_MAX){ memmove(aiHist, aiHist + 1, sizeof(AiHist) * (AIH_MAX - 1)); aiHistN = AIH_MAX - 1; }
+  AiHist& h = aiHist[aiHistN++];
+  strncpy(h.q, aiLastPrompt.c_str(), AIH_Q_LEN - 1); h.q[AIH_Q_LEN - 1] = 0; emjCutZ(h.q, AIH_Q_LEN - 1);
+  bool cut = (int)aiResponse.length() > AIH_A_LEN - 1;
+  strncpy(h.a, aiResponse.c_str(), AIH_A_LEN - 1); h.a[AIH_A_LEN - 1] = 0;
+  if(cut){ emjCutZ(h.a, AIH_A_LEN - 4); strcat(h.a, ".."); } else emjCutZ(h.a, AIH_A_LEN - 1);
+}
+
 // =================================================================
 // AI MEMORY: riwayat percakapan disimpan permanen di SD Card supaya
 // Gemini "ingat" obrolan sebelumnya walau HP di-restart. Setiap tanya-
@@ -3440,6 +3466,7 @@ void sendGeminiRequest(String promptText) {
 
   if(ok) nyxVoiceExtract(resp); // NYX-EXTRAS-V1: cabut @@CMD dari jawaban, eksekusi di loop utama
   aiResponse = emjNormalize(resp);       // emoji dari Gemini -> kode privat firmware (digambar sbg sprite)
+  aiFollow = 2;                          // CHAT_UI_V2: jawaban baru -> layar lompat ke AWAL jawaban
   if(ok) appendAiMemory(promptText, resp); // cuma simpan tanya-jawab yg BERHASIL
   aiLoading = false;
   aiRequestStartMillis = 0;
@@ -3478,6 +3505,7 @@ void triggerGeminiAI() {
   // biar user bisa langsung lihat kotak input bersih (kayak app AI chat pada
   // umumnya) & bisa mulai ngetik pertanyaan berikutnya SELAGI yg ini masih
   // diproses di background, tanpa nunggu jawaban Gemini muncul dulu.
+  aiHistPushPrev();   // CHAT_UI_V2: giliran sebelumnya masuk riwayat tampilan
   aiLastPrompt = aiPrompt;
   aiPrompt = "";
 
@@ -3518,7 +3546,7 @@ void triggerGeminiAI() {
   aiSoftStopTriggered = false;
   aiResponse = "Menghubungi Gemini AI...";
   aiRequestStartMillis = millis();
-  aiRespScrollY = 0; // pertanyaan baru -> mulai baca dari atas lagi
+  aiRespScrollY = 0; aiFollow = 1; // CHAT_UI_V2: pertanyaan baru -> layar ikut ke dasar (pertanyaan + titik mengetik)
   // v14: Dynamic Island nunjukin activity latar -> mekar sebentar lalu
   // mengecil jadi pil compact yg berdenyut selama masih loading
   // v96: sekarang pakai diBeginProgress -- pil dapet progress bar Live
@@ -10697,7 +10725,7 @@ static AiLine* aiLinesPtr(){
 }
 #define aiLinesBuf (aiLinesPtr())
 
-void aiEnter(){ aiRespScrollY = 0; }
+void aiEnter(){ aiRespScrollY = 0; aiFollow = 2; }   // CHAT_UI_V2
 void aiExit(){}
 
 // Word-wrap manual (font default = ~6px/karakter) supaya kita tahu persis
@@ -10785,132 +10813,228 @@ void kbFloatTap(int x,int y){
   }
 }
 
+// CHAT_UI_V2 ---------------------------------------------------------------
+// Potongan UI yang dipakai bersama oleh AI Chat (di sini) dan Chat MQTT (chat_renphone.ino).
+// Tombol Kirim bentuk pil: panah ke atas + teks; busy = tiga titik bergelombang.
+void cuSendBtn(LGFX_Sprite& s,int x,int y,int w,int h,bool on,bool busy,const char* label){
+  uint16_t bg = on ? (uint16_t)T().accent : (uint16_t)T().surface2;
+  uint16_t fg = on ? (uint16_t)T().bg : (uint16_t)T().subtext;
+  nyxAaRR(s,x,y,w,h,h/2,bg);
+  int cy = y+h/2;
+  if(busy){
+    float t = millis()/1000.0f;
+    for(int k=0;k<3;k++){
+      float b = (sinf(t*6.0f-k*0.8f)+1.0f)*0.5f;
+      nyxAaCircle(s,x+w/2-8+k*8,cy-(int)(b*2.0f),2,blend565(T().subtext,T().text,(uint8_t)(255.0f*b)));
+    }
+    return;
+  }
+  int tw = emjCells(label,(int)strlen(label))*6;
+  int cx = x+(w-(7+4+tw))/2;
+  s.fillTriangle(cx+3,cy-4,cx,cy+3,cx+6,cy+3,fg);
+  s.setTextColor(fg); s.setCursor(cx+11,cy-4); s.print(label);
+}
+// Tombol bulat "ke pesan terbaru" (panah bawah) + lencana jumlah belum dibaca (0 = tanpa lencana).
+void cuToBottomBtn(LGFX_Sprite& s,int cx,int cy,int badge){
+  nyxAaCircle(s,cx,cy,12,T().divider);
+  nyxAaCircle(s,cx,cy,11,T().surface2);
+  s.drawLine(cx-4,cy-2,cx,cy+2,T().text); s.drawLine(cx,cy+2,cx+4,cy-2,T().text);
+  s.drawLine(cx-4,cy-1,cx,cy+3,T().text); s.drawLine(cx,cy+3,cx+4,cy-1,T().text);
+  if(badge>0){
+    char b[4]; snprintf(b,sizeof(b),"%d",badge>9?9:badge);
+    nyxAaCircle(s,cx+8,cy-9,6,T().accent);
+    s.setTextColor(T().bg); s.setCursor(cx+8-3,cy-9-3); s.print(b);
+  }
+}
+// Gelembung: sudut "ekor" persegi hanya kalau tail = true (pesan terakhir dalam satu kelompok).
+void cuBubble(LGFX_Sprite& s,int x,int y,int w,int h,uint16_t c,bool right,bool tail){
+  nyxAaRR(s,x,y,w,h,9,c);
+  if(tail){
+    if(right) s.fillRect(x+w-9,y+h-9,9,9,c);
+    else      s.fillRect(x,y+h-9,9,9,c);
+  }
+}
+
+#define AI_CHIP_N 3
+const char* const AI_CHIPS[AI_CHIP_N] = { "Ceritakan fakta unik", "Buat timer 10 menit", "Ide menu makan malam" };
+int aiChipY(int i){ return AI_CHAT_TOP+58+i*22; }
+int aiInputRight(){ return aiPrompt.length() ? SCR_W-94 : SCR_W-60; }   // kolom input melebar saat tombol X tidak perlu
+bool aiEmptyState(){ return aiHistN==0 && !aiLastPrompt.length() && !aiLoading && !aiResponse.length(); }
+
 void drawAiChat(LGFX_Sprite& s){
   iosBackdrop(s); drawStatusBar(s);
-  s.setTextWrap(false);
-  s.setTextColor(T().accent);s.setTextSize(1);s.setCursor(8,26);
-  // v27: judul dipendekin otomatis kalau layar sempit (mis. orientasi
-  // portrait) supaya gak numpuk sama tombol Mic yg skrg mepet ke situ.
-  const char* aiTitleFull="AI Chat (Gemini)";
-  const char* aiTitleShort="AI Chat";
-  int titleBudget = aiMicBtnX() - 8 - 6;
-  s.print(((int)s.textWidth(aiTitleFull) <= titleBudget) ? aiTitleFull : aiTitleShort);
-  
+  s.setTextWrap(false); s.setTextSize(1);
+
   bool hasKey = (geminiApiKey.length() > 0 && geminiApiKey != "YOUR_GEMINI_API_KEY_HERE");
-  iosRR(s,SCR_W-72,24,68,18,4,hasKey?T().good:T().danger);
-  s.setTextColor(0xFFFF);s.setCursor(SCR_W-66,29);
-  s.print(hasKey?"Key: OK":"Key: Edit");
+  bool online = (WiFi.status() == WL_CONNECTED);
+  int micBtnX = aiMicBtnX(), micBtnW = AI_MIC_BTN_W;
 
-  iosRR(s,SCR_W-118,24,40,18,4,T().surface2);
-  s.setTextColor(T().text);s.setCursor(SCR_W-113,29);
-  s.print("Mem");
+  // ---- header: judul + titik status | Mic  Baru  API Key ----
+  s.setTextColor(T().accent); s.setCursor(8,26); s.print("AI Chat");
+  {
+    uint16_t dc; const char* st;
+    if(micRecording){ dc = T().danger; st = RPTR("merekam"); }
+    else if(micTranscribing){ dc = T().accent2; st = RPTR("menyalin"); }
+    else if(aiLoading){ dc = T().accent2; st = RPTR("berpikir"); }
+    else if(!online){ dc = T().danger; st = RPTR("offline"); }
+    else { dc = T().good; st = "Gemini"; }
+    nyxAaCircle(s,58,30,3,dc);
+    int room = (micBtnX-6-65)/6;
+    if(room >= (int)strlen(st)){ s.setTextColor(T().subtext); s.setCursor(65,26); s.print(st); }
+  }
+  uint16_t micCol = micRecording ? T().danger : (micTranscribing ? T().surface2 : T().accent2);
+  iosRR(s,micBtnX,24,micBtnW,18,9,micCol);
+  const char* micTxt = micRecording ? "Stop" : (micTranscribing ? "..." : "Mic");
+  s.setTextColor(0xFFFF); s.setCursor(micBtnX+(micBtnW-(int)strlen(micTxt)*6)/2,29); s.print(micTxt);
 
-  // v27: tombol Mic (rekam suara -> transkrip -> isi ke kolom prompt)
-  // ditaruh di ruang kosong header, antara judul & tombol Mem/Key.
-  int micBtnX=aiMicBtnX(), micBtnW=AI_MIC_BTN_W;
-  uint16_t micCol = micRecording? T().danger : (micTranscribing? T().surface2 : T().accent2);
-  iosRR(s,micBtnX,24,micBtnW,18,4,micCol);
-  s.setTextColor(0xFFFF); s.setCursor(micBtnX+4,29);
-  s.print(micRecording? "Stop" : (micTranscribing? "..." : "Mic"));
+  iosRR(s,SCR_W-118,24,40,18,9,T().surface2);
+  s.setTextColor(T().text); s.setCursor(SCR_W-118+(40-24)/2,29); s.print(RPTR("Baru"));
+
+  iosRR(s,SCR_W-72,24,68,18,9,T().surface2);
+  nyxAaCircle(s,SCR_W-72+9,33,3,hasKey ? T().good : T().danger);
+  s.setTextColor(hasKey ? (uint16_t)T().text : (uint16_t)T().danger); s.setCursor(SCR_W-72+17,29); s.print("API Key");
+  s.drawFastHLine(0,43,SCR_W,T().divider);
 
   int inputY  = backY() - 26;
   int chatTop = AI_CHAT_TOP;
   int chatBot = kbVisible ? kbY()-4 : inputY-6;
   int chatH   = chatBot - chatTop;
 
-  // ---- Satu area chat gabungan (Kamu + Gemini), dibungkus & discroll ----
-  iosRR(s,4,chatTop,SCR_W-8,chatH,6,T().surface);
-
-  int lineH = 10;
-  int innerX = 10, innerW = (SCR_W-8) - 12;
-  int maxChars = innerW/6; if(maxChars<6) maxChars=6;
-
-  int n=0;
-  n = aiWrapAppend(aiLinesBuf,AI_MAX_LINES,n,"Kamu:",T().accent,maxChars);
-  // v82: dulu ini nge-mirror aiPrompt (isi kotak input) SECARA LIVE -- efek
-  // sampingnya, begitu kotak input dikosongkan otomatis stlh Kirim (lihat
-  // triggerGeminiAI), baris ini ikut kosong padahal pertanyaannya baru saja
-  // dikirim & masih diproses. Sekarang pakai aiLastPrompt (snapshot
-  // pertanyaan TERAKHIR yg BENERAN terkirim) -- baris ini jadi "riwayat
-  // pertanyaan terkirim", terpisah dari kotak input yg sekarang cuma tempat
-  // ngetik draft berikutnya (pola yg sama dgn app AI chat pada umumnya).
-  String qText = aiLastPrompt.length() ? aiLastPrompt : "(ketuk kotak input di bawah utk mengetik)";
-  n = aiWrapAppend(aiLinesBuf,AI_MAX_LINES,n,qText,T().text,maxChars);
-  n = aiWrapAppend(aiLinesBuf,AI_MAX_LINES,n,"",T().text,maxChars);
-  n = aiWrapAppend(aiLinesBuf,AI_MAX_LINES,n,"Gemini:",T().accent2,maxChars);
-  int typingLineIdx = -1;
-  if(aiLoading){
-    // v27: baris ini SENGAJA dikosongkan (bukan diisi teks) -- animasi
-    // titik2 "sedang mengetik" digambar belakangan, DI ATAS baris kosong
-    // ini, supaya tetep ikut logika scroll/clip yg sama spt baris teks lain.
-    typingLineIdx = n;
-    n = aiWrapAppend(aiLinesBuf,AI_MAX_LINES,n,"",T().text,maxChars);
-  } else if(aiResponse.length()){
-    n = aiWrapAppend(aiLinesBuf,AI_MAX_LINES,n,aiResponse,T().text,maxChars);
-  } else {
-    n = aiWrapAppend(aiLinesBuf,AI_MAX_LINES,n,"Ketik pertanyaan lalu tekan [Kirim].",T().subtext,maxChars);
-  }
-
-  int contentH = n*lineH;
-  int viewH = chatH-8;
-  aiRespMaxScroll = contentH-viewH; if(aiRespMaxScroll<0) aiRespMaxScroll=0;
-  if(aiRespScrollY>aiRespMaxScroll) aiRespScrollY=aiRespMaxScroll;
-  if(aiRespScrollY<0) aiRespScrollY=0;
-
-  // FIX: pakai clip rect -> teks TIDAK PERNAH lagi meluber keluar kotak
-  // (dulu ini yg bikin tulisan menutupi kotak pertanyaan/Kirim/Back).
-  s.setClipRect(4,chatTop,SCR_W-8,chatH);
-  s.setTextWrap(false);
-  for(int i=0;i<n;i++){
-    int ly = chatTop+4+i*lineH-(int)aiRespScrollY;
-    if(ly+lineH < chatTop || ly > chatBot) continue;
-    s.setTextColor(aiLinesBuf[i].color);
-    s.setCursor(innerX,ly);
-    s.print(aiLinesBuf[i].text.c_str());
-  }
-  if(typingLineIdx>=0){
-    int ly = chatTop+4+typingLineIdx*lineH-(int)aiRespScrollY;
-    if(ly+lineH >= chatTop && ly <= chatBot){
-      unsigned long elapsed = aiRequestStartMillis ? (millis()-aiRequestStartMillis) : 0;
-      uint16_t dotColor = (elapsed>AI_SOFT_TIMEOUT_MS) ? T().accent : T().accent2;
-      drawAiTypingDots(s, innerX, ly, dotColor);
+  if(aiEmptyState()){
+    // ---- layar sambutan: ikon, ajakan, dan tiga saran satu-ketuk (hemat mengetik di keyboard layar) ----
+    int cx = SCR_W/2, cy = chatTop+16;
+    s.setClipRect(0,chatTop,SCR_W,chatH);
+    nyxAaCircle(s,cx,cy,13,T().surface2);
+    nyxAaCircle(s,cx,cy,7,T().accent2);
+    nyxAaCircle(s,cx,cy,3,T().surface2);
+    s.setTextColor(T().text);
+    const char* hi = RPTR("Tanya apa saja");
+    s.setCursor(cx-emjCells(hi,(int)strlen(hi))*3,cy+20); s.print(hi);
+    if(!kbVisible){
+      for(int i=0;i<AI_CHIP_N;i++){
+        int cyy = aiChipY(i);
+        iosRR(s,20,cyy,SCR_W-40,18,9,T().surface2);
+        const char* ct = RPTR(AI_CHIPS[i]);
+        s.setTextColor(T().accent); s.setCursor(SCR_W/2-emjCells(ct,(int)strlen(ct))*3,cyy+5); s.print(ct);
+      }
     }
-  }
-  s.clearClipRect();
+    s.clearClipRect();
+    aiRespMaxScroll = 0; aiRespScrollY = 0;
+  } else {
+    // ---- daftar gelembung: riwayat + giliran terbaru ----
+    const int PADX = 8, PADT = 5, PADB = 5, LH = 10, NAMEH = 11, GAPN = 8;
+    int maxBWu = SCR_W*3/4, maxBWa = SCR_W*9/10;
+    int chU = (maxBWu-2*PADX)/6, chA = (maxBWa-2*PADX)/6;
+    const int MMAX = AIH_MAX*2+2;
+    const char* mt[MMAX]; uint8_t mk[MMAX]; int mn = 0;     // mk: 0 kamu, 1 Gemini, 2 Gemini (error), 3 Gemini mengetik
+    for(int i=0;i<aiHistN && mn<MMAX-2;i++){ mt[mn]=aiHist[i].q; mk[mn++]=0; mt[mn]=aiHist[i].a; mk[mn++]=1; }
+    if(aiLastPrompt.length() && mn<MMAX-1){
+      mt[mn]=aiLastPrompt.c_str(); mk[mn++]=0;
+      if(aiLoading){ mt[mn]=""; mk[mn++]=3; }
+      else if(aiResponse.length()){ mt[mn]=aiResponse.c_str(); mk[mn++]=aiResponse.startsWith("Error:") ? 2 : 1; }
+    } else if(!aiLastPrompt.length() && aiResponse.length() && mn<MMAX){
+      mt[mn]=aiResponse.c_str(); mk[mn++]=aiResponse.startsWith("Error:") ? 2 : 1;   // mis. error sebelum ada pertanyaan
+    }
+    // pesan paling lama dibuang bila buffer baris (AI_MAX_LINES) tidak cukup; yang terbaru selalu ikut
+    int first = mn, used = 0, budget = AI_MAX_LINES-6;
+    for(int i=mn-1;i>=0;i--){
+      int L = (int)strlen(mt[i]), nl = 1;
+      for(const char* p=mt[i];*p;p++) if(*p=='\n') nl++;
+      int cm = (mk[i]==0) ? chU : chA; if(cm<8) cm=8;
+      int est = (mk[i]==3) ? 1 : (L/(cm>12 ? cm-6 : cm) + nl + 1);
+      if(used+est > budget && first < mn) break;
+      used += est; first = i;
+    }
+    int ms[MMAX], mc[MMAX], mw[MMAX], mh[MMAX], mbh[MMAX], mg[MMAX], py[MMAX];
+    int n = 0;
+    for(int i=first;i<mn;i++){            // satu putaran: bungkus teks ke aiLinesBuf (salinan, jadi aman dari task Gemini)
+      ms[i] = n;
+      if(mk[i]==3) n = aiWrapAppend(aiLinesBuf,AI_MAX_LINES,n,"",T().text,chA);
+      else         n = aiWrapAppend(aiLinesBuf,AI_MAX_LINES,n,mt[i],T().text,(mk[i]==0) ? chU : chA);
+      mc[i] = n-ms[i];
+      while(mc[i]>1 && aiLinesBuf[ms[i]+mc[i]-1].text.c[0]==0) mc[i]--;     // buang baris kosong di ujung
+    }
+    int contentH = 4;
+    for(int i=first;i<mn;i++){
+      int ml = 0;
+      for(int k=0;k<mc[i];k++){ const char* ln = aiLinesBuf[ms[i]+k].text.c_str(); int cl = emjCells(ln,(int)strlen(ln)); if(cl>ml) ml=cl; }
+      int minW = (mk[i]==0) ? 30 : (mk[i]==3 ? 46 : 36);
+      mw[i]  = (mk[i]==3) ? 46 : (ml*6 > minW ? ml*6 : minW) + 2*PADX;
+      if(mw[i] > ((mk[i]==0) ? maxBWu : maxBWa) + 2*PADX) mw[i] = ((mk[i]==0) ? maxBWu : maxBWa) + 2*PADX;
+      mbh[i] = (mk[i]==3) ? 20 : (PADT + (mc[i]>0 ? mc[i] : 1)*LH + PADB);
+      mg[i]  = (i==first) ? 4 : GAPN;
+      mh[i]  = mg[i] + ((mk[i]==0) ? 0 : NAMEH) + mbh[i];
+      py[i]  = contentH;
+      contentH += mh[i];
+    }
+    contentH += 6;
+    aiRespMaxScroll = contentH-chatH; if(aiRespMaxScroll<0) aiRespMaxScroll=0;
+    int lastTop = (mn>first && mk[mn-1]!=0) ? py[mn-1] : -1;
+    if(aiFollow==1) aiRespScrollY = (float)aiRespMaxScroll;
+    else if(aiFollow==2){
+      aiRespScrollY = (lastTop>=0) ? (float)min(lastTop-2,aiRespMaxScroll) : (float)aiRespMaxScroll;
+      aiFollow = 0;
+    }
+    if(aiRespScrollY>aiRespMaxScroll) aiRespScrollY=aiRespMaxScroll;
+    if(aiRespScrollY<0) aiRespScrollY=0;
 
-  // Indikator scrollbar tipis di kanan, muncul kalau kontennya lebih panjang dari kotak
-  if(aiRespMaxScroll>0){
-    int trackX=SCR_W-8, trackY=chatTop+4, trackH=chatH-8;
-    int thumbH = max(14, (int)((float)viewH/contentH*trackH));
-    int thumbY = trackY + (int)((float)aiRespScrollY/aiRespMaxScroll*(trackH-thumbH));
-    nyxAaRR(s, trackX,trackY,3,trackH,1,T().divider);
-    nyxAaRR(s, trackX,thumbY,3,thumbH,1,T().accent);
+    s.setClipRect(0,chatTop,SCR_W,chatH);
+    int base = chatTop - (int)aiRespScrollY;
+    for(int i=first;i<mn;i++){
+      int sy = base + py[i];
+      if(sy+mh[i] < chatTop) continue;
+      if(sy > chatBot) break;
+      bool user = (mk[i]==0);
+      int bx = user ? (SCR_W-6-mw[i]) : 6;
+      int by = sy + mg[i] + (user ? 0 : NAMEH);
+      if(!user){ s.setTextColor(T().accent2); s.setCursor(bx+4,sy+mg[i]); s.print("Gemini"); }
+      uint16_t bc = user ? (uint16_t)T().accent : (mk[i]==2 ? blend565(T().surface2,T().danger,150) : (uint16_t)T().surface2);
+      cuBubble(s,bx,by,mw[i],mbh[i],bc,user,true);
+      if(mk[i]==2) nyxAaRRRing(s,bx,by,mw[i],mbh[i],9,T().danger);
+      if(mk[i]==3){
+        float ph = (float)millis()/170.0f;
+        unsigned long el = aiRequestStartMillis ? (millis()-aiRequestStartMillis) : 0;
+        for(int k=0;k<3;k++){
+          float bn = sinf(ph-(float)k*0.9f); if(bn<0.0f) bn = 0.0f;
+          uint16_t dc = blend565(T().subtext,(el>AI_SOFT_TIMEOUT_MS) ? (uint16_t)T().accent : (uint16_t)T().text,(uint8_t)(255.0f*bn));
+          nyxAaCircle(s,bx+14+k*10,by+10-(int)(3.0f*bn+0.5f),3,dc);
+        }
+        if(el>AI_SOFT_TIMEOUT_MS){ s.setTextColor(T().subtext); s.setCursor(bx+mw[i]+6,by+6); s.print(RPTR("agak lama...")); }
+      } else {
+        s.setTextColor(user ? (uint16_t)T().bg : (uint16_t)T().text);
+        for(int k=0;k<mc[i];k++){
+          int ly = by + PADT + k*LH;
+          if(ly+LH < chatTop || ly > chatBot) continue;
+          s.setCursor(bx+PADX,ly); s.print(aiLinesBuf[ms[i]+k].text.c_str());
+        }
+      }
+    }
+    s.clearClipRect();
+
+    if(aiRespMaxScroll>0){                                   // scrollbar tipis di kanan
+      int trackX = SCR_W-4, trackY = chatTop+2, trackH = chatH-4;
+      int thumbH = max(14,(int)((float)chatH/contentH*trackH));
+      int thumbY = trackY + (int)((float)aiRespScrollY/aiRespMaxScroll*(trackH-thumbH));
+      nyxAaRR(s,trackX,trackY,2,trackH,1,T().divider);
+      nyxAaRR(s,trackX,thumbY,2,thumbH,1,T().accent);
+    }
+    if(aiRespMaxScroll-(int)aiRespScrollY > 30) cuToBottomBtn(s,SCR_W-18,chatBot-14,0);
   }
 
   if(!kbVisible){
-    // v20: kolom input diperkecil dikit utk kasih tempat tombol "Hapus" baru
-    // (lihat clearW/clearX) -- tombol Kirim SENGAJA dibiarkan di posisi X
-    // yg PERSIS SAMA spt sebelumnya (SCR_W-56), cuma kolom teksnya yg
-    // menyusut, jadi tttTouch/aiTouch existing utk tombol Kirim tdk perlu
-    // ikut berubah.
-    int clearW = 30;
-    int clearX = SCR_W-90; // = (posisi lama tombol Kirim) - gap(4) - clearW(30) - gap(4)... lihat perhitungan di aiTouch
-    iosRR(s,4,inputY,SCR_W-98,22,4,T().surface);
-    s.setTextColor(T().subtext);s.setCursor(10,inputY+6);
-    String ipDisp = aiPrompt.length() ? aiPrompt : "Ketik pertanyaan...";
-    if((int)ipDisp.length()>maxChars) ipDisp = ipDisp.substring(0, maxChars>3?maxChars-3:maxChars) + "..";
-    s.print(ipDisp.c_str());
-
-    // v20: tombol "Hapus" -- kosongkan aiPrompt sekali ketuk, supaya user
-    // TIDAK PERLU menghapus satu-huruf-satu-huruf lewat tombol backspace
-    // keyboard virtual kalau mau mengetik ulang dari nol.
-    iosRR(s,clearX,inputY,clearW,22,4,aiPrompt.length()?T().danger:T().surface2);
-    s.setTextColor(aiPrompt.length()?0xFFFF:T().subtext);
-    s.setCursor(clearX+clearW/2-3,inputY+6);s.print("X");
-
-    iosRR(s,SCR_W-56,inputY,52,22,4,aiLoading?T().surface2:T().accent);
-    s.setTextColor(aiLoading?T().subtext:T().bg);s.setCursor(SCR_W-48,inputY+6);
-    s.print(RPTR("Kirim"));
+    int right = aiInputRight();
+    iosRR(s,4,inputY,right-4,22,11,T().surface);
+    int maxIn = (right-4-20)/6;
+    String ipDisp = aiPrompt;
+    if(!ipDisp.length()) ipDisp = RPTR("Tanya Gemini...");
+    else if(emjCells(ipDisp.c_str(),(int)ipDisp.length()) > maxIn) ipDisp = String("..") + emjTail(ipDisp,maxIn-2);
+    s.setTextColor(aiPrompt.length() ? (uint16_t)T().text : (uint16_t)T().subtext);
+    s.setCursor(12,inputY+7); s.print(ipDisp.c_str());
+    if(aiPrompt.length()){                                  // X: kosongkan pertanyaan sekali ketuk
+      iosRR(s,SCR_W-90,inputY,30,22,11,T().danger);
+      s.setTextColor(0xFFFF); s.setCursor(SCR_W-90+12,inputY+7); s.print("X");
+    }
+    cuSendBtn(s,SCR_W-56,inputY,52,22,aiPrompt.length()>0 && !aiLoading,aiLoading,RPTR("Kirim"));
   }
 
   if(kbVisible) drawKb(s); else drawBack(s);
@@ -10919,6 +11043,7 @@ void drawAiChat(LGFX_Sprite& s){
 
 void aiTouch(int x,int y,bool held,bool isNew){
   static int dragLastY=0;
+  static bool dragging=false;
 
   if(kbVisible){
     if(!isNew) return;
@@ -10934,9 +11059,10 @@ void aiTouch(int x,int y,bool held,bool isNew){
   int chatBot = inputY-6;
 
   if(isNew){
+    dragging = false;
     if(isBack(x,y)){ navBack(); return; }
 
-    if(x>=SCR_W-72 && x<=SCR_W-4 && y>=24 && y<=42){
+    if(x>=SCR_W-72 && x<=SCR_W-4 && y>=24 && y<=42){          // API Key
       kbTarget = &geminiApiKey;
       kbVisible = true;
       kbMode = KB_LOWER;
@@ -10945,18 +11071,18 @@ void aiTouch(int x,int y,bool held,bool isNew){
       return;
     }
 
-    if(x>=SCR_W-118 && x<=SCR_W-78 && y>=24 && y<=42){
+    if(x>=SCR_W-118 && x<=SCR_W-78 && y>=24 && y<=42){        // Baru: hapus memory SD + riwayat tampilan
+      if(aiLoading){ showToast(RPTR("Tunggu jawaban selesai")); return; }
       clearAiMemory();
-      showToast(RPTR("Memory percakapan dihapus"));
+      aiHistClear();
+      aiLastPrompt = ""; aiResponse = "";
+      aiFollow = 1; aiRespScrollY = 0;
+      showToast(RPTR("Percakapan baru dimulai"));
       needRedraw = true;
       return;
     }
 
-    // v27: tombol Mic -- ketuk utk mulai rekam, ketuk lg (jd "Stop") utk
-    // berhenti & lanjut transkrip. Diblokir selagi lg transcribing (biar
-    // gak numpuk request). Pakai aiMicBtnX() yg SAMA dgn drawAiChat() --
-    // JANGAN patok angka mentah lagi di sini (lihat catatan v27 di atas
-    // fungsi aiMicBtnX(), itu penyebab bug tombol dempet sebelumnya).
+    // Mic: pakai aiMicBtnX() yang SAMA dgn drawAiChat() (lihat catatan v27 di atas aiMicBtnX)
     int micBtnX=aiMicBtnX(), micBtnW=AI_MIC_BTN_W;
     if(x>=micBtnX && x<=micBtnX+micBtnW && y>=24 && y<=42){
       if(micRecording) micStopRecording();
@@ -10964,15 +11090,33 @@ void aiTouch(int x,int y,bool held,bool isNew){
       return;
     }
 
-    // FIX: menyentuh area chat SEKARANG dipakai utk geser/scroll isi
-    // (dulu tidak bisa discroll sama sekali).
-    if(y>=chatTop && y<=chatBot){
-      dragLastY = y;
-      aiRespScrollVel = 0; // v12: reset sisa momentum di awal sentuhan baru (spt Home)
+    if(aiEmptyState()){                                        // saran satu-ketuk
+      for(int i=0;i<AI_CHIP_N;i++){
+        int cyy = aiChipY(i);
+        if(x>=20 && x<=SCR_W-20 && y>=cyy && y<=cyy+18){
+          aiPrompt = String(RPTR(AI_CHIPS[i]));
+          saveGeminiKey();
+          triggerGeminiAI();
+          vibTap();
+          needRedraw = true;
+          return;
+        }
+      }
+    }
+
+    if(aiRespMaxScroll-(int)aiRespScrollY > 30 && abs(x-(SCR_W-18))<=14 && abs(y-(chatBot-14))<=14){   // ke pesan terbaru
+      aiFollow = 1; vibTap(); needRedraw = true;
       return;
     }
 
-    if(y>=inputY && y<=inputY+22 && x<=SCR_W-98){
+    if(y>=chatTop && y<=chatBot){                              // sentuh area chat = mulai geser
+      dragging = true;
+      dragLastY = y;
+      aiRespScrollVel = 0;
+      return;
+    }
+
+    if(y>=inputY && y<=inputY+22 && x<=aiInputRight()){        // kolom input
       kbTarget = &aiPrompt;
       kbVisible = true;
       kbMode = KB_LOWER;
@@ -10980,29 +11124,26 @@ void aiTouch(int x,int y,bool held,bool isNew){
       return;
     }
 
-    // v20: tombol "Hapus" -- kosongkan seluruh kolom pertanyaan sekali
-    // ketuk (koordinat PERSIS sama dgn yg digambar di drawAiChat, lihat
-    // clearX/clearW di sana).
-    if(x>=SCR_W-90 && x<=SCR_W-60 && y>=inputY && y<=inputY+22){
-      if(aiPrompt.length()){ aiPrompt=""; showToast(RPTR("Pertanyaan dihapus")); needRedraw=true; }
+    if(aiPrompt.length() && x>=SCR_W-90 && x<=SCR_W-60 && y>=inputY && y<=inputY+22){   // X
+      aiPrompt=""; showToast(RPTR("Pertanyaan dihapus")); needRedraw=true;
       return;
     }
 
-    if(x>=SCR_W-56 && x<=SCR_W-4 && y>=inputY && y<=inputY+22){
+    if(x>=SCR_W-56 && x<=SCR_W-4 && y>=inputY && y<=inputY+22){   // Kirim (kolom kosong = buka keyboard)
+      if(!aiPrompt.length()){ kbTarget=&aiPrompt; kbVisible=true; kbMode=KB_LOWER; needRedraw=true; return; }
       saveGeminiKey();
       triggerGeminiAI();
+      vibTap();
       return;
     }
     return;
   }
 
-  // Frame lanjutan selagi jari masih ditahan -> geser scroll
-  if(held && y>=chatTop-20 && y<=chatBot+20){
+  // jari masih ditahan -> geser; kecepatan di-low-pass utk momentum di loop() (v12)
+  if(held && dragging && y>=chatTop-20 && y<=chatBot+20){
     int dy = dragLastY - y;
     if(dy!=0){
-      // v12: kecepatan di-low-pass (bukan delta mentah) supaya sisa
-      // momentumnya bisa dipakai utk scroll lanjutan yg mulus setelah jari
-      // dilepas (lihat momentum di loop()) -- gaya yg sama dgn Home.
+      aiFollow = 0;
       aiRespScrollVel = aiRespScrollVel*0.5f + dy*0.5f;
       aiRespScrollY = constrain(aiRespScrollY + dy, 0.0f, (float)aiRespMaxScroll);
       dragLastY = y;

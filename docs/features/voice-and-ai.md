@@ -18,6 +18,8 @@ Question and answer with Gemini over HTTPS, with text input or voice dictation. 
 
 **Voice commands `BETA`.** Gemini can control the phone: *open app*, *timer*, *music* (play, pause, continue, back, shuffle), *brightness*, *Home* and *back*. At the end of its reply, Gemini writes an `@@CMD {json}` line (at most 3); that line is stripped from the displayed text and executed by the main loop. Examples (spoken in Indonesian or English): "Hei Nyx, set a timer for 10 minutes", "open Music and shuffle". Actions only run while the phone is unlocked, and only from the action list above (there is no deleting files or powering off).
 
+**Screen layout (CHAT_UI_V2).** AI Chat is shown as a conversation: your questions are bubbles on the right, Gemini's answers bubbles on the left. The last 6 exchanges stay on screen while the phone is on (they are kept in PSRAM and are not saved; the Gemini memory on the SD card works as before). While Gemini works, a bubble with bouncing dots shows. A new answer opens at its first line; a down-arrow button jumps to the newest message. On an empty chat three suggestions can be tapped to send at once. *New* (was *Mem*) clears the SD memory and the on-screen history; the *API Key* pill shows a green or red dot and opens the key editor.
+
 ## Voice Memo
 
 Records through the INMP441 microphone into a WAV file in `/memo`, which is then played through the Music BT path.

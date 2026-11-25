@@ -64,6 +64,7 @@
 #define CB_GAP_NEW  8
 #define CB_QUOTE_H  20                // tinggi kotak kutipan balasan di dalam bubble
 #define CB_TYPE_H   26                // tinggi slot indikator mengetik (bubble 20 + celah)
+#define CB_DATE_H   16                // CHAT_UI_V2: tinggi chip tanggal ("Hari ini") saat hari berganti
 
 struct ChatMsg { uint32_t seq; uint32_t ts; char user[CHAT_USER_LEN]; char text[CHAT_TEXT_LEN]; uint32_t born; };   // born = millis() saat pesan LIVE masuk (0 = riwayat, tanpa animasi)
 
@@ -81,6 +82,8 @@ static bool   chatCfgLoaded = false;
 static bool   chatCfgMode = false;
 static int    chatCfgEdit = -1;                     // field yg sedang diketik (-1 = tidak ada)
 static int    chatScroll = 0;
+static int    chatUnread = 0;                        // CHAT_UI_V2: pesan masuk selagi user menggulir ke atas
+static uint32_t chatSeenSeq = 0;                     // CHAT_UI_V2: seq tertinggi yang sudah dihitung UI
 
 static volatile bool     chatActive = false;        // app terbuka & terkonfigurasi
 static volatile uint8_t  chatConn = 0;              // 0 menyambung, 1 siap, 2 error
@@ -406,7 +409,7 @@ static bool chatEnsureInit() {
 void chatEnter() {
   if (!chatEnsureInit()) { showToast(RPTR("RAM tidak cukup utk Chat"), 2500); return; }
   if (!chatConfigured() && chatCfgFromSd()) { chatCfgSave(); showToast(RPTR("Konfigurasi dimuat dari SD"), 2200); }
-  chatScroll = 0;
+  chatScroll = 0; chatUnread = 0; chatSeenSeq = chatLastSeq;   // CHAT_UI_V2
   chatCfgEdit = -1;
   chatOutState = 0; chatReplyOn = false;
   chatPeerTypeUntil = 0; chatPeerName[0] = 0; chatTypeAnim = 0.0f; chatTypeSentMs = 0; chatTypeSendReq = false;
@@ -546,7 +549,35 @@ static bool chatParseReply(const char* text, char* qn, int qnCap, char* qt, int 
   return true;
 }
 
-// Tata letak satu pesan sbg bubble. Mengembalikan tinggi slot (celah + nama + bubble).
+// CHAT_UI_V2: chip tanggal saat hari berganti + warna nama per pengirim
+static int chatDayKey(uint32_t ts) { return ts ? (int)((ts + CHAT_TZ_SEC) / 86400UL) : -1; }
+static bool chatNewDay(int idx) {
+  if (chatMsgs[idx].ts == 0) return false;
+  if (idx == 0) return true;
+  return chatDayKey(chatMsgs[idx].ts) != chatDayKey(chatMsgs[idx - 1].ts);
+}
+static void chatDayLabel(uint32_t ts, char* out, int cap) {
+  time_t nowT = time(nullptr);
+  int today = nowT > 1700000000L ? (int)(((uint32_t)nowT + CHAT_TZ_SEC) / 86400UL) : -2;
+  int k = chatDayKey(ts);
+  if (k == today) snprintf(out, cap, "%s", RPTR("Hari ini"));
+  else if (k == today - 1) snprintf(out, cap, "%s", RPTR("Kemarin"));
+  else {
+    time_t tt = (time_t)(ts + CHAT_TZ_SEC); struct tm tmv; gmtime_r(&tt, &tmv);
+    snprintf(out, cap, "%02d/%02d/%04d", tmv.tm_mday, tmv.tm_mon + 1, tmv.tm_year + 1900);
+  }
+}
+static uint16_t chatNameColor(const char* nm) {
+  uint32_t h = 0;
+  for (; *nm; nm++) h = h * 31 + (uint8_t)*nm;
+  switch (h % 3) {
+    case 0:  return T().good;
+    case 1:  return T().accent2;
+    default: return blend565(T().accent, T().text, 110);
+  }
+}
+
+// Tata letak satu pesan sbg bubble. Mengembalikan tinggi slot (chip tanggal + celah + nama + bubble).
 // Out: jumlah baris, panjang baris terpanjang (karakter), celah di atas, tampilkan nama?
 static int chatMsgLayout(int idx, int maxCh, int* nLines, int* maxLen, int* gap, bool* showName) {
   int st[8], ln[8];
@@ -557,15 +588,16 @@ static int chatMsgLayout(int idx, int maxCh, int* nLines, int* maxLen, int* gap,
   if (n < 1) n = 1;
   else for (int k = 0; k < n; k++) { int cl = emjCells(body + st[k], ln[k]); if (cl > ml) ml = cl; }
   if (hq) { int ql = (int)strlen(qn) + 2 + (int)strlen(qt); if (ql > maxCh) ql = maxCh; if (ql > ml) ml = ql; }
+  bool nd = chatNewDay(idx);
   bool mine = strcmp(chatName.c_str(), chatMsgs[idx].user) == 0;
-  bool newGroup = (idx == 0) || strcmp(chatMsgs[idx].user, chatMsgs[idx - 1].user) != 0;
+  bool newGroup = (idx == 0) || nd || strcmp(chatMsgs[idx].user, chatMsgs[idx - 1].user) != 0;
   bool sn = !mine && newGroup;
   int g = newGroup ? CB_GAP_NEW : CB_GAP_SAME;
   if (nLines)   *nLines = n;
   if (maxLen)   *maxLen = ml;
   if (gap)      *gap = g;
   if (showName) *showName = sn;
-  return g + (sn ? CB_NAMEH : 0) + (hq ? CB_QUOTE_H : 0) + CB_PADT + n * CB_LINE + CB_TIMEH + CB_PADB;
+  return (nd ? CB_DATE_H : 0) + g + (sn ? CB_NAMEH : 0) + (hq ? CB_QUOTE_H : 0) + CB_PADT + n * CB_LINE + CB_TIMEH + CB_PADB;
 }
 
 // CHAT_LAYOUT_FIX_V1: lebar teks = sel x 6 px (ASCII 1 sel, emoji 2 sel), BUKAN s.textWidth()
@@ -644,11 +676,12 @@ void drawChat(LGFX_Sprite& s) {
   uint16_t dot = (chatConn == 1) ? (uint16_t)T().good : ((chatConn == 2) ? (uint16_t)T().danger : (uint16_t)T().subtext);
   nyxAaCircle(s, 46, 30, 3, dot);
   String stt = (chatConn == 1) ? String("terhubung") : ((chatConn == 2) ? String(chatErrBuf) : String("menyambung..."));
-  int maxSt = (SCR_W - 54 - 76) / 6;
+  int maxSt = (SCR_W - 54 - 84) / 6;
   if ((int)stt.length() > maxSt) stt = stt.substring(0, maxSt > 2 ? maxSt - 2 : maxSt) + "..";
   s.setTextColor(T().subtext); s.setCursor(54, 26); s.print(stt.c_str());
-  iosRR(s, SCR_W - 70, 24, 66, 18, 5, T().surface2);
-  s.setTextColor(chatBcWait ? (uint16_t)T().subtext : (uint16_t)T().accent); chatPrintCentered(s, SCR_W - 70, 66, 29, RPTR("Ambil ulang"));
+  iosRR(s, SCR_W - 78, 24, 74, 18, 9, T().surface2);
+  s.setTextColor(chatBcWait ? (uint16_t)T().subtext : (uint16_t)T().accent); chatPrintCentered(s, SCR_W - 78, 74, 29, RPTR("Ambil ulang"));
+  s.drawFastHLine(0, CHAT_TOP - 1, SCR_W, T().divider);
 
   // ---- area pesan (bubble) ----
   int inputY = (kbVisible ? kbY() : backY()) - 26;
@@ -657,6 +690,15 @@ void drawChat(LGFX_Sprite& s) {
   int maxBW = SCR_W * 3 / 4;
   int maxCh = (maxBW - 2 * CB_PADX) / 6;
   if (areaH > 10 && chatMx && xSemaphoreTake(chatMx, pdMS_TO_TICKS(30)) == pdTRUE) {
+    // CHAT_UI_V2: pesan baru masuk saat user menggulir ke atas -> posisi baca dijaga (daftar tidak melompat),
+    // jumlahnya dihitung utk lencana di tombol "ke pesan terbaru"
+    {
+      int newN = 0, newH = 0;
+      for (int i = chatCount - 1; i >= 0 && chatMsgs[i].seq > chatSeenSeq; i--) { newN++; newH += chatMsgLayout(i, maxCh, 0, 0, 0, 0); }
+      if (chatSeenSeq != 0 && newN > 0 && chatScroll > 24) { chatScroll += newH; chatUnread += newN; }
+      chatSeenSeq = chatLastSeq;
+      if (chatScroll <= 24) chatUnread = 0;
+    }
     int typeSlot = (int)lroundf((float)CB_TYPE_H * chatEaseOut(chatTypeAnim));
     // bubble "sedang dikirim / gagal" milik kita: slot tambahan paling bawah di atas indikator mengetik
     int outN = 0, outMl = 0, outH = 0, outGap = CB_GAP_NEW;
@@ -721,8 +763,7 @@ void drawChat(LGFX_Sprite& s) {
       int bh = CB_PADT + outN * CB_LINE + CB_TIMEH + CB_PADB;
       int bx = SCR_W - 6 - bw, by = y + outGap;
       uint16_t bc = (os == 2) ? blend565(T().surface2, T().danger, 150) : blend565(T().accent, T().bg, 90);   // pucat = belum terkirim
-      nyxAaRR(s, bx, by, bw, bh, 9, bc);
-      s.fillRect(bx + bw - 9, by + bh - 9, 9, 9, bc);
+      cuBubble(s, bx, by, bw, bh, bc, true, true);
       if (os == 2) nyxAaRRRing(s, bx, by, bw, bh, 9, T().danger);
       int ost[8], oln[8];
       char oqn2[20], oqt2[32]; const char* obody2;
@@ -748,6 +789,8 @@ void drawChat(LGFX_Sprite& s) {
       if (y + h <= top) break;
       if (y >= bot) continue;
       bool mine = (strcmp(chatName.c_str(), chatMsgs[i].user) == 0);
+      bool nd = chatNewDay(i);
+      int dh = nd ? CB_DATE_H : 0;
       int minIn = mine ? 42 : 30;
       int bw = (ml * 6 > minIn ? ml * 6 : minIn) + 2 * CB_PADX;
       char qn[20], qt[32]; const char* body;
@@ -756,16 +799,23 @@ void drawChat(LGFX_Sprite& s) {
       int bh = qo + CB_PADT + n * CB_LINE + CB_TIMEH + CB_PADB;
       int bx = mine ? (SCR_W - 6 - bw) : 6;
       if (i == chatCount - 1) bx += mine ? newX : -newX;
-      int by = y + gap + (showName ? CB_NAMEH : 0);
+      int by = y + dh + gap + (showName ? CB_NAMEH : 0);
       uint16_t bc = mine ? (uint16_t)T().accent : (uint16_t)T().surface2;
       uint16_t tc = mine ? (uint16_t)T().bg : (uint16_t)T().text;
-      if (showName) {
-        s.setTextColor(T().good);
-        s.setCursor(bx + 4, y + gap); s.print(chatMsgs[i].user);
+      // ekor bubble hanya di pesan TERAKHIR satu kelompok; pesan beruntun dari orang yang sama jadi kotak bulat penuh
+      bool lastInGroup = (i == chatCount - 1) ? !(mine && outH > 0)
+                                              : (strcmp(chatMsgs[i + 1].user, chatMsgs[i].user) != 0 || chatNewDay(i + 1));
+      if (nd) {                                          // chip tanggal di tengah
+        char dl[16]; chatDayLabel(chatMsgs[i].ts, dl, sizeof(dl));
+        int dw = chatTW(dl) + 16, dx = (SCR_W - dw) / 2;
+        nyxAaRR(s, dx, y + 2, dw, 12, 6, T().surface2);
+        s.setTextColor(T().subtext); s.setCursor(dx + 8, y + 4); s.print(dl);
       }
-      nyxAaRR(s, bx, by, bw, bh, 9, bc);
-      if (mine) s.fillRect(bx + bw - 9, by + bh - 9, 9, 9, bc);   // sudut "ekor" bubble sendiri
-      else      s.fillRect(bx, by + bh - 9, 9, 9, bc);            // sudut "ekor" bubble lawan bicara
+      if (showName) {
+        s.setTextColor(chatNameColor(chatMsgs[i].user));
+        s.setCursor(bx + 4, y + dh + gap); s.print(chatMsgs[i].user);
+      }
+      cuBubble(s, bx, by, bw, bh, bc, mine, lastInGroup);
       if (hq) {                                          // kotak kutipan balasan
         uint16_t qbg = mine ? blend565(T().accent, T().bg, 70) : blend565(T().surface2, T().bg, 70);
         nyxAaRR(s, bx + 5, by + 4, bw - 10, CB_QUOTE_H - 3, 4, qbg);
@@ -800,11 +850,18 @@ void drawChat(LGFX_Sprite& s) {
         s.drawLine(kx, ky + 2, kx + 2, ky + 4, kc); s.drawLine(kx + 2, ky + 4, kx + 7, ky - 1, kc);
       }
     }
-    if (chatCount == 0) {
+    if (chatCount == 0) {                                // layar kosong: ikon gelembung + ajakan
+      int cx = SCR_W / 2, cy = top + areaH / 2 - 16;
+      if (cy < top + 16) cy = top + 16;
+      nyxAaRR(s, cx - 18, cy - 13, 36, 24, 9, T().surface2);
+      s.fillRect(cx - 18, cy + 2, 9, 9, T().surface2);
+      for (int k = 0; k < 3; k++) nyxAaCircle(s, cx - 9 + k * 9, cy - 1, 2, blend565(T().subtext, T().text, 140));
       s.setTextColor(T().subtext);
-      s.setCursor(10, top + 6); s.print(chatConn == 1 ? RPTR("Belum ada pesan. Tulis yang pertama!") : RPTR("Menunggu koneksi..."));
+      chatPrintCentered(s, 0, SCR_W, cy + 20, chatConn == 1 ? RPTR("Belum ada pesan") : RPTR("Menunggu koneksi..."));
+      if (chatConn == 1 && areaH > 60) chatPrintCentered(s, 0, SCR_W, cy + 32, RPTR("Tulis yang pertama!"));
     }
     s.clearClipRect();
+    if (chatScroll > 40) cuToBottomBtn(s, SCR_W - 18, bot - 14, chatUnread);   // ke pesan terbaru (+ jumlah belum dibaca)
     xSemaphoreGive(chatMx);
   }
 
@@ -820,18 +877,23 @@ void drawChat(LGFX_Sprite& s) {
   }
   // ---- baris input ----
   int boxW = SCR_W - 4 - 62;
-  iosRR(s, 4, inputY, boxW, 22, 5, T().surface);
+  iosRR(s, 4, inputY, boxW, 22, 11, T().surface);
   bool typing = kbVisible && kbTarget == &chatInput;
+  int remain = 200 - (int)chatInput.length();
+  bool showCnt = chatInput.length() >= 150;                // sisa karakter muncul saat mendekati batas 200
   String shown = chatInput;
-  int maxIn = (boxW - 12) / 6;
+  int maxIn = (boxW - 20 - (showCnt ? 24 : 0)) / 6;
   if ((int)shown.length() > maxIn) shown = String("..") + emjTail(shown, maxIn - 2);
   if (typing) shown += "_";
   s.setTextColor(chatInput.length() || typing ? T().text : T().subtext);
-  s.setCursor(10, inputY + 7); s.print(shown.length() ? shown.c_str() : RPTR("Ketik pesan..."));
+  s.setCursor(12, inputY + 7); s.print(shown.length() ? shown.c_str() : RPTR("Ketik pesan..."));
+  if (showCnt) {
+    char cb[12]; snprintf(cb, sizeof(cb), "%d", remain < 0 ? 0 : remain);
+    s.setTextColor(remain < 20 ? (uint16_t)T().danger : (uint16_t)T().subtext);
+    s.setCursor(4 + boxW - 8 - chatTW(cb), inputY + 7); s.print(cb);
+  }
   bool canSend = chatInput.length() > 0 && !chatSendPending && chatConn == 1;
-  iosRR(s, SCR_W - 56, inputY, 52, 22, 5, canSend ? (uint16_t)T().accent : (uint16_t)T().surface2);
-  s.setTextColor(canSend ? (uint16_t)T().bg : (uint16_t)T().subtext);
-  chatPrintCentered(s, SCR_W - 56, 52, inputY + 7, chatSendPending ? "..." : RPTR("Kirim"));
+  cuSendBtn(s, SCR_W - 56, inputY, 52, 22, canSend, chatSendPending, RPTR("Kirim"));
 
   if (kbVisible) drawKb(s); else drawBack(s);
   drawToast(s);
@@ -975,7 +1037,10 @@ void chatTouch(int x, int y, bool held, bool isNew) {
     lpStart = millis(); lpX = x; lpY = y; lpFired = false;
     if (chatReplyOn && x >= SCR_W - 30 && y >= inputY - 20 && y < inputY - 2) { chatReplyOn = false; needRedraw = true; return; }
     if (isBack(x, y)) { navBack(); return; }
-    if (x >= SCR_W - 70 && x <= SCR_W - 4 && y >= 24 && y <= 42) {
+    if (chatScroll > 40 && abs(x - (SCR_W - 18)) <= 14 && abs(y - (bot - 14)) <= 14) {   // CHAT_UI_V2: ke pesan terbaru
+      chatScroll = 0; chatUnread = 0; vibTap(); needRedraw = true; return;
+    }
+    if (x >= SCR_W - 78 && x <= SCR_W - 4 && y >= 24 && y <= 42) {
       if (!chatBcWait) chatRefetch();
       return;
     }

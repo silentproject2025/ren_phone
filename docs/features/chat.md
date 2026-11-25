@@ -17,6 +17,13 @@ Private messaging between devices **without a self-built server**. An MQTT broke
 - **RAM-friendly.** The device is only connected while the Chat app is open. After it is closed, the TLS connection is released and the memory returned.
 - A topic `renphone/chat/t` (non-retained, QoS 0) carries the "is typing" indicator with the sender's name; it is already covered by an ACL on `renphone/chat/#`.
 
+## Screen layout (CHAT_UI_V2)
+
+- **Header:** status dot and text on the left, *Refetch* on the right, a thin line under it.
+- **Messages:** your messages are accent-coloured bubbles on the right, others are grey bubbles on the left with the sender's name in a colour that stays the same per person. A chip with *Today*, *Yesterday* or the date appears when the day changes. The bubble tail is only drawn on the last message of a run from the same person.
+- **Scrolling:** a round down-arrow button appears when you have scrolled up; it shows how many messages arrived meanwhile and jumps to the newest one. While you read older messages the list stays where it is when a new message arrives.
+- **Input:** a rounded box, a counter with the remaining characters once you pass 150 of 200, and a *Send* pill (greyed out until you are connected and have typed something). Hold a bubble to reply, tap the red *Failed* bubble to resend (unchanged).
+
 ## Configuration
 
 If no login is fetched automatically (see [below](#automatic-broker-login-beta)), fill it in through the app (Broker, Username, Password, Name, then *Save & connect*; this screen only appears while no login is stored), or put a `/chat.cfg` file on the SD card and press *Load SD* (see [Configuration](../configuration.md)). Typing on the on-screen keyboard is tiring, so the SD file is often more convenient:

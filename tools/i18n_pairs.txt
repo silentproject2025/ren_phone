@@ -900,3 +900,20 @@ Kembalikan ::: Roll back
 URL manual ::: Manual URL
 Isi ::: Enter
 Siap diunduh ::: Ready to download
+# --- CHAT_UI_V2 (AI Chat & Chat MQTT) ---
+Hari ini ::: Today
+Kemarin ::: Yesterday
+Belum ada pesan ::: No messages yet
+Tulis yang pertama! ::: Write the first one!
+Baru ::: New
+merekam ::: recording
+menyalin ::: transcribing
+berpikir ::: thinking
+agak lama... ::: taking a while...
+Tanya apa saja ::: Ask me anything
+Tanya Gemini... ::: Ask Gemini...
+Ceritakan fakta unik ::: Tell me a fun fact
+Buat timer 10 menit ::: Set a 10 minute timer
+Ide menu makan malam ::: Dinner menu ideas
+Tunggu jawaban selesai ::: Wait for the answer to finish
+Percakapan baru dimulai ::: New conversation started
