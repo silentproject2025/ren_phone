@@ -142,3 +142,7 @@ A thin row of **3 word suggestions** for the word being typed appears above the 
 *Dictionaries.* Built in: ~1,290 Indonesian words (including slang: `gak`, `udah`, `banget`, `mager`) and ~940 English words, from `tools/kamus_id.txt` and `tools/kamus_en.txt` (order = approximate frequency; `python3 tools/gen_kamus.py` turns them into `firmware/phone/kamus_data.h`). The language you type more often is prioritised in suggestions. **Optional extra dictionary:** put `/kamus.txt` in the SD card root (one word per line, most frequent first; the `word 1234` format is also accepted; 2 MB maximum). It is loaded once into PSRAM when the keyboard is first used. A word that is not in the dictionary may be corrected wrongly; one press of Backspace immediately undoes it and prevents it from recurring. A fuller dictionary from the SD card reduces this.
 
 The logic is tested on a PC (`tests/dictionary/`) but not yet on a device.
+
+## Factory reset `BETA`
+
+*Settings > About > Factory reset* (tap twice within 4 seconds) erases all settings stored in NVS and the settings copies, API key, broker logins and AI memory on the SD card, then restarts. Your own files on the SD card (photos, music, books, memos) and the firmware stay. Afterwards the phone starts like a new one and asks for screen calibration.

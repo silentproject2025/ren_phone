@@ -9847,15 +9847,15 @@ int loadSpiOcPref(){
 // =====================================================================
 enum { SR_TITLE=0, SR_SECT, SR_BRIGHT, SR_THEME, SR_FONT, SR_ROT, SR_SPI, SR_SPIAPPLY,
        SR_SCAN, SR_WIFI, SR_NONET, SR_SSID, SR_PASS, SR_CONNECT, SR_MPU, SR_TCAL, SR_OWNER, SR_ABOUT, SR_POWER, SR_HOMEEDIT, SR_BACKUP, SR_HEAPLOG, SR_HWS, SR_LANG,
-       SR_WSTAT, SR_FOOT /* SETT_UX_V1 */ };
-#define SETT_MAXROWS 40
+       SR_WSTAT, SR_FOOT /* SETT_UX_V1 */, SR_FACTORY /* FACTORY_RESET_V1 */ };
+#define SETT_MAXROWS 44
 int settRT[SETT_MAXROWS], settRG[SETT_MAXROWS], settRY[SETT_MAXROWS], settRH[SETT_MAXROWS], settRA[SETT_MAXROWS];
 const char* settRL[SETT_MAXROWS];
 int settRowN=0, settTotalH=0;
 float settScroll=0;
 int settTouchMode=0;            // 0 diam, 1 menunggu (tap/scroll), 2 geser slider, 3 scroll
 int settTouchX0=0, settTouchY0=0, settTouchLastY=0;
-unsigned long settTouchT0=0, settTcalArmUntil=0;
+unsigned long settTouchT0=0, settTcalArmUntil=0, settFactArmUntil=0;   // FACTORY_RESET_V1
 // SETT_UX_V1: sorotan baris yang ditekan + momentum scroll
 int settPressRow=-1;
 float settVel=0; bool settGlide=false; unsigned long settGlideT=0, settMoveT=0;
@@ -9916,7 +9916,8 @@ void settBuildLayout(){
   settAddRow(SR_SECT,0,26,0,RPTR("TENTANG"),y);
   settAddRow(SR_ABOUT,g,34,0,nullptr,y);
   settAddRow(SR_BACKUP,g,34,0,nullptr,y); g++;
-  settAddRow(SR_POWER,g,34,0,nullptr,y); g++;
+  settAddRow(SR_POWER,g,34,0,nullptr,y);
+  settAddRow(SR_FACTORY,g,34,0,nullptr,y); g++;   // FACTORY_RESET_V1
 
   settAddRow(SR_FOOT,0,40,0,nullptr,y);   // SETT_UX_V1: footer nama + versi
   y+=14; settTotalH=y;
@@ -9949,7 +9950,7 @@ bool settPressable(int t){
   switch(t){
     case SR_FONT: case SR_LANG: case SR_ROT: case SR_HOMEEDIT: case SR_HEAPLOG: case SR_SPIAPPLY:
     case SR_SCAN: case SR_WIFI: case SR_SSID: case SR_PASS: case SR_CONNECT: case SR_MPU: case SR_TCAL:
-    case SR_OWNER: case SR_ABOUT: case SR_POWER: case SR_BACKUP:
+    case SR_OWNER: case SR_ABOUT: case SR_POWER: case SR_BACKUP: case SR_FACTORY:
       return true;
   }
   return false;
@@ -9957,7 +9958,7 @@ bool settPressable(int t){
 bool settHasChip(int t){
   switch(t){
     case SR_BRIGHT: case SR_THEME: case SR_FONT: case SR_LANG: case SR_ROT: case SR_HOMEEDIT: case SR_SPI:
-    case SR_SCAN: case SR_SSID: case SR_PASS: case SR_MPU: case SR_TCAL: case SR_ABOUT: case SR_POWER: case SR_BACKUP: case SR_HEAPLOG: case SR_HWS:
+    case SR_SCAN: case SR_SSID: case SR_PASS: case SR_MPU: case SR_TCAL: case SR_ABOUT: case SR_POWER: case SR_BACKUP: case SR_HEAPLOG: case SR_HWS: case SR_FACTORY:
       return true;
   }
   return false;
@@ -9982,6 +9983,7 @@ void settChip(LGFX_Sprite& s,int type,int x,int y){ // x,y = pojok kiri-atas chi
     case SR_HEAPLOG:  col=CHIP_GRAY;   break;
     case SR_HWS:      col=CHIP_TEAL;   break;   // HW_SCROLL_V1
     case SR_POWER:    col=CHIP_RED;    break;
+    case SR_FACTORY:  col=CHIP_RED;    break;   // FACTORY_RESET_V1
     default: return;
   }
   const uint16_t W=0xFFFF;
@@ -10049,6 +10051,9 @@ void settChip(LGFX_Sprite& s,int type,int x,int y){ // x,y = pojok kiri-atas chi
       break;
     case SR_ABOUT:     // "i"
       nyxAaCircle(s, cx,cy-5,2,W); s.fillRect(cx-1,cy-1,3,8,W);
+      break;
+    case SR_FACTORY:   // tempat sampah
+      s.fillRect(cx-5,cy-5,11,2,W); s.fillRect(cx-2,cy-7,5,2,W); s.fillRect(cx-4,cy-2,9,9,W); s.fillRect(cx-2,cy,1,5,col); s.fillRect(cx+1,cy,1,5,col);
       break;
     case SR_POWER:     // tombol daya
       s.fillArc(cx,cy+1,5,7,300.0f,360.0f,W); s.fillArc(cx,cy+1,5,7,0.0f,240.0f,W);
@@ -10293,6 +10298,11 @@ void drawSettings(LGFX_Sprite& s){
         s.setTextColor(T().danger); s.setCursor(xl,ty); s.print(RPTR("Daya (Matikan / Mulai Ulang)"));
         settChevron(s,xr-4,ty+4,T().subtext);
         break;
+      case SR_FACTORY:
+        s.setTextColor(T().danger); s.setCursor(xl,ty); s.print(RPTR("Reset Pabrik"));
+        if(millis()<settFactArmUntil){ settTextR(s,xr,ty,RPTR("Ketuk lagi: HAPUS SEMUA"),T().danger); needRedraw=true; }
+        else settChevron(s,xr-4,ty+4,T().subtext);
+        break;
       case SR_TCAL:
         s.setTextColor(T().danger); s.setCursor(xl,ty); s.print(RPTR("Kalibrasi Layar Sentuh"));
         if(millis()<settTcalArmUntil){ settTextR(s,xr,ty,RPTR("Ketuk lagi"),T().danger); needRedraw=true; }
@@ -10417,6 +10427,10 @@ void settTap(int x,int y){
       navPush(SCR_BACKUP); break;
     case SR_POWER:
       powerMenuShow(); needRedraw=true; break;
+    case SR_FACTORY:   // FACTORY_RESET_V1: ketuk 2x dalam 4 detik
+      if(millis()<settFactArmUntil){ showToast(RPTR("Mereset ke pengaturan pabrik..."),3000); needRedrawNow(); delay(400); factoryResetNow(); }
+      else { settFactArmUntil=millis()+4000; showToast(RPTR("Ketuk lagi: semua pengaturan dihapus, HP restart"),3200); needRedraw=true; }
+      break;
     case SR_MPU:
       if(mpuReady){ calibrateMPU(); needRedraw=true; }
       else showToast(RPTR("Sensor MPU6050 tidak terdeteksi"));
