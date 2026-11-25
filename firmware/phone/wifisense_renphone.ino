@@ -648,11 +648,11 @@ void drawWsense(LGFX_Sprite& s) {
   s.setTextColor(T().subtext);
   float thr = wsThr();
   snprintf(b, sizeof(b), "Gerak %.1fx", (double)(thr > 0 ? wsScore / thr : 0));
-  s.setCursor(SCR_W / 3 + 4, iy); s.print(b);
+  s.setCursor((SCR_W - s.textWidth(b)) / 2, iy); s.print(b);          // WSENSE_TIDY_V1: tengah
   if (wsBr > 0) snprintf(b, sizeof(b), "Napas ~%.0f/mnt", (double)wsBr);
   else          snprintf(b, sizeof(b), "Napas --");
   s.setTextColor(wsBr > 0 ? WS_RGB(48,209,88) : T().subtext);
-  s.setCursor(SCR_W * 2 / 3, iy); s.print(b);
+  s.setCursor(SCR_W - 12 - s.textWidth(b), iy); s.print(b);           // WSENSE_TIDY_V1: rata kanan
 
   // ---- grafik 15 dtk terakhir (simpangan dari rata-rata, auto-skala) ----
   int gx = 8, gy = iy + 14, gw = SCR_W - 16, gh = wsGraphBottom() - gy;
@@ -671,7 +671,9 @@ void drawWsense(LGFX_Sprite& s) {
     float m = 0; for (int k = 0; k < n; k++) m += wsAt(k); m /= n;
     float mx = 0.01f * m;                               // lantai skala 1% dari rata-rata
     for (int k = 0; k < n; k++) { float a = fabsf(wsAt(k) - m); if (a > mx) mx = a; }
-    int mid = gy + gh / 2, half = gh / 2 - 4;
+    int pTop = gy + 21, pBot = gy + gh - 18;                           // WSENSE_TIDY_V1: di antara strip atas & bawah
+    if (pBot - pTop < 16) { pTop = gy + 4; pBot = gy + gh - 4; }       // grafik sangat pendek: pakai seluruh panel
+    int mid = (pTop + pBot) / 2, half = (pBot - pTop) / 2 - 2;
     s.drawFastHLine(gx + 4, mid, gw - 8, T().divider);
     int px = 0, py = 0;
     for (int k = 0; k < n; k++) {
@@ -691,23 +693,34 @@ void drawWsense(LGFX_Sprite& s) {
     s.fillRect(gx + 8, gy + 3, gw - 16, 2, T().divider);
     s.fillRect(gx + 8, gy + 3, bw, 2, r >= 1.0f ? WS_RGB(255,159,10) : T().accent);
   }
-  if (wsCal) {
-    int sec = (int)((WS_CAL_MS - (millis() - wsCalT0)) / 1000UL);
-    snprintf(b, sizeof(b), "Kalibrasi... %d dtk (jangan ada orang)", sec < 0 ? 0 : sec);
-    s.setTextColor(WS_RGB(255,214,10)); s.setCursor(gx + 10, gy + gh - 12); s.print(b);
-  } else if (wsMsg[0] && wsRun) {
-    s.setTextColor(T().subtext); s.setCursor(gx + 10, gy + gh - 12); s.print(wsMsg);
+  if (gh >= 70) {                                                      // WSENSE_TIDY_V1: garis pemisah strip atas & bawah
+    s.drawFastHLine(gx + 8, gy + 19, gw - 16, T().divider);
+    s.drawFastHLine(gx + 8, gy + gh - 17, gw - 16, T().divider);
   }
+  { char sb[12]; snprintf(sb, sizeof(sb), "Sens %d/5", wsSens + 1);   // strip bawah kanan: sensitivitas
+    int sw = s.textWidth(sb);
+    s.setTextSize(1); s.setTextColor(T().subtext);
+    s.setCursor(gx + gw - sw - 8, gy + gh - 12); s.print(sb);
+    char mb[64]; mb[0] = 0; uint16_t mc = T().subtext;                 // strip bawah kiri: pesan (dipotong bila kepanjangan)
+    if (wsCal) {
+      int sec = (int)((WS_CAL_MS - (millis() - wsCalT0)) / 1000UL);
+      snprintf(mb, sizeof(mb), "Kalibrasi... %d dtk (jangan ada orang)", sec < 0 ? 0 : sec);
+      mc = WS_RGB(255,214,10);
+    } else if (wsMsg[0] && wsRun) {
+      snprintf(mb, sizeof(mb), "%s", wsMsg);
+    }
+    if (mb[0]) {
+      int maxW = gw - 20 - sw - 8, l = (int)strlen(mb);
+      while (l > 3 && s.textWidth(mb) > maxW) mb[--l] = 0;
+      s.setTextColor(mc); s.setCursor(gx + 10, gy + gh - 12); s.print(mb);
+    } }
 
   // ---- tombol ----
   wsBtn(s, 0, wsRun ? "Berhenti" : "Mulai", wsRun ? T().danger : T().accent, true);
   wsBtn(s, 1, "Kalibrasi", T().accent2, wsCal);
   wsBtn(s, 2, "-", T().accent, false);
   wsBtn(s, 3, "+", T().accent, false);
-  { int x, w; wsBtnRect(3, &x, &w); int x2, w2; wsBtnRect(2, &x2, &w2);   // indikator sensitivitas di tengah pasangan -/+
-    s.setTextSize(1); s.setTextColor(T().subtext);
-    snprintf(b, sizeof(b), "Sens %d/5", wsSens + 1);
-    int tw = s.textWidth(b); s.setCursor(x2 + (x + w - x2 - tw) / 2, wsBtnY() - 11); s.print(b); }
+  // WSENSE_TIDY_V1: indikator 'Sens n/5' sekarang ada di strip bawah grafik
 
   drawBack(s);
   drawToast(s);
