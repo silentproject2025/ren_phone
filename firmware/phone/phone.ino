@@ -4189,7 +4189,7 @@ void drawKb(LGFX_Sprite& s){
       String d=*kbTarget; bool empty=(d.length()==0);
       if(d.length()>80) d=d.substring(d.length()-80);
       if(fk==2 && d.length()>6){ String m; for(int i=0;i<(int)d.length()-6;i++) m+="*"; m+=d.substring(d.length()-6); d=m; }
-      if(empty) d = (fk==1) ? String("Ketik pertanyaan...") : String("Tempel/ketik API key...");
+      if(empty) d = (fk==1) ? String("Ketik pertanyaan...") : (fk==3 ? String("Ketik nama branch...") : String("Tempel/ketik API key..."));
       int maxW=bw-20;
       while(d.length()>1 && s.textWidth(d.c_str())>maxW){          // tampilkan UJUNG teks
         d.remove(0,1);
@@ -10799,6 +10799,7 @@ int kbFloatKind(){
   if(!kbTarget) return 0;
   if(kbTarget==&aiPrompt) return 1;
   if(kbTarget==&geminiApiKey) return 2;
+  if(otaIsNewBranchTarget(kbTarget)) return 3;   // KB_FLOAT_BRANCH_V1
   return 0;
 }
 void kbFloatTap(int x,int y){

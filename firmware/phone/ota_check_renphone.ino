@@ -236,6 +236,9 @@ void otaChannelCycle() {
   needRedraw = true;
 }
 
+// KB_FLOAT_BRANCH_V1: true bila keyboard sedang mengetik nama branch baru (dipakai kbFloatKind() di phone.ino)
+bool otaIsNewBranchTarget(String* t) { return t == &otaNewBranch; }
+
 // buka keyboard utk mengetik nama branch baru
 void otaAddBranchBegin() {
   otaChanLoad();
