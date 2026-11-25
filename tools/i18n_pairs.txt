@@ -937,3 +937,8 @@ Belum diatur ::: Not set
 Belum ada foto ::: No photo
 Yakin? Ketuk lagi ::: Sure? Tap again
 kali ::: times
+# --- Notifikasi (NOTIF_UX_V2) ---
+baru saja ::: just now
+mnt lalu ::: min ago
+jam lalu ::: h ago
+hari lalu ::: d ago

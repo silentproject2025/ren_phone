@@ -80,6 +80,7 @@ When a charger is plugged in, the lock screen shows a small black hole with an a
 | **Per-app grouping** | Notifications from the same app are merged into one row (the newest) with a count chip. Tap the chip to open/close the group; rows below slide smoothly. |
 | **Swipe to dismiss** | Swipe a row left/right past one third of the screen width (or flick quickly). On a parent row the whole group is removed; on a child row only that entry. A light vibration fires once when crossing the threshold. |
 | **Quick actions** | Long-press a row (~0.45 s, finger still): **Open** (if the notification has a linked app), **Delete**, **Cancel**. Tap outside the row to cancel. |
+| **Scrolling and feedback** | The list glides after a flick; touching it stops the glide without a tap. The pressed row is highlighted. Tap the title to jump to the top. Notifications under one minute old have an accent dot, and age labels refresh every 15 s. A notification without a linked app does not close the shade; for such a group, tap the row to open or close it. |
 | **Switcher card previews** | A 64×48 thumbnail of the app's last screen, captured from the canvas just before leaving the app. At most 8 thumbnails in PSRAM; they disappear on reboot or when the card is closed. Disable with `-DSW_THUMB_ENABLE=0` if the capture seems to hold up transitions. |
 | **Close all** | A chip at the top right of the Switcher; equivalent to swiping up each card (the app's RAM cache is released too). |
 

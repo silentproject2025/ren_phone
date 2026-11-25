@@ -901,5 +901,9 @@ static const I18nPair I18N_DICT[] = {
   { "Belum diatur", "Not set" },
   { "Belum ada foto", "No photo" },
   { "kali", "times" },
+  { "baru saja", "just now" },
+  { "mnt lalu", "min ago" },
+  { "jam lalu", "h ago" },
+  { "hari lalu", "d ago" },
 };
 static const int I18N_DICT_N = (int)(sizeof(I18N_DICT)/sizeof(I18N_DICT[0]));

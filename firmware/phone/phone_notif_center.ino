@@ -1,5 +1,5 @@
 // =================================================================
-// phone_notif_center.ino  (v90)
+// phone_notif_center.ino  (v90)  [NOTIF_UX_V2]
 // Notification Shade + antrean Dynamic Island + context menu ketuk-lama.
 //
 // SENGAJA dinamai "phone_notif_center" (bukan "notif_center") supaya
@@ -235,6 +235,11 @@ int   nsActRow=-1;                // baris yg menampilkan bar aksi cepat
 bool  nsLongFired=false;
 float nsRowOff[NOTIF_HIST_MAX];   // offset piksel (+ = tertahan di bawah slotnya) -> baris naik halus saat ada yg hilang
 unsigned long nsOffLastMs=0;
+// NOTIF_UX_V2: scroll meluncur, penghenti-ketukan, penyegar label usia
+float nsVel=0;                    // kecepatan scroll (px/ms, + = isi bergerak naik)
+bool  nsGlide=false;              // sedang meluncur setelah jari diangkat
+bool  nsStopTap=false;            // sentuhan ini dipakai menghentikan luncuran -> bukan ketukan
+unsigned long nsVelT=0, nsAgeT=0;
 
 // Hapus 1 baris tampil: induk -> SELURUH grup, anak -> entri itu saja. Baris di bawahnya naik halus.
 void nsDeleteRow(int r){
@@ -294,6 +299,7 @@ void openNotifShade(){
   nsAnimStartMs=millis(); nsAnimating=true;
   nsScrollY=0; nsPressedRow=-1; nsIsSwiping=false; // v91: tiap dibuka, mulai dari atas & bersih dari sisa state sentuhan sblmnya
   nsSwipeRow=-1; nsSwipeH=false; nsSwipeDx=0; nsOutRow=-1; nsActRow=-1; nsLongFired=false; // v133
+  nsGlide=false; nsVel=0; nsStopTap=false; nsAgeT=millis(); // NOTIF_UX_V2
   for(int i=0;i<NOTIF_HIST_MAX;i++) nsRowOff[i]=0.0f;
   needRedraw=true;
 }
@@ -301,6 +307,7 @@ void closeNotifShade(){
   nsAnimFromH=nsOffset; nsAnimToH=0.0f;
   nsAnimStartMs=millis(); nsAnimating=true;
   nsActRow=-1; // v133: bar aksi tidak dibawa ke pembukaan berikutnya
+  nsGlide=false; // NOTIF_UX_V2
   needRedraw=true;
 }
 
@@ -320,11 +327,21 @@ void nsRowsTick(){
     if(fabsf(nsSwipeDx)<1.0f){ nsSwipeDx=0; nsSwipeRow=-1; }
     needRedraw=true;
   }
+  if(now-nsAgeT>=15000UL){ nsAgeT=now; needRedraw=true; }   // NOTIF_UX_V2: label usia & titik "baru" menyegar
   float k=expf(-dt/62.0f); bool any=false;
   for(int i=0;i<NOTIF_HIST_MAX;i++){
     if(nsRowOff[i]>0.0f){ nsRowOff[i]*=k; if(nsRowOff[i]<0.5f) nsRowOff[i]=0.0f; else any=true; }
   }
   if(any){ uiBoostKick(); needRedraw=true; }
+  if(nsGlide){            // NOTIF_UX_V2: scroll meluncur setelah jari diangkat
+    float mx=(float)nsMaxScroll();
+    float nx=nsScrollY+nsVel*dt;
+    if(nx<0.0f || nx>mx){ nx=(nx<0.0f)?0.0f:mx; nsVel=0.0f; }
+    nsScrollY=nx;
+    nsVel*=expf(-dt/240.0f);
+    if(fabsf(nsVel)<0.02f){ nsGlide=false; nsVel=0.0f; }
+    uiBoostKick(); needRedraw=true;
+  }
   if(nsOutRow<0 && !nsSwipeH) nsRetarget();       // isi berubah -> tinggi panel menyusul
 }
 // Dipanggil TIAP frame dari loop() (phone.ino), pola sama dgn blok
@@ -358,10 +375,11 @@ void nsActGeom(int n,int i,int& x,int& w){
   w=(SCR_W-20-(n-1)*gap)/n;
   x=10+i*(w+gap);
 }
-static void nsAgeStr(unsigned long ageMs,char* out,size_t sz){
-  if(ageMs<60000UL) snprintf(out,sz,"baru saja");
-  else if(ageMs<3600000UL) snprintf(out,sz,"%lu mnt lalu",ageMs/60000UL);
-  else snprintf(out,sz,"%lu jam lalu",ageMs/3600000UL);
+static void nsAgeStr(unsigned long ageMs,char* out,size_t sz){   // NOTIF_UX_V2: diterjemahkan + hari
+  if(ageMs<60000UL) snprintf(out,sz,"%s",RPTR("baru saja"));
+  else if(ageMs<3600000UL) snprintf(out,sz,"%lu %s",ageMs/60000UL,RPTR("mnt lalu"));
+  else if(ageMs<86400000UL) snprintf(out,sz,"%lu %s",ageMs/3600000UL,RPTR("jam lalu"));
+  else snprintf(out,sz,"%lu %s",ageMs/86400000UL,RPTR("hari lalu"));
 }
 
 void drawNotifShade(LGFX_Sprite& s){
@@ -372,12 +390,26 @@ void drawNotifShade(LGFX_Sprite& s){
   drawGlassPanel(s, 0,0,SCR_W,ph,rad, T().surface, 200);
   nyxAaRR(s, SCR_W/2-14,ph-9,28,4,2,T().divider);
 
-  s.setTextColor(T().text); s.setTextSize(1);
-  s.setCursor(10,8); s.print(RPTR("Notifikasi"));
+  s.setClipRect(0,0,SCR_W,ph);   // NOTIF_UX_V2: isi tidak bocor di bawah panel saat animasi buka/tutup
+  s.setTextSize(1);
+  const char* ttl=RPTR("Notifikasi");
+  uiText(s,10,8,ttl,T().text,false,true);
+  if(notifHistCount>0){   // chip jumlah notifikasi di sebelah judul
+    char cb[8]; snprintf(cb,sizeof(cb),"%d",notifHistCount);
+    int cw=(int)s.textWidth(cb)+14, cx0=10+(int)s.textWidth(ttl)+10;
+    nyxAaRR(s, cx0,5,cw,15,7,T().accent);
+    s.setTextColor(0xFFFF); s.setCursor(cx0+7,8); s.print(cb);
+  }
 
   if(nsRowN==0){
+    int bx=SCR_W/2, by=40; uint16_t bc=T().divider;   // lonceng sederhana
+    nyxAaCircle(s, bx,by-8,2,bc);
+    nyxAaCircle(s, bx,by,8,bc);
+    nyxAaRR(s, bx-10,by+1,20,7,3,bc);
+    nyxAaCircle(s, bx,by+11,2,bc);
+    const char* em=RPTR("Tidak ada notifikasi");
     s.setTextColor(T().subtext); s.setTextSize(1);
-    s.setCursor(10,32); s.print(RPTR("Tidak ada notifikasi"));
+    s.setCursor(SCR_W/2-(int)s.textWidth(em)/2, by+22); s.print(em);
   } else {
     int rowTop=NS_HEAD_H;
     int btnY=ph-32;
@@ -426,6 +458,9 @@ void drawNotifShade(LGFX_Sprite& s){
         continue;
       }
 
+      if(nsPressedRow==r && dx==0){   // NOTIF_UX_V2: sorot baris yg ditekan (hanya yg bereaksi pada ketukan)
+        if(n.hasLink || (rw.head && rw.cnt>1)) s.fillRectAlpha(8,y+2,SCR_W-16,NS_ROW_H-4,38,T().accent);
+      } else if(child) s.fillRectAlpha(8,y+2,SCR_W-16,NS_ROW_H-4,22,T().surface2);
       int iconR = child ? 9 : 13;
       int cx = 10+iconR+(child?16:0)+dx, cy=y+NS_ROW_H/2;
       if(!child && n.hasLink){
@@ -442,9 +477,11 @@ void drawNotifShade(LGFX_Sprite& s){
       while(t.length()>2 && s.textWidth(t.c_str())>maxW) t = t.substring(0,t.length()-3)+"..";
       s.setTextColor(child ? T().subtext : T().text); s.setTextSize(1);
       s.setCursor(tx0, y+NS_ROW_H/2-9); s.print(t.c_str());
-      char ageStr[14]; nsAgeStr(nowMs-n.ts,ageStr,sizeof(ageStr));
-      s.setTextColor(T().subtext);
-      s.setCursor(tx0, y+NS_ROW_H/2+3); s.print(ageStr);
+      char ageStr[16]; nsAgeStr(nowMs-n.ts,ageStr,sizeof(ageStr));
+      bool isNew=(nowMs-n.ts)<60000UL;   // NOTIF_UX_V2: titik aksen < 1 menit
+      if(isNew) nyxAaCircle(s, tx0+3,y+NS_ROW_H/2+7,3,T().accent);
+      s.setTextColor(isNew ? T().accent : T().subtext);
+      s.setCursor(tx0+(isNew?10:0), y+NS_ROW_H/2+3); s.print(ageStr);
 
       // chip "N v" -- ketuk utk buka/tutup grup
       if(rw.head && rw.cnt>1){
@@ -459,7 +496,7 @@ void drawNotifShade(LGFX_Sprite& s){
       }
       s.drawFastHLine(8, y+NS_ROW_H-2, SCR_W-16, T().divider);
     }
-    s.clearClipRect();
+    s.setClipRect(0,0,SCR_W,ph);   // NOTIF_UX_V2: kembali ke klip panel
     int maxS = nsMaxScroll();
     if(maxS>0){
       int trackH = viewportBottom-rowTop;
@@ -477,6 +514,7 @@ void drawNotifShade(LGFX_Sprite& s){
   const char* clearLbl="Bersihkan Semua";
   int clw=s.textWidth(clearLbl);
   s.setCursor(SCR_W/2-clw/2, btnY+7); s.print(clearLbl);
+  s.clearClipRect();   // NOTIF_UX_V2
 }
 
 // v91: DIPISAH jadi 2 fungsi -- notifShadeTap() (logika TAP, hanya jalan pas jari
@@ -522,13 +560,17 @@ void notifShadeTap(int x,int y){
     return;
   }
 
+  if(y<rowTop){   // NOTIF_UX_V2: ketuk judul = lompat ke paling atas
+    if(nsScrollY>0.0f){ nsScrollY=0.0f; nsGlide=false; needRedraw=true; }
+    return;
+  }
   if(y>=rowTop && nsRowN>0){
     int idx = (y-rowTop+(int)nsScrollY)/NS_ROW_H;
     if(idx>=0 && idx<nsRowN){
       NsRow rw=nsRows[idx];
       NotifEntry &n=notifHist[rw.hist];
       // chip hitungan di kanan -> buka/tutup grup (baris di bawahnya naik halus saat menutup)
-      if(rw.head && rw.cnt>1 && x>=SCR_W-10-40){
+      if(rw.head && rw.cnt>1 && (x>=SCR_W-10-40 || !n.hasLink)){   // NOTIF_UX_V2: tanpa app tertaut, ketuk di mana saja = buka/tutup grup
         int before=nsRowN;
         nsExpToggleIdx(rw.hist);
         nsBuildRows();
@@ -543,6 +585,7 @@ void notifShadeTap(int x,int y){
         return;
       }
       bool hasLink=n.hasLink; Screen target=n.linkScreen;
+      if(!hasLink) return;   // NOTIF_UX_V2: tanpa app tertaut -> shade tetap terbuka (dulu menutup tanpa hasil)
       closeNotifShade();
       if(hasLink) navPush(target); // otomatis dapat transisi mulus yg sama dgn buka app dari Home/dock
       return;
@@ -561,6 +604,7 @@ void notifShadeInput(bool touched, bool newT, int tx, int ty){
   if(newT){
     nsTouchStartX=tx; nsTouchStartY=ty; nsTouchLastY=ty;
     nsIsSwiping=false; nsSwipeH=false; nsLongFired=false; nsTouchStartMs=millis();
+    nsStopTap=nsGlide; nsGlide=false; nsVel=0.0f; nsVelT=nsTouchStartMs;   // NOTIF_UX_V2: menyentuh saat meluncur = berhenti, bukan ketukan
     // baris yg sedang terlempar keluar: abaikan sentuhan baru sampai animasinya kelar
     if(nsOutRow>=0){ nsPressedRow=-1; return; }
     if(ty>=rowTop && ty<viewportBottom && nsRowN>0){
@@ -605,6 +649,9 @@ void notifShadeInput(bool touched, bool newT, int tx, int ty){
       needRedraw=true;
     } else if(nsIsSwiping){
       float delta=(float)(nsTouchLastY-ty);
+      { unsigned long nw=millis(), dtv=nw-nsVelT;   // NOTIF_UX_V2: kecepatan jari (dihaluskan)
+        if(dtv>0) nsVel=nsVel*0.6f+(delta/(float)dtv)*0.4f;
+        nsVelT=nw; }
       nsScrollY += delta;
       float maxS=(float)nsMaxScroll();
       if(nsScrollY<0) nsScrollY=0;
@@ -625,9 +672,14 @@ void notifShadeInput(bool touched, bool newT, int tx, int ty){
       vibTap();               // notif hilang permanen -> konfirmasi (sama dgn kartu di App Switcher)
       nsStartOut(nsSwipeRow, nsSwipeDx<0?-1:1, nsSwipeDx);
     }                         // else: dibiarkan, nsRowsTick() yg membalikkan baris
-  } else if(!nsLongFired && !nsIsSwiping && millis()-nsTouchStartMs<400){
+  } else if(!nsLongFired && !nsIsSwiping && !nsStopTap && millis()-nsTouchStartMs<400){
     notifShadeTap(nsTouchStartX,nsTouchStartY);
   }
+  if(nsIsSwiping){   // NOTIF_UX_V2: lepas saat menggeser -> luncur kalau cukup cepat
+    if(millis()-nsVelT>90) nsVel=0.0f;
+    if(fabsf(nsVel)>0.12f && nsMaxScroll()>0) nsGlide=true;
+  }
+  nsStopTap=false;
   nsPressedRow=-1; nsIsSwiping=false; nsLongFired=false;
   needRedraw=true;
 }
@@ -728,10 +780,7 @@ void lockNotifDraw(LGFX_Sprite& s,int lift,uint16_t fg,uint16_t fg2){
     String t=e.title; int maxCh=(w-62)/6; if((int)t.length()>maxCh) t=t.substring(0,maxCh-2)+"..";
     s.setTextSize(1);
     uiText(s,x+44,cy-11,t.c_str(),fg,false,true);   // LOCK_UX_V2: judul tebal
-    char ageStr[16];
-    if(age<60000UL) strcpy(ageStr,"baru saja");
-    else if(age<3600000UL) snprintf(ageStr,sizeof(ageStr),"%lu mnt lalu",age/60000UL);
-    else snprintf(ageStr,sizeof(ageStr),"%lu jam lalu",age/3600000UL);
+    char ageStr[16]; nsAgeStr(age,ageStr,sizeof(ageStr));   // NOTIF_UX_V2: sama dgn shade (diterjemahkan)
     s.setTextColor(fg2); s.setCursor(x+44,cy+3); s.print(ageStr);
   }
   // LOCK_UX_V2: ada notifikasi yg tidak muat -> pil kecil "+N lagi" di bawah kartu terakhir (kalau ada tempat)
