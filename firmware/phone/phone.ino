@@ -5229,10 +5229,7 @@ bool screenHasEdgeBack(Screen sc){
   }
 }
 bool backHidden(){
-  Screen c=curScreen();
-  if(!screenHasEdgeBack(c)) return false;
-  if(c==SCR_GALLERY && galInViewer()) return false;
-  return true;
+  return true;   // NO_BACK_PILL_V1: pil "Kembali" dihapus di semua layar (tinggal home bar + gestur)
 }
 
 void drawBack(LGFX_Sprite& s){
