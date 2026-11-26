@@ -1782,6 +1782,58 @@ static void musTrunc(char* nm, int maxc) {
 }
 
 // ---- cover: warna unik per judul + piringan hitam berputar ----
+// MUS_POSTER_V1: poster geometris datar. Pola + warna dari hash judul; semua bentuk dipotong ke kotak cover.
+static void musPoster(LGFX_Sprite& s, int x, int y, int S, uint32_t h) {
+  int i0 = (int)(h % 8), i1 = (i0 + 2 + (int)((h / 8) % 5)) % 8;     // i1 selalu beda dari i0
+  uint16_t c0 = MUS_CVPAL[i0], c1 = MUS_CVPAL[i1];
+  uint16_t paper = MUS_RGB(240, 234, 220), ink = MUS_RGB(26, 26, 30);
+  int L = (int)((h / 64) % 6), hs = S / 2;
+  s.fillRect(x, y, S, S, c0);
+  s.setClipRect(x, y, S, S);
+  switch (L) {
+    case 0:   // lingkaran besar + kotak ink + garis kertas
+      nyxAaCircle(s, x + S * 60 / 100, y + S * 56 / 100, S * 34 / 100, c1);
+      s.fillRect(x + S / 10, y + S / 10, S / 4, S / 4, ink);
+      s.fillRect(x, y + S * 82 / 100, S, S / 10, paper);
+      break;
+    case 1:   // segitiga diagonal + lingkaran kertas
+      s.fillTriangle(x, y, x + S, y, x, y + S, c1);
+      nyxAaCircle(s, x + S * 62 / 100, y + S * 62 / 100, S / 4, paper);
+      s.fillRect(x + S * 70 / 100, y + S / 10, S / 6, S / 6, ink);
+      break;
+    case 2:   // setengah lingkaran di atas alas ink bergaris
+      nyxAaCircle(s, x + hs, y + S * 56 / 100, S * 36 / 100, c1);
+      s.fillRect(x, y + S * 56 / 100, S, S - S * 56 / 100, ink);
+      for (int k = 0; k < 3; k++) s.fillRect(x, y + S * 66 / 100 + k * (S / 10), S, 2, c0);
+      break;
+    case 3:   // grid 2x2 ala Bauhaus
+      s.fillRect(x, y, hs, hs, paper);
+      nyxAaCircle(s, x + hs / 2, y + hs / 2, hs * 35 / 100, ink);
+      s.fillRect(x + hs, y, S - hs, hs, c1);
+      s.fillTriangle(x + hs, y + hs, x + S, y + hs, x + S, y, ink);
+      s.fillRect(x, y + hs, hs, S - hs, ink);
+      s.setClipRect(x, y + hs, hs, S - hs);
+      nyxAaCircle(s, x + hs, y + S, hs * 90 / 100, c1);             // seperempat lingkaran
+      s.setClipRect(x, y, S, S);
+      nyxAaCircle(s, x + hs + hs / 2, y + hs + hs / 2, hs / 4, paper);
+      break;
+    case 4:   // lingkaran bersarang di sudut
+      nyxAaCircle(s, x + S * 30 / 100, y + S * 70 / 100, S * 48 / 100, c1);
+      nyxAaCircle(s, x + S * 30 / 100, y + S * 70 / 100, S * 32 / 100, paper);
+      nyxAaCircle(s, x + S * 30 / 100, y + S * 70 / 100, S * 14 / 100, ink);
+      break;
+    default: { // pita vertikal + lingkaran
+      int bw = S / 6;
+      s.fillRect(x + bw, y, bw, S, ink);
+      s.fillRect(x + 3 * bw, y, bw, S, paper);
+      s.fillRect(x + 5 * bw - bw / 2, y, bw / 2, S, c1);
+      nyxAaCircle(s, x + S * 55 / 100, y + S * 40 / 100, S / 5, c1);
+      break;
+    }
+  }
+  s.clearClipRect();
+}
+
 static void musDrawCover(LGFX_Sprite& s, bool playing, const char* title) {   // MUS_FLAT_V1
   int x = mCovX, y = mCovY, S = mCovS;
   s.fillRect(x + 4, y + 4, S, S, T().accent);          // bayangan keras: blok datar, bukan blur
@@ -1798,25 +1850,7 @@ static void musDrawCover(LGFX_Sprite& s, bool playing, const char* title) {   //
   }
   uint32_t hsh = 5381;
   for (const char* q = title; *q; q++) hsh = hsh * 33 + (uint8_t)*q;
-  uint16_t col = MUS_CVPAL[hsh % 8];                // satu warna solid per judul
-  s.fillRect(x, y, S, S, col);
-
-  int cx = x + S / 2, cy = y + S / 2, R = (S * 44) / 100;
-  nyxAaCircle(s, cx, cy, R, 0x1082);
-  for (int g = 6; g < R - 8; g += 6) nyxAaCircleRing(s, cx, cy, R - g, 0x2124);
-  uint32_t now = millis();
-  float dt = (now - musAnimMs) / 1000.f; if (dt > 0.25f) dt = 0.25f;
-  musAnimMs = now;
-  if (playing) musDiscAng += dt * 150.f;
-  if (musDiscAng > 360.f) musDiscAng -= 360.f;
-  for (int k = 0; k < 2; k++) {
-    float a = (musDiscAng + k * 180.f) * 0.0174533f;
-    float ca = cosf(a), sa = sinf(a);
-    s.drawLine(cx + (int)(ca * R * 0.5f), cy + (int)(sa * R * 0.5f),
-               cx + (int)(ca * (R - 2)),  cy + (int)(sa * (R - 2)), 0x52AA);
-  }
-  nyxAaCircle(s, cx, cy, (R * 38) / 100, col);
-  nyxAaCircle(s, cx, cy, 3, 0x1082);
+  musPoster(s, x, y, S, hsh);                       // MUS_POSTER_V1: poster geometris per judul
 }
 
 static void musDrawEq(LGFX_Sprite& s, bool playing) {   // MUS_FLAT_V1: batang kotak, satu warna
