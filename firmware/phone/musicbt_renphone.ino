@@ -713,6 +713,56 @@ static bool musCoverPush(int dw, int dh) {
   return true;
 }
 
+// COVER_PJPG_V1: JPEG progressive lewat stb_image (JPEGDEC hanya baseline). AKTIF HANYA kalau firmware/phone/stb_image.h ada
+// (unduh dari github.com/nothings/stb); kalau tidak ada, build tetap jalan dan progressive tetap dilewati.
+// Hanya dipanggil sebagai cadangan setelah JPEGDEC gagal. Memori di PSRAM; gambar > 700 ribu piksel dilewati.
+#if defined(__has_include)
+#if __has_include("stb_image.h")
+#define MUS_HAVE_STB 1
+#endif
+#endif
+#ifdef MUS_HAVE_STB
+#define STBI_ONLY_JPEG
+#define STBI_NO_STDIO
+#define STBI_NO_LINEAR
+#define STBI_NO_HDR
+#define STBI_MALLOC(sz)        heap_caps_malloc((sz), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)
+#define STBI_REALLOC(p, sz)    heap_caps_realloc((p), (sz), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)
+#define STBI_FREE(p)           heap_caps_free(p)
+#define STB_IMAGE_IMPLEMENTATION
+#include "stb_image.h"
+static bool musDecodeProgJpeg(uint8_t* img, uint32_t len) {
+  int w = 0, h = 0, comp = 0;
+  if (!stbi_info_from_memory(img, (int)len, &w, &h, &comp) || w < 8 || h < 8 || (long)w * (long)h > 700000L) return false;
+  uint8_t* rgb = (uint8_t*)stbi_load_from_memory(img, (int)len, &w, &h, &comp, 3);
+  if (!rgb) return false;
+  int sh = (w < h) ? w : h;
+  int f = sh / MUS_COVER_SZ; if (f < 1) f = 1;                    // skala bulat: rata-rata blok f x f
+  int dw = w / f, dh = h / f;
+  bool ok = false;
+  musCvTmp.deleteSprite();
+  musCvTmp.setPsram(true);
+  if (dw > 0 && dh > 0 && musCvTmp.createSprite(dw, dh)) {
+    for (int y = 0; y < dh; y++) {
+      for (int x = 0; x < dw; x++) {
+        uint32_t r = 0, g = 0, b = 0;
+        for (int yy = 0; yy < f; yy++) {
+          const uint8_t* p = rgb + ((size_t)(y * f + yy) * (size_t)w + (size_t)(x * f)) * 3;
+          for (int xx = 0; xx < f; xx++, p += 3) { r += p[0]; g += p[1]; b += p[2]; }
+        }
+        uint32_t n = (uint32_t)(f * f);
+        musCvTmp.drawPixel(x, y, musCvTmp.color565((uint8_t)(r / n), (uint8_t)(g / n), (uint8_t)(b / n)));
+      }
+      if ((y & 15) == 15) vTaskDelay(1);                           // beri napas ke task lain
+    }
+    ok = musCoverPush(dw, dh);
+  }
+  musCvTmp.deleteSprite();
+  stbi_image_free(rgb);
+  return ok;
+}
+#endif
+
 // decode satu gambar cover (JPEG baseline atau PNG) di buffer RAM. false = format tak dikenal / progressive / gagal.
 static bool musDecodeCoverBuf(uint8_t* img, uint32_t len) {
   bool ok = false;
@@ -754,6 +804,9 @@ static bool musDecodeCoverBuf(uint8_t* img, uint32_t len) {
       musCvTmp.deleteSprite();
     }
   }
+#ifdef MUS_HAVE_STB
+  if (!ok && len >= 4 && img[0] == 0xFF && img[1] == 0xD8) ok = musDecodeProgJpeg(img, len);   // COVER_PJPG_V1: progressive
+#endif
   return ok;
 }
 
