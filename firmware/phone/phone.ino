@@ -12853,7 +12853,7 @@ void mjpegPlayRelay(){   // RELAY_STREAM_V3 (termasuk RELAY_DISCOVER_V1): status
 
   msg("Menyambung ke relay", hp, 0xFFFF);
   WiFiClient rc;
-  rc.setTimeout(4);
+  rc.setTimeout(4000);   // RELAY_TIMEOUT_V1: milidetik (dulu 4 = 4 ms -> 'Relay kosong' / 0 frame)
   if(!rc.connect(host.c_str(), port, 4000)){
     Serial.printf("[RELAY] gagal connect %s:%u\n", host.c_str(), (unsigned)port);
     bye("Relay tak terjangkau", hp);
