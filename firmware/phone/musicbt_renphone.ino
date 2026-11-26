@@ -101,6 +101,31 @@ static volatile bool     musExtFinish = false;           // player sudah selesai
 static volatile bool     musExtFinSent = false;
 static volatile bool     musExtEndedFlag = false;        // CAM melapor audio habis diputar
 
+// ---- BT_NET_V1: lagu online (Jamendo) lewat TWS ----
+// Task download (mbTaskFn, di bawah) mengisi ring musExtRing di atas; musTask mengirimnya ke CAM (jalur yg sama dgn AVI).
+static volatile bool     musNetBt  = false;             // sesi online sekarang memakai jalur BT (ring -> CAM)
+static volatile bool     mbReady   = false;             // ring sudah di-reset utk sesi ini -> musTask boleh mulai memompa
+static volatile bool     mbFailF   = false;             // download gagal sebelum ada byte (musTask menampilkan toast)
+static volatile bool     mbIdle    = true;              // task download tidak memegang koneksi
+static volatile bool     mbUrlOk   = false;             // mbUrl valid (ditulis penuh)
+static volatile uint32_t mbCmdSeq  = 0;                 // naik tiap start/stop dari musTask
+static char              mbUrl[256] = {0};
+static TaskHandle_t      mbTaskH   = nullptr;
+static StaticTask_t      mbTCB;
+static StackType_t*      mbStack   = nullptr;
+static bool musNetBtStart(const char* url);             // definisi di bagian API audio eksternal
+static void musNetBtHalt(bool wait) {
+  musNetBt = false; mbReady = false; mbUrlOk = false;
+  if (!mbTaskH) return;
+  __sync_synchronize();
+  mbCmdSeq++;
+  if (wait) {                                           // dipanggil dari thread UI (musExtBegin): tunggu koneksi lepas, lalu beri musTask waktu menuntaskan iterasi pompa
+    uint32_t t0 = millis();
+    while (!mbIdle && millis() - t0 < 600) delay(5);
+    delay(15);
+  }
+}
+
 // ---- milik S3 ----
 static std::vector<String> musList;
 static volatile int  musCur = 0;
@@ -422,6 +447,7 @@ static void musBtFfClose() {
 static void musCloseFile() {
   if (musFile) musFile.close();
   musBtFfClose();
+  musNetBtHalt(false);                          // BT_NET_V1: hentikan download lagu online (no-op kalau tidak ada)
 }
 // baca satu blok 4 KB utk dikirim ke CAM. >0 byte, 0/-1 = habis, -2 = worker FFat sedang tidak merespons (coba lagi)
 static int musBtReadBlk() {
@@ -700,11 +726,12 @@ static int musNetNext(int dir, bool autoNext) {
   if (nx < 0) nx = n - 1;
   return nx;
 }
-// JAM_UI_V1: putar lagu online ke-idx lewat spkTask (hanya output speaker)
+// JAM_UI_V1: putar lagu online ke-idx. BT_NET_V1: output SPK = spkTask; output BT = mbTaskFn -> ring -> CAM -> TWS
 static bool musStartNet(int idx, int prevHow) {
   int n = jamCount();
   if (n <= 0)    { musToast("Daftar online kosong"); return false; }
-  if (!musOutSpk) { musToast("Online butuh output SPK"); return false; }
+  if (!musOutSpk && !musCamAlive) { musToast("Modul BT tidak terdeteksi"); return false; }   // BT_NET_V1
+  if (!musOutSpk && !musBtConn)   { musToast("TWS belum terhubung"); return false; }
   if (WiFi.status() != WL_CONNECTED) { musToast("WiFi belum terhubung"); return false; }
   if (idx < 0) idx = n - 1;
   if (idx >= n) idx = 0;
@@ -715,7 +742,13 @@ static bool musStartNet(int idx, int prevHow) {
   musCredit = 0; musSentSince = 0;
   strncpy(musNetTitle,  jamTitle(idx),  sizeof(musNetTitle) - 1);  musNetTitle[sizeof(musNetTitle) - 1] = 0;
   strncpy(musNetArtist, jamArtist(idx), sizeof(musNetArtist) - 1); musNetArtist[sizeof(musNetArtist) - 1] = 0;
-  if (!spkPlayUrl(jamUrl(idx))) { musToast("Speaker gagal dimulai"); return false; }
+  if (musOutSpk) {
+    if (!spkPlayUrl(jamUrl(idx))) { musToast("Speaker gagal dimulai"); return false; }
+  } else {                                      // BT_NET_V1
+    uint8_t sq = musSeq;
+    if (!musNetBtStart(jamUrl(idx))) { musToast("Stream online gagal dimulai"); return false; }
+    rpSend(Serial1, RP_BEGIN, &sq, 1);
+  }
   musNetMode = true; musNetCur = idx;
   musLoaded = true; musPaused = false; musEnded = false;
   musPlayedMs = 0; musStreaming = false; musFileDone = false;
@@ -1040,7 +1073,7 @@ static void musTask(void* arg) {
     if (musHello) {
       musHello = false;
       musFastFailed = false;                      // CAM baru boot (mungkin baru di-flash): boleh coba link cepat lagi
-      if (musLoaded) { musLoaded = false; musStreaming = false; musExt = false; musCloseFile(); musToast("Modul BT restart"); }
+      if (musLoaded) { musLoaded = false; musStreaming = false; musExt = false; musNetBtHalt(false); musCloseFile(); musToast("Modul BT restart"); }   // BT_NET_V1
       uint8_t v = (uint8_t)musVol; rpSend(Serial1, RP_VOLUME, &v, 1);
       if (!musBtOn) { uint8_t m = 0; rpSend(Serial1, RP_BTMODE, &m, 1); }
     } else if (musCamAlive && !prevAlive) {
@@ -1063,6 +1096,13 @@ static void musTask(void* arg) {
     MusReq rq;
     while (xQueueReceive(musQ, &rq, 0) == pdTRUE) musHandleReq(rq.t, rq.a, rq.s);
 
+    if (musNetBt && mbFailF) {                    // BT_NET_V1: download lagu online gagal sebelum ada byte
+      mbFailF = false;
+      musNetBtHalt(false);
+      musLoaded = false; musStreaming = false;
+      rpSend(Serial1, RP_STOP, nullptr, 0);
+      musToast("Stream online gagal");
+    }
     if (musOutSpk && musLoaded && !musExt) {      // output speaker: waktu putar & habis/gagal datang dari spkTask
       musPlayedMs = spkPlayedMs();
       if (spkTakePreempt()) { musLoaded = false; musStreaming = false; musWavMode = false; musToast("Musik dihentikan (telepon)"); }
@@ -1116,7 +1156,7 @@ static void musTask(void* arg) {
     }
 
     // ---- 6a. stream AVI: ring PSRAM -> CAM (kredit sama spt streaming file) ----
-    if (musExt && !musExtFinSent && musExtRing) {
+    if ((musExt || (musNetBt && mbReady)) && !musExtFinSent && musExtRing) {   // BT_NET_V1: ring dipakai AVI *atau* lagu online
       uint32_t avail = musExtHead - musExtTail;
       int32_t freeEst = (int32_t)musCredit - (int32_t)musSentSince;
       int32_t need = MUS_CREDIT_MIN;
@@ -1239,6 +1279,7 @@ int musExtBegin() {
     musExtRing = (uint8_t*)heap_caps_malloc(MUS_EXT_RING, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!musExtRing) return 4;
   }
+  musNetBtHalt(true);                              // BT_NET_V1: ring dipakai bersama; pastikan task download lepas dulu
   musExtHead = 0; musExtTail = 0;
   musExtFinish = false; musExtFinSent = false; musExtEndedFlag = false; musExtReady = false;
   musPost('E', 0, nullptr);
@@ -1288,6 +1329,158 @@ void musExtEnd()         { musPost('e', 0, nullptr); }
 // volume (0..127) utk pemutar AVI: sama dgn slider app Musik (musVol), langsung dikirim ke CAM lewat musTask
 int  musExtGetVol()      { return musVol; }
 void musExtSetVol(int v) { musSetVol(v); musPost('v', musVol, nullptr); }
+
+// =====================================================================
+//  BT_NET_V1 -- download lagu online -> ring PSRAM (dipompa musTask ke CAM -> TWS)
+//  Task ini satu-satunya yang menyentuh koneksi HTTP-nya; ring di-reset OLEH TASK INI
+//  setelah koneksi terbuka (musTask tidak memompa selama mbReady == false).
+//  Tag ID3v2 di awal file dibuang (cover JPEG di dalamnya bikin decoder CAM kerja sia-sia).
+// =====================================================================
+static void mbTaskFn(void* arg) {
+  uint8_t* buf = (uint8_t*)heap_caps_malloc(4096, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  if (!buf) { mbFailF = true; mbTaskH = nullptr; vTaskDelete(nullptr); return; }
+  HTTPClient*       http  = nullptr;
+  WiFiClientSecure* sec   = nullptr;
+  WiFiClient*       plain = nullptr;
+  WiFiClient*       str   = nullptr;
+  int32_t  len = -1;
+  uint32_t got = 0, pushed = 0, skipLeft = 0, lastRx = 0;
+  int      st = 0;                                  // 0 diam | 1 baca 10 byte pertama | 2 lompati ID3 | 3 alirkan ke ring
+  uint8_t  hdr[10]; int hn = 0;
+  uint32_t seen = mbCmdSeq;
+  char     url[256];
+
+  auto closeAll = [&]() {
+    if (http)  { http->end(); delete http; http = nullptr; }
+    if (sec)   { sec->stop(); delete sec; sec = nullptr; }
+    if (plain) { plain->stop(); delete plain; plain = nullptr; }
+    str = nullptr; st = 0; mbIdle = true;
+  };
+  auto enterStream = [&](bool writeHdr) {
+    if (seen != mbCmdSeq) return;                   // dibatalkan: loop atas menangani perintah baru
+    musExtHead = 0; musExtTail = 0; musExtFinish = false; musExtFinSent = false;
+    __sync_synchronize();
+    mbReady = true;                                 // mulai sekarang musTask boleh memompa
+    st = 3;
+    if (writeHdr) { musExtWrite(hdr, 10); pushed += 10; }
+  };
+
+  for (;;) {
+    if (seen != mbCmdSeq) {                         // ---- perintah baru dari musTask ----
+      seen = mbCmdSeq;
+      closeAll();
+      if (mbUrlOk) {
+        strncpy(url, mbUrl, sizeof(url) - 1); url[sizeof(url) - 1] = 0;
+        __sync_synchronize();
+        if (!mbUrlOk) continue;                     // URL sedang ditulis ulang -> tunggu perintah berikutnya
+        mbIdle = false;
+        bool ok = false;
+        if (WiFi.status() == WL_CONNECTED) {
+          bool tls = (strncmp(url, "https", 5) == 0);
+          http = new HTTPClient();
+          if (tls) { sec = new WiFiClientSecure(); sec->setInsecure(); } else { plain = new WiFiClient(); }
+          WiFiClient& c = tls ? (WiFiClient&)*sec : *plain;
+          http->setConnectTimeout(10000); http->setTimeout(8000);
+          http->setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+          http->setReuse(false);
+          if (http->begin(c, url)) ok = (http->GET() == 200);
+          if (ok) { str = http->getStreamPtr(); len = http->getSize(); got = 0; }
+        }
+        if (seen != mbCmdSeq) { closeAll(); continue; }   // dibatalkan saat membuka koneksi
+        if (!ok || !str) { closeAll(); mbFailF = true; continue; }
+        st = 1; hn = 0; pushed = 0; skipLeft = 0; lastRx = millis();
+      }
+    }
+    if (st == 0) { vTaskDelay(pdMS_TO_TICKS(20)); continue; }
+
+    size_t want = 4096;
+    if (st == 1) want = (size_t)(10 - hn);
+    else if (st == 2) want = skipLeft > 4096 ? 4096 : (size_t)skipLeft;
+    else {
+      uint32_t fr = musExtFree();
+      if (fr < 2048) { lastRx = millis(); vTaskDelay(pdMS_TO_TICKS(10)); continue; }   // ring penuh (jeda / CAM belum minta): jangan hitung sbg macet
+      if (want > fr) want = fr;
+    }
+
+    int r;                                          // >0 byte | 0 belum ada data | -1 selesai/putus/macet
+    {
+      int av = str->available();
+      if (len > 0 && got >= (uint32_t)len) r = -1;
+      else if (av > 0) {
+        if ((size_t)av < want) want = (size_t)av;
+        r = str->readBytes(buf, want);
+        if (r > 0) got += (uint32_t)r; else r = 0;
+      }
+      else if (!str->connected()) r = -1;
+      else r = 0;
+    }
+    if (r == 0) {
+      if (millis() - lastRx > 8000) r = -1;         // macet 8 dtk = anggap putus
+      else { vTaskDelay(pdMS_TO_TICKS(5)); continue; }
+    }
+    if (seen != mbCmdSeq) continue;                 // dibatalkan: loop atas menutup & mengganti sesi
+
+    if (r < 0) {
+      if (st == 3 && pushed > 0) musExtFinish = true;   // selesai (atau putus di tengah): habiskan yg sudah masuk ring
+      else mbFailF = true;                              // belum ada byte audio sama sekali
+      closeAll();
+      continue;
+    }
+    lastRx = millis();
+
+    if (st == 1) {
+      memcpy(hdr + hn, buf, (size_t)r); hn += r;
+      if (hn >= 10) {
+        if (hdr[0] == 'I' && hdr[1] == 'D' && hdr[2] == '3') {
+          skipLeft = ((uint32_t)(hdr[6] & 0x7F) << 21) | ((uint32_t)(hdr[7] & 0x7F) << 14) |
+                     ((uint32_t)(hdr[8] & 0x7F) << 7)  |  (uint32_t)(hdr[9] & 0x7F);
+          if (hdr[5] & 0x10) skipLeft += 10;        // ada footer ID3
+          if (skipLeft) st = 2; else enterStream(false);
+        } else {
+          enterStream(true);                        // bukan ID3: 10 byte tadi sudah audio, ikutkan
+        }
+      }
+      continue;
+    }
+    if (st == 2) {
+      skipLeft -= (uint32_t)r;
+      if (skipLeft == 0) enterStream(false);
+      continue;
+    }
+    uint32_t w = 0;                                 // st == 3
+    while (w < (uint32_t)r && seen == mbCmdSeq) {
+      uint32_t k = musExtWrite(buf + w, (uint32_t)r - w);
+      w += k;
+      if (!k) vTaskDelay(pdMS_TO_TICKS(10));
+    }
+    pushed += w;
+  }
+}
+static bool mbEnsureTask() {
+  if (mbTaskH) return true;
+  const uint32_t sb = 16384;                        // handshake TLS butuh stack besar (di PSRAM, seperti spkTask)
+  if (!mbStack) mbStack = (StackType_t*)heap_caps_aligned_alloc(16, sb, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  if (mbStack) mbTaskH = xTaskCreateStaticPinnedToCore(mbTaskFn, "mbNetTask", sb, NULL, 3, mbStack, &mbTCB, 0);
+  else         xTaskCreatePinnedToCore(mbTaskFn, "mbNetTask", sb, NULL, 3, &mbTaskH, 0);
+  return mbTaskH != nullptr;
+}
+// dipanggil dari musTask (musStartNet) saat output = BT. Return false = gagal mulai (RAM / task).
+static bool musNetBtStart(const char* url) {
+  if (!url || !url[0]) return false;
+  if (!musExtRing) {
+    musExtRing = (uint8_t*)heap_caps_malloc(MUS_EXT_RING, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!musExtRing) return false;
+  }
+  if (!mbEnsureTask()) return false;
+  musNetBt = true; mbReady = false; mbFailF = false; mbUrlOk = false;
+  musExtFinish = false; musExtFinSent = false;
+  strncpy(mbUrl, url, sizeof(mbUrl) - 1); mbUrl[sizeof(mbUrl) - 1] = 0;
+  __sync_synchronize();
+  mbUrlOk = true;
+  __sync_synchronize();
+  mbCmdSeq++;
+  return true;
+}
 
 // =====================================================================
 //  HOOK DARI phone.ino
@@ -1956,7 +2149,6 @@ static void musJamTouch(int x, int y) {
     int idx = musJamTop + r;
     if (idx >= n) break;
     if (musHit(x, y, 12, top + r * 30, SCR_W - 30, 28)) {
-      if (!musOutSpk) { showToast(RPTR("Online butuh output SPK (Cari TWS)")); return; }
       musPost('J', idx, nullptr); musPage = 0; vibTap(); needRedraw = true; return;
     }
   }
