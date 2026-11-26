@@ -3814,6 +3814,7 @@ void ptrPointerTick(bool touched,bool wasT,int tx,int ty); void ptrDraw(LGFX_Spr
 // UI-OVERHAUL: API musik utk widget Home/Lock (definisi di musicbt_renphone.ino)
 bool homeMusStarted(); bool homeMusLoaded(); bool homeMusPlaying(); float homeMusProgress();
 void homeMusTitle(char* out,int cap); void homeMusToggle(); void homeMusNext();
+bool homeMusCoverDraw(LGFX_Sprite& s,int x,int y,int size); // MUS_COVER_V2 (definisi di musicbt_renphone.ino)
 const char* homeGreeting(int hour);   // definisi di dekat drawHome
 uint16_t appIconInk(uint16_t c);      // definisi di dekat drawAppIcon
 // v33: forward decl manual -- parameter bertipe namespaced (lgfx::touch_point_t&)
@@ -4614,10 +4615,12 @@ void drawMusicMini(LGFX_Sprite& s,int x,int y,int w,int h,bool ctrl){
   bool started=homeMusStarted(), loaded=homeMusLoaded(), playing=homeMusPlaying();
   int cr=(h>=50)?19:15, ccx=x+14+cr;
   uint16_t disc=T().accent2;
-  nyxAaCircle(s, ccx,cy,cr,disc);
-  nyxAaCircleRing(s, ccx,cy,cr-4,blend565(disc,0x0000,90));
-  nyxAaCircle(s, ccx,cy,cr/3+1,blend565(disc,0xFFFF,130));
-  nyxAaCircle(s, ccx,cy,2,blend565(disc,0x0000,170));
+  if(!(started && homeMusCoverDraw(s, ccx-cr, cy-cr, cr*2))){ // MUS_COVER_V2: cover asli kalau ada, kalau tidak piringan
+    nyxAaCircle(s, ccx,cy,cr,disc);
+    nyxAaCircleRing(s, ccx,cy,cr-4,blend565(disc,0x0000,90));
+    nyxAaCircle(s, ccx,cy,cr/3+1,blend565(disc,0xFFFF,130));
+    nyxAaCircle(s, ccx,cy,2,blend565(disc,0x0000,170));
+  }
   int tx=ccx+cr+12;
   int pc,nc; homeMusBtnPos(x,w,pc,nc);
   int maxX=(ctrl&&started)?(pc-20):(x+w-34);

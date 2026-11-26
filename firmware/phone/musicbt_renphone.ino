@@ -488,6 +488,7 @@ static volatile bool musCoverReady = false;
 static volatile bool musCoverWant = false;
 static uint32_t      musCoverReqMs = 0;
 static char          musCoverPath[96];
+static uint16_t      musCoverTint = 0;                // MUS_COVER_V2: warna rata-rata cover (RGB565), 0 = belum ada
 
 static uint32_t musSynchsafe(const uint8_t* p) {
   return ((uint32_t)(p[0] & 0x7F) << 21) | ((uint32_t)(p[1] & 0x7F) << 14) |
@@ -585,56 +586,196 @@ static uint8_t* musReadApicPath(const char* path, uint32_t* outLen) {
   return img;
 }
 
+// MUS_COVER_V2: gambar cover di samping file lagu: <lagu>.jpg/.jpeg/.png, lalu cover/folder/album/front di folder yang sama.
+struct MusFfBlob { const char* path; uint8_t* img; uint32_t len; };
+static uint8_t* musReadBlobFile(File& f, uint32_t* outLen) {
+  *outLen = 0;
+  if (!f || f.isDirectory()) return nullptr;
+  uint32_t sz = (uint32_t)f.size();
+  if (sz < 64 || sz > MUS_COVER_MAX) return nullptr;
+  uint8_t* b = (uint8_t*)heap_caps_malloc(sz, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  if (!b) return nullptr;
+  uint32_t got = 0;
+  while (got < sz) {
+    uint32_t want = sz - got; if (want > 16384) want = 16384;
+    int n = f.read(b + got, want);
+    if (n <= 0) break;
+    got += (uint32_t)n;
+  }
+  if (got != sz) { free(b); return nullptr; }
+  *outLen = sz;
+  return b;
+}
+static void musFfBlobFn(void* p) {
+  MusFfBlob* o = (MusFfBlob*)p;
+  File f = FFat.open(o->path, FILE_READ);
+  if (!f) return;
+  o->img = musReadBlobFile(f, &o->len);
+  f.close();
+}
+static uint8_t* musReadBlobPath(const char* path, uint32_t* outLen) {
+  *outLen = 0;
+  if (musUseFfat) {
+    MusFfBlob o; o.path = path; o.img = nullptr; o.len = 0;
+    if (!mffRun(musFfBlobFn, &o)) return nullptr;
+    *outLen = o.len;
+    return o.img;
+  }
+  File f = SD_MMC.open(path, FILE_READ);
+  if (!f) return nullptr;
+  uint8_t* img = musReadBlobFile(f, outLen);
+  f.close();
+  return img;
+}
+static uint8_t* musReadSidecar(const char* song, uint32_t* outLen) {
+  *outLen = 0;
+  char dir[96], base[96], p[200];
+  strncpy(dir, song, sizeof(dir) - 1); dir[sizeof(dir) - 1] = 0;
+  base[0] = 0;
+  char* sl = strrchr(dir, '/');
+  if (sl) { strncpy(base, sl + 1, sizeof(base) - 1); base[sizeof(base) - 1] = 0; *sl = 0; }
+  else    { strncpy(base, song, sizeof(base) - 1);   base[sizeof(base) - 1] = 0; dir[0] = 0; }
+  char* dot = strrchr(base, '.'); if (dot) *dot = 0;
+  static const char* const exts[]  = { ".jpg", ".jpeg", ".png" };
+  static const char* const names[] = { "cover", "folder", "album", "front" };
+  uint8_t* img;
+  if (base[0]) {
+    for (int e = 0; e < 3; e++) {
+      snprintf(p, sizeof(p), "%s/%s%s", dir, base, exts[e]);
+      img = musReadBlobPath(p, outLen); if (img) return img;
+    }
+  }
+  for (int n = 0; n < 4; n++) for (int e = 0; e < 3; e++) {
+    snprintf(p, sizeof(p), "%s/%s%s", dir, names[n], exts[e]);
+    img = musReadBlobPath(p, outLen); if (img) return img;
+  }
+  return nullptr;
+}
+
+// MUS_COVER_V2: warna rata-rata cover -> aksen pemutar. Piksel berwarna dihitung lebih berat dari abu-abu.
+static uint16_t musAvgTint(LGFX_Sprite* sp) {
+  if (!sp || (int)sp->getColorDepth() != 16 || !sp->getBuffer()) return 0;
+  const uint16_t* px = (const uint16_t*)sp->getBuffer();
+  int w = sp->width(), h = sp->height();
+  uint32_t sr = 0, sg = 0, sb = 0, sw = 0;
+  for (int yy = 4; yy < h; yy += 8) for (int xx = 4; xx < w; xx += 8) {
+    uint16_t v = px[yy * w + xx];
+    v = (uint16_t)((v >> 8) | (v << 8));                         // buffer sprite = RGB565 big-endian
+    int r = ((v >> 11) & 31) * 255 / 31, g = ((v >> 5) & 63) * 255 / 63, b = (v & 31) * 255 / 31;
+    int mx = r > g ? (r > b ? r : b) : (g > b ? g : b);
+    int mn = r < g ? (r < b ? r : b) : (g < b ? g : b);
+    uint32_t wt = 1 + (uint32_t)(mx - mn);
+    sr += (uint32_t)r * wt; sg += (uint32_t)g * wt; sb += (uint32_t)b * wt; sw += wt;
+  }
+  if (sw == 0) return 0;
+  int r = (int)(sr / sw), g = (int)(sg / sw), b = (int)(sb / sw);
+  int lum = (r * 3 + g * 6 + b) / 10;                            // tambah kejenuhan 25%
+  r = lum + (r - lum) * 5 / 4; g = lum + (g - lum) * 5 / 4; b = lum + (b - lum) * 5 / 4;
+  int mx = r > g ? (r > b ? r : b) : (g > b ? g : b);
+  if (mx < 1) return 0;
+  if (mx < 190) { int k = 190 * 256 / mx; if (k > 768) k = 768; r = r * k >> 8; g = g * k >> 8; b = b * k >> 8; }   // cerahkan
+  if (r < 0) r = 0; if (r > 255) r = 255; if (g < 0) g = 0; if (g > 255) g = 255; if (b < 0) b = 0; if (b > 255) b = 255;
+  uint16_t c = (uint16_t)(((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3));
+  return c ? c : 1;
+}
+static int musLum565(uint16_t v) { return (((v >> 11) & 31) * 8 * 3 + ((v >> 5) & 63) * 4 * 6 + (v & 31) * 8) / 10; }
+// aksen pemutar: warna cover kalau ada (diberi kontras ke latar tema), kalau tidak aksen tema
+static uint16_t musAcc() {
+  if (!musCoverReady || musCoverTint == 0) return (uint16_t)T().accent;
+  uint16_t c = musCoverTint;
+  int d = musLum565(c) - musLum565((uint16_t)T().bg); if (d < 0) d = -d;
+  if (d < 70) c = blend565(c, (uint16_t)T().text, 120);
+  return c;
+}
+
 static int musCoverDraw(JPEGDRAW* d) {
   musCvTmp.pushImage(d->x, d->y, d->iWidth, d->iHeight, (lgfx::swap565_t*)d->pPixels);
   return 1;
 }
 
-static bool musLoadCover(const char* path) {
-  uint32_t len = 0;
-  uint8_t* img = musReadApicPath(path, &len);
-  if (!img) return false;
-  if (len < 4 || img[0] != 0xFF || img[1] != 0xD8) { free(img); return false; }   // bukan JPEG (mis. PNG) -> tetap piringan hitam
+// musCvTmp (hasil decode ukuran asli dw x dh) -> sprite belakang 120x120 ("cover": isi penuh, tepi panjang dipotong) -> tukar buffer
+static bool musCoverPush(int dw, int dh) {
+  int back = 1 - (int)musCoverCur;
+  LGFX_Sprite* dst = musCvP[back];
+  dst->deleteSprite();
+  dst->setPsram(true);
+  if (!dst->createSprite(MUS_COVER_SZ, MUS_COVER_SZ)) return false;
+  dst->fillSprite(0);
+  float z1 = (float)MUS_COVER_SZ / dw, z2 = (float)MUS_COVER_SZ / dh;
+  float z = (z1 > z2) ? z1 : z2;
+  musCvTmp.pushRotateZoom(dst, MUS_COVER_SZ / 2.0f, MUS_COVER_SZ / 2.0f, 0.0f, z, z);
+  musCoverTint = musAvgTint(dst);
+  musCoverCur = back;
+  musCoverReady = true;
+  return true;
+}
 
+// decode satu gambar cover (JPEG baseline atau PNG) di buffer RAM. false = format tak dikenal / progressive / gagal.
+static bool musDecodeCoverBuf(uint8_t* img, uint32_t len) {
   bool ok = false;
-  if (musCvJpeg->openRAM(img, (int)len, musCoverDraw)) {
-    int iw = musCvJpeg->getWidth(), ih = musCvJpeg->getHeight();
-    int sh = (iw < ih) ? iw : ih;
-    int scale = 0, shiftAmt = 0;
-    if      (sh >= MUS_COVER_SZ * 8) { scale = JPEG_SCALE_EIGHTH;  shiftAmt = 3; }
-    else if (sh >= MUS_COVER_SZ * 4) { scale = JPEG_SCALE_QUARTER; shiftAmt = 2; }
-    else if (sh >= MUS_COVER_SZ * 2) { scale = JPEG_SCALE_HALF;    shiftAmt = 1; }
-    int dw = iw >> shiftAmt, dh = ih >> shiftAmt;
-    if (iw > 0 && ih > 0 && dw > 0 && dh > 0 && (uint32_t)dw * (uint32_t)dh * 2u <= 1200u * 1024u) {
+  if (len >= 4 && img[0] == 0xFF && img[1] == 0xD8) {                           // JPEG
+    if (musCvJpeg->openRAM(img, (int)len, musCoverDraw)) {
+      int iw = musCvJpeg->getWidth(), ih = musCvJpeg->getHeight();
+      int sh = (iw < ih) ? iw : ih;
+      int scale = 0, shiftAmt = 0;
+      if      (sh >= MUS_COVER_SZ * 8) { scale = JPEG_SCALE_EIGHTH;  shiftAmt = 3; }
+      else if (sh >= MUS_COVER_SZ * 4) { scale = JPEG_SCALE_QUARTER; shiftAmt = 2; }
+      else if (sh >= MUS_COVER_SZ * 2) { scale = JPEG_SCALE_HALF;    shiftAmt = 1; }
+      int dw = iw >> shiftAmt, dh = ih >> shiftAmt;
+      if (iw > 0 && ih > 0 && dw > 0 && dh > 0 && (uint32_t)dw * (uint32_t)dh * 2u <= 1200u * 1024u) {
+        musCvTmp.deleteSprite();
+        musCvTmp.setPsram(true);
+        if (musCvTmp.createSprite(dw, dh)) {
+          musCvTmp.fillSprite(0);
+          musCvJpeg->setPixelType(RGB565_BIG_ENDIAN);
+          int r = musCvJpeg->decode(0, 0, scale);              // progressive JPEG ditolak JPEGDEC -> r = 0
+          if (r) ok = musCoverPush(dw, dh);
+        }
+        musCvTmp.deleteSprite();
+      }
+      musCvJpeg->close();
+    }
+  } else if (len > 8 && img[0] == 0x89 && img[1] == 'P' && img[2] == 'N' && img[3] == 'G') {   // PNG (decoder bawaan LovyanGFX, skala saat gambar)
+    int iw = 0, ih = 0;
+    if (rpPngDims(img, len, &iw, &ih) && (long)iw * (long)ih <= 6000000L) {
+      int sh = (iw < ih) ? iw : ih;
+      float sc = (sh > MUS_COVER_SZ) ? (float)MUS_COVER_SZ / (float)sh : 1.0f;
+      int dw = (int)((float)iw * sc + 0.5f), dh = (int)((float)ih * sc + 0.5f);
+      if (dw < 1) dw = 1; if (dh < 1) dh = 1;
       musCvTmp.deleteSprite();
       musCvTmp.setPsram(true);
       if (musCvTmp.createSprite(dw, dh)) {
         musCvTmp.fillSprite(0);
-        musCvJpeg->setPixelType(RGB565_BIG_ENDIAN);
-        int r = musCvJpeg->decode(0, 0, scale);              // progressive JPEG ditolak JPEGDEC -> r = 0
-        if (r) {
-          int back = 1 - (int)musCoverCur;
-          LGFX_Sprite* dst = musCvP[back];
-          dst->deleteSprite();
-          dst->setPsram(true);
-          if (dst->createSprite(MUS_COVER_SZ, MUS_COVER_SZ)) {
-            dst->fillSprite(0);
-            float z1 = (float)MUS_COVER_SZ / dw, z2 = (float)MUS_COVER_SZ / dh;
-            float z = (z1 > z2) ? z1 : z2;                   // "cover": isi penuh persegi, tepi yg lebih panjang dipotong
-            musCvTmp.pushRotateZoom(dst, MUS_COVER_SZ / 2.0f, MUS_COVER_SZ / 2.0f, 0.0f, z, z);
-            musCoverCur = back;
-            musCoverReady = true;
-            ok = true;
-          }
-        }
+        if (musCvTmp.drawPng(img, (uint32_t)len, 0, 0, 0, 0, 0, 0, sc, sc)) ok = musCoverPush(dw, dh);
       }
       musCvTmp.deleteSprite();
     }
-    musCvJpeg->close();
   }
-  free(img);
-  if (ok) needRedraw = true;
   return ok;
+}
+
+static bool musLoadCover(const char* path) {
+  uint32_t len = 0;
+  uint8_t* img = musReadApicPath(path, &len);                    // 1) tag ID3
+  bool ok = img && musDecodeCoverBuf(img, len);
+  if (img) free(img);
+  if (!ok) {                                                      // 2) gambar di samping file lagu
+    img = musReadSidecar(path, &len);
+    ok = img && musDecodeCoverBuf(img, len);
+    if (img) free(img);
+  }
+  if (ok) needRedraw = true;
+  return ok;                                                      // false -> poster geometris
+}
+
+// MUS_COVER_V2: cover lagu yang sedang main untuk kartu musik Home / Lock Screen. false = belum ada cover asli (pakai piringan).
+bool homeMusCoverDraw(LGFX_Sprite& s, int x, int y, int size) {
+  if (!musStarted || !musLoaded || !musCoverReady) return false;
+  LGFX_Sprite* cv = musCvP[musCoverCur];
+  if (cv->width() != MUS_COVER_SZ) return false;
+  float z = (float)size / MUS_COVER_SZ;
+  cv->pushRotateZoom(&s, x + size / 2.0f, y + size / 2.0f, 0.0f, z, z);
+  return true;
 }
 
 // =====================================================================
@@ -1601,6 +1742,7 @@ void musicLoopPoll() {
   uint32_t iv = 500;
   if (onScr) {
     if (musPage == 0)      iv = 100;
+    else if (musPage == 5) iv = (musLoaded && !musPaused) ? 250 : 500;   // MUS_COVER_V2
     else if (musPage == 1) iv = (musLoaded && !musPaused) ? 150 : 500;
     else if (musPage == 4) iv = (jamBusy() || (musLoaded && !musPaused) || (kbVisible && kbTarget == &musJamQuery)) ? 150 : 500;   // JAM_UI_V1
     else                   iv = (musScanning || musConnecting) ? 100 : 500;
@@ -1836,7 +1978,7 @@ static void musPoster(LGFX_Sprite& s, int x, int y, int S, uint32_t h) {
 
 static void musDrawCover(LGFX_Sprite& s, bool playing, const char* title) {   // MUS_FLAT_V1
   int x = mCovX, y = mCovY, S = mCovS;
-  s.fillRect(x + 4, y + 4, S, S, T().accent);          // bayangan keras: blok datar, bukan blur
+  s.fillRect(x + 4, y + 4, S, S, musAcc());          // bayangan keras: blok datar, bukan blur
   if (musCoverReady) {                              // cover asli dari tag ID3 (APIC)
     LGFX_Sprite* cv = musCvP[musCoverCur];
     if (cv->width() == MUS_COVER_SZ) {
@@ -1858,7 +2000,7 @@ static void musDrawEq(LGFX_Sprite& s, bool playing) {   // MUS_FLAT_V1: batang k
   const int n = 16, gap = 3;
   int bw = (mEqW - (n - 1) * gap) / n; if (bw < 2) bw = 2;
   uint32_t t = millis();
-  uint16_t col = playing ? (uint16_t)T().accent : blend565(T().bg, T().text, 45);
+  uint16_t col = playing ? musAcc() : blend565(T().bg, T().text, 45);
   for (int i = 0; i < n; i++) {
     float tgt = playing ? (0.18f + 0.82f * fabsf(sinf(t * 0.0021f * (1.f + 0.23f * i) + i * 1.7f) *
                                                  cosf(t * 0.0013f + i * 0.9f)))
@@ -1912,7 +2054,7 @@ static void musDrawPlayer(LGFX_Sprite& s) {
   musDrawChips(s);
   musDrawCover(s, playing, title);
   if (mLand) {                                       // MUS_FLAT_V1: label status kecil di atas judul
-    uint16_t lc = playing ? (uint16_t)T().accent : (uint16_t)T().subtext;
+    uint16_t lc = playing ? musAcc() : (uint16_t)T().subtext;
     s.fillRect(mTitX, mCovY + 1, 6, 6, lc);
     s.setTextSize(1); s.setTextColor(lc);
     s.setCursor(mTitX + 11, mCovY);
@@ -2009,7 +2151,7 @@ static void musDrawPlayer(LGFX_Sprite& s) {
   int fw = (int)(pr * mBarW);
   if (!musLoaded) fw = 0;
   s.fillRect(mBarX, mBarY + 1, mBarW, 4, musLn());
-  if (fw > 0) s.fillRect(mBarX, mBarY + 1, fw, 4, T().accent);
+  if (fw > 0) s.fillRect(mBarX, mBarY + 1, fw, 4, musAcc());
   if (musLoaded) {
     int mx = fw - 1; if (mx < 0) mx = 0; if (mx > mBarW - 3) mx = mBarW - 3;
     s.fillRect(mBarX + mx, mBarY - 3, 3, 12, T().text);
@@ -2028,7 +2170,8 @@ static void musDrawPlayer(LGFX_Sprite& s) {
   if (musRepeat) s.fillRect(mRepX - 6, mCtlCY + 14, 12, 2, T().accent);
   musDrawIcon(s, 0, mPrevX, mCtlCY, T().text);
   musDrawIcon(s, 1, mNextX, mCtlCY, T().text);
-  uint16_t pc = (musPressCtl == 1) ? blend565(T().accent, T().bg, 70) : (uint16_t)T().accent;
+  uint16_t pa = musAcc();
+  uint16_t pc = (musPressCtl == 1) ? blend565(pa, T().bg, 70) : pa;
   nyxAaRR(s, mPlayX - mPlayR - 2, mCtlCY - mPlayR - 2, 2 * mPlayR + 4, 2 * mPlayR + 4, 10, pc);
   musDrawIcon(s, playing ? 3 : 2, mPlayX, mCtlCY, T().bg);
 
@@ -2040,6 +2183,114 @@ static void musDrawPlayer(LGFX_Sprite& s) {
     nyxAaRR(s, px, py, pw, 20, 4, armed ? T().accent : blend565(T().bg, T().text, 60));
     musDrawLabel(s, lb, px, py, pw, 20, armed ? T().bg : T().text);
   }
+}
+
+// =====================================================================
+//  MUS_COVER_V2: halaman "Cover besar" (musPage == 5). Dibuka dengan mengetuk cover di pemutar.
+// =====================================================================
+static int mBgX, mBgY, mBgS, mBgTx, mBgTy, mBgTw, mBgLines, mBgBarX, mBgBarY, mBgBarW, mBgCy, mBgPrevX, mBgPlayX, mBgNextX;
+static void musBigLayout() {
+  int W = SCR_W, H = SCR_H;
+  int top = 30, bot = H - BACK_H - 4;
+  if (W >= H) {                                      // landscape: cover di kiri, teks + kontrol di kanan
+    int bs = bot - top; if (bs > 150) bs = 150; if (bs > W / 2 - 14) bs = W / 2 - 14;
+    mBgS = bs; mBgX = 12; mBgY = top + (bot - top - bs) / 2;
+    mBgTx = mBgX + bs + 16; mBgTw = W - 12 - mBgTx; mBgTy = mBgY + 14;
+    mBgLines = (bs >= 140) ? 3 : 2;
+    mBgBarX = mBgTx; mBgBarW = mBgTw; mBgBarY = mBgY + bs - 52;
+    mBgCy = mBgY + bs - 18;
+    mBgPlayX = mBgTx + mBgTw / 2; mBgPrevX = mBgPlayX - 46; mBgNextX = mBgPlayX + 46;
+  } else {                                           // portrait: cover di atas, teks + kontrol di bawah
+    int bs = bot - top - 125; if (bs > W - 24) bs = W - 24; if (bs > 190) bs = 190; if (bs < 90) bs = 90;
+    mBgS = bs; mBgX = (W - bs) / 2 - 2; mBgY = top + 4;
+    mBgTx = 14; mBgTw = W - 28; mBgTy = mBgY + bs + 14;
+    mBgLines = 2;
+    mBgCy = bot - 24; mBgBarX = 14; mBgBarW = W - 28; mBgBarY = mBgCy - 46;
+    mBgPlayX = W / 2; mBgPrevX = W / 2 - 62; mBgNextX = W / 2 + 62;
+  }
+}
+// tulis teks dibungkus per huruf/kata sampai maxLines baris (baris terakhir diakhiri ".." kalau masih ada sisa); return jumlah baris
+static int musWrapLines(LGFX_Sprite& s, const char* txt, int x, int y, int w, int lineH, int maxLines, uint16_t col) {
+  char buf[64]; strncpy(buf, txt, sizeof(buf) - 1); buf[sizeof(buf) - 1] = 0;
+  int len = (int)strlen(buf), pos = 0, drawn = 0;
+  s.setTextColor(col);
+  while (pos < len && drawn < maxLines) {
+    char ln[64];
+    int cut = 0;
+    while (pos + cut < len) {                         // tambah satu huruf (UTF-8 utuh) selama masih muat
+      int nx = cut + 1;
+      while (pos + nx < len && ((uint8_t)buf[pos + nx] & 0xC0) == 0x80) nx++;
+      memcpy(ln, buf + pos, nx); ln[nx] = 0;
+      if (s.textWidth(ln) > w) break;
+      cut = nx;
+    }
+    if (cut == 0) { cut = 1; while (pos + cut < len && ((uint8_t)buf[pos + cut] & 0xC0) == 0x80) cut++; }
+    int brk = cut;
+    if (pos + cut < len) { for (int k = cut; k > cut / 2; k--) if (buf[pos + k - 1] == ' ') { brk = k; break; } }   // utamakan putus di spasi
+    memcpy(ln, buf + pos, brk); ln[brk] = 0;
+    bool moreLeft = (pos + brk < len);
+    if (drawn == maxLines - 1 && moreLeft) {
+      int dotsW = s.textWidth("..");
+      int n = (int)strlen(ln);
+      while (n > 1 && s.textWidth(ln) + dotsW > w) { n--; while (n > 1 && ((uint8_t)ln[n] & 0xC0) == 0x80) n--; ln[n] = 0; }
+      strcat(ln, "..");
+    }
+    s.setCursor(x, y + drawn * lineH); s.print(ln);
+    pos += brk; while (pos < len && buf[pos] == ' ') pos++;
+    drawn++;
+  }
+  return drawn;
+}
+static void musDrawBig(LGFX_Sprite& s) {
+  musBigLayout();
+  bool playing = musLoaded && !musPaused;
+  char title[64];
+  musGetTitle(title, sizeof(title), musCur);
+  if (musNetMode) { strncpy(title, musNetTitle, sizeof(title) - 1); title[sizeof(title) - 1] = 0; }
+  uint16_t acc = musAcc();
+  bool land = (SCR_W >= SCR_H);
+
+  int sx = mCovX, sy = mCovY, ss = mCovS;            // pakai ulang musDrawCover (cover asli atau poster) dengan kotak besar
+  mCovX = mBgX; mCovY = mBgY; mCovS = mBgS;
+  musDrawCover(s, playing, title);
+  mCovX = sx; mCovY = sy; mCovS = ss;
+
+  s.setTextWrap(false, false);
+  int ty = mBgTy;
+  if (land) {                                        // label status kecil di atas judul
+    s.setTextSize(1);
+    uint16_t lc = playing ? acc : (uint16_t)T().subtext;
+    s.fillRect(mBgTx, mBgY + 1, 6, 6, lc);
+    s.setTextColor(lc); s.setCursor(mBgTx + 11, mBgY);
+    s.print(musNetMode ? "ONLINE" : (playing ? "SEDANG DIPUTAR" : (musLoaded ? "DIJEDA" : "SIAP")));
+  }
+  s.setTextSize(2);
+  int n = musWrapLines(s, title, mBgTx, ty, mBgTw, 18, mBgLines, (uint16_t)T().text);
+  char sub[64];
+  if (musNetMode) snprintf(sub, sizeof(sub), "%s  %d/%d", musNetArtist, (int)musNetCur + 1, jamCount());
+  else if (musLoaded && musKbps) snprintf(sub, sizeof(sub), "%d/%d   MP3 %ukbps", musCur + 1, musListCount(), (unsigned)musKbps);
+  else snprintf(sub, sizeof(sub), "%d/%d", musCur + 1, musListCount());
+  s.setTextSize(1);
+  musTrunc(sub, mBgTw / 6);
+  s.setTextColor(T().subtext);
+  s.setCursor(mBgTx, ty + n * 18 + 4); s.print(sub);
+
+  char t1[12], t2[12];                               // progres + waktu
+  musFmtTime(t1, musLoaded ? musPlayedMs : 0);
+  if (musLoaded && musDurMs > 0) musFmtTime(t2, musDurMs); else strcpy(t2, "--:--");
+  float pr = (musDurMs > 0) ? (float)musPlayedMs / (float)musDurMs : 0.f;
+  if (pr > 1.f) pr = 1.f;
+  int fw = musLoaded ? (int)(pr * mBgBarW) : 0;
+  s.fillRect(mBgBarX, mBgBarY + 1, mBgBarW, 4, musLn());
+  if (fw > 0) s.fillRect(mBgBarX, mBgBarY + 1, fw, 4, acc);
+  s.setTextColor(T().text); s.setCursor(mBgBarX, mBgBarY + 11); s.print(t1);
+  s.setTextColor(T().subtext); s.setCursor(mBgBarX + mBgBarW - s.textWidth(t2), mBgBarY + 11); s.print(t2);
+
+  musDrawIcon(s, 0, mBgPrevX, mBgCy, T().text);      // kontrol
+  musDrawIcon(s, 1, mBgNextX, mBgCy, T().text);
+  uint16_t pc = (musPressCtl == 1) ? blend565(acc, T().bg, 70) : acc;
+  nyxAaRR(s, mBgPlayX - mPlayR - 2, mBgCy - mPlayR - 2, 2 * mPlayR + 4, 2 * mPlayR + 4, 10, pc);
+  musDrawIcon(s, playing ? 3 : 2, mBgPlayX, mBgCy, T().bg);
 }
 
 static void musMiniEq(LGFX_Sprite& s, int x, int yBase, bool playing, uint16_t col) {
@@ -2214,8 +2465,9 @@ static void musPtrUp() {
       if (musPtrVel < -3.0f) musPtrVel = -3.0f;
       if (musPtrVel > 0.05f || musPtrVel < -0.05f) { musLsGlide = true; musLsGlideT = now; }
     }
-  } else if (mode == 5 && now - musPtrT0 < 700) {                                 // ketuk cover/judul = play/jeda
-    musPost('u', 0, nullptr); vibTap();
+  } else if (mode == 5 && now - musPtrT0 < 700) {                                 // MUS_COVER_V2: ketuk cover = cover besar, ketuk judul = play/jeda
+    if (musHit(musPtrX0, musPtrY0, mCovX - 4, mCovY - 4, mCovS + 8, mCovS + 8)) { musPage = 5; vibTap(); }
+    else { musPost('u', 0, nullptr); vibTap(); }
   } else if (mode == 6) {                                                         // geser kiri = berikutnya, kanan = sebelumnya
     if (dx <= -50)     { musPost('n', 0, nullptr); vibTap(); }
     else if (dx >= 50) { musPost('b', 0, nullptr); vibTap(); }
@@ -2658,6 +2910,7 @@ void drawMusic(LGFX_Sprite& s) {
   else if (musPage == 2) musDrawScan(s);
   else if (musPage == 3) ryvDraw(s);
   else if (musPage == 4) musDrawJam(s);          // JAM_UI_V1
+  else if (musPage == 5) musDrawBig(s);          // MUS_COVER_V2
   else                   musDrawPlayer(s);
   if (musPage == 4 && musJamKbOn()) drawKb(s); else drawBack(s);
   drawToast(s);
@@ -2683,6 +2936,13 @@ void musicTouch(int x, int y, bool held, bool isNew) {
     return;
   }
 
+  if (musPage == 5) {                               // MUS_COVER_V2: cover besar -- kontrol; ketuk di tempat lain = kembali
+    musBigLayout();
+    if (musHitC(x, y, mBgPlayX, mBgCy, mPlayR + 8)) { musPost('u', 0, nullptr); musPressCtl = 1; vibTap(); needRedraw = true; return; }
+    if (musHitC(x, y, mBgPrevX, mBgCy, 22)) { musPost('b', 0, nullptr); vibTap(); needRedraw = true; return; }
+    if (musHitC(x, y, mBgNextX, mBgCy, 22)) { musPost('n', 0, nullptr); vibTap(); needRedraw = true; return; }
+    musPage = 0; vibTap(); needRedraw = true; return;
+  }
   if (musPage == 3) { ryvTouch(x, y); return; }
   if (musPage == 4) { musJamTouch(x, y); return; }   // JAM_UI_V1
 
