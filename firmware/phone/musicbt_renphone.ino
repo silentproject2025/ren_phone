@@ -1230,6 +1230,7 @@ static void musBegin() {
     musShufMode = p.getInt("smode", p.getBool("shuf", false) ? 1 : 0);
     musCur = p.getInt("cur", 0);
     musOutSpk = p.getBool("spk", false);
+    jamSetSource((uint8_t)p.getInt("jsrc", jamSrcDefault()));   // AUDIUS_V1
     p.end();
   }
   spkSetVolume(musVol);
@@ -1550,7 +1551,10 @@ void musicLoopPoll() {
 
   if (jamTakeDone()) {                           // JAM_UI_V1: pencarian online selesai
     int jr = jamLastResult();
-    if (onScr && jr < 0) showToast(jr == -1 ? "WiFi belum terhubung" : (jr == -3 ? "RAM tidak cukup" : "Gagal ambil data Jamendo"));
+    if (onScr && jr < 0) {                       // AUDIUS_V1: nama sumber ikut pesan
+      static char em[40]; snprintf(em, sizeof(em), "Gagal ambil data %s", jamSrcName());
+      showToast(jr == -1 ? "WiFi belum terhubung" : (jr == -3 ? "RAM tidak cukup" : em));
+    }
     needRedraw = true;
   }
   if (musMsgPending) {
@@ -1592,6 +1596,7 @@ void musicLoopPoll() {
     p.putInt("vol", musVol); p.putInt("rep", musRepeat);
     p.putInt("smode", musShufMode); p.putInt("cur", musCur);
     p.putBool("spk", musOutSpk);
+    p.putInt("jsrc", (int)jamSrc);   // AUDIUS_V1
     p.end();
   }
 }
@@ -2012,6 +2017,8 @@ static void musDrawList(LGFX_Sprite& s) {
 //  JAM_UI_V1: halaman ONLINE (musPage == 4) -- cari / jelajah lagu Jamendo, ketuk = putar
 // =====================================================================
 #define MJ_GO_W 46
+#define MJ_SRC_W 54                                 // AUDIUS_V1: chip sumber (Jamendo / Audius)
+static int musJamSrcX() { return SCR_W - 12 - MJ_GO_W - 4 - MJ_SRC_W; }
 static const char* const MJ_CHIP_LB[5]  = { "Hits", "Pop", "Rock", "Lofi", "Jazz" };
 static const char* const MJ_CHIP_TAG[5] = { "", "pop", "rock", "lofi", "jazz" };
 
@@ -2039,6 +2046,19 @@ static void musJamSubmit() {
   musJamFetch(q.c_str(), "");
 }
 
+// AUDIUS_V1: ganti sumber Jamendo <-> Audius. Daftar lama dibuang; kalau ada ketikan, dicari lagi di sumber baru.
+static void musJamSwitchSrc() {
+  if (jamBusy()) { showToast(RPTR("Masih memuat...")); return; }
+  if (musJamKbOn()) { kbVisible = false; kbTarget = nullptr; }
+  jamSetSource(jamSrc == JAM_SRC_AUDIUS ? JAM_SRC_JAMENDO : JAM_SRC_AUDIUS);
+  musPrefsDirty = true; musPrefsMs = millis();
+  showToast(jamSrc == JAM_SRC_AUDIUS ? "Sumber: Audius" : "Sumber: Jamendo");
+  musJamOpened = true;
+  String q = musJamQuery; q.trim();
+  if (q.length() > 0) { musJamTag = -1; musJamFetch(q.c_str(), ""); }
+  else                { musJamTag = 0;  musJamFetch("", ""); }
+}
+
 static void musDrawJam(LGFX_Sprite& s) {
   uint16_t chip = blend565(T().bg, T().text, 28);
   bool kbOn = musJamKbOn();
@@ -2046,13 +2066,15 @@ static void musDrawJam(LGFX_Sprite& s) {
   s.setTextSize(1);
 
   // kotak cari + tombol Cari
-  int by = musJamBoxY(), bx = 12, bw = SCR_W - 12 - MJ_GO_W - 6 - bx;
+  int by = musJamBoxY(), bx = 12, bw = musJamSrcX() - 4 - bx;     // AUDIUS_V1: ruang untuk chip sumber
   nyxAaRR(s, bx, by, bw, 22, 11, chip);
   char q[48]; strncpy(q, musJamQuery.c_str(), sizeof(q) - 1); q[sizeof(q) - 1] = 0;
   musTrunc(q, (bw - 24) / 6);
   s.setTextColor(q[0] ? T().text : T().subtext);
-  s.setCursor(bx + 10, by + 7); s.print(q[0] ? q : RPTR("cari lagu / artis (Jamendo)"));
+  s.setCursor(bx + 10, by + 7); s.print(q[0] ? q : RPTR("cari lagu / artis"));
   if (kbOn && ((millis() / 500) & 1)) { int cw = q[0] ? s.textWidth(q) : 0; s.fillRect(bx + 10 + cw + 1, by + 5, 1, 12, T().accent); }
+  nyxAaRR(s, musJamSrcX(), by, MJ_SRC_W, 22, 11, chip);            // AUDIUS_V1: chip sumber
+  musDrawLabel(s, jamSrcName(), musJamSrcX(), by, MJ_SRC_W, 22, T().accent2);
   nyxAaRR(s, SCR_W - 12 - MJ_GO_W, by, MJ_GO_W, 22, 11, T().accent);
   musDrawLabel(s, busy ? "..." : RPTR("Cari"), SCR_W - 12 - MJ_GO_W, by, MJ_GO_W, 22, T().bg);
 
@@ -2072,14 +2094,15 @@ static void musDrawJam(LGFX_Sprite& s) {
     if (busy) {
       char m[16]; snprintf(m, sizeof(m), "Memuat%.*s", (int)((millis() / 300) % 4), "...");
       s.setTextColor(T().text); s.setCursor(12, tY); s.print(m);
-    } else if (strcmp(JAM_CLIENT_ID, "ISI_CLIENT_ID_KAMU") == 0) {
+    } else if (jamSrc == JAM_SRC_JAMENDO && strcmp(JAM_CLIENT_ID, "ISI_CLIENT_ID_KAMU") == 0) {   // AUDIUS_V1
       s.setTextColor(T().danger);  s.setCursor(12, tY);      s.print("JAM_CLIENT_ID belum diisi.");
       s.setTextColor(T().subtext); s.setCursor(12, tY + 14); s.print("Daftar gratis: devportal.jamendo.com");
+      s.setCursor(12, tY + 28);                              s.print(RPTR("Atau ketuk chip sumber -> Audius (tanpa kunci)."));
     } else if (WiFi.status() != WL_CONNECTED) {
       s.setTextColor(T().text);    s.setCursor(12, tY);      s.print(RPTR("WiFi belum terhubung."));
       s.setTextColor(T().subtext); s.setCursor(12, tY + 14); s.print(RPTR("Sambungkan lewat Setting, lalu ketuk Cari."));
     } else if (jamLastResult() < 0) {
-      s.setTextColor(T().danger);  s.setCursor(12, tY);      s.print(jamLastResult() == -3 ? "RAM tidak cukup." : "Gagal ambil data Jamendo.");
+      s.setTextColor(T().danger);  s.setCursor(12, tY);      { char em[40]; snprintf(em, sizeof(em), "Gagal ambil data %s.", jamSrcName()); s.print(jamLastResult() == -3 ? "RAM tidak cukup." : em); }
       s.setTextColor(T().subtext); s.setCursor(12, tY + 14); s.print(RPTR("Ketuk Cari untuk mencoba lagi."));
     } else if (musJamOpened || musJamTag == -1) {
       s.setTextColor(T().subtext); s.setCursor(12, tY);      s.print(RPTR("Tidak ada hasil."));
@@ -2130,7 +2153,8 @@ static void musJamTouch(int x, int y) {
   int by = musJamBoxY();
   bool rowBox = (y >= by - 2 && y <= by + 24);
   if (rowBox && x >= SCR_W - 12 - MJ_GO_W - 4 && x <= SCR_W - 6) { vibTap(); musJamSubmit(); needRedraw = true; return; }
-  if (rowBox && x >= 12 && x < SCR_W - 12 - MJ_GO_W - 4) {
+  if (rowBox && x >= musJamSrcX() - 2 && x < SCR_W - 12 - MJ_GO_W - 4) { vibTap(); musJamSwitchSrc(); needRedraw = true; return; }   // AUDIUS_V1
+  if (rowBox && x >= 12 && x < musJamSrcX() - 2) {
     if (kbOn) { kbVisible = false; kbTarget = nullptr; }
     else { kbTarget = &musJamQuery; kbVisible = true; kbMode = KB_LOWER; }
     vibTap(); needRedraw = true; return;

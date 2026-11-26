@@ -32,7 +32,7 @@
   #define JAM_CLIENT_ID "ISI_CLIENT_ID_KAMU"
  #endif
 #endif
-#define JAM_RESP_MAX (128 * 1024)   // JAM_PARTIAL_V1: 40 lagu x ~2 KB JSON (di PSRAM)
+#define JAM_RESP_MAX (256 * 1024)   // JAM_PARTIAL_V1: 40 lagu x ~2 KB JSON (di PSRAM); AUDIUS_V1: respons Audius ~3-5 KB per lagu
 
 static JamTrack* jamTracks = nullptr;
 static int       jamN      = 0;
@@ -63,6 +63,52 @@ static void jamFree() {
   jamN = 0;
 }
 
+// =====================================================================
+//  AUDIUS_V1 -- sumber lagu kedua. 0 = Jamendo (butuh client_id), 1 = Audius (tanpa kunci).
+//  Daftar hasil (jamTracks) sama untuk keduanya, jadi UI, pemutaran (SPK / BT) dan lagu berikutnya tidak berubah.
+//  Pilihan disimpan di NVS "music"/"jsrc". Bawaan: Jamendo kalau build punya JAM_CLIENT_ID, kalau tidak Audius.
+//  Cari   -> GET /v1/tracks/search?query=..          (cocok sebagian/juga artis; urutan lalu dirapikan jamRank)
+//  Hits   -> GET /v1/tracks/trending?time=week       (+ &genre=Pop/Rock/Lo-Fi/Jazz untuk chip genre)
+//  Putar  -> GET /v1/tracks/<id>/stream              (balas 302 ke file MP3; HTTPClient mengikuti redirect)
+//  BELUM DICOMPILE / DITES DI BOARD.
+// =====================================================================
+#define JAM_SRC_JAMENDO 0
+#define JAM_SRC_AUDIUS  1
+static volatile uint8_t jamSrc    = JAM_SRC_JAMENDO;   // pilihan di UI
+static uint8_t          jamSrcRun = JAM_SRC_JAMENDO;   // salinan yang dipakai worker selama satu pencarian
+static const char* jamSrcName()   { return jamSrc == JAM_SRC_AUDIUS ? "Audius" : "Jamendo"; }
+static uint8_t jamSrcDefault()    { return (strcmp(JAM_CLIENT_ID, "ISI_CLIENT_ID_KAMU") == 0) ? JAM_SRC_AUDIUS : JAM_SRC_JAMENDO; }
+static void jamSetSource(uint8_t s) { jamSrc = (s == JAM_SRC_AUDIUS) ? JAM_SRC_AUDIUS : JAM_SRC_JAMENDO; jamN = 0; }
+
+// Return jumlah lagu (>=0) atau -2 = HTTP/TLS gagal. body = buffer PSRAM milik jamSearch.
+static int audSearchInto(const char* qq, const char* tag, char* body) {
+  char url[360]; int u;
+  if (qq[0]) {
+    char q[96]; jamUrlEnc(qq, q, sizeof(q));
+    u = snprintf(url, sizeof(url), AUD_BASE "/tracks/search?query=%s&limit=%d&app_name=" AUD_APP, q, JAM_MAX_TRACKS);
+  } else {
+    u = snprintf(url, sizeof(url), AUD_BASE "/tracks/trending?time=week&limit=%d&app_name=" AUD_APP, JAM_MAX_TRACKS);
+    const char* g = audGenre(tag);
+    if (g[0]) { char ge[48]; jamUrlEnc(g, ge, sizeof(ge)); u += snprintf(url + u, sizeof(url) - u, "&genre=%s", ge); }
+  }
+  int result = -2;
+  WiFiClientSecure net; net.setInsecure();              // sama seperti Jamendo: tanpa verifikasi sertifikat
+  HTTPClient http; http.setTimeout(15000); http.setConnectTimeout(10000);
+  http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+  if (http.begin(net, url)) {
+    int code = http.GET();
+    if (code == 200) {
+      JamSink sink(body, JAM_RESP_MAX);
+      http.writeToStream(&sink);
+      body[sink.len] = 0;
+      jamN = audParse(body, jamTracks, JAM_MAX_TRACKS);
+      result = jamN;
+    }
+    http.end();
+  }
+  return result;
+}
+
 // Return jumlah lagu (>=0), atau -1 = tidak ada WiFi, -2 = HTTP/TLS gagal, -3 = RAM habis.
 // JAM_PARTIAL_V1: pencarian sebagian judul. Tahap 1 = namesearch (cocok di mana saja dalam judul, urut populer);
 // kalau kosong, tahap 2 = search biasa (artis / tag / kata penuh). Lalu hasil diurutkan ulang (jamRank).
@@ -78,6 +124,13 @@ static int jamSearch(const char* query, const char* tag) {
     while (*query == ' ') query++;
     strncpy(qq, query, sizeof(qq) - 1); qq[sizeof(qq) - 1] = 0;
     for (int i = (int)strlen(qq) - 1; i >= 0 && qq[i] == ' '; i--) qq[i] = 0;
+  }
+
+  if (jamSrcRun == JAM_SRC_AUDIUS) {                   // AUDIUS_V1
+    int ar = audSearchInto(qq, tag, body);
+    heap_caps_free(body);
+    if (ar > 0 && qq[0]) jamRank(jamTracks, jamN, qq);
+    return ar;
   }
 
   int result = -2;
@@ -153,6 +206,7 @@ static bool jamSearchAsync(const char* q, const char* tag) {
   }
   strncpy(jamAQ, q ? q : "", sizeof(jamAQ) - 1);     jamAQ[sizeof(jamAQ) - 1] = 0;
   strncpy(jamATag, tag ? tag : "", sizeof(jamATag) - 1); jamATag[sizeof(jamATag) - 1] = 0;
+  jamSrcRun = jamSrc;                                // AUDIUS_V1: sumber dikunci selama satu pencarian
   jamBusyF = true; jamDoneF = false;
   xTaskNotifyGive(jamTaskH);
   return true;

@@ -40,7 +40,7 @@ NyxOS is neither Android nor Linux. The launcher, notification center, network s
 >
 > - **Speaker output** (optional MAX98357A module: Music *Output: SPK*, call audio through the speaker, MP3 from internal flash) is `BETA`: not yet tested on hardware. Bluetooth stays the default output.
 >
-> - **Online music** (Jamendo search and streaming in the Music app, through the Bluetooth TWS earbuds or the optional speaker) is `BETA`: not yet compiled or tested on a device. It needs Wi-Fi and a Jamendo `client_id` in the build (`JAM_CLIENT_ID`, normally the GitHub Secret of the same name; forks without it get a placeholder and no results).
+> - **Online music** (Jamendo search and streaming in the Music app, through the Bluetooth TWS earbuds or the optional speaker) is `BETA`: not yet compiled or tested on a device. It needs Wi-Fi and a Jamendo `client_id` in the build (`JAM_CLIENT_ID`, normally the GitHub Secret of the same name; forks without it get a placeholder and no results). The Audius source needs no key and is the default when the build has no Jamendo id.
 >
 > - **WiFi Sensing** (motion, presence and a rough breathing estimate from WiFi CSI) is `BETA`: the signal processing is tested with synthetic signals on a PC (`tests/wifisense/`) but not yet on a device. It needs CSI in the custom core libraries (input `wifi_csi`, on by default). The labels on its screen are still Indonesian only.
 > - **Automatic broker login** (Chat and Chess fetch their MQTT host, username and password from Supabase, plus the **Refetch** button) is `BETA`: not yet tested on a device. The login is **not secret**; see the [security notice](#security-notice).
@@ -97,7 +97,7 @@ Status markers used throughout the documentation:
 | | [Camera (OV2640 on the ESP32-CAM)](./docs/features/camera.md) | `OK` |
 | | [Books (`.txt`, `.md`, `.epub`) and Project Gutenberg downloads](./docs/features/books.md) | `OK` |
 | | Optional speaker output (MAX98357A): Music *Output: SPK*, call audio without earbuds, MP3 from internal flash when there is no SD card — [details](./docs/features/media.md) | `BETA` |
-| | [Online music (Jamendo)](./docs/features/media.md#online-music-jamendo): search or browse by tag, then play through the TWS earbuds (*Output: BT*) or the speaker (*Output: SPK*) | `BETA` |
+| | [Online music (Jamendo, Audius)](./docs/features/media.md#online-music-jamendo): search or browse by tag, then play through the TWS earbuds (*Output: BT*) or the speaker (*Output: SPK*) | `BETA` |
 | **Voice and AI** | [Wake word "Hei Nyx", Gemini AI Chat, voice memo](./docs/features/voice-and-ai.md) | `OK` (voice commands `BETA`) |
 | **System** | [Battery (INA219), per-channel OTA with release notes, HWmonitor, crash log](./docs/features/system-tools.md) | `OK` (per-app energy and crash log `BETA`) |
 | | [Settings Backup & Restore](./docs/features/system-tools.md#settings-backup-and-restore-beta) | `OK` (Cloud) / `BETA` (SD Card) |

@@ -58,10 +58,15 @@ static void jamUnescape(const char* s, char* out, size_t cap) {
     } else if (c == 'n' || c == 'r' || c == 't') out[o++] = ' ';
     else out[o++] = c;                                 // \" \\ \/
   }
-  // buang byte UTF-8 yang terpotong di ujung
+  // buang byte UTF-8 yang terpotong di ujung (AUDIUS_V1: hanya kalau urutannya memang belum lengkap;
+  // dulu satu huruf non-ASCII yang utuh di akhir teks ikut terbuang, mis. nama artis berakhiran "Ü")
   size_t k = o;
   while (k > 0 && ((unsigned char)out[k - 1] & 0xC0) == 0x80) k--;
-  if (k > 0 && ((unsigned char)out[k - 1] & 0xC0) == 0xC0) o = k - 1;
+  if (k > 0 && ((unsigned char)out[k - 1] & 0xC0) == 0xC0) {
+    unsigned char lead = (unsigned char)out[k - 1];
+    size_t need = (lead >= 0xF0) ? 4 : (lead >= 0xE0) ? 3 : 2;
+    if (o - (k - 1) < need) o = k - 1;
+  }
   out[o] = 0;
 }
 // cari "key":"nilai" di dalam objek (string ber-NUL). false kalau tidak ada / bukan string.
@@ -186,4 +191,116 @@ static void jamRank(JamTrack* a, int n, const char* q) {
     while (j >= 0 && sc[j] > s) { a[j + 1] = a[j]; sc[j + 1] = sc[j]; j--; }
     a[j + 1] = tmp; sc[j + 1] = s;
   }
+}
+// =====================================================================
+//  AUDIUS_V1 -- parser respons Audius (/v1/tracks/search dan /v1/tracks/trending)
+//  Bentuk: {"data":[{ "id":"D7KyD", "title":"..", "duration":180, "user":{"id":"..","name":".."}, ... }]}
+//  Objek track berisi objek bersarang (artwork, user, access, ...) yang juga punya "id" dan "name",
+//  jadi kunci DICARI HANYA di kedalaman 1 (audKey), bukan strstr seperti jamFindStr.
+//  Lagu yang tidak bisa diputar (is_streamable:false, is_stream_gated:true, access.stream:false) dilewati.
+// =====================================================================
+#define AUD_BASE  "https://api.audius.co/v1"
+#define AUD_APP   "ren_phone"
+
+// pointer ke nilai (setelah ':' dan spasi) dari "key" di kedalaman 1 objek; nullptr kalau tidak ada.
+// obj harus diawali '{' atau '['. Untuk objek bersarang: audKey(audKey(o,"user"),"name").
+static const char* audKey(const char* obj, const char* key) {
+  if (!obj) return nullptr;
+  size_t kl = strlen(key); int depth = 0;
+  for (const char* p = obj; *p; p++) {
+    char c = *p;
+    if (c == '"') {
+      const char* s = p + 1; const char* q = s;
+      while (*q && *q != '"') { if (*q == '\\' && q[1]) q++; q++; }
+      if (!*q) return nullptr;
+      if (depth == 1 && (size_t)(q - s) == kl && strncmp(s, key, kl) == 0) {
+        const char* v = q + 1;
+        while (*v == ' ') v++;
+        if (*v == ':') { v++; while (*v == ' ') v++; return v; }
+      }
+      p = q; continue;
+    }
+    if (c == '{' || c == '[') depth++;
+    else if (c == '}' || c == ']') depth--;
+  }
+  return nullptr;
+}
+static bool audStr(const char* obj, const char* key, char* out, size_t cap) {
+  const char* v = audKey(obj, key);
+  if (!v || *v != '"') return false;
+  jamUnescape(v + 1, out, cap);
+  return true;
+}
+static int audInt(const char* obj, const char* key) {            // -1 kalau tidak ada / bukan angka
+  const char* v = audKey(obj, key);
+  if (!v || *v < '0' || *v > '9') return -1;
+  long n = 0;
+  while (*v >= '0' && *v <= '9' && n < 100000) { n = n * 10 + (*v - '0'); v++; }
+  return (int)n;
+}
+static bool audIsFalse(const char* obj, const char* key) { const char* v = audKey(obj, key); return v && strncmp(v, "false", 5) == 0; }
+static bool audIsTrue (const char* obj, const char* key) { const char* v = audKey(obj, key); return v && strncmp(v, "true", 4) == 0; }
+
+// id Audius = huruf/angka saja (mis. "D7KyD"); apa pun selain itu ditolak supaya URL aman
+static bool audIdOk(const char* id) {
+  size_t n = strlen(id);
+  if (n < 2 || n > 24) return false;
+  for (size_t i = 0; i < n; i++) {
+    char c = id[i];
+    if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'))) return false;
+  }
+  return true;
+}
+
+// Parse respons. json DIUBAH (NUL disisipkan). Isi out[] dengan JamTrack yang sama dengan Jamendo:
+// url = https://api.audius.co/v1/tracks/<id>/stream?app_name=ren_phone (server membalas 302 ke file MP3).
+static int audParse(char* json, JamTrack* out, int maxN) {
+  char* p = strstr(json, "\"data\"");
+  if (!p) return 0;
+  p = strchr(p, '[');
+  if (!p) return 0;
+  p++;
+  int n = 0;
+  while (n < maxN) {
+    while (*p && *p != '{' && *p != ']') p++;
+    if (*p != '{') break;
+    char* start = p;
+    int depth = 0; bool inStr = false;
+    for (; *p; p++) {
+      char c = *p;
+      if (inStr) { if (c == '\\' && p[1]) p++; else if (c == '"') inStr = false; continue; }
+      if (c == '"') inStr = true;
+      else if (c == '{') depth++;
+      else if (c == '}') { depth--; if (depth == 0) break; }
+    }
+    if (*p != '}') break;                              // objek terpotong
+    *p = 0;
+    JamTrack& t = out[n];
+    t.title[0] = t.artist[0] = t.url[0] = 0; t.durSec = 0;
+    char id[28]; id[0] = 0;
+    bool ok = audStr(start, "id", id, sizeof(id)) && audIdOk(id);
+    if (ok && (audIsFalse(start, "is_streamable") || audIsTrue(start, "is_stream_gated"))) ok = false;
+    if (ok) { const char* ac = audKey(start, "access"); if (ac && *ac == '{' && audIsFalse(ac, "stream")) ok = false; }
+    if (ok) {
+      audStr(start, "title", t.title, sizeof(t.title));
+      const char* u = audKey(start, "user");
+      if (u && *u == '{') audStr(u, "name", t.artist, sizeof(t.artist));
+      int d = audInt(start, "duration"); t.durSec = (d > 0 && d < 65535) ? (uint16_t)d : 0;
+      snprintf(t.url, sizeof(t.url), AUD_BASE "/tracks/%s/stream?app_name=" AUD_APP, id);
+      if (!t.title[0]) strcpy(t.title, "(tanpa judul)");
+      n++;
+    }
+    p++;
+  }
+  return n;
+}
+
+// chip genre aplikasi (tag Jamendo huruf kecil) -> nama genre Audius untuk trending; "" = semua genre
+static const char* audGenre(const char* tag) {
+  if (!tag || !tag[0]) return "";
+  if (!strcmp(tag, "pop"))  return "Pop";
+  if (!strcmp(tag, "rock")) return "Rock";
+  if (!strcmp(tag, "lofi")) return "Lo-Fi";
+  if (!strcmp(tag, "jazz")) return "Jazz";
+  return "";
 }
