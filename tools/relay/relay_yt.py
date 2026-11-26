@@ -4,7 +4,7 @@
 #
 # Setup Termux (sekali):
 #   pkg update && pkg install python ffmpeg nodejs
-#   pip install -U yt-dlp
+#   pip install -U "yt-dlp[default]"
 # Jalankan:
 #   python relay_yt.py            (port 8080; ganti:  python relay_yt.py 9000)
 # Pakai:
@@ -15,7 +15,7 @@
 #   - kalau di PC/lain: tulis "192.168.x.x:8080" di berkas /relay.txt di root SD card
 # Ukuran video mengikuti panel: ren_phone mengirim /live?w=..&h=.. (Accretion v2 ST7796 = 320x480 portrait, v1 ILI9341 = 240x320).
 # Hanya video, tanpa suara. Hanya satu penonton sekali waktu.
-import os, re, shutil, subprocess, sys, socket, threading, urllib.parse, html
+import os, re, shutil, subprocess, sys, socket, threading, time, urllib.parse, html
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8080
@@ -32,9 +32,11 @@ def resolve(url):
         yd = shutil.which("yt-dlp")
         if not yd:
             raise RuntimeError("yt-dlp belum terpasang (pip install -U yt-dlp)")
-        r = subprocess.run([yd, "--no-playlist", "-f", "b[height<=360]/bv*[height<=360]/b",
+        # yt-dlp >= 2025.11: YouTube butuh runtime JS eksternal (bawaan cuma deno). Termux: pkg install nodejs
+        js = ["--js-runtimes", "node", "--remote-components", "ejs:github"] if shutil.which("node") else []
+        r = subprocess.run([yd, "--no-playlist", "-f", "b[height<=360]/bv*[height<=360]/b", *js,
                             "--get-title", "--get-url", url],
-                           capture_output=True, text=True, timeout=60)
+                           capture_output=True, text=True, timeout=120)
         lines = [l.strip() for l in r.stdout.splitlines() if l.strip()]
         if r.returncode != 0 or len(lines) < 2:
             raise RuntimeError("yt-dlp gagal: " + (r.stderr.strip().splitlines() or ["tanpa pesan"])[-1][:200])
@@ -125,8 +127,41 @@ class H_(BaseHTTPRequestHandler):
             try: p.kill()
             except Exception: pass
 
+def lan_ip():
+    try:                                   # IP HP ini di WiFi/hotspot (tanpa perlu izin khusus)
+        u = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); u.connect(("10.255.255.255", 1)); ip = u.getsockname()[0]; u.close()
+        return ip
+    except Exception:
+        return ""
+
+def beacon():
+    """RELAY_DISCOVER_V1: pancarkan "RENRELAY <port>" (UDP 8081) tiap 1 dtk supaya ren_phone menemukan relay tanpa /relay.txt."""
+    msg = ("RENRELAY %d" % PORT).encode()
+    extra = [t for t in os.environ.get("RELAY_BCAST", "").split(",") if t]
+    while True:
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+            ip = lan_ip(); tg = ["255.255.255.255"] + extra
+            if ip.count(".") == 3: tg.append(ip.rsplit(".", 1)[0] + ".255")
+            for t in tg:
+                try: s.sendto(msg, (t, 8081))
+                except Exception: pass
+            s.close()
+        except Exception:
+            pass
+        time.sleep(1)
+
+class Srv(ThreadingHTTPServer):   # abaikan koneksi yang ditutup browser/HP di tengah jalan
+    def handle_error(self, request, client_address):
+        if isinstance(sys.exc_info()[1], (BrokenPipeError, ConnectionResetError, ConnectionAbortedError)):
+            return
+        super().handle_error(request, client_address)
+
 if __name__ == "__main__":
     if not shutil.which("ffmpeg"):
         sys.exit("ffmpeg belum terpasang (Termux: pkg install ffmpeg)")
+    ip = lan_ip()
+    threading.Thread(target=beacon, daemon=True).start()   # RELAY_DISCOVER_V1
     print("Relay jalan di port %d. Buka http://127.0.0.1:%d di browser." % (PORT, PORT))
-    ThreadingHTTPServer(("0.0.0.0", PORT), H_).serve_forever()
+    print("Alamat relay: %s:%d  (ren_phone menemukannya otomatis di WiFi yang sama; /relay.txt di SD hanya kalau gagal)" % (ip or "<IP HP ini>", PORT))
+    Srv(("0.0.0.0", PORT), H_).serve_forever()

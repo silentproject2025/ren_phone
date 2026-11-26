@@ -12813,6 +12813,24 @@ void mjpegPlayRelay(){
     File rf = SD_MMC.open("/relay.txt", FILE_READ);
     if(rf){ hp = rf.readStringUntil('\n'); hp.trim(); rf.close(); }
   }
+  if(hp.length() == 0){            // RELAY_DISCOVER_V1: relay memancarkan "RENRELAY <port>" ke UDP 8081 tiap 1 dtk
+    WiFiUDP du;
+    if(du.begin(8081)){
+      uint32_t t0 = millis();
+      while(millis() - t0 < 3500){
+        int n = du.parsePacket();
+        if(n > 0){
+          char b[40]; int m = du.read(b, sizeof(b) - 1); if(m < 0) m = 0; b[m] = 0;
+          if(strncmp(b, "RENRELAY ", 9) == 0){
+            hp = du.remoteIP().toString() + ":" + String(atoi(b + 9));
+            break;
+          }
+        }
+        delay(20); yield();
+      }
+      du.stop();
+    }
+  }
   if(hp.length() == 0) hp = WiFi.gatewayIP().toString() + ":8080";
   String host = hp; uint16_t port = 8080;
   int ci = hp.indexOf(':');
