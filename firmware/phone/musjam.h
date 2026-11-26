@@ -21,8 +21,16 @@
 #include <esp_heap_caps.h>
 #include "jam_core.h"
 
+// Client ID bisa datang dari build flag -DJAM_CLIENT_ID_RAW=308473cf (token polos tanpa kutip; dipakai CI
+// dari GitHub Secret) atau -DJAM_CLIENT_ID=\"...\" atau diisi manual di bawah. Kosong = placeholder.
 #ifndef JAM_CLIENT_ID
-#define JAM_CLIENT_ID "ISI_CLIENT_ID_KAMU"
+ #ifdef JAM_CLIENT_ID_RAW
+  #define JAM_STR_(x) #x
+  #define JAM_STR(x)  JAM_STR_(x)
+  #define JAM_CLIENT_ID JAM_STR(JAM_CLIENT_ID_RAW)
+ #else
+  #define JAM_CLIENT_ID "ISI_CLIENT_ID_KAMU"
+ #endif
 #endif
 #define JAM_RESP_MAX (64 * 1024)
 
