@@ -26,6 +26,9 @@
 #include <esp_heap_caps.h>
 #include "musfs.h"      // SPK_FFAT_V1: worker FFat + musRamLog
 #include "MP3DecoderHelix.h"
+#include <WiFi.h>
+#include <WiFiClientSecure.h>
+#include <HTTPClient.h>   // JAM_STREAM_V1: sumber lagu dari jaringan (Jamendo)
 using namespace libhelix;
 
 #ifndef MUS_SPK_DEC_PSRAM
@@ -53,6 +56,8 @@ static char              spkCmdPath[128];
 static volatile bool     spkCmdWav    = false;
 static volatile uint32_t spkCmdOff    = 0;
 static volatile bool     spkCmdFfat   = false;   // SPK_FFAT_V1: sesi ini membaca dari FFat
+static char              spkCmdUrl[256];         // JAM_STREAM_V1: URL MP3 (http/https)
+static volatile bool     spkCmdNet    = false;   // JAM_STREAM_V1: sesi ini membaca dari jaringan
 
 // ---- status ----
 static volatile bool     spkPausedF   = false;
@@ -164,19 +169,66 @@ static long spkIo(int op, const char* path, uint8_t* dst, size_t n, uint32_t pos
   if (!mffRun(spkIoFn, &o)) return -1;
   return o.ret;
 }
+// ---- JAM_STREAM_V1: sumber jaringan. Hanya spkTask yang menyentuh ini ----
+static bool            spkNetOn  = false;          // sesi yg sedang berjalan membaca dari jaringan
+static HTTPClient*     spkHttp   = nullptr;
+static WiFiClientSecure* spkNetCli = nullptr;
+static WiFiClient*     spkNetStr = nullptr;
+static int32_t         spkNetLen = -1;             // Content-Length (-1 = tidak diketahui)
+static uint32_t        spkNetGot = 0;              // byte yg sudah dibaca
+static bool spkNetOpen(const char* url) {
+  if (WiFi.status() != WL_CONNECTED) return false;
+  spkNetCli = new WiFiClientSecure(); spkNetCli->setInsecure();
+  spkHttp   = new HTTPClient();
+  spkHttp->setConnectTimeout(10000); spkHttp->setTimeout(8000);
+  spkHttp->setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+  spkHttp->setReuse(false);                          // server menutup koneksi setelah selesai
+  spkNetLen = -1; spkNetGot = 0;
+  bool ok = false;
+  if (spkHttp->begin(*spkNetCli, url)) ok = (spkHttp->GET() == 200);
+  if (ok) { spkNetStr = spkHttp->getStreamPtr(); spkNetLen = spkHttp->getSize(); }   // MP3 dikirim apa adanya (bukan chunked)
+  if (!ok || !spkNetStr) {
+    spkHttp->end(); delete spkHttp; delete spkNetCli; spkHttp = nullptr; spkNetCli = nullptr; spkNetStr = nullptr;
+    return false;
+  }
+  return true;
+}
+// >0 = byte terbaca, 0 = stream selesai, <0 = putus/timeout
+static int spkNetRead(uint8_t* b, size_t n) {
+  if (!spkNetStr) return -1;
+  uint32_t t0 = millis();
+  for (;;) {
+    int av = spkNetStr->available();
+    if (spkNetLen > 0 && spkNetGot >= (uint32_t)spkNetLen) return 0;   // semua byte sudah diterima = selesai (walau koneksi masih terbuka)
+    if (av > 0) { if ((size_t)av < n) n = (size_t)av; int r = spkNetStr->readBytes(b, n); if (r > 0) spkNetGot += (uint32_t)r; return r; }
+    if (!spkNetStr->connected()) return 0;           // server menutup & buffer kosong = selesai
+    if (millis() - t0 > 8000) return -1;
+    vTaskDelay(pdMS_TO_TICKS(5));
+  }
+}
+static void spkNetClose() {
+  if (spkHttp)   { spkHttp->end(); delete spkHttp; spkHttp = nullptr; }
+  if (spkNetCli) { spkNetCli->stop(); delete spkNetCli; spkNetCli = nullptr; }
+  spkNetStr = nullptr;
+}
+
 static bool spkOpenFile(const char* p, bool ffat) {
+  if (spkNetOn) return spkNetOpen(p);                // JAM_STREAM_V1
   if (ffat) return spkIo(0, p, nullptr, 0, 0) == 1;
   spkF = SD_MMC.open(p, FILE_READ);
   return (bool)spkF;
 }
 static int spkReadFile(bool ffat, uint8_t* b, size_t n) {
+  if (spkNetOn) return spkNetRead(b, n);             // JAM_STREAM_V1
   if (ffat) return (int)spkIo(1, nullptr, b, n, 0);
   return spkF.read(b, n);
 }
 static void spkSeekFile(bool ffat, uint32_t pos) {
+  if (spkNetOn) return;                              // JAM_STREAM_V1: stream tidak bisa di-seek
   if (ffat) spkIo(2, nullptr, nullptr, 0, pos); else spkF.seek(pos);
 }
 static void spkCloseFile(bool ffat) {
+  if (spkNetOn) { spkNetClose(); return; }           // JAM_STREAM_V1
   if (ffat) spkIo(3, nullptr, nullptr, 0, 0); else if (spkF) spkF.close();
 }
 
@@ -202,18 +254,19 @@ static void spkTaskFn(void* arg) {
       playing = false; pausedHandled = false; ramLogged = false;
       if (spkCmdPath[0]) musRamLog("pra");
       if (spkCmdPath[0] && !spkLive) {
-        ffat = spkCmdFfat;
-        bool ok = spkOpenFile(spkCmdPath, ffat);
+        spkNetOn = spkCmdNet;                        // JAM_STREAM_V1 (sesi lama sudah ditutup di atas)
+        ffat = spkCmdFfat && !spkNetOn;
+        bool ok = spkOpenFile(spkNetOn ? spkCmdUrl : spkCmdPath, ffat);
         fileOpen = ok;
         wav = spkCmdWav;
-        if (ok && wav) {                             // memo WAV (selalu dari SD): header 44 byte, PCM 16-bit
+        if (ok && wav && !spkNetOn) {                             // memo WAV (selalu dari SD): header 44 byte, PCM 16-bit
           uint8_t h[44];
           ok = (spkF.read(h, 44) == 44) && memcmp(h, "RIFF", 4) == 0 && h[34] == 16;
           wavCh = h[22];
           wavSr = (uint32_t)h[24] | ((uint32_t)h[25] << 8) | ((uint32_t)h[26] << 16) | ((uint32_t)h[27] << 24);
           if (wavCh < 1 || wavCh > 2 || wavSr < 8000 || wavSr > 96000) ok = false;
         } else if (ok) {
-          if (spkCmdOff) spkSeekFile(ffat, spkCmdOff);   // lewati tag ID3
+          if (spkCmdOff && !spkNetOn) spkSeekFile(ffat, spkCmdOff);   // lewati tag ID3
           ok = spkDecCreate();
         }
         if (ok) playing = true;
@@ -257,7 +310,7 @@ static void spkTaskFn(void* arg) {
 // =====================================================================
 static bool spkEnsureTask() {
   if (spkTaskH) return true;
-  const uint32_t stackBytes = 8192;
+  const uint32_t stackBytes = 16384;                 // JAM_STREAM_V1: handshake TLS butuh stack lebih besar (di PSRAM)
   if (!spkStack)
     spkStack = (StackType_t*)heap_caps_aligned_alloc(16, stackBytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
   if (spkStack)
@@ -273,6 +326,20 @@ static bool spkPlay(const char* path, bool wav, uint32_t off) {
   spkCmdPath[sizeof(spkCmdPath) - 1] = 0;
   spkCmdWav = wav; spkCmdOff = off;
   spkCmdFfat = (!wav && musUseFfat);          // memo WAV selalu dari SD; lagu ikut hasil pindai
+  spkCmdNet = false;                          // JAM_STREAM_V1
+  spkPausedF = false; spkEndedF = false; spkFailF = false;
+  spkFrames = 0;
+  __sync_synchronize();
+  spkCmdSeq++;
+  return true;
+}
+// JAM_STREAM_V1: putar MP3 dari URL (mis. dari jamUrl(i)). Dekode & I2S sama dgn lagu SD.
+static bool spkPlayUrl(const char* url) {
+  if (spkLive || !url || !url[0]) return false;
+  if (!spkEnsureTask()) return false;
+  strncpy(spkCmdUrl, url, sizeof(spkCmdUrl) - 1); spkCmdUrl[sizeof(spkCmdUrl) - 1] = 0;
+  strcpy(spkCmdPath, "net");                         // hanya penanda "ada perintah"
+  spkCmdWav = false; spkCmdOff = 0; spkCmdFfat = false; spkCmdNet = true;
   spkPausedF = false; spkEndedF = false; spkFailF = false;
   spkFrames = 0;
   __sync_synchronize();

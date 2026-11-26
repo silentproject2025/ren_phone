@@ -29,6 +29,7 @@
 #include <esp_heap_caps.h>
 #include <math.h>
 #include "musspk.h"   // pemutar lokal: SD -> Helix -> I2S -> MAX98357A (output "SPK")
+#include "musjam.h"   // JAM_UI_V1: lagu online Jamendo (cari + stream lewat spkPlayUrl)
 
 #define MUS_UART_RX     42
 #define MUS_UART_TX     41
@@ -128,6 +129,15 @@ static volatile bool musStreaming = false, musFileDone = false;
 static volatile bool musResumeOnBt = false;
 static uint8_t       musSeq = 0;
 static volatile bool musWavMode = false;     // true = yg sedang diputar adalah memo WAV (bukan playlist)
+// ---- JAM_UI_V1: lagu online (Jamendo) ----
+static volatile bool musNetMode = false;     // true = yg diputar berasal dari daftar Jamendo (jamTracks), bukan playlist SD
+static volatile int  musNetCur  = -1;        // indeks di daftar Jamendo
+static char          musNetTitle[64] = "";
+static char          musNetArtist[40] = "";
+static String        musJamQuery;            // target keyboard (kotak cari)
+static int           musJamTop  = 0;         // baris pertama yg tampak
+static int           musJamTag  = 0;         // chip aktif (0 Hits, 1 Pop, 2 Rock, 3 Lofi, 4 Jazz); -1 = hasil cari teks
+static bool          musJamOpened = false;   // pengambilan awal sudah dicoba
 
 static char          musScanName[MUS_SCAN_MAX][40];
 static int8_t        musScanRssi[MUS_SCAN_MAX];
@@ -625,6 +635,7 @@ static bool musStartTrack(int idx, int prevHow) {
   if (!musUseFfat) { if (off > 0 && off < (uint32_t)musFile.size()) musFile.seek(off); else musFile.seek(0); }
 
   musWavMode = false;                           // lagu playlist -> keluar dari mode memo
+  musNetMode = false;                           // JAM_UI_V1
   musEndCurrent(prevHow);                       // bukukan lagu sebelumnya (reward) SEBELUM musPlayedMs di-reset
   musSeq++;
   uint8_t sq = musSeq;
@@ -678,6 +689,43 @@ static int musNextIdx(int dir, bool autoNext) {
   return nx;
 }
 
+// JAM_UI_V1: indeks lagu online berikutnya/sebelumnya (-1 = tidak ada)
+static int musNetNext(int dir, bool autoNext) {
+  int n = jamCount();
+  if (n <= 0) return -1;
+  if (autoNext && musRepeat == 2) return musNetCur;
+  if (musShufMode != 0 && n > 1 && dir > 0) { int r; do { r = (int)random(0, n); } while (r == musNetCur); return r; }
+  int nx = musNetCur + dir;
+  if (nx >= n) { if (musRepeat == 1 || !autoNext) nx = 0; else return -1; }
+  if (nx < 0) nx = n - 1;
+  return nx;
+}
+// JAM_UI_V1: putar lagu online ke-idx lewat spkTask (hanya output speaker)
+static bool musStartNet(int idx, int prevHow) {
+  int n = jamCount();
+  if (n <= 0)    { musToast("Daftar online kosong"); return false; }
+  if (!musOutSpk) { musToast("Online butuh output SPK"); return false; }
+  if (WiFi.status() != WL_CONNECTED) { musToast("WiFi belum terhubung"); return false; }
+  if (idx < 0) idx = n - 1;
+  if (idx >= n) idx = 0;
+  musCloseFile();
+  musEndCurrent(prevHow);                       // bukukan lagu playlist sebelumnya (RYNE); no-op kalau sebelumnya lagu online
+  musWavMode = false;
+  musSeq++;
+  musCredit = 0; musSentSince = 0;
+  strncpy(musNetTitle,  jamTitle(idx),  sizeof(musNetTitle) - 1);  musNetTitle[sizeof(musNetTitle) - 1] = 0;
+  strncpy(musNetArtist, jamArtist(idx), sizeof(musNetArtist) - 1); musNetArtist[sizeof(musNetArtist) - 1] = 0;
+  if (!spkPlayUrl(jamUrl(idx))) { musToast("Speaker gagal dimulai"); return false; }
+  musNetMode = true; musNetCur = idx;
+  musLoaded = true; musPaused = false; musEnded = false;
+  musPlayedMs = 0; musStreaming = false; musFileDone = false;
+  musDurMs = (uint32_t)jamDurSec(idx) * 1000u;  // 0 = tidak diketahui (bar kosong, "--:--")
+  musKbps = 0; musSr = 0;
+  musCoverReady = false; musCoverWant = false;  // tidak ada ID3 cover utk stream
+  musLiked = false;
+  return true;
+}
+
 static void musSendPause(bool pause) {
   if (musOutSpk) { spkSetPause(pause); return; }
   uint8_t v = pause ? 0 : 1;
@@ -698,6 +746,7 @@ static void musPlayWav(const char* path) {
   musFile.seek(0);
   musEndCurrent(3);                              // bukukan lagu yg sedang jalan (kalau ada)
   musWavMode = true;
+  musNetMode = false;                            // JAM_UI_V1
   musSeq++;
   uint8_t sq = musSeq;
   musCredit = 0; musSentSince = 0;
@@ -718,15 +767,20 @@ static void musHandleReq(uint8_t t, int32_t a, const char* s) {
   switch (t) {
     case 'p': musStartTrack((int)a, 2); break;
     case 'u':
-      if (!musLoaded) musStartTrack(musCur < 0 ? 0 : musCur, 3);
+      if (!musLoaded) { if (musNetMode && musNetCur >= 0) musStartNet(musNetCur, 3); else musStartTrack(musCur < 0 ? 0 : musCur, 3); }
       else { musPaused = !musPaused; musSendPause(musPaused); }
       break;
     case 'n': {
+      if (musNetMode) { musStartNet(musNetNext(1, false), 1); break; }       // JAM_UI_V1
       int old = musCur, i = musNextIdx(1, false);
       if (i >= 0 && musStartTrack(i, 1) && musShufMode != 0) musHistPush(old);
       break;
     }
     case 'b':
+      if (musNetMode) {                                                       // JAM_UI_V1
+        if (musLoaded && musPlayedMs > 3000) musStartNet(musNetCur, 2); else musStartNet(musNetNext(-1, false), 2);
+        break;
+      }
       if (musLoaded && musPlayedMs > 3000) musStartTrack(musCur, 2);
       else { int i = musNextIdx(-1, false); if (i >= 0) musStartTrack(i, 2); }
       break;
@@ -738,8 +792,10 @@ static void musHandleReq(uint8_t t, int32_t a, const char* s) {
       break;
     }
     case 'w': musPlayWav(s); break;
+    case 'J': musStartNet((int)a, 2); break;      // JAM_UI_V1: putar lagu online ke-a
     case 's':
       musWavMode = false;
+      musNetMode = false;                         // JAM_UI_V1
       musEndCurrent(3);
       musLoaded = false; musStreaming = false;
       musCoverReady = false; musCoverWant = false;
@@ -769,6 +825,7 @@ static void musHandleReq(uint8_t t, int32_t a, const char* s) {
       spkStopPlay();                              // audio AVI selalu lewat CAM/Bluetooth; hentikan lagu speaker kalau ada
       musEndCurrent(3);
       musWavMode = false;
+      musNetMode = false;                         // JAM_UI_V1
       musSeq++;
       uint8_t sq = musSeq;
       musCredit = 0; musSentSince = 0;
@@ -796,6 +853,7 @@ static void musHandleReq(uint8_t t, int32_t a, const char* s) {
       if (musExt && musLoaded) { musPaused = (a != 0); musSendPause(musPaused); }
       break;
     case 'k':                                     // tombol suka (toggle) untuk lagu terpilih
+      if (musNetMode) break;                      // JAM_UI_V1: lagu online tidak ikut RYNE
       if (ryne && musCur >= 0) {
         bool on = !ryne->liked(musCur);
         ryne->like(musCur, on, millis());
@@ -1008,7 +1066,7 @@ static void musTask(void* arg) {
     if (musOutSpk && musLoaded && !musExt) {      // output speaker: waktu putar & habis/gagal datang dari spkTask
       musPlayedMs = spkPlayedMs();
       if (spkTakePreempt()) { musLoaded = false; musStreaming = false; musWavMode = false; musToast("Musik dihentikan (telepon)"); }
-      else if (spkTakeFail()) { musLoaded = false; musStreaming = false; musWavMode = false; musToast("Speaker gagal dimulai"); }
+      else if (spkTakeFail()) { musLoaded = false; musStreaming = false; musWavMode = false; musToast(musNetMode ? "Stream online gagal" : "Speaker gagal dimulai"); }
       else if (spkTakeEnded()) musEnded = true;
     }
     if (musEnded && musWavMode) {                 // memo selesai: berhenti, JANGAN lanjut ke playlist
@@ -1018,6 +1076,11 @@ static void musTask(void* arg) {
     if (musEnded && musExt) {                     // audio AVI habis: berhenti, JANGAN lanjut ke playlist
       musEnded = false; musExt = false; musExtEndedFlag = true;
       musLoaded = false; musStreaming = false;
+    }
+    if (musEnded && musNetMode) {                 // JAM_UI_V1: lagu online habis -> berikutnya di daftar Jamendo
+      musEnded = false;
+      int nx = musNetNext(1, true);
+      if (nx < 0 || !musStartNet(nx, 3)) { musLoaded = false; musStreaming = false; }
     }
     // ---- 5. lagu habis -> berikutnya ----
     if (musEnded) {
@@ -1264,6 +1327,7 @@ float homeMusProgress() {
 }
 void homeMusTitle(char* out, int cap) {
   if (!musStarted) { strncpy(out, "Musik", cap - 1); out[cap - 1] = 0; return; }
+  if (musNetMode) { strncpy(out, musNetTitle, cap - 1); out[cap - 1] = 0; return; }   // JAM_UI_V1
   musGetTitle(out, cap, musCur);
 }
 void homeMusToggle() { if (musStarted) musPost('u', 0, nullptr); }
@@ -1291,6 +1355,11 @@ void musicLoopPoll() {
     }
   }
 
+  if (jamTakeDone()) {                           // JAM_UI_V1: pencarian online selesai
+    int jr = jamLastResult();
+    if (onScr && jr < 0) showToast(jr == -1 ? "WiFi belum terhubung" : (jr == -3 ? "RAM tidak cukup" : "Gagal ambil data Jamendo"));
+    needRedraw = true;
+  }
   if (musMsgPending) {
     musMsgPending = false;
     if (onScr || musLoaded) showToast(musMsg);
@@ -1320,6 +1389,7 @@ void musicLoopPoll() {
   if (onScr) {
     if (musPage == 0)      iv = 100;
     else if (musPage == 1) iv = (musLoaded && !musPaused) ? 150 : 500;
+    else if (musPage == 4) iv = (jamBusy() || (musLoaded && !musPaused) || (kbVisible && kbTarget == &musJamQuery)) ? 150 : 500;   // JAM_UI_V1
     else                   iv = (musScanning || musConnecting) ? 100 : 500;
   }
   if (onScr && now - lastRd >= iv) { lastRd = now; needRedraw = true; }
@@ -1530,12 +1600,19 @@ static void musDrawEq(LGFX_Sprite& s, bool playing) {
 }
 
 static bool ryvChipRect(int* x, int* w);      // definisi di blok layar RYNE (bawah)
+// JAM_UI_V1: chip "Online" di header pemutar (setelah chip RYNE; muncul kalau muat)
+static bool musJamChipRect(int* x, int* w) {
+  int rx, rw;
+  int base = ryvChipRect(&rx, &rw) ? rx + rw + 6 : mDafX + mDafW + 6;
+  *x = base; *w = 46; return *x + *w + 6 <= mTwsX;
+}
 static void musDrawChips(LGFX_Sprite& s) {
   musPanel(s, mDafX, mHdrY, mDafW, mChipH, 9, T().surface2, 210);
   for (int i = 0; i < 3; i++) s.fillRect(mDafX + 10, mHdrY + 5 + i * 4, 10, 2, T().text);
   s.setTextSize(1); s.setTextColor(T().text);
   s.setCursor(mDafX + 26, mHdrY + 5); s.print(RPTR("Daftar"));
   { int cx, cw; if (ryvChipRect(&cx, &cw)) { musPanel(s, cx, mHdrY, cw, mChipH, 9, T().surface2, 210); s.setTextColor(T().accent); s.setCursor(cx + (cw - 24) / 2, mHdrY + 5); s.print("RYNE"); s.setTextColor(T().text); } }
+  { int jx, jw; if (musJamChipRect(&jx, &jw)) { musPanel(s, jx, mHdrY, jw, mChipH, 9, T().surface2, 210); s.setTextColor(T().accent2); s.setCursor(jx + (jw - 36) / 2, mHdrY + 5); s.print("Online"); s.setTextColor(T().text); } }   // JAM_UI_V1
 
   const char* st; uint16_t col;
   char spkTxt[24];
@@ -1559,6 +1636,7 @@ static void musDrawPlayer(LGFX_Sprite& s) {
   bool playing = musLoaded && !musPaused;
   char title[64];
   musGetTitle(title, sizeof(title), musCur);
+  if (musNetMode) { strncpy(title, musNetTitle, sizeof(title) - 1); title[sizeof(title) - 1] = 0; }   // JAM_UI_V1
 
   musDrawChips(s);
   musDrawCover(s, playing, title);
@@ -1603,10 +1681,14 @@ static void musDrawPlayer(LGFX_Sprite& s) {
     if (vp > 0) snprintf(sub, sizeof(sub), "%d/%d   %s %d%%", musCur + 1, musListCount(), RY_VIBE_NAME[vi], vp);
     else        snprintf(sub, sizeof(sub), "%d/%d", musCur + 1, musListCount());
   }
+  if (musNetMode) {                                    // JAM_UI_V1: artis + posisi di daftar online
+    snprintf(sub, sizeof(sub), "%s  %d/%d", musNetArtist, (int)musNetCur + 1, jamCount());
+    musTrunc(sub, (mTitW - 24) / 6);
+  }
   s.setTextSize(1); s.setTextColor(T().subtext);
   int sw = s.textWidth(sub);
   s.setCursor(mLand ? mTitX : mTitX + (mTitW - sw) / 2, mSubY); s.print(sub);
-  musDrawHeart(s, mTitX + mTitW - 8, mSubY + 4, musLiked ? 0xF9A6 : blend565(T().bg, T().text, 70));
+  if (!musNetMode) musDrawHeart(s, mTitX + mTitW - 8, mSubY + 4, musLiked ? 0xF9A6 : blend565(T().bg, T().text, 70));
 
   if (!musOutSpk && !musCamAlive) {                    // diagnosa: apa yg masuk dari CAM?
     char dg[56];
@@ -1721,14 +1803,168 @@ static void musDrawList(LGFX_Sprite& s) {
     nyxAaRR(s, SCR_W - 9, thumbY, 3, thumbH, 1, T().accent);
   }
 
-  int bw3 = (SCR_W - 24 - 12) / 3;
-  int bx0 = 12, bx1 = 12 + bw3 + 6, bx2 = 12 + 2 * (bw3 + 6);
+  int bw3 = (SCR_W - 24 - 18) / 4;                  // JAM_UI_V1: 4 tombol (▲ ▼ Online Pemutar)
+  int bx0 = 12, bx1 = 12 + bw3 + 6, bxJ = 12 + 2 * (bw3 + 6), bx2 = 12 + 3 * (bw3 + 6);
   musPanel(s, bx0, mBotY, bw3, mBotH, 10, T().surface2, 210);
   s.fillTriangle(bx0 + bw3 / 2, mBotY + 9, bx0 + bw3 / 2 - 7, mBotY + 19, bx0 + bw3 / 2 + 7, mBotY + 19, T().text);
   musPanel(s, bx1, mBotY, bw3, mBotH, 10, T().surface2, 210);
   s.fillTriangle(bx1 + bw3 / 2, mBotY + 19, bx1 + bw3 / 2 - 7, mBotY + 9, bx1 + bw3 / 2 + 7, mBotY + 9, T().text);
+  musPanel(s, bxJ, mBotY, bw3, mBotH, 10, T().surface2, 210);
+  musDrawLabel(s, "Online", bxJ, mBotY, bw3, mBotH, T().accent2);
   iosRR(s,bx2, mBotY, bw3, mBotH, 10, T().accent);
   musDrawLabel(s, RPTR("Pemutar"), bx2, mBotY, bw3, mBotH, T().bg);
+}
+
+// =====================================================================
+//  JAM_UI_V1: halaman ONLINE (musPage == 4) -- cari / jelajah lagu Jamendo, ketuk = putar
+// =====================================================================
+#define MJ_GO_W 46
+static const char* const MJ_CHIP_LB[5]  = { "Hits", "Pop", "Rock", "Lofi", "Jazz" };
+static const char* const MJ_CHIP_TAG[5] = { "", "pop", "rock", "lofi", "jazz" };
+
+static bool musJamKbOn()  { return kbVisible && kbTarget == &musJamQuery; }
+static int  musJamBoxY()  { return mHdrY - 2; }
+static int  musJamChipY() { return mHdrY + 24; }
+static int  musJamTopY()  { return mHdrY + 50; }
+static int  musJamBot()   { return musJamKbOn() ? kbY() - 4 : mBotY - 4; }
+static int  musJamRows()  { int r = (musJamBot() - musJamTopY()) / 30; return r < 0 ? 0 : r; }
+
+static void musJamFetch(const char* q, const char* tag) {
+  if (WiFi.status() != WL_CONNECTED) { showToast(RPTR("WiFi belum terhubung")); return; }
+  if (!jamSearchAsync(q, tag)) { showToast(jamBusy() ? RPTR("Masih memuat...") : RPTR("Gagal memulai pencarian")); return; }
+  musJamTop = 0; needRedraw = true;
+}
+static void musOpenJam() {                          // dipakai chip header & tombol di Daftar
+  musPage = 4; musJamTop = 0;
+  if (!musJamOpened && jamCount() == 0 && !jamBusy()) { musJamOpened = true; musJamTag = 0; musJamFetch("", ""); }
+}
+static void musJamSubmit() {
+  if (musJamKbOn()) { kbVisible = false; kbTarget = nullptr; }
+  String q = musJamQuery; q.trim();
+  if (q.length() == 0) { musJamTag = 0; musJamFetch("", ""); return; }
+  musJamTag = -1;
+  musJamFetch(q.c_str(), "");
+}
+
+static void musDrawJam(LGFX_Sprite& s) {
+  uint16_t chip = blend565(T().bg, T().text, 28);
+  bool kbOn = musJamKbOn();
+  bool busy = jamBusy();
+  s.setTextSize(1);
+
+  // kotak cari + tombol Cari
+  int by = musJamBoxY(), bx = 12, bw = SCR_W - 12 - MJ_GO_W - 6 - bx;
+  nyxAaRR(s, bx, by, bw, 22, 11, chip);
+  char q[48]; strncpy(q, musJamQuery.c_str(), sizeof(q) - 1); q[sizeof(q) - 1] = 0;
+  musTrunc(q, (bw - 24) / 6);
+  s.setTextColor(q[0] ? T().text : T().subtext);
+  s.setCursor(bx + 10, by + 7); s.print(q[0] ? q : RPTR("cari lagu / artis (Jamendo)"));
+  if (kbOn && ((millis() / 500) & 1)) { int cw = q[0] ? s.textWidth(q) : 0; s.fillRect(bx + 10 + cw + 1, by + 5, 1, 12, T().accent); }
+  nyxAaRR(s, SCR_W - 12 - MJ_GO_W, by, MJ_GO_W, 22, 11, T().accent);
+  musDrawLabel(s, busy ? "..." : RPTR("Cari"), SCR_W - 12 - MJ_GO_W, by, MJ_GO_W, 22, T().bg);
+
+  // chip genre
+  int cw5 = (SCR_W - 24 - 16) / 5, cy = musJamChipY();
+  for (int i = 0; i < 5; i++) {
+    int x = 12 + i * (cw5 + 4); bool on = (i == musJamTag);
+    nyxAaRR(s, x, cy, cw5, 20, 10, on ? T().accent : chip);
+    musDrawLabel(s, MJ_CHIP_LB[i], x, cy, cw5, 20, on ? T().bg : T().text);
+  }
+
+  // daftar
+  int n = jamCount(), top = musJamTopY(), rows = musJamRows();
+  if (musJamTop >= n) musJamTop = 0;
+  if (n == 0) {
+    int tY = top + 6;
+    if (busy) {
+      char m[16]; snprintf(m, sizeof(m), "Memuat%.*s", (int)((millis() / 300) % 4), "...");
+      s.setTextColor(T().text); s.setCursor(12, tY); s.print(m);
+    } else if (strcmp(JAM_CLIENT_ID, "ISI_CLIENT_ID_KAMU") == 0) {
+      s.setTextColor(T().danger);  s.setCursor(12, tY);      s.print("JAM_CLIENT_ID belum diisi.");
+      s.setTextColor(T().subtext); s.setCursor(12, tY + 14); s.print("Daftar gratis: devportal.jamendo.com");
+    } else if (WiFi.status() != WL_CONNECTED) {
+      s.setTextColor(T().text);    s.setCursor(12, tY);      s.print(RPTR("WiFi belum terhubung."));
+      s.setTextColor(T().subtext); s.setCursor(12, tY + 14); s.print(RPTR("Sambungkan lewat Setting, lalu ketuk Cari."));
+    } else if (jamLastResult() < 0) {
+      s.setTextColor(T().danger);  s.setCursor(12, tY);      s.print(jamLastResult() == -3 ? "RAM tidak cukup." : "Gagal ambil data Jamendo.");
+      s.setTextColor(T().subtext); s.setCursor(12, tY + 14); s.print(RPTR("Ketuk Cari untuk mencoba lagi."));
+    } else if (musJamOpened || musJamTag == -1) {
+      s.setTextColor(T().subtext); s.setCursor(12, tY);      s.print(RPTR("Tidak ada hasil."));
+    } else {
+      s.setTextColor(T().subtext); s.setCursor(12, tY);      s.print(RPTR("Ketuk Cari atau pilih genre."));
+    }
+  }
+  int maxc = (SCR_W - 46 - 56) / 6;
+  for (int r = 0; r < rows; r++) {
+    int idx = musJamTop + r;
+    if (idx >= n) break;
+    int y = top + r * 30;
+    bool cur = (musNetMode && idx == musNetCur);
+    musPanel(s, 12, y, SCR_W - 30, 28, 8, cur ? T().accent : T().surface2, cur ? 90 : 170);
+    nyxAaCircle(s, 28, y + 14, 10, cur ? T().accent : blend565(T().bg, T().text, 40));
+    char num[12]; snprintf(num, sizeof(num), "%d", idx + 1);
+    s.setTextColor(cur ? T().bg : T().subtext);
+    s.setCursor(28 - s.textWidth(num) / 2, y + 10); s.print(num);
+    char nm[64]; strncpy(nm, jamTitle(idx), sizeof(nm) - 1); nm[sizeof(nm) - 1] = 0; musTrunc(nm, maxc);
+    char ar[40]; strncpy(ar, jamArtist(idx), sizeof(ar) - 1); ar[sizeof(ar) - 1] = 0; musTrunc(ar, maxc);
+    s.setTextColor(T().text);    s.setCursor(46, y + 4);  s.print(nm);
+    s.setTextColor(T().subtext); s.setCursor(46, y + 15); s.print(ar);
+    if (cur) musMiniEq(s, SCR_W - 18 - 14, y + 22, musLoaded && !musPaused, T().accent);
+    else { int d = jamDurSec(idx); if (d > 0) { char dt[12]; musFmtTime(dt, (uint32_t)d * 1000u); s.setTextColor(T().subtext); s.setCursor(SCR_W - 20 - s.textWidth(dt), y + 10); s.print(dt); } }
+  }
+  if (n > rows && rows > 0) {                       // scrollbar
+    int trackH = rows * 30 - 2, thumbH = (trackH * rows) / n; if (thumbH < 12) thumbH = 12;
+    int thumbY = top + ((trackH - thumbH) * musJamTop) / (n - rows > 0 ? n - rows : 1);
+    nyxAaRR(s, SCR_W - 9, top, 3, trackH, 1, blend565(T().bg, T().text, 30));
+    nyxAaRR(s, SCR_W - 9, thumbY, 3, thumbH, 1, T().accent);
+  }
+
+  if (!kbOn) {                                      // bar bawah: ▲ ▼ Pemutar
+    int bw3 = (SCR_W - 24 - 12) / 3;
+    int bx0 = 12, bx1 = 12 + bw3 + 6, bx2 = 12 + 2 * (bw3 + 6);
+    musPanel(s, bx0, mBotY, bw3, mBotH, 10, T().surface2, 210);
+    s.fillTriangle(bx0 + bw3 / 2, mBotY + 9, bx0 + bw3 / 2 - 7, mBotY + 19, bx0 + bw3 / 2 + 7, mBotY + 19, T().text);
+    musPanel(s, bx1, mBotY, bw3, mBotH, 10, T().surface2, 210);
+    s.fillTriangle(bx1 + bw3 / 2, mBotY + 19, bx1 + bw3 / 2 - 7, mBotY + 9, bx1 + bw3 / 2 + 7, mBotY + 9, T().text);
+    iosRR(s, bx2, mBotY, bw3, mBotH, 10, T().accent);
+    musDrawLabel(s, RPTR("Pemutar"), bx2, mBotY, bw3, mBotH, T().bg);
+  }
+}
+
+// jari baru menyentuh halaman Online (keyboard sudah ditangani di musicTouch)
+static void musJamTouch(int x, int y) {
+  bool kbOn = musJamKbOn();
+  int by = musJamBoxY();
+  bool rowBox = (y >= by - 2 && y <= by + 24);
+  if (rowBox && x >= SCR_W - 12 - MJ_GO_W - 4 && x <= SCR_W - 6) { vibTap(); musJamSubmit(); needRedraw = true; return; }
+  if (rowBox && x >= 12 && x < SCR_W - 12 - MJ_GO_W - 4) {
+    if (kbOn) { kbVisible = false; kbTarget = nullptr; }
+    else { kbTarget = &musJamQuery; kbVisible = true; kbMode = KB_LOWER; }
+    vibTap(); needRedraw = true; return;
+  }
+  if (kbOn) { kbVisible = false; kbTarget = nullptr; needRedraw = true; return; }   // ketuk di luar = tutup keyboard
+
+  int cy = musJamChipY(), cw5 = (SCR_W - 24 - 16) / 5;
+  if (y >= cy - 2 && y <= cy + 22) {
+    for (int i = 0; i < 5; i++) {
+      int x0 = 12 + i * (cw5 + 4);
+      if (x >= x0 - 2 && x <= x0 + cw5 + 2) { musJamTag = i; musJamQuery = ""; vibTap(); musJamFetch("", MJ_CHIP_TAG[i]); needRedraw = true; return; }
+    }
+  }
+  int n = jamCount(), rows = musJamRows(), top = musJamTopY();
+  for (int r = 0; r < rows; r++) {
+    int idx = musJamTop + r;
+    if (idx >= n) break;
+    if (musHit(x, y, 12, top + r * 30, SCR_W - 30, 28)) {
+      if (!musOutSpk) { showToast(RPTR("Online butuh output SPK (Cari TWS)")); return; }
+      musPost('J', idx, nullptr); musPage = 0; vibTap(); needRedraw = true; return;
+    }
+  }
+  int bw3 = (SCR_W - 24 - 12) / 3;
+  int bx0 = 12, bx1 = 12 + bw3 + 6, bx2 = 12 + 2 * (bw3 + 6);
+  if (musHit(x, y, bx0, mBotY, bw3, mBotH)) { musJamTop -= rows; if (musJamTop < 0) musJamTop = 0; vibTap(); needRedraw = true; return; }
+  if (musHit(x, y, bx1, mBotY, bw3, mBotH)) { if (musJamTop + rows < n) musJamTop += rows; vibTap(); needRedraw = true; return; }
+  if (musHit(x, y, bx2, mBotY, bw3, mBotH)) { musPage = 0; vibTap(); needRedraw = true; return; }
 }
 
 static void musDrawScan(LGFX_Sprite& s) {
@@ -1996,8 +2232,10 @@ void drawMusic(LGFX_Sprite& s) {
   if (musPage == 1)      musDrawList(s);
   else if (musPage == 2) musDrawScan(s);
   else if (musPage == 3) ryvDraw(s);
+  else if (musPage == 4) musDrawJam(s);          // JAM_UI_V1
   else                   musDrawPlayer(s);
-  drawBack(s); drawToast(s);
+  if (musPage == 4 && musJamKbOn()) drawKb(s); else drawBack(s);
+  drawToast(s);
 }
 
 void musicTouch(int x, int y, bool held, bool isNew) {
@@ -2011,13 +2249,16 @@ void musicTouch(int x, int y, bool held, bool isNew) {
   }
   if (!isNew) return;
 
+  if (musPage == 4 && musJamKbOn() && y >= kbY() - 2) { kbTouch(x, y); needRedraw = true; return; }   // JAM_UI_V1: keyboard dulu (area-nya menimpa tombol Kembali)
+
   if (isBack(x, y)) {
-    if (musPage != 0) { musPage = 0; needRedraw = true; }
+    if (musPage != 0) { if (musJamKbOn()) { kbVisible = false; kbTarget = nullptr; } musPage = 0; needRedraw = true; }
     else navBack();
     return;
   }
 
   if (musPage == 3) { ryvTouch(x, y); return; }
+  if (musPage == 4) { musJamTouch(x, y); return; }   // JAM_UI_V1
 
   if (musPage == 1) {
     int n = musListCount(), rows = musListRows();
@@ -2028,10 +2269,11 @@ void musicTouch(int x, int y, bool held, bool isNew) {
         musPost('p', idx, nullptr); musPage = 0; vibTap(); needRedraw = true; return;
       }
     }
-    int bw3 = (SCR_W - 24 - 12) / 3;
-    int bx0 = 12, bx1 = 12 + bw3 + 6, bx2 = 12 + 2 * (bw3 + 6);
+    int bw3 = (SCR_W - 24 - 18) / 4;                // JAM_UI_V1: 4 tombol
+    int bx0 = 12, bx1 = 12 + bw3 + 6, bxJ = 12 + 2 * (bw3 + 6), bx2 = 12 + 3 * (bw3 + 6);
     if (musHit(x, y, bx0, mBotY, bw3, mBotH)) { musListTop -= rows; if (musListTop < 0) musListTop = 0; vibTap(); needRedraw = true; return; }
     if (musHit(x, y, bx1, mBotY, bw3, mBotH)) { if (musListTop + rows < n) musListTop += rows; vibTap(); needRedraw = true; return; }
+    if (musHit(x, y, bxJ, mBotY, bw3, mBotH)) { musOpenJam(); vibTap(); needRedraw = true; return; }
     if (musHit(x, y, bx2, mBotY, bw3, mBotH)) { musPage = 0; vibTap(); needRedraw = true; return; }
     return;
   }
@@ -2060,6 +2302,7 @@ void musicTouch(int x, int y, bool held, bool isNew) {
   if (musHit(x, y, mDafX, mHdrY - 3, mDafW, mChipH + 6)) { musPage = 1; int r = musListRows(); musListTop = (musCur / r) * r; vibTap(); needRedraw = true; return; }
   { int cx, cw; bool vr = mVibeY >= 0 && musHit(x, y, mTitX, mVibeY - 3, mTitW, 14);          // chip RYNE / ketuk baris vibe
     if (vr || (ryvChipRect(&cx, &cw) && musHit(x, y, cx, mHdrY - 3, cw, mChipH + 6))) { musPage = 3; ryvTab = 0; ryvCell = -1; ryvInfo[0] = 0; vibTap(); needRedraw = true; return; } }
+  { int jx, jw; if (musJamChipRect(&jx, &jw) && musHit(x, y, jx, mHdrY - 3, jw, mChipH + 6)) { musOpenJam(); vibTap(); needRedraw = true; return; } }   // JAM_UI_V1
   if (musHit(x, y, mTwsX, mHdrY - 3, mTwsW, mChipH + 6)) { musPage = 2; musPost('a', 0, nullptr); vibTap(); needRedraw = true; return; }
 
   if (musHitC(x, y, mPlayX, mCtlCY, mPlayR + 6)) { musPost('u', 0, nullptr); vibTap(); needRedraw = true; return; }
@@ -2070,7 +2313,7 @@ void musicTouch(int x, int y, bool held, bool isNew) {
     showToast(musShufMode == 0 ? RPTR("Acak: mati") : (musShufMode == 1 ? RPTR("Acak: biasa") : RPTR("Acak: AI (RYNE)")));
     needRedraw = true; return;
   }
-  if (musHitC(x, y, mTitX + mTitW - 8, mSubY + 4, 14)) {          // hati = suka
+  if (!musNetMode && musHitC(x, y, mTitX + mTitW - 8, mSubY + 4, 14)) {          // hati = suka
     musPost('k', 0, nullptr); musLiked = !musLiked; vibTap(); needRedraw = true; return;
   }
   if (musHitC(x, y, mRepX, mCtlCY, 20)) { musRepeat = (musRepeat + 1) % 3; musPrefsDirty = true; musPrefsMs = millis(); vibTap(); needRedraw = true; return; }
