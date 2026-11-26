@@ -288,8 +288,8 @@ jobs:
           cp firmware/phone/musicbt_renphone.ino build_sketch/
           cp firmware/phone/musspk.h build_sketch/              # pemutar MP3/WAV lokal -> MAX98357A
           cp firmware/phone/musfs.h build_sketch/               # SPK_FFAT_V1: worker FFat + musRamLog (di-include musspk.h)
-cp firmware/phone/musjam.h build_sketch/              # JAM_UI_V1: klien Jamendo (di-include musicbt_renphone.ino)
-cp firmware/phone/jam_core.h build_sketch/            # JAM_UI_V1: parser JSON Jamendo (di-include musjam.h)
+          cp firmware/phone/musjam.h build_sketch/              # JAM_UI_V1: klien Jamendo (di-include musicbt_renphone.ino)
+          cp firmware/phone/jam_core.h build_sketch/            # JAM_UI_V1: parser JSON Jamendo (di-include musjam.h)
           cp firmware/phone/avi_renphone.ino build_sketch/
           cp firmware/phone/features_renphone.ino build_sketch/
           cp firmware/phone/gallery_renphone.ino build_sketch/
