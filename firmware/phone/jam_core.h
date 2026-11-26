@@ -11,7 +11,7 @@
 #define JAM_TITLE_LEN   48
 #define JAM_ARTIST_LEN  32
 #define JAM_URL_LEN     200
-#define JAM_MAX_TRACKS  20
+#define JAM_MAX_TRACKS  40     // JAM_PARTIAL_V1: 20 -> 40
 
 struct JamTrack { char title[JAM_TITLE_LEN]; char artist[JAM_ARTIST_LEN]; char url[JAM_URL_LEN]; uint16_t durSec; };
 
@@ -139,4 +139,51 @@ static void jamUrlEnc(const char* in, char* out, size_t cap) {
     else { snprintf(out + o, 4, "%%%02X", c); o += 3; }
   }
   out[o] = 0;
+}
+
+// =====================================================================
+//  JAM_PARTIAL_V1 -- urutan hasil untuk pencarian sebagian (tanpa dependensi Arduino)
+//  skor: 0 judul diawali ketikan | 1 ketikan di awal sebuah kata | 2 ada di dalam judul | 3 ada di nama artis | 4 tidak ada
+//  Huruf besar/kecil dianggap sama (ASCII). Urutan asal dipertahankan di dalam skor yang sama (stabil).
+// =====================================================================
+static char jamLow(char c) { return (c >= 'A' && c <= 'Z') ? (char)(c + 32) : c; }
+static bool jamIsWordCh(char c) {
+  return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || ((unsigned char)c >= 0x80);
+}
+// offset kemunculan pertama nd di hay (tanpa beda besar/kecil), -1 kalau tidak ada
+static int jamCiFind(const char* hay, const char* nd) {
+  size_t nl = strlen(nd);
+  if (nl == 0) return 0;
+  for (int i = 0; hay[i]; i++) {
+    size_t k = 0;
+    while (k < nl && hay[i + k] && jamLow(hay[i + k]) == jamLow(nd[k])) k++;
+    if (k == nl) return i;
+    if (!hay[i + k]) break;
+  }
+  return -1;
+}
+static int jamScore(const JamTrack& t, const char* q) {
+  size_t nl = strlen(q);
+  int best = 4;
+  for (int i = 0; t.title[i]; i++) {
+    size_t k = 0;
+    while (k < nl && t.title[i + k] && jamLow(t.title[i + k]) == jamLow(q[k])) k++;
+    if (k == nl) {
+      int s = (i == 0) ? 0 : (!jamIsWordCh(t.title[i - 1]) ? 1 : 2);
+      if (s < best) best = s;
+      if (best == 0) return 0;
+    } else if (!t.title[i + k]) break;
+  }
+  if (best == 4 && jamCiFind(t.artist, q) >= 0) best = 3;
+  return best;
+}
+static void jamRank(JamTrack* a, int n, const char* q) {
+  if (!a || !q || !q[0] || n < 2 || n > JAM_MAX_TRACKS) return;
+  int sc[JAM_MAX_TRACKS];
+  for (int i = 0; i < n; i++) sc[i] = jamScore(a[i], q);
+  for (int i = 1; i < n; i++) {                        // insertion sort stabil (n <= 40)
+    JamTrack tmp = a[i]; int s = sc[i]; int j = i - 1;
+    while (j >= 0 && sc[j] > s) { a[j + 1] = a[j]; sc[j + 1] = sc[j]; j--; }
+    a[j + 1] = tmp; sc[j + 1] = s;
+  }
 }

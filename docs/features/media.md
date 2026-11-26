@@ -1,6 +1,7 @@
 # Media: music, video and gallery `OK`
 
 - [Music (Bluetooth)](#music-bluetooth)
+- [Online music (Jamendo)](#online-music-jamendo)
 - [AVI / MJPEG player](#avi--mjpeg-player)
 - [Gallery](#gallery)
 
@@ -16,6 +17,17 @@ Audio goes out through **Bluetooth TWS** earbuds, with the ESP32-CAM as the copr
 - **Control from the earbuds' buttons** (AVRCP).
 - If the CAM restarts, the reason is shown on the screen to help diagnosis.
 - **Speaker output (optional).** With a MAX98357A module wired (see [Hardware](../hardware.md)), open the *Find TWS* page and tap **Output: BT / SPK** to switch. In SPK mode the S3 decodes MP3 (and voice-memo WAV) itself with the Helix decoder (`musspk.h`) and sends it over I2S; the CAM and earbuds are not needed. The choice is remembered. Only the music app and voice memos use the speaker: AVI video audio still goes through the CAM and Bluetooth. Phone calls follow the same setting (see [Phone calls](./phone-calls.md)). The decoder, its buffers and the task stack are placed in PSRAM and are freed when playback stops. With no SD card (or no MP3 on it) the app lists and plays MP3 files from internal FFat instead. This works with **both** outputs: through the speaker (the chip shows `SPK-F`) and through the Bluetooth TWS earbuds (the S3 streams the file to the CAM exactly like an SD track). FFat is read through a helper task with an internal-RAM stack, which costs roughly 12 KB of internal RAM only while a FFat track plays. While Output is SPK, the chip at the top right shows free internal RAM / largest block in KB and the Serial log prints `[SPK-RAM]` lines. This path has not been compiled or tested on hardware yet.
+
+## Online music (Jamendo)
+
+`BETA`: not yet compiled or tested on a device.
+
+In the Music app, the **Online** chip next to the RYNE chip opens a page where you can search by title or artist, or browse popular tracks by tag. **Partial titles work:** typing *ab* finds *ABCD*. The search matches anywhere in the track name (most popular first); if nothing matches it falls back to a normal search (artist names, tags, whole words). The list is then ordered so titles that start with what you typed come first, then titles with a word that starts with it, then the rest. Up to 40 results are shown; a longer query (*abc*) narrows the list. Tap a track to play it; when it ends, the next one in the list starts.
+
+- **Needs Wi-Fi** and a Jamendo `client_id`, set at build time with `JAM_CLIENT_ID` (the GitHub Secret of the same name in the official workflow). Forks without it get a placeholder and no results.
+- **Output: BT (default).** A download task (`mbTaskFn` in `musicbt_renphone.ino`) fetches the MP3 over HTTP(S) into the 128 KB PSRAM ring (the same one the AVI player uses). The music task sends it to the ESP32-CAM over RPLink, and the CAM decodes it and plays it over A2DP to the TWS earbuds. Pause, volume, next/previous and the earbud buttons work as for SD tracks. The ID3 tag at the start of the stream is skipped. TWS must be connected first.
+- **Output: SPK.** The S3 downloads and decodes the stream itself (`musspk.h`) and plays it through the MAX98357A.
+- **Limits.** The buffer is about 8 seconds of audio, so a slow connection can cause gaps. A stream that stalls for 8 seconds is treated as ended. Opening an AVI video stops the online track (they share the ring). Online tracks are not part of RYNE learning and have no album cover. The stream is fetched over TLS without certificate verification, like Chat.
 
 **RYNE v2** is a song-recommendation engine that runs entirely on the device (`ryne_engine.h`, *header-only*). It estimates a song's "mood" (8 classes) from 13 behavioural and audio features using softmax and an HMM filter, then chooses a song with *contextual Thompson Sampling*. Its learning data is stored in `/ryne2.bin`.
 

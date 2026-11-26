@@ -32,7 +32,7 @@
   #define JAM_CLIENT_ID "ISI_CLIENT_ID_KAMU"
  #endif
 #endif
-#define JAM_RESP_MAX (64 * 1024)
+#define JAM_RESP_MAX (128 * 1024)   // JAM_PARTIAL_V1: 40 lagu x ~2 KB JSON (di PSRAM)
 
 static JamTrack* jamTracks = nullptr;
 static int       jamN      = 0;
@@ -64,6 +64,8 @@ static void jamFree() {
 }
 
 // Return jumlah lagu (>=0), atau -1 = tidak ada WiFi, -2 = HTTP/TLS gagal, -3 = RAM habis.
+// JAM_PARTIAL_V1: pencarian sebagian judul. Tahap 1 = namesearch (cocok di mana saja dalam judul, urut populer);
+// kalau kosong, tahap 2 = search biasa (artis / tag / kata penuh). Lalu hasil diurutkan ulang (jamRank).
 static int jamSearch(const char* query, const char* tag) {
   if (WiFi.status() != WL_CONNECTED) return -1;
   if (!jamTracks) jamTracks = (JamTrack*)heap_caps_malloc(sizeof(JamTrack) * JAM_MAX_TRACKS, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
@@ -71,16 +73,29 @@ static int jamSearch(const char* query, const char* tag) {
   if (!jamTracks || !body) { if (body) heap_caps_free(body); return -3; }
   jamN = 0;
 
-  char q[96], url[400];
-  int u = snprintf(url, sizeof(url),
-      "https://api.jamendo.com/v3.0/tracks/?client_id=%s&format=json&limit=%d&audioformat=mp31&audiodlformat=mp31&imagesize=100",
-      JAM_CLIENT_ID, JAM_MAX_TRACKS);
-  if (query && query[0]) { jamUrlEnc(query, q, sizeof(q)); u += snprintf(url + u, sizeof(url) - u, "&search=%s", q); }
-  else                   { u += snprintf(url + u, sizeof(url) - u, "&order=popularity_week"); }
-  if (tag && tag[0])     { jamUrlEnc(tag, q, sizeof(q));   u += snprintf(url + u, sizeof(url) - u, "&tags=%s", q); }
+  char qq[64]; qq[0] = 0;                              // ketikan tanpa spasi di ujung
+  if (query) {
+    while (*query == ' ') query++;
+    strncpy(qq, query, sizeof(qq) - 1); qq[sizeof(qq) - 1] = 0;
+    for (int i = (int)strlen(qq) - 1; i >= 0 && qq[i] == ' '; i--) qq[i] = 0;
+  }
 
   int result = -2;
-  {
+  for (int pass = 0; pass < 2; pass++) {
+    if (pass == 1 && !(qq[0] && result == 0)) break;   // cadangan hanya kalau pencarian sebagian kosong
+    jamN = 0; result = -2;
+
+    char q[96], url[400];
+    int u = snprintf(url, sizeof(url),
+        "https://api.jamendo.com/v3.0/tracks/?client_id=%s&format=json&limit=%d&audioformat=mp31&audiodlformat=mp31&imagesize=100",
+        JAM_CLIENT_ID, JAM_MAX_TRACKS);
+    if (qq[0]) {
+      jamUrlEnc(qq, q, sizeof(q));
+      if (pass == 0) u += snprintf(url + u, sizeof(url) - u, "&namesearch=%s&order=popularity_total", q);
+      else           u += snprintf(url + u, sizeof(url) - u, "&search=%s", q);
+    } else           u += snprintf(url + u, sizeof(url) - u, "&order=popularity_week");
+    if (tag && tag[0]) { jamUrlEnc(tag, q, sizeof(q)); u += snprintf(url + u, sizeof(url) - u, "&tags=%s", q); }
+
     WiFiClientSecure net; net.setInsecure();            // sama seperti backup_sync: tanpa verifikasi sertifikat
     HTTPClient http; http.setTimeout(15000); http.setConnectTimeout(10000);
     http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
@@ -95,8 +110,10 @@ static int jamSearch(const char* query, const char* tag) {
       }
       http.end();
     }
+    if (result < 0) break;                              // gagal jaringan: jangan coba tahap 2
   }
   heap_caps_free(body);
+  if (result > 0 && qq[0]) jamRank(jamTracks, jamN, qq);
   return result;
 }
 

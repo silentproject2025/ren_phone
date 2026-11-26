@@ -40,6 +40,8 @@ NyxOS is neither Android nor Linux. The launcher, notification center, network s
 >
 > - **Speaker output** (optional MAX98357A module: Music *Output: SPK*, call audio through the speaker, MP3 from internal flash) is `BETA`: not yet tested on hardware. Bluetooth stays the default output.
 >
+> - **Online music** (Jamendo search and streaming in the Music app, through the Bluetooth TWS earbuds or the optional speaker) is `BETA`: not yet compiled or tested on a device. It needs Wi-Fi and a Jamendo `client_id` in the build (`JAM_CLIENT_ID`, normally the GitHub Secret of the same name; forks without it get a placeholder and no results).
+>
 > - **WiFi Sensing** (motion, presence and a rough breathing estimate from WiFi CSI) is `BETA`: the signal processing is tested with synthetic signals on a PC (`tests/wifisense/`) but not yet on a device. It needs CSI in the custom core libraries (input `wifi_csi`, on by default). The labels on its screen are still Indonesian only.
 > - **Automatic broker login** (Chat and Chess fetch their MQTT host, username and password from Supabase, plus the **Refetch** button) is `BETA`: not yet tested on a device. The login is **not secret**; see the [security notice](#security-notice).
 >
@@ -95,6 +97,7 @@ Status markers used throughout the documentation:
 | | [Camera (OV2640 on the ESP32-CAM)](./docs/features/camera.md) | `OK` |
 | | [Books (`.txt`, `.md`, `.epub`) and Project Gutenberg downloads](./docs/features/books.md) | `OK` |
 | | Optional speaker output (MAX98357A): Music *Output: SPK*, call audio without earbuds, MP3 from internal flash when there is no SD card — [details](./docs/features/media.md) | `BETA` |
+| | [Online music (Jamendo)](./docs/features/media.md#online-music-jamendo): search or browse by tag, then play through the TWS earbuds (*Output: BT*) or the speaker (*Output: SPK*) | `BETA` |
 | **Voice and AI** | [Wake word "Hei Nyx", Gemini AI Chat, voice memo](./docs/features/voice-and-ai.md) | `OK` (voice commands `BETA`) |
 | **System** | [Battery (INA219), per-channel OTA with release notes, HWmonitor, crash log](./docs/features/system-tools.md) | `OK` (per-app energy and crash log `BETA`) |
 | | [Settings Backup & Restore](./docs/features/system-tools.md#settings-backup-and-restore-beta) | `OK` (Cloud) / `BETA` (SD Card) |
@@ -127,7 +130,7 @@ The device is built from two microcontrollers connected over UART. The ESP32-S3 
 
 Key design consequences:
 
-- **Audio goes to Bluetooth earbuds.** Music, video, calls and voice memos go through the ESP32-CAM. An optional MAX98357A speaker module adds a second path: the HWmonitor "Test Speaker" tone, the Music app (*Output: SPK*) and phone calls when no earbuds are connected. AVI video sound still needs Bluetooth, and the speaker path is `BETA` (see [Hardware](./docs/hardware.md)).
+- **Audio goes to Bluetooth earbuds.** Music, video, calls and voice memos go through the ESP32-CAM. An optional MAX98357A speaker module adds a second path: the HWmonitor "Test Speaker" tone, the Music app (*Output: SPK*) and phone calls when no earbuds are connected. Online music (Jamendo) follows the same output switch: with *Output: BT* a download task fills a PSRAM ring that the music task sends to the CAM, with *Output: SPK* the S3 decodes the stream itself. AVI video sound still needs Bluetooth, and the speaker path is `BETA` (see [Hardware](./docs/hardware.md)).
 - **The two firmwares must stay consistent.** `rplink.h` must be **identical** in `firmware/phone/` and `firmware/cam_bt_coprocessor/`.
 - **Memory is the scarcest resource.** Only ~162 KB of internal RAM is available; see [Architecture](./docs/architecture.md).
 - **Fragmentation is handled by design, not by compaction.** Memory is judged by the *largest contiguous block*, not by total free bytes. Each Nyx App gets one PSRAM arena (allocated once, freed once, so apps cannot fragment system PSRAM); inside it a best-fit allocator merges neighbouring free blocks on `free()`. Before an HTTPS handshake a **TLS gate** waits for, and reclaims memory until, a contiguous internal-RAM block is available. Blocks are never moved (native apps use real pointers), so a long-running app can still fragment its own arena. See [SysMem](./docs/sysmem.md) and [Nyx Apps](./docs/features/native-apps.md).
@@ -309,7 +312,7 @@ More detail, including the install conditions and the log lines to look for, is 
 A short list; the full list is in [docs/limitations.md](./docs/limitations.md).
 
 - Internal RAM is tight. `HTTP -1` errors usually indicate memory fragmentation rather than a network problem. Gemini, Trivia and the NASA apps now try even when the largest free block is below 12 KB and retry a failed connection up to 3 times, but they cannot work when almost no internal RAM is left.
-- Audio goes through Bluetooth by default. Without the ESP32-CAM and earbuds, sound needs the optional MAX98357A speaker (Music and calls only, `BETA`); AVI video sound and everything else stay silent. DOOM has no sound at all.
+- Audio goes through Bluetooth by default. Without the ESP32-CAM and earbuds, sound needs the optional MAX98357A speaker (Music, online music and calls only, `BETA`); AVI video sound and everything else stay silent. Online music and AVI video share one PSRAM ring, so opening a video stops an online track. DOOM has no sound at all.
 - DOOM needs a contiguous block of about 6.25 MB of PSRAM for its full 6 MiB zone; with less it runs with a 5 or 4 MiB zone and big levels may fail. A WAD on FFat is streamed by a helper task and no longer has to fit in PSRAM (see [Games](./docs/features/games.md#doom-wad-files)).
 - Hardware scroll and row-diff push exist only on ST7796 and Aether builds. Vertical scrolling in landscape cannot use hardware scroll, because the panel can only scroll along its long (480-pixel) axis; landscape Home uses swipeable pages instead. Hardware scroll also steps aside while someone views Remote Control, in game mode, while an overlay is open and, on portrait Home, when a wallpaper is set (see [System UI](./docs/features/system-ui.md#home-pages-and-hardware-scroll-st7796)).
 - Phone calls: partially tested; no ICE; TURN over UDP only; no PSTN numbers through free services.
