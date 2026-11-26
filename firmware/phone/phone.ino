@@ -1102,6 +1102,10 @@ void shadowSoft(LGFX_Sprite& s, int x,int y,int w,int h,int radius){
 }
 void drawGlassPanel(LGFX_Sprite& s, int x,int y,int w,int h,int radius, uint16_t tint, uint8_t tintAlpha){
   shadowSoft(s,x,y,w,h,radius);
+  if(ccNoShadow){   // CC_FLAT_PANEL_V1: panel CC = satu warna rata, tanpa bingkai/rim/highlight
+    nyxAaRR(s, x,y,w,h,radius, blend565(glassSampleAvg(s,x,y,w,h), tint, tintAlpha));
+    return;
+  }
   // v51: FIX "kotak2 kayak hancur/pecah" yg dilaporin abis v49 -- v49
   // nyampel per-sel grid TAPI tiap sel di-cat rata SATU warna sendiri2
   // tanpa nyambung ke sel sebelahnya, jadi begitu wallpaper di baliknya ada

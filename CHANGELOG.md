@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- Changed: the Control Center panel is now one flat colour (CC_FLAT_PANEL_V1). The grey frame along the top, bottom, left and right edges (an outer band without the glass gradient), the thin rim line and the highlight at the top are gone. This also makes the panel cheaper to draw while it animates. Only drawing code changed. Not yet compiled or tested on a device. Script: `tools/patches/apply_cc_flat_panel.py`
 - Changed: Control Center has no shadows at all now (CC_NO_SHADOW_V1): not around the panel (top, bottom, left, right), not under the round buttons, and not under the toast pill. Only drawing code changed. Not yet compiled or tested on a device. Script: `tools/patches/apply_cc_no_shadow.py`
 - Changed: the *Kembali* pill at the bottom left is removed on every screen (NO_BACK_PILL_V1). It was easy to hit by accident (for example in games) and did not match the rest of the look. Going back is now: swipe in from the left edge (apps that have it), swipe up from the bottom edge to go Home, or tap the small home-bar line at the bottom centre. The layout of the apps is unchanged (the strip at the bottom stays empty). Only drawing and one hit-area function changed. Not yet compiled or tested on a device. Script: `tools/patches/apply_no_back_pill.py`
 - Changed: the lock screen no longer shows the *Geser ke atas utk buka* pill with its chevron (NO_SWIPE_HINT_V1). The small home-bar line at the bottom stays. Only drawing code changed. Not yet compiled or tested on a device. Script: `tools/patches/apply_no_swipe_hint.py`
