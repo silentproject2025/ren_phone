@@ -1619,6 +1619,7 @@ void musicLoopPoll() {
 
 // =====================================================================
 //  UI  (v2: cover vinyl berputar, equalizer, panel flat biar ringan)
+//  MUS_FLAT_V1: rombak -- gaya datar (blok solid, garis tipis, satu aksen), tanpa gradasi / kaca / glow
 //  drawGlassPanel sengaja TIDAK dipakai di sini: dia nyampel wallpaper + blur
 //  per panel, kemahalan buat layar yg di-redraw ~10x/detik (animasi).
 // =====================================================================
@@ -1636,7 +1637,7 @@ static float    musDiscAng = 0;
 static uint32_t musAnimMs = 0;
 static int      musMuteVol = 0;
 
-static void musCalcLayout() {
+static void musCalcLayout() {   // MUS_FLAT_V1: cover lebih kecil + label status di atas judul (landscape)
   int W = SCR_W, H = SCR_H;
   mLand = (W >= H);
   mHdrY = 25; mChipH = 18;
@@ -1648,15 +1649,15 @@ static void musCalcLayout() {
   mPlayX = cx; mPrevX = cx - dPN; mNextX = cx + dPN; mShufX = cx - dSR; mRepX = cx + dSR;
   mBotH = 28; mBotY = H - BACK_H - 3 - 6 - mBotH;
   if (mLand) {
-    mCovX = 12; mCovY = 50; mCovS = 88;
-    int x0 = mCovX + mCovS + 12, rw = W - 12 - x0;
-    mTitX = x0; mTitY = 52; mTitW = rw; mSubY = 74;
-    mVibeY = 88;
-    mEqX = x0; mEqY = 100; mEqW = rw; mEqH = 18;
-    mVolY = 124; mVolIcX = x0 + 8; mVolSX = x0 + 26; mVolSW = rw - 26;
-    mBarX = 12; mBarY = 152; mBarW = W - 24; mTimeY = 141;
+    mCovX = 12; mCovY = 48; mCovS = 84;
+    int x0 = mCovX + mCovS + 16, rw = W - 12 - x0;
+    mTitX = x0; mTitY = 61; mTitW = rw; mSubY = 83;
+    mVibeY = 96;
+    mEqX = x0; mEqY = 108; mEqW = rw; mEqH = 16;
+    mVolY = 127; mVolIcX = x0 + 8; mVolSX = x0 + 26; mVolSW = rw - 26;
+    mBarX = 12; mBarY = 153; mBarW = W - 24; mTimeY = 142;
   } else {
-    mCovS = 120; mCovX = (W - mCovS) / 2; mCovY = 48;
+    mCovS = 120; mCovX = (W - mCovS) / 2 - 2; mCovY = 48;
     mTitX = 12; mTitY = 176; mTitW = W - 24; mSubY = 197;
     mVibeY = -1;
     mEqX = 12; mEqY = 0; mEqW = 0; mEqH = 0;
@@ -1677,6 +1678,33 @@ static int musScanRows() { int r = (mBotY - 8 - 48) / 30; return r < 1 ? 1 : r; 
 
 static void musPanel(LGFX_Sprite& s, int x, int y, int w, int h, int r, uint16_t col, uint8_t a) {
   nyxAaRR(s, x, y, w, h, r, blend565(T().bg, col, a));
+}
+
+// ---- MUS_FLAT_V1: helper gaya datar (tanpa gradasi / kaca / glow) ----
+#define MUS_RGB(r, g, b) ((uint16_t)((((r) & 0xF8) << 8) | (((g) & 0xFC) << 3) | ((b) >> 3)))
+static const uint16_t MUS_CVPAL[8] = {            // palet cover: warna solid, dipilih dari hash judul
+  MUS_RGB(228, 87, 46),  MUS_RGB(242, 177, 52), MUS_RGB(46, 158, 131), MUS_RGB(58, 110, 165),
+  MUS_RGB(214, 86, 138), MUS_RGB(91, 140, 62),  MUS_RGB(201, 193, 177), MUS_RGB(31, 122, 140)
+};
+static uint16_t musLn() { return blend565(T().bg, T().text, 60); }       // garis tipis / bingkai
+static void musOutline(LGFX_Sprite& s, int x, int y, int w, int h, int r, uint16_t c) { nyxAaRRRing(s, x, y, w, h, r, c); }
+static void musHead(LGFX_Sprite& s, const char* t) {                       // judul halaman + garis aksen pendek
+  s.setTextSize(2); s.setTextColor(T().text); s.setCursor(12, mHdrY + 1); s.print(t);
+  s.fillRect(12, mHdrY + 18, 28, 2, T().accent);
+}
+static void musRowBg(LGFX_Sprite& s, int y, bool cur, bool prs) {         // baris daftar: datar, garis pemisah, bilah aksen
+  int x = 12, w = SCR_W - 30;
+  if (prs)      s.fillRect(x, y, w, 29, blend565(T().bg, T().accent, 70));
+  else if (cur) s.fillRect(x, y, w, 29, blend565(T().bg, T().accent, 36));
+  s.drawFastHLine(x, y + 29, w, musLn());
+  if (cur) s.fillRect(x, y, 3, 29, T().accent);
+}
+static void musBtnGhost(LGFX_Sprite& s, int x, int w) { musOutline(s, x, mBotY, w, mBotH, 6, musLn()); }
+static void musBtnSolid(LGFX_Sprite& s, int x, int w, uint16_t c) { nyxAaRR(s, x, mBotY, w, mBotH, 6, c); }
+static void musArrow(LGFX_Sprite& s, int x, int w, bool up) {
+  int cx = x + w / 2, cy = mBotY + mBotH / 2;
+  if (up) s.fillTriangle(cx, cy - 5, cx - 6, cy + 4, cx + 6, cy + 4, T().text);
+  else    s.fillTriangle(cx, cy + 5, cx - 6, cy - 4, cx + 6, cy - 4, T().text);
 }
 
 static void musSetVol(int v) {
@@ -1754,30 +1782,24 @@ static void musTrunc(char* nm, int maxc) {
 }
 
 // ---- cover: warna unik per judul + piringan hitam berputar ----
-static void musDrawCover(LGFX_Sprite& s, bool playing, const char* title) {
+static void musDrawCover(LGFX_Sprite& s, bool playing, const char* title) {   // MUS_FLAT_V1
+  int x = mCovX, y = mCovY, S = mCovS;
+  s.fillRect(x + 4, y + 4, S, S, T().accent);          // bayangan keras: blok datar, bukan blur
   if (musCoverReady) {                              // cover asli dari tag ID3 (APIC)
     LGFX_Sprite* cv = musCvP[musCoverCur];
     if (cv->width() == MUS_COVER_SZ) {
-      int x = mCovX, y = mCovY, S = mCovS;
       if (S == MUS_COVER_SZ) cv->pushSprite(&s, x, y);
       else {
         float z = (float)S / MUS_COVER_SZ;
         cv->pushRotateZoom(&s, x + S / 2.0f, y + S / 2.0f, 0.0f, z, z);
       }
-      nyxAaRRRing(s, x - 1, y - 1, S + 2, S + 2, 2, blend565(T().bg, T().text, 60));
       return;
     }
   }
   uint32_t hsh = 5381;
   for (const char* q = title; *q; q++) hsh = hsh * 33 + (uint8_t)*q;
-  float hue = (float)(hsh % 360);
-  uint16_t c1 = musHsv(hue, 0.65f, 0.85f), c2 = musHsv(hue + 50.f, 0.70f, 0.42f);
-  int x = mCovX, y = mCovY, S = mCovS;
-  for (int i = 0; i < S; i += 4) {
-    int hh = (S - i < 4) ? (S - i) : 4;
-    s.fillRect(x, y + i, S, hh, blend565(c1, c2, (uint8_t)((i * 255) / S)));
-  }
-  nyxAaRRRing(s, x - 1, y - 1, S + 2, S + 2, 2, blend565(T().bg, T().text, 60));
+  uint16_t col = MUS_CVPAL[hsh % 8];                // satu warna solid per judul
+  s.fillRect(x, y, S, S, col);
 
   int cx = x + S / 2, cy = y + S / 2, R = (S * 44) / 100;
   nyxAaCircle(s, cx, cy, R, 0x1082);
@@ -1793,23 +1815,23 @@ static void musDrawCover(LGFX_Sprite& s, bool playing, const char* title) {
     s.drawLine(cx + (int)(ca * R * 0.5f), cy + (int)(sa * R * 0.5f),
                cx + (int)(ca * (R - 2)),  cy + (int)(sa * (R - 2)), 0x52AA);
   }
-  nyxAaCircle(s, cx, cy, (R * 38) / 100, c1);
+  nyxAaCircle(s, cx, cy, (R * 38) / 100, col);
   nyxAaCircle(s, cx, cy, 3, 0x1082);
 }
 
-static void musDrawEq(LGFX_Sprite& s, bool playing) {
+static void musDrawEq(LGFX_Sprite& s, bool playing) {   // MUS_FLAT_V1: batang kotak, satu warna
   if (mEqH <= 0) return;
   const int n = 16, gap = 3;
   int bw = (mEqW - (n - 1) * gap) / n; if (bw < 2) bw = 2;
   uint32_t t = millis();
+  uint16_t col = playing ? (uint16_t)T().accent : blend565(T().bg, T().text, 45);
   for (int i = 0; i < n; i++) {
     float tgt = playing ? (0.18f + 0.82f * fabsf(sinf(t * 0.0021f * (1.f + 0.23f * i) + i * 1.7f) *
                                                  cosf(t * 0.0013f + i * 0.9f)))
                         : 0.07f;
     musEq[i] += (tgt - musEq[i]) * 0.45f;
     int h = (int)(musEq[i] * mEqH); if (h < 2) h = 2;
-    nyxAaRR(s, mEqX + i * (bw + gap), mEqY + mEqH - h, bw, h, 1,
-                    blend565(T().accent, T().accent2, (uint8_t)((i * 255) / (n - 1))));
+    s.fillRect(mEqX + i * (bw + gap), mEqY + mEqH - h, bw, h, col);
   }
 }
 
@@ -1820,13 +1842,14 @@ static bool musJamChipRect(int* x, int* w) {
   int base = ryvChipRect(&rx, &rw) ? rx + rw + 6 : mDafX + mDafW + 6;
   *x = base; *w = 46; return *x + *w + 6 <= mTwsX;
 }
-static void musDrawChips(LGFX_Sprite& s) {
-  musPanel(s, mDafX, mHdrY, mDafW, mChipH, 9, T().surface2, 210);
-  for (int i = 0; i < 3; i++) s.fillRect(mDafX + 10, mHdrY + 5 + i * 4, 10, 2, T().text);
+static void musDrawChips(LGFX_Sprite& s) {   // MUS_FLAT_V1: kotak berbingkai tipis
+  uint16_t ln = musLn();
+  musOutline(s, mDafX, mHdrY, mDafW, mChipH, 4, ln);
+  for (int i = 0; i < 3; i++) s.fillRect(mDafX + 9, mHdrY + 5 + i * 4, 10, 2, T().text);
   s.setTextSize(1); s.setTextColor(T().text);
   s.setCursor(mDafX + 26, mHdrY + 5); s.print(RPTR("Daftar"));
-  { int cx, cw; if (ryvChipRect(&cx, &cw)) { musPanel(s, cx, mHdrY, cw, mChipH, 9, T().surface2, 210); s.setTextColor(T().accent); s.setCursor(cx + (cw - 24) / 2, mHdrY + 5); s.print("RYNE"); s.setTextColor(T().text); } }
-  { int jx, jw; if (musJamChipRect(&jx, &jw)) { musPanel(s, jx, mHdrY, jw, mChipH, 9, T().surface2, 210); s.setTextColor(T().accent2); s.setCursor(jx + (jw - 36) / 2, mHdrY + 5); s.print("Online"); s.setTextColor(T().text); } }   // JAM_UI_V1
+  { int cx, cw; if (ryvChipRect(&cx, &cw)) { musOutline(s, cx, mHdrY, cw, mChipH, 4, ln); s.setTextColor(T().accent); s.setCursor(cx + (cw - 24) / 2, mHdrY + 5); s.print("RYNE"); s.setTextColor(T().text); } }
+  { int jx, jw; if (musJamChipRect(&jx, &jw)) { musOutline(s, jx, mHdrY, jw, mChipH, 4, ln); s.setTextColor(T().accent); s.setCursor(jx + (jw - 36) / 2, mHdrY + 5); s.print("Online"); s.setTextColor(T().text); } }   // JAM_UI_V1
 
   const char* st; uint16_t col;
   char spkTxt[24];
@@ -1840,10 +1863,10 @@ static void musDrawChips(LGFX_Sprite& s) {
   else if (musBtConn)      { st = "TWS terhubung";     col = T().good; }
   else if (musConnecting)  { st = "Menghubungkan...";  col = T().accent2; }
   else                     { st = "TWS putus";         col = T().subtext; }
-  musPanel(s, mTwsX, mHdrY, mTwsW, mChipH, 9, T().surface2, 210);
-  nyxAaCircle(s, mTwsX + 11, mHdrY + 9, 4, col);
-  if (musConnecting && !musBtConn) nyxAaCircleRing(s, mTwsX + 11, mHdrY + 9, 5 + (int)((millis() / 150) % 4), col);
-  s.setTextColor(T().text); s.setCursor(mTwsX + 22, mHdrY + 5); s.print(st);
+  musOutline(s, mTwsX, mHdrY, mTwsW, mChipH, 4, ln);
+  bool blink = musConnecting && !musBtConn && ((millis() / 300) & 1);
+  if (!blink) s.fillRect(mTwsX + 8, mHdrY + 6, 6, 6, col);
+  s.setTextColor(T().text); s.setCursor(mTwsX + 20, mHdrY + 5); s.print(st);
 }
 
 static void musDrawPlayer(LGFX_Sprite& s) {
@@ -1854,6 +1877,13 @@ static void musDrawPlayer(LGFX_Sprite& s) {
 
   musDrawChips(s);
   musDrawCover(s, playing, title);
+  if (mLand) {                                       // MUS_FLAT_V1: label status kecil di atas judul
+    uint16_t lc = playing ? (uint16_t)T().accent : (uint16_t)T().subtext;
+    s.fillRect(mTitX, mCovY + 1, 6, 6, lc);
+    s.setTextSize(1); s.setTextColor(lc);
+    s.setCursor(mTitX + 11, mCovY);
+    s.print(musNetMode ? "ONLINE" : (playing ? "SEDANG DIPUTAR" : (musLoaded ? "DIJEDA" : "SIAP")));
+  }
 
   // judul: kalau muat -> diam di tengah/kiri. Kalau kepanjangan -> SATU salinan saja yang
   // bergeser (jeda di awal, geser ke kiri sampai ujung, jeda, lalu balik). Dulu 2 salinan
@@ -1902,7 +1932,7 @@ static void musDrawPlayer(LGFX_Sprite& s) {
   s.setTextSize(1); s.setTextColor(T().subtext);
   int sw = s.textWidth(sub);
   s.setCursor(mLand ? mTitX : mTitX + (mTitW - sw) / 2, mSubY); s.print(sub);
-  if (!musNetMode) musDrawHeart(s, mTitX + mTitW - 8, mSubY + 4, musLiked ? 0xF9A6 : blend565(T().bg, T().text, 70));
+  if (!musNetMode) musDrawHeart(s, mTitX + mTitW - 8, mSubY + 4, musLiked ? (uint16_t)T().danger : blend565(T().bg, T().text, 70));
 
   if (!musOutSpk && !musCamAlive) {                    // diagnosa: apa yg masuk dari CAM?
     char dg[56];
@@ -1913,8 +1943,7 @@ static void musDrawPlayer(LGFX_Sprite& s) {
   } else if (musRstMsg[0] && millis() - musRstAt < 120000) {   // CAM baru restart krn crash/brownout: tampil 2 menit
     s.setTextColor(T().danger); s.setCursor(mTitX, mVibeY >= 0 ? mVibeY : mSubY + 11); s.print(musRstMsg);
   } else if (mVibeY >= 0) {                            // baris vibe (RYNE)
-    uint16_t vc = musHsv(vi * 45.f, 0.7f, 0.95f);
-    nyxAaCircle(s, mTitX + 4, mVibeY + 4, 3, vc);
+    s.fillRect(mTitX, mVibeY + 1, 6, 6, T().accent2);
     char vb[40];
     if (vp > 0) snprintf(vb, sizeof(vb), "Vibe: %s %d%%", RY_VIBE_NAME[vi], vp);
     else        snprintf(vb, sizeof(vb), "Vibe: mempelajari...");
@@ -1923,58 +1952,50 @@ static void musDrawPlayer(LGFX_Sprite& s) {
 
   musDrawEq(s, playing);
 
-  // volume
+  // volume: garis tipis + penanda tegak (MUS_FLAT_V1: tanpa lingkaran)
   int lvl = (musVol == 0) ? 0 : (musVol < 64 ? 1 : 2);
   musDrawSpeaker(s, mVolIcX, mVolY + 7, T().subtext, lvl);
-  nyxAaRR(s, mVolSX, mVolY + 4, mVolSW, 6, 3, blend565(T().bg, T().text, 40));
+  s.fillRect(mVolSX, mVolY + 6, mVolSW, 2, musLn());
   int vf = (mVolSW * musVol) / 127;
-  if (vf > 0) nyxAaRR(s, mVolSX, mVolY + 4, vf, 6, 3, T().accent2);
-  nyxAaCircle(s, mVolSX + vf, mVolY + 7, 6, T().text);
+  if (vf > 0) s.fillRect(mVolSX, mVolY + 6, vf, 2, T().text);
+  int vx = vf - 1; if (vx < 0) vx = 0;
+  s.fillRect(mVolSX + vx, mVolY + 1, 3, 12, T().text);
 
-  // progress + waktu
+  // progress + waktu: garis 4 px + penanda tegak
   char t1[12], t2[12];
   musFmtTime(t1, musLoaded ? musPlayedMs : 0);
   if (musNetMode && musLoaded && !musPaused && musPlayedMs == 0) strcpy(t1, "Memuat...");   // MUS_UX_V1: lagu online belum mulai bunyi
   if (musLoaded && musDurMs > 0) musFmtTime(t2, musDurMs); else strcpy(t2, "--:--");
-  s.setTextColor(T().subtext);
+  s.setTextColor(T().text);
   s.setCursor(mBarX, mTimeY); s.print(t1);
+  s.setTextColor(T().subtext);
   s.setCursor(mBarX + mBarW - s.textWidth(t2), mTimeY); s.print(t2);
   float pr = (musDurMs > 0) ? (float)musPlayedMs / (float)musDurMs : 0.f;
   if (pr > 1.f) pr = 1.f;
   int fw = (int)(pr * mBarW);
   if (!musLoaded) fw = 0;
-  // v109: BAR BERGELOMBANG -- bagian yg sudah diputar = gelombang sinus (bergerak saat play, lurus saat pause),
-  // sisa lagu = garis lurus tipis. Layar pemutar di-redraw ~10 fps jadi geraknya cukup halus.
-  nyxAaRR(s, mBarX + fw, mBarY + 2, mBarW - fw, 3, 1, blend565(T().bg, T().text, 40));
-  if (fw > 0) {
-    const float amp = playing ? 2.6f : 0.f;
-    const float ph = (float)(millis() % 1400) * (6.2832f / 1400.f);
-    int ky = mBarY + 3;
-    for (int x = 0; x <= fw; x++) {
-      ky = mBarY + 3 + (int)lroundf(amp * sinf(x * 0.30f - ph));
-      s.fillRect(mBarX + x, ky - 1, 1, 3, T().accent);
-    }
-    nyxAaCircle(s, mBarX + fw, ky, 6, T().text);
+  s.fillRect(mBarX, mBarY + 1, mBarW, 4, musLn());
+  if (fw > 0) s.fillRect(mBarX, mBarY + 1, fw, 4, T().accent);
+  if (musLoaded) {
+    int mx = fw - 1; if (mx < 0) mx = 0; if (mx > mBarW - 3) mx = mBarW - 3;
+    s.fillRect(mBarX + mx, mBarY - 3, 3, 12, T().text);
   }
 
-  // kontrol
-  if (musPressCtl) {                                   // MUS_UX_V1: sorotan tombol yang sedang ditekan
-    if (musPressCtl == 1) nyxAaCircle(s, mPlayX, mCtlCY, mPlayR + 7, blend565(T().bg, T().accent, 110));
-    else {
-      int px = (musPressCtl == 2) ? mPrevX : (musPressCtl == 3) ? mNextX : (musPressCtl == 4) ? mShufX : mRepX;
-      nyxAaCircle(s, px, mCtlCY, 19, blend565(T().bg, T().text, 38));
-    }
+  // kontrol: ikon polos; Play = blok aksen persegi membulat
+  if (musPressCtl >= 2) {                              // MUS_UX_V1: sorotan tombol yang sedang ditekan
+    int px = (musPressCtl == 2) ? mPrevX : (musPressCtl == 3) ? mNextX : (musPressCtl == 4) ? mShufX : mRepX;
+    nyxAaRR(s, px - 19, mCtlCY - 19, 38, 38, 8, blend565(T().bg, T().text, 38));
   }
   int sm = musShufMode;
   musDrawShuffle(s, mShufX, mCtlCY, sm == 2 ? T().accent2 : (sm == 1 ? T().accent : T().subtext));
-  if (sm == 1) nyxAaCircle(s, mShufX, mCtlCY + 15, 2, T().accent);
+  if (sm == 1) s.fillRect(mShufX - 6, mCtlCY + 14, 12, 2, T().accent);
   if (sm == 2) { s.setTextSize(1); s.setTextColor(T().accent2); s.setCursor(mShufX - 6, mCtlCY + 11); s.print("AI"); }
   musDrawRepeat(s, mRepX, mCtlCY, musRepeat ? T().accent : T().subtext, musRepeat == 2);
-  if (musRepeat) nyxAaCircle(s, mRepX, mCtlCY + 15, 2, T().accent);
+  if (musRepeat) s.fillRect(mRepX - 6, mCtlCY + 14, 12, 2, T().accent);
   musDrawIcon(s, 0, mPrevX, mCtlCY, T().text);
   musDrawIcon(s, 1, mNextX, mCtlCY, T().text);
-  if (playing) nyxAaCircleRing(s, mPlayX, mCtlCY, mPlayR + 3, blend565(T().bg, T().accent, 120));
-  nyxAaCircle(s, mPlayX, mCtlCY, mPlayR, T().accent);
+  uint16_t pc = (musPressCtl == 1) ? blend565(T().accent, T().bg, 70) : (uint16_t)T().accent;
+  nyxAaRR(s, mPlayX - mPlayR - 2, mCtlCY - mPlayR - 2, 2 * mPlayR + 4, 2 * mPlayR + 4, 10, pc);
   musDrawIcon(s, playing ? 3 : 2, mPlayX, mCtlCY, T().bg);
 
   if (musPtrMode == 6) {                               // MUS_UX_V1: petunjuk geser kiri/kanan (melewati 50 px = siap)
@@ -1982,7 +2003,7 @@ static void musDrawPlayer(LGFX_Sprite& s) {
     const char* lb = nxt ? RPTR("Berikutnya >>") : RPTR("<< Sebelumnya");
     int pw = 112, px = mCovX + mCovS / 2 - pw / 2, py = mCovY + mCovS / 2 - 10;
     if (mLand) px = mCovX + mCovS / 2 - pw / 2;
-    nyxAaRR(s, px, py, pw, 20, 10, armed ? T().accent : blend565(T().bg, T().text, 60));
+    nyxAaRR(s, px, py, pw, 20, 4, armed ? T().accent : blend565(T().bg, T().text, 60));
     musDrawLabel(s, lb, px, py, pw, 20, armed ? T().bg : T().text);
   }
 }
@@ -1999,11 +2020,10 @@ static void musMiniEq(LGFX_Sprite& s, int x, int yBase, bool playing, uint16_t c
 static void musLsSet(float px);                       // MUS_UX_V1 (definisi di blok halaman Online)
 static float musLsGet();
 static void musLsDrawBar(LGFX_Sprite& s, int top, int bot, int n);
-static void musDrawList(LGFX_Sprite& s) {
+static void musDrawList(LGFX_Sprite& s) {   // MUS_FLAT_V1: baris datar + garis pemisah
   int n = musListCount();
-  int rows = musListRows();
   musLsSet(musLsGet());                             // MUS_UX_V1: rapikan posisi (daftar bisa menyusut)
-  s.setTextSize(2); s.setTextColor(T().accent); s.setCursor(12, mHdrY + 1); s.print(RPTR("Daftar Lagu"));
+  musHead(s, RPTR("Daftar Lagu"));
   char cnt[16]; snprintf(cnt, sizeof(cnt), "%d lagu", n);
   s.setTextSize(1); s.setTextColor(T().subtext);
   s.setCursor(SCR_W - 12 - s.textWidth(cnt), mHdrY + 5); s.print(cnt);
@@ -2025,11 +2045,10 @@ static void musDrawList(LGFX_Sprite& s) {
     int y = lTop + r * 30 - musLsFrac;
     if (y >= lBot) break;
     bool cur = (idx == musCur), prs = (idx == musPressRow);
-    musPanel(s, 12, y, SCR_W - 30, 28, 8, (cur || prs) ? T().accent : T().surface2, prs ? (cur ? 130 : 60) : (cur ? 90 : 170));
-    nyxAaCircle(s, 28, y + 14, 10, cur ? T().accent : blend565(T().bg, T().text, 40));
+    musRowBg(s, y, cur, prs);
     char num[12]; snprintf(num, sizeof(num), "%d", idx + 1);
-    s.setTextSize(1); s.setTextColor(cur ? T().bg : T().subtext);
-    s.setCursor(28 - s.textWidth(num) / 2, y + 10); s.print(num);
+    s.setTextSize(1); s.setTextColor(cur ? T().accent : T().subtext);
+    s.setCursor(34 - s.textWidth(num), y + 10); s.print(num);
     char nm[64]; musGetTitle(nm, sizeof(nm), idx);
     musTrunc(nm, maxc);
     s.setTextColor(T().text); s.setCursor(46, y + 10); s.print(nm);
@@ -2040,14 +2059,10 @@ static void musDrawList(LGFX_Sprite& s) {
 
   int bw3 = (SCR_W - 24 - 18) / 4;                  // JAM_UI_V1: 4 tombol (▲ ▼ Online Pemutar)
   int bx0 = 12, bx1 = 12 + bw3 + 6, bxJ = 12 + 2 * (bw3 + 6), bx2 = 12 + 3 * (bw3 + 6);
-  musPanel(s, bx0, mBotY, bw3, mBotH, 10, T().surface2, 210);
-  s.fillTriangle(bx0 + bw3 / 2, mBotY + 9, bx0 + bw3 / 2 - 7, mBotY + 19, bx0 + bw3 / 2 + 7, mBotY + 19, T().text);
-  musPanel(s, bx1, mBotY, bw3, mBotH, 10, T().surface2, 210);
-  s.fillTriangle(bx1 + bw3 / 2, mBotY + 19, bx1 + bw3 / 2 - 7, mBotY + 9, bx1 + bw3 / 2 + 7, mBotY + 9, T().text);
-  musPanel(s, bxJ, mBotY, bw3, mBotH, 10, T().surface2, 210);
-  musDrawLabel(s, "Online", bxJ, mBotY, bw3, mBotH, T().accent2);
-  iosRR(s,bx2, mBotY, bw3, mBotH, 10, T().accent);
-  musDrawLabel(s, RPTR("Pemutar"), bx2, mBotY, bw3, mBotH, T().bg);
+  musBtnGhost(s, bx0, bw3); musArrow(s, bx0, bw3, true);
+  musBtnGhost(s, bx1, bw3); musArrow(s, bx1, bw3, false);
+  musBtnGhost(s, bxJ, bw3); musDrawLabel(s, "Online", bxJ, mBotY, bw3, mBotH, T().accent);
+  musBtnSolid(s, bx2, bw3, T().accent); musDrawLabel(s, RPTR("Pemutar"), bx2, mBotY, bw3, mBotH, T().bg);
 }
 
 // =====================================================================
@@ -2211,14 +2226,15 @@ static void musJamSwitchSrc() {
 }
 
 static void musDrawJam(LGFX_Sprite& s) {
-  uint16_t chip = blend565(T().bg, T().text, 28);
+  uint16_t chip = musLn();
   bool kbOn = musJamKbOn();
   bool busy = jamBusy();
   s.setTextSize(1);
 
-  // kotak cari + tombol Cari
+  // kotak cari + tombol Cari  (MUS_FLAT_V1: kotak datar, bingkai aksen saat mengetik)
   int by = musJamBoxY(), bx = 12, bw = musJamSrcX() - 4 - bx;     // AUDIUS_V1: ruang untuk chip sumber
-  nyxAaRR(s, bx, by, bw, 22, 11, chip);
+  nyxAaRR(s, bx, by, bw, 22, 6, T().surface);
+  nyxAaRRRing(s, bx, by, bw, 22, 6, kbOn ? (uint16_t)T().accent : chip);
   char q[48]; strncpy(q, musJamQuery.c_str(), sizeof(q) - 1); q[sizeof(q) - 1] = 0;
   musTrunc(q, (bw - (musJamQuery.length() > 0 ? 40 : 24)) / 6);   // MUS_UX_V1: ruang tombol x
   s.setTextColor(q[0] ? T().text : T().subtext);
@@ -2226,19 +2242,22 @@ static void musDrawJam(LGFX_Sprite& s) {
   if (kbOn && ((millis() / 500) & 1)) { int cw = q[0] ? s.textWidth(q) : 0; s.fillRect(bx + 10 + cw + 1, by + 5, 1, 12, T().accent); }
   if (musJamQuery.length() > 0) {                    // MUS_UX_V1: tombol hapus teks (x)
     int xx = bx + bw - 13, yy = by + 11;
-    nyxAaCircle(s, xx, yy, 7, blend565(T().bg, T().text, 50));
-    s.drawLine(xx - 3, yy - 3, xx + 3, yy + 3, T().bg); s.drawLine(xx + 3, yy - 3, xx - 3, yy + 3, T().bg);
+    for (int d = 0; d < 2; d++) {
+      s.drawLine(xx - 4 + d, yy - 4, xx + 4 + d, yy + 4, T().subtext);
+      s.drawLine(xx + 4 + d, yy - 4, xx - 4 + d, yy + 4, T().subtext);
+    }
   }
-  nyxAaRR(s, musJamSrcX(), by, MJ_SRC_W, 22, 11, chip);            // AUDIUS_V1: chip sumber
+  nyxAaRRRing(s, musJamSrcX(), by, MJ_SRC_W, 22, 6, chip);          // AUDIUS_V1: chip sumber
   musDrawLabel(s, jamSrcName(), musJamSrcX(), by, MJ_SRC_W, 22, T().accent2);
-  nyxAaRR(s, SCR_W - 12 - MJ_GO_W, by, MJ_GO_W, 22, 11, T().accent);
+  nyxAaRR(s, SCR_W - 12 - MJ_GO_W, by, MJ_GO_W, 22, 6, T().accent);
   musDrawLabel(s, busy ? "..." : RPTR("Cari"), SCR_W - 12 - MJ_GO_W, by, MJ_GO_W, 22, T().bg);
 
-  // chip genre
+  // chip genre: terpilih = blok aksen, lain = bingkai tipis
   int cw5 = (SCR_W - 24 - 16) / 5, cy = musJamChipY();
   for (int i = 0; i < 5; i++) {
     int x = 12 + i * (cw5 + 4); bool on = (i == musJamTag);
-    nyxAaRR(s, x, cy, cw5, 20, 10, on ? T().accent : chip);
+    if (on) nyxAaRR(s, x, cy, cw5, 20, 6, T().accent);
+    else    nyxAaRRRing(s, x, cy, cw5, 20, 6, chip);
     musDrawLabel(s, MJ_CHIP_LB[i], x, cy, cw5, 20, on ? T().bg : T().text);
   }
 
@@ -2251,8 +2270,8 @@ static void musDrawJam(LGFX_Sprite& s) {
       for (int r = 0; r < rows && r < 5; r++) {      // MUS_UX_V1: rangka berdenyut selagi memuat
         int y = top + r * 30;
         uint8_t a = 60 + (uint8_t)(50.f * (0.5f + 0.5f * sinf(millis() * 0.006f - r * 0.8f)));
-        musPanel(s, 12, y, SCR_W - 30, 28, 8, T().surface2, a);
-        nyxAaCircle(s, 28, y + 14, 10, blend565(T().bg, T().text, 30));
+        s.drawFastHLine(12, y + 29, SCR_W - 30, musLn());                       // MUS_FLAT_V1
+        nyxAaRR(s, 16, y + 8, 12, 12, 2, blend565(T().bg, T().text, (uint8_t)(a / 4)));
         nyxAaRR(s, 46, y + 6, 90 + (r * 37) % 70, 6, 3, blend565(T().bg, T().text, 35));
         nyxAaRR(s, 46, y + 17, 60 + (r * 23) % 50, 5, 2, blend565(T().bg, T().text, 22));
       }
@@ -2281,11 +2300,10 @@ static void musDrawJam(LGFX_Sprite& s) {
     int y = top + r * 30 - musLsFrac;
     if (y >= bot) break;
     bool cur = (musNetMode && idx == musNetCur), prs = (idx == musPressRow);
-    musPanel(s, 12, y, SCR_W - 30, 28, 8, (cur || prs) ? T().accent : T().surface2, prs ? (cur ? 130 : 60) : (cur ? 90 : 170));
-    nyxAaCircle(s, 28, y + 14, 10, cur ? T().accent : blend565(T().bg, T().text, 40));
+    musRowBg(s, y, cur, prs);                                                // MUS_FLAT_V1
     char num[12]; snprintf(num, sizeof(num), "%d", idx + 1);
-    s.setTextColor(cur ? T().bg : T().subtext);
-    s.setCursor(28 - s.textWidth(num) / 2, y + 10); s.print(num);
+    s.setTextColor(cur ? T().accent : T().subtext);
+    s.setCursor(34 - s.textWidth(num), y + 10); s.print(num);
     char nm[64]; strncpy(nm, jamTitle(idx), sizeof(nm) - 1); nm[sizeof(nm) - 1] = 0; musTrunc(nm, maxc);
     char ar[40]; strncpy(ar, jamArtist(idx), sizeof(ar) - 1); ar[sizeof(ar) - 1] = 0; musTrunc(ar, maxc);
     s.setTextColor(T().text);    s.setCursor(46, y + 4);  s.print(nm);
@@ -2299,11 +2317,9 @@ static void musDrawJam(LGFX_Sprite& s) {
   if (!kbOn) {                                      // bar bawah: ▲ ▼ Pemutar
     int bw3 = (SCR_W - 24 - 12) / 3;
     int bx0 = 12, bx1 = 12 + bw3 + 6, bx2 = 12 + 2 * (bw3 + 6);
-    musPanel(s, bx0, mBotY, bw3, mBotH, 10, T().surface2, 210);
-    s.fillTriangle(bx0 + bw3 / 2, mBotY + 9, bx0 + bw3 / 2 - 7, mBotY + 19, bx0 + bw3 / 2 + 7, mBotY + 19, T().text);
-    musPanel(s, bx1, mBotY, bw3, mBotH, 10, T().surface2, 210);
-    s.fillTriangle(bx1 + bw3 / 2, mBotY + 19, bx1 + bw3 / 2 - 7, mBotY + 9, bx1 + bw3 / 2 + 7, mBotY + 9, T().text);
-    iosRR(s, bx2, mBotY, bw3, mBotH, 10, T().accent);
+    musBtnGhost(s, bx0, bw3); musArrow(s, bx0, bw3, true);
+    musBtnGhost(s, bx1, bw3); musArrow(s, bx1, bw3, false);
+    musBtnSolid(s, bx2, bw3, T().accent);
     musDrawLabel(s, RPTR("Pemutar"), bx2, mBotY, bw3, mBotH, T().bg);
   }
 }
@@ -2341,8 +2357,8 @@ static void musJamTouch(int x, int y) {
   if (musHit(x, y, bx2, mBotY, bw3, mBotH)) { musPage = 0; vibTap(); needRedraw = true; return; }
 }
 
-static void musDrawScan(LGFX_Sprite& s) {
-  s.setTextSize(2); s.setTextColor(T().accent); s.setCursor(12, mHdrY + 1); s.print(RPTR("Cari TWS"));
+static void musDrawScan(LGFX_Sprite& s) {   // MUS_FLAT_V1
+  musHead(s, RPTR("Cari TWS"));
   if (musScanning) {                                // radar
     int rcx = SCR_W - 24, rcy = mHdrY + 9;
     int ph = (int)((millis() / 90) % 12);
@@ -2351,7 +2367,7 @@ static void musDrawScan(LGFX_Sprite& s) {
     nyxAaCircleRing(s, rcx, rcy, 3 + ((ph + 6) % 12), blend565(T().bg, T().accent, (uint8_t)(255 - ((ph + 6) % 12) * 20)));
   }
   s.setTextSize(1);
-  s.setCursor(12, 46);
+  s.setCursor(12, 47);
   if (!musCamAlive) { s.setTextColor(T().danger); s.print(RPTR("Modul BT tidak terdeteksi (cek kabel)")); }
   else if (musScanning) {
     s.setTextColor(T().subtext);
@@ -2366,7 +2382,7 @@ static void musDrawScan(LGFX_Sprite& s) {
   int maxc = (SCR_W - 90) / 6;
   for (int r = 0; r < rows && r < musScanCount; r++) {
     int y = 58 + r * 30;
-    musPanel(s, 12, y, SCR_W - 24, 28, 8, T().surface2, 180);
+    s.drawFastHLine(12, y + 29, SCR_W - 24, musLn());
     musDrawSignal(s, 20, y + 7, musScanRssi[r]);
     char nm[40]; strncpy(nm, musScanName[r], sizeof(nm) - 1); nm[sizeof(nm) - 1] = 0;
     musTrunc(nm, maxc);
@@ -2375,11 +2391,12 @@ static void musDrawScan(LGFX_Sprite& s) {
     s.setTextColor(T().subtext); s.setCursor(SCR_W - 20 - s.textWidth(rs), y + 10); s.print(rs);
   }
   int bw3s = (SCR_W - 24 - 12) / 3;
-  musPanel(s, 12, mBotY, bw3s, mBotH, 10, T().surface2, 210);
+  musBtnGhost(s, 12, bw3s);
   musDrawLabel(s, RPTR("Pindai"), 12, mBotY, bw3s, mBotH, T().text);
-  musPanel(s, 12 + bw3s + 6, mBotY, bw3s, mBotH, 10, musOutSpk ? T().good : T().surface2, 210);
+  if (musOutSpk) { musBtnSolid(s, 12 + bw3s + 6, bw3s, T().good); }
+  else           { musBtnGhost(s, 12 + bw3s + 6, bw3s); }
   musDrawLabel(s, musOutSpk ? RPTR("Output: SPK") : RPTR("Output: BT"), 12 + bw3s + 6, mBotY, bw3s, mBotH, musOutSpk ? T().bg : T().text);
-  iosRR(s,12 + (bw3s + 6) * 2, mBotY, bw3s, mBotH, 10, T().accent);
+  musBtnSolid(s, 12 + (bw3s + 6) * 2, bw3s, T().accent);
   musDrawLabel(s, RPTR("Pemutar"), 12 + (bw3s + 6) * 2, mBotY, bw3s, mBotH, T().bg);
 }
 
@@ -2433,7 +2450,7 @@ static void ryvBars(LGFX_Sprite& s, int x, int y, int w, int h, int n, const cha
     } else {
       if (f > 1) f = 1; if (f < 0) f = 0;
       int len = (int)(f * bw + 0.5f);
-      if (len > 0) s.fillRect(bx, by, len, bh, musHsv(i * 45.f, 0.7f, hi == i ? 0.98f : 0.7f));
+      if (len > 0) s.fillRect(bx, by, len, bh, hi == i ? (uint16_t)T().accent : blend565(T().bg, T().text, 110));   // MUS_FLAT_V1
       char b[8]; snprintf(b, sizeof(b), "%d%%", (int)(f * 100.f + 0.5f));
       s.setTextColor(tc); s.setCursor(bx + bw + 3, ry + (rowH - 8) / 2); s.print(b);
     }
@@ -2544,7 +2561,7 @@ static void ryvDraw(LGFX_Sprite& s) {
   s.setTextSize(1);
   for (int i = 0; i < 3; i++) {
     int x, y, w, h; ryvTabRect(i, &x, &y, &w, &h); bool on = (ryvTab == i);
-    iosRR(s, x, y, w, h, 7, on ? (uint16_t)T().accent : (uint16_t)T().surface2);
+    if (on) nyxAaRR(s, x, y, w, h, 5, T().accent); else nyxAaRRRing(s, x, y, w, h, 5, musLn());   // MUS_FLAT_V1
     s.setTextColor(on ? (uint16_t)T().bg : (uint16_t)T().text); s.setCursor(x + (w - (int)strlen(tn[i]) * 6) / 2, y + 5); s.print(tn[i]);
   }
   RyneEngine* R = ryne;
