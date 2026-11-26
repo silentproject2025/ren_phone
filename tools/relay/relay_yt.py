@@ -108,6 +108,7 @@ class H_(BaseHTTPRequestHandler):
                 try: return max(lo, min(hi, int(q.get(k, [d])[0]))) // 2 * 2
                 except Exception: return d
             w, h, fps = qi("w", W, 64, 800), qi("h", H, 64, 800), qi("fps", 0, 0, 30)
+            print("[live] dari %s  %dx%d  %s" % (self.client_address[0], w, h, ("video: " + S["title"]) if src else "KOSONG (belum ada video)"), flush=True)
             if not src:
                 b = b"idle"; self.send_response(503); self.send_header("Content-Length", "4"); self.end_headers(); self.wfile.write(b); return
             kill_proc()
@@ -117,14 +118,17 @@ class H_(BaseHTTPRequestHandler):
             self.connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
             self.send_response(200); self.send_header("Content-Type", "video/x-motion-jpeg")
             self.send_header("Connection", "close"); self.end_headers()
+            sent = 0
             while True:
                 d = p.stdout.read(16384)
                 if not d: break
-                self.wfile.write(d)
+                self.wfile.write(d); sent += len(d)
         except Exception:
             pass
         finally:
             try: p.kill()
+            except Exception: pass
+            try: print("[live] selesai, terkirim %d KB" % (sent // 1024), flush=True)
             except Exception: pass
 
 def lan_ip():
