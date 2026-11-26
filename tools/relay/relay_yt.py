@@ -19,7 +19,7 @@ import os, re, shutil, subprocess, sys, socket, threading, time, urllib.parse, h
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8080
-W, H, QUAL = 240, 320, 7                    # ukuran bawaan; ren_phone mengirim ukuran panelnya sendiri (?w=&h=). QUAL: 2 (bagus) .. 31 (kasar)
+W, H, QUAL = 240, 320, 15                    # ukuran bawaan; ren_phone mengirim ukuran panelnya sendiri (?w=&h=). QUAL: 2 (bagus) .. 31 (kasar)
 YT_RE = re.compile(r"^https?://([a-z0-9-]+\.)?(youtube\.com|youtu\.be)/", re.I)
 S = {"src": "", "title": "", "rot": False, "err": "", "proc": None}
 LOCK = threading.Lock()
@@ -103,33 +103,36 @@ class H_(BaseHTTPRequestHandler):
     def live(self):
         with LOCK:
             src, rot = S["src"], S["rot"]
-            q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
-            def qi(k, d, lo, hi):
-                try: return max(lo, min(hi, int(q.get(k, [d])[0]))) // 2 * 2
-                except Exception: return d
-            w, h, fps = qi("w", W, 64, 800), qi("h", H, 64, 800), qi("fps", 0, 0, 30)
-            print("[live] dari %s  %dx%d  %s" % (self.client_address[0], w, h, ("video: " + S["title"]) if src else "KOSONG (belum ada video)"), flush=True)
-            if not src:
-                b = b"idle"; self.send_response(503); self.send_header("Content-Length", "4"); self.end_headers(); self.wfile.write(b); return
-            kill_proc()
-            p = subprocess.Popen(ffmpeg_cmd(src, rot, w, h, fps), stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=0)
-            S["proc"] = p
+        q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+        def qi(k, d, lo, hi):
+            try: return max(lo, min(hi, int(q.get(k, [d])[0]))) // 2 * 2
+            except Exception: return d
+        w, h, fps = qi("w", W, 64, 800), qi("h", H, 64, 800), qi("fps", 0, 0, 30)
+        print("[live] dari %s  %dx%d  %s" % (self.client_address[0], w, h, ("video: " + S["title"]) if src else "KOSONG (belum ada video)"), flush=True)
+        if not src:
+            b = b"idle"; self.send_response(503); self.send_header("Content-Length", "4"); self.end_headers(); self.wfile.write(b); return
+        t0 = time.time(); sent = 0; p = None
         try:
             self.connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
             self.send_response(200); self.send_header("Content-Type", "video/x-motion-jpeg")
-            self.send_header("Connection", "close"); self.end_headers()
-            sent = 0
+            self.send_header("Connection", "close"); self.end_headers()      # header DULU, sebelum ffmpeg jalan
+            self.wfile.flush()
+            with LOCK:
+                kill_proc()
+                p = subprocess.Popen(ffmpeg_cmd(src, rot, w, h, fps), stdout=subprocess.PIPE, stderr=None, bufsize=0)
+                S["proc"] = p
             while True:
                 d = p.stdout.read(16384)
+                if sent == 0: print("[live] frame pertama setelah %.1f dtk (%d byte)" % (time.time() - t0, len(d)), flush=True)
                 if not d: break
                 self.wfile.write(d); sent += len(d)
-        except Exception:
-            pass
+        except Exception as e:
+            print("[live] putus setelah %.1f dtk: %r" % (time.time() - t0, e), flush=True)
         finally:
-            try: p.kill()
+            try:
+                if p: p.kill()
             except Exception: pass
-            try: print("[live] selesai, terkirim %d KB" % (sent // 1024), flush=True)
-            except Exception: pass
+            print("[live] selesai, terkirim %d KB" % (sent // 1024), flush=True)
 
 def lan_ip():
     try:                                   # IP HP ini di WiFi/hotspot (tanpa perlu izin khusus)
@@ -138,21 +141,48 @@ def lan_ip():
     except Exception:
         return ""
 
-def beacon():
-    """RELAY_DISCOVER_V1: pancarkan "RENRELAY <port>" (UDP 8081) tiap 1 dtk supaya ren_phone menemukan relay tanpa /relay.txt."""
-    msg = ("RENRELAY %d" % PORT).encode()
-    extra = [t for t in os.environ.get("RELAY_BCAST", "").split(",") if t]
-    while True:
+def local_nets():
+    """RELAY_BEACON_ALLIF: semua (ip, broadcast) IPv4 HP ini, termasuk antarmuka hotspot."""
+    import ipaddress
+    res = []
+    def add(ip, n):
         try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-            ip = lan_ip(); tg = ["255.255.255.255"] + extra
-            if ip.count(".") == 3: tg.append(ip.rsplit(".", 1)[0] + ".255")
-            for t in tg:
-                try: s.sendto(msg, (t, 8081))
-                except Exception: pass
-            s.close()
+            if ip.startswith("127.") or ip.startswith("169.254."): return
+            bc = str(ipaddress.ip_interface("%s/%s" % (ip, n)).network.broadcast_address)
+            if (ip, bc) not in res: res.append((ip, bc))
         except Exception:
             pass
+    for cmd in (["ip", "-4", "-o", "addr"], ["ifconfig"]):
+        try:
+            out = subprocess.run(cmd, capture_output=True, text=True, timeout=3).stdout
+        except Exception:
+            continue
+        for m in re.finditer(r"inet (\d+\.\d+\.\d+\.\d+)/(\d+)", out):
+            add(m.group(1), m.group(2))
+        for m in re.finditer(r"inet (\d+\.\d+\.\d+\.\d+)\s+netmask (\d+\.\d+\.\d+\.\d+)", out):
+            add(m.group(1), str(ipaddress.ip_address(m.group(2))))
+    ip = lan_ip()
+    if ip.count(".") == 3: add(ip, 24)
+    return res
+
+def beacon():
+    """RELAY_DISCOVER_V1 + RELAY_BEACON_ALLIF: pancarkan "RENRELAY <port>" (UDP 8081) tiap 1 dtk di tiap antarmuka."""
+    msg = ("RENRELAY %d" % PORT).encode()
+    extra = [t for t in os.environ.get("RELAY_BCAST", "").split(",") if t]
+    n = 0; nets = []
+    while True:
+        if n % 5 == 0: nets = local_nets()            # IP berubah saat hotspot dinyalakan/dimatikan
+        n += 1
+        for src, bc in nets + [("", "")]:
+            try:
+                s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+                if src: s.bind((src, 0))
+                for t in {"255.255.255.255", bc, *extra} - {""}:
+                    try: s.sendto(msg, (t, 8081))
+                    except Exception: pass
+                s.close()
+            except Exception:
+                pass
         time.sleep(1)
 
 class Srv(ThreadingHTTPServer):   # abaikan koneksi yang ditutup browser/HP di tengah jalan
