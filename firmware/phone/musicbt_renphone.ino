@@ -183,6 +183,20 @@ static int musListTop = 0;
 // =====================================================================
 //  UTIL
 // =====================================================================
+// =====================================================================
+//  MUS_UX_V1 -- keadaan sentuh baru untuk app Musik (geser daftar, ketuk saat lepas, geser di pemutar)
+// =====================================================================
+static int      musPtrMode = 0;               // 0 diam | 1 ditekan (calon ketuk) | 2 menghentikan glide | 3 menggeser daftar | 5 pemutar: calon ketuk | 6 pemutar: menggeser kiri/kanan
+static int      musPtrX0 = 0, musPtrY0 = 0, musPtrLastY = 0, musPtrDx = 0;
+static uint32_t musPtrT0 = 0, musPtrMoveT = 0;
+static float    musPtrVel = 0.f;              // px/ms (daftar)
+static bool     musLsGlide = false;           // daftar meluncur setelah jari diangkat
+static uint32_t musLsGlideT = 0;
+static int      musLsFrac = 0;                // 0..29: piksel baris pertama yang sudah tergeser keluar di atas
+static int      musPressRow = -1;             // baris daftar yang sedang ditekan (disorot)
+static int      musPressCtl = 0;              // tombol pemutar yang sedang ditekan: 1 play, 2 prev, 3 next, 4 acak, 5 ulang
+static void musLsGlideTick(uint32_t now);     // definisi di blok halaman Online
+
 static void musToast(const char* m) {
   strncpy(musMsg, m, sizeof(musMsg) - 1);
   musMsg[sizeof(musMsg) - 1] = 0;
@@ -1489,6 +1503,7 @@ static bool musNetBtStart(const char* url) {
 void musicEnter() {
   musBegin();
   musPage = 0;
+  musPtrMode = 0; musPressRow = -1; musPressCtl = 0; musLsGlide = false; musLsFrac = 0;   // MUS_UX_V1
   if (musListCount() == 0) musPost('r', 0, nullptr);
 }
 void musicExit() {}
@@ -1549,6 +1564,7 @@ void musicLoopPoll() {
     }
   }
 
+  if (onScr) musLsGlideTick(now);                // MUS_UX_V1: daftar meluncur setelah jari diangkat
   if (jamTakeDone()) {                           // JAM_UI_V1: pencarian online selesai
     int jr = jamLastResult();
     if (onScr && jr < 0) {                       // AUDIUS_V1: nama sumber ikut pesan
@@ -1918,6 +1934,7 @@ static void musDrawPlayer(LGFX_Sprite& s) {
   // progress + waktu
   char t1[12], t2[12];
   musFmtTime(t1, musLoaded ? musPlayedMs : 0);
+  if (musNetMode && musLoaded && !musPaused && musPlayedMs == 0) strcpy(t1, "Memuat...");   // MUS_UX_V1: lagu online belum mulai bunyi
   if (musLoaded && musDurMs > 0) musFmtTime(t2, musDurMs); else strcpy(t2, "--:--");
   s.setTextColor(T().subtext);
   s.setCursor(mBarX, mTimeY); s.print(t1);
@@ -1941,6 +1958,13 @@ static void musDrawPlayer(LGFX_Sprite& s) {
   }
 
   // kontrol
+  if (musPressCtl) {                                   // MUS_UX_V1: sorotan tombol yang sedang ditekan
+    if (musPressCtl == 1) nyxAaCircle(s, mPlayX, mCtlCY, mPlayR + 7, blend565(T().bg, T().accent, 110));
+    else {
+      int px = (musPressCtl == 2) ? mPrevX : (musPressCtl == 3) ? mNextX : (musPressCtl == 4) ? mShufX : mRepX;
+      nyxAaCircle(s, px, mCtlCY, 19, blend565(T().bg, T().text, 38));
+    }
+  }
   int sm = musShufMode;
   musDrawShuffle(s, mShufX, mCtlCY, sm == 2 ? T().accent2 : (sm == 1 ? T().accent : T().subtext));
   if (sm == 1) nyxAaCircle(s, mShufX, mCtlCY + 15, 2, T().accent);
@@ -1952,6 +1976,15 @@ static void musDrawPlayer(LGFX_Sprite& s) {
   if (playing) nyxAaCircleRing(s, mPlayX, mCtlCY, mPlayR + 3, blend565(T().bg, T().accent, 120));
   nyxAaCircle(s, mPlayX, mCtlCY, mPlayR, T().accent);
   musDrawIcon(s, playing ? 3 : 2, mPlayX, mCtlCY, T().bg);
+
+  if (musPtrMode == 6) {                               // MUS_UX_V1: petunjuk geser kiri/kanan (melewati 50 px = siap)
+    bool armed = abs(musPtrDx) >= 50, nxt = musPtrDx < 0;
+    const char* lb = nxt ? RPTR("Berikutnya >>") : RPTR("<< Sebelumnya");
+    int pw = 112, px = mCovX + mCovS / 2 - pw / 2, py = mCovY + mCovS / 2 - 10;
+    if (mLand) px = mCovX + mCovS / 2 - pw / 2;
+    nyxAaRR(s, px, py, pw, 20, 10, armed ? T().accent : blend565(T().bg, T().text, 60));
+    musDrawLabel(s, lb, px, py, pw, 20, armed ? T().bg : T().text);
+  }
 }
 
 static void musMiniEq(LGFX_Sprite& s, int x, int yBase, bool playing, uint16_t col) {
@@ -1963,28 +1996,36 @@ static void musMiniEq(LGFX_Sprite& s, int x, int yBase, bool playing, uint16_t c
   }
 }
 
+static void musLsSet(float px);                       // MUS_UX_V1 (definisi di blok halaman Online)
+static float musLsGet();
+static void musLsDrawBar(LGFX_Sprite& s, int top, int bot, int n);
 static void musDrawList(LGFX_Sprite& s) {
   int n = musListCount();
   int rows = musListRows();
-  if (musListTop >= n) musListTop = 0;
+  musLsSet(musLsGet());                             // MUS_UX_V1: rapikan posisi (daftar bisa menyusut)
   s.setTextSize(2); s.setTextColor(T().accent); s.setCursor(12, mHdrY + 1); s.print(RPTR("Daftar Lagu"));
   char cnt[16]; snprintf(cnt, sizeof(cnt), "%d lagu", n);
   s.setTextSize(1); s.setTextColor(T().subtext);
   s.setCursor(SCR_W - 12 - s.textWidth(cnt), mHdrY + 5); s.print(cnt);
 
   int maxc = (SCR_W - 80) / 6;
-  if (n == 0) {
-    s.setTextColor(T().subtext);
-    s.setCursor(12, 56); s.print(RPTR("Tidak ada MP3 di folder /music"));
-    s.setCursor(12, 70); s.print(RPTR("(atau di root SD). Taruh file lalu"));
-    s.setCursor(12, 84); s.print(RPTR("buka ulang app ini."));
+  int lTop = 48, lBot = mBotY - 4;
+  if (n == 0) {                                     // MUS_UX_V1: layar kosong di tengah
+    int cy = lTop + 34;
+    nyxAaCircle(s, SCR_W / 2, cy, 20, blend565(T().bg, T().text, 28));
+    nyxAaCircle(s, SCR_W / 2, cy, 6, blend565(T().bg, T().text, 70));
+    musDrawLabel(s, RPTR("Tidak ada MP3 di folder /music"), 0, cy + 30, SCR_W, 12, T().text);
+    musDrawLabel(s, RPTR("(atau di root SD). Taruh file lalu"), 0, cy + 46, SCR_W, 12, T().subtext);
+    musDrawLabel(s, RPTR("buka ulang app ini."), 0, cy + 60, SCR_W, 12, T().subtext);
   }
-  for (int r = 0; r < rows; r++) {
+  s.setClipRect(0, lTop, SCR_W, lBot - lTop);       // MUS_UX_V1: baris boleh terpotong di tepi saat digeser
+  for (int r = 0; ; r++) {
     int idx = musListTop + r;
     if (idx >= n) break;
-    int y = 48 + r * 30;
-    bool cur = (idx == musCur);
-    musPanel(s, 12, y, SCR_W - 30, 28, 8, cur ? T().accent : T().surface2, cur ? 90 : 170);
+    int y = lTop + r * 30 - musLsFrac;
+    if (y >= lBot) break;
+    bool cur = (idx == musCur), prs = (idx == musPressRow);
+    musPanel(s, 12, y, SCR_W - 30, 28, 8, (cur || prs) ? T().accent : T().surface2, prs ? (cur ? 130 : 60) : (cur ? 90 : 170));
     nyxAaCircle(s, 28, y + 14, 10, cur ? T().accent : blend565(T().bg, T().text, 40));
     char num[12]; snprintf(num, sizeof(num), "%d", idx + 1);
     s.setTextSize(1); s.setTextColor(cur ? T().bg : T().subtext);
@@ -1994,12 +2035,8 @@ static void musDrawList(LGFX_Sprite& s) {
     s.setTextColor(T().text); s.setCursor(46, y + 10); s.print(nm);
     if (cur) musMiniEq(s, SCR_W - 18 - 14, y + 22, musLoaded && !musPaused, T().accent);
   }
-  if (n > rows) {                                   // scrollbar
-    int trackH = rows * 30 - 2, thumbH = (trackH * rows) / n; if (thumbH < 12) thumbH = 12;
-    int thumbY = 48 + ((trackH - thumbH) * musListTop) / (n - rows > 0 ? n - rows : 1);
-    nyxAaRR(s, SCR_W - 9, 48, 3, trackH, 1, blend565(T().bg, T().text, 30));
-    nyxAaRR(s, SCR_W - 9, thumbY, 3, thumbH, 1, T().accent);
-  }
+  s.clearClipRect();
+  musLsDrawBar(s, lTop, lBot, n);                   // MUS_UX_V1: scrollbar mengikuti posisi piksel
 
   int bw3 = (SCR_W - 24 - 18) / 4;                  // JAM_UI_V1: 4 tombol (▲ ▼ Online Pemutar)
   int bx0 = 12, bx1 = 12 + bw3 + 6, bxJ = 12 + 2 * (bw3 + 6), bx2 = 12 + 3 * (bw3 + 6);
@@ -2029,14 +2066,128 @@ static int  musJamTopY()  { return mHdrY + 50; }
 static int  musJamBot()   { return musJamKbOn() ? kbY() - 4 : mBotY - 4; }
 static int  musJamRows()  { int r = (musJamBot() - musJamTopY()) / 30; return r < 0 ? 0 : r; }
 
+// =====================================================================
+//  MUS_UX_V1: geser daftar (Daftar Lagu & Online) dengan momentum, ketuk saat jari dilepas + sorotan baris;
+//  di pemutar: sorotan tombol yang ditekan, geser kiri/kanan di cover/judul = lagu sebelum/berikut.
+//  Posisi daftar = musListTop/musJamTop (baris pertama) + musLsFrac (0..29 px) -> semua kode lama tetap berlaku.
+// =====================================================================
+static bool  musLsActive() { return musPage == 1 || (musPage == 4 && !musJamKbOn()); }
+static int   musLsTopY()   { return musPage == 4 ? musJamTopY() : 48; }
+static int   musLsBotY()   { return musPage == 4 ? musJamBot()  : mBotY - 4; }
+static int   musLsN()      { return musPage == 4 ? jamCount()   : musListCount(); }
+static int&  musLsRow()    { return musPage == 4 ? musJamTop    : musListTop; }
+static int   musLsMax()    { int m = musLsN() * 30 - 2 - (musLsBotY() - musLsTopY()); return m < 0 ? 0 : m; }
+static float musLsGet()    { return (float)musLsRow() * 30.f + (float)musLsFrac; }
+static void  musLsSet(float px) {
+  float mx = (float)musLsMax();
+  if (px > mx) px = mx;
+  if (px < 0.f) px = 0.f;
+  int r = (int)(px / 30.f);
+  int f = (int)(px - (float)r * 30.f);
+  if (f < 0) f = 0; if (f > 29) f = 29;
+  musLsRow() = r; musLsFrac = f;
+}
+static int musLsRowAt(int y) {
+  int rel = y - musLsTopY() + musLsFrac;
+  if (rel < 0) return -1;
+  int idx = musLsRow() + rel / 30;
+  return (idx < musLsN()) ? idx : -1;
+}
+static void musLsDrawBar(LGFX_Sprite& s, int top, int bot, int n) {
+  int vh = bot - top, total = n * 30 - 2, mx = total - vh;
+  if (mx <= 0 || vh <= 4) return;
+  int trackH = vh - 2, thumbH = (trackH * vh) / total;
+  if (thumbH < 12) thumbH = 12;
+  if (thumbH > trackH) thumbH = trackH;
+  int thumbY = top + (int)((float)(trackH - thumbH) * musLsGet() / (float)mx);
+  nyxAaRR(s, SCR_W - 9, top, 3, trackH, 1, blend565(T().bg, T().text, 30));
+  nyxAaRR(s, SCR_W - 9, thumbY, 3, thumbH, 1, T().accent);
+}
+static void musLsGlideTick(uint32_t now) {
+  if (!musLsGlide) return;
+  if (!(musPage == 1 || musPage == 4) || musPtrMode == 3) { musLsGlide = false; musPtrVel = 0.f; return; }
+  uint32_t dt = now - musLsGlideT;
+  if (dt == 0) return;
+  if (dt > 50) dt = 50;
+  musLsGlideT = now;
+  float px = musLsGet() + musPtrVel * (float)dt;
+  if (px < 0.f || px > (float)musLsMax()) { musLsGlide = false; musPtrVel = 0.f; }   // mentok ujung: berhenti
+  musLsSet(px);
+  musPtrVel *= (1.0f - 0.0045f * (float)dt);
+  if (musPtrVel < 0.02f && musPtrVel > -0.02f) { musLsGlide = false; musPtrVel = 0.f; }
+  needRedraw = true;
+}
+// jari menyentuh area daftar? true = ditangani (ketuk baru dijalankan saat jari dilepas)
+static bool musLsDown(int x, int y) {
+  if (!musLsActive()) return false;
+  if (y < musLsTopY() || y >= musLsBotY()) return false;
+  bool wasGliding = musLsGlide;
+  musLsGlide = false; musPtrVel = 0.f;
+  musPtrMode = wasGliding ? 2 : 1;                 // sentuhan yang menghentikan glide tidak boleh membuka lagu
+  musPtrX0 = x; musPtrY0 = y; musPtrLastY = y;
+  musPtrT0 = millis(); musPtrMoveT = musPtrT0;
+  musPressRow = wasGliding ? -1 : musLsRowAt(y);
+  needRedraw = true;
+  return true;
+}
+// jari bergeser (event held)
+static void musPtrMove(int x, int y) {
+  if (musPtrMode == 1 || musPtrMode == 2) {
+    if (abs(y - musPtrY0) > 8) { musPtrMode = 3; musPressRow = -1; needRedraw = true; }
+  }
+  if (musPtrMode == 3) {
+    uint32_t nw = millis(), dt = nw - musPtrMoveT;
+    if (dt < 1) dt = 1;
+    musPtrMoveT = nw;
+    musPtrVel = musPtrVel * 0.5f + ((float)(musPtrLastY - y) / (float)dt) * 0.5f;
+    musLsSet(musLsGet() + (float)(musPtrLastY - y));
+    needRedraw = true;
+  } else if (musPtrMode == 5 || musPtrMode == 6) {
+    int dx = x - musPtrX0, dy = y - musPtrY0;
+    musPtrDx = dx;
+    if (musPtrMode == 5 && abs(dx) > 14 && abs(dx) > abs(dy)) musPtrMode = 6;
+    else if (musPtrMode == 5 && abs(dy) > 24) musPtrMode = 0;     // geser tegak = batal
+    if (musPtrMode == 6) needRedraw = true;
+  }
+  musPtrLastY = y;
+}
+// jari diangkat
+static void musPtrUp() {
+  int mode = musPtrMode, pr = musPressRow, dx = musPtrDx;
+  uint32_t now = millis();
+  musPtrMode = 0; musPressRow = -1; musPressCtl = 0; musPtrDx = 0;
+  if (mode == 1 && pr >= 0 && now - musPtrT0 < 700 && pr < musLsN()) {            // ketuk baris
+    if (musPage == 4) musPost('J', pr, nullptr); else musPost('p', pr, nullptr);
+    musPage = 0; vibTap();
+  } else if (mode == 3) {                                                         // lepas setelah geser -> meluncur
+    if (now - musPtrMoveT < 90 && musLsMax() > 0) {
+      if (musPtrVel > 3.0f) musPtrVel = 3.0f;
+      if (musPtrVel < -3.0f) musPtrVel = -3.0f;
+      if (musPtrVel > 0.05f || musPtrVel < -0.05f) { musLsGlide = true; musLsGlideT = now; }
+    }
+  } else if (mode == 5 && now - musPtrT0 < 700) {                                 // ketuk cover/judul = play/jeda
+    musPost('u', 0, nullptr); vibTap();
+  } else if (mode == 6) {                                                         // geser kiri = berikutnya, kanan = sebelumnya
+    if (dx <= -50)     { musPost('n', 0, nullptr); vibTap(); }
+    else if (dx >= 50) { musPost('b', 0, nullptr); vibTap(); }
+  }
+  needRedraw = true;
+}
+
+
 static void musJamFetch(const char* q, const char* tag) {
   if (WiFi.status() != WL_CONNECTED) { showToast(RPTR("WiFi belum terhubung")); return; }
   if (!jamSearchAsync(q, tag)) { showToast(jamBusy() ? RPTR("Masih memuat...") : RPTR("Gagal memulai pencarian")); return; }
-  musJamTop = 0; needRedraw = true;
+  musJamTop = 0; musLsFrac = 0; needRedraw = true;
 }
 static void musOpenJam() {                          // dipakai chip header & tombol di Daftar
   musPage = 4; musJamTop = 0;
+  musLsFrac = 0;
   if (!musJamOpened && jamCount() == 0 && !jamBusy()) { musJamOpened = true; musJamTag = 0; musJamFetch("", ""); }
+  else if (musNetMode && musNetCur >= 0 && musNetCur < jamCount()) {           // MUS_UX_V1: buka di lagu yang sedang main
+    int t = musNetCur - musJamRows() / 2; if (t < 0) t = 0;
+    musJamTop = t; musLsSet(musLsGet());
+  }
 }
 static void musJamSubmit() {
   if (musJamKbOn()) { kbVisible = false; kbTarget = nullptr; }
@@ -2069,10 +2220,15 @@ static void musDrawJam(LGFX_Sprite& s) {
   int by = musJamBoxY(), bx = 12, bw = musJamSrcX() - 4 - bx;     // AUDIUS_V1: ruang untuk chip sumber
   nyxAaRR(s, bx, by, bw, 22, 11, chip);
   char q[48]; strncpy(q, musJamQuery.c_str(), sizeof(q) - 1); q[sizeof(q) - 1] = 0;
-  musTrunc(q, (bw - 24) / 6);
+  musTrunc(q, (bw - (musJamQuery.length() > 0 ? 40 : 24)) / 6);   // MUS_UX_V1: ruang tombol x
   s.setTextColor(q[0] ? T().text : T().subtext);
   s.setCursor(bx + 10, by + 7); s.print(q[0] ? q : RPTR("cari lagu / artis"));
   if (kbOn && ((millis() / 500) & 1)) { int cw = q[0] ? s.textWidth(q) : 0; s.fillRect(bx + 10 + cw + 1, by + 5, 1, 12, T().accent); }
+  if (musJamQuery.length() > 0) {                    // MUS_UX_V1: tombol hapus teks (x)
+    int xx = bx + bw - 13, yy = by + 11;
+    nyxAaCircle(s, xx, yy, 7, blend565(T().bg, T().text, 50));
+    s.drawLine(xx - 3, yy - 3, xx + 3, yy + 3, T().bg); s.drawLine(xx + 3, yy - 3, xx - 3, yy + 3, T().bg);
+  }
   nyxAaRR(s, musJamSrcX(), by, MJ_SRC_W, 22, 11, chip);            // AUDIUS_V1: chip sumber
   musDrawLabel(s, jamSrcName(), musJamSrcX(), by, MJ_SRC_W, 22, T().accent2);
   nyxAaRR(s, SCR_W - 12 - MJ_GO_W, by, MJ_GO_W, 22, 11, T().accent);
@@ -2088,12 +2244,18 @@ static void musDrawJam(LGFX_Sprite& s) {
 
   // daftar
   int n = jamCount(), top = musJamTopY(), rows = musJamRows();
-  if (musJamTop >= n) musJamTop = 0;
+  musLsSet(musLsGet());                             // MUS_UX_V1: rapikan posisi
   if (n == 0) {
     int tY = top + 6;
     if (busy) {
-      char m[16]; snprintf(m, sizeof(m), "Memuat%.*s", (int)((millis() / 300) % 4), "...");
-      s.setTextColor(T().text); s.setCursor(12, tY); s.print(m);
+      for (int r = 0; r < rows && r < 5; r++) {      // MUS_UX_V1: rangka berdenyut selagi memuat
+        int y = top + r * 30;
+        uint8_t a = 60 + (uint8_t)(50.f * (0.5f + 0.5f * sinf(millis() * 0.006f - r * 0.8f)));
+        musPanel(s, 12, y, SCR_W - 30, 28, 8, T().surface2, a);
+        nyxAaCircle(s, 28, y + 14, 10, blend565(T().bg, T().text, 30));
+        nyxAaRR(s, 46, y + 6, 90 + (r * 37) % 70, 6, 3, blend565(T().bg, T().text, 35));
+        nyxAaRR(s, 46, y + 17, 60 + (r * 23) % 50, 5, 2, blend565(T().bg, T().text, 22));
+      }
     } else if (jamSrc == JAM_SRC_JAMENDO && strcmp(JAM_CLIENT_ID, "ISI_CLIENT_ID_KAMU") == 0) {   // AUDIUS_V1
       s.setTextColor(T().danger);  s.setCursor(12, tY);      s.print("JAM_CLIENT_ID belum diisi.");
       s.setTextColor(T().subtext); s.setCursor(12, tY + 14); s.print("Daftar gratis: devportal.jamendo.com");
@@ -2111,12 +2273,15 @@ static void musDrawJam(LGFX_Sprite& s) {
     }
   }
   int maxc = (SCR_W - 46 - 56) / 6;
-  for (int r = 0; r < rows; r++) {
+  int bot = musJamBot();
+  s.setClipRect(0, top, SCR_W, bot - top);          // MUS_UX_V1: baris boleh terpotong di tepi saat digeser
+  for (int r = 0; ; r++) {
     int idx = musJamTop + r;
     if (idx >= n) break;
-    int y = top + r * 30;
-    bool cur = (musNetMode && idx == musNetCur);
-    musPanel(s, 12, y, SCR_W - 30, 28, 8, cur ? T().accent : T().surface2, cur ? 90 : 170);
+    int y = top + r * 30 - musLsFrac;
+    if (y >= bot) break;
+    bool cur = (musNetMode && idx == musNetCur), prs = (idx == musPressRow);
+    musPanel(s, 12, y, SCR_W - 30, 28, 8, (cur || prs) ? T().accent : T().surface2, prs ? (cur ? 130 : 60) : (cur ? 90 : 170));
     nyxAaCircle(s, 28, y + 14, 10, cur ? T().accent : blend565(T().bg, T().text, 40));
     char num[12]; snprintf(num, sizeof(num), "%d", idx + 1);
     s.setTextColor(cur ? T().bg : T().subtext);
@@ -2128,12 +2293,8 @@ static void musDrawJam(LGFX_Sprite& s) {
     if (cur) musMiniEq(s, SCR_W - 18 - 14, y + 22, musLoaded && !musPaused, T().accent);
     else { int d = jamDurSec(idx); if (d > 0) { char dt[12]; musFmtTime(dt, (uint32_t)d * 1000u); s.setTextColor(T().subtext); s.setCursor(SCR_W - 20 - s.textWidth(dt), y + 10); s.print(dt); } }
   }
-  if (n > rows && rows > 0) {                       // scrollbar
-    int trackH = rows * 30 - 2, thumbH = (trackH * rows) / n; if (thumbH < 12) thumbH = 12;
-    int thumbY = top + ((trackH - thumbH) * musJamTop) / (n - rows > 0 ? n - rows : 1);
-    nyxAaRR(s, SCR_W - 9, top, 3, trackH, 1, blend565(T().bg, T().text, 30));
-    nyxAaRR(s, SCR_W - 9, thumbY, 3, thumbH, 1, T().accent);
-  }
+  s.clearClipRect();
+  musLsDrawBar(s, top, bot, n);                     // MUS_UX_V1: scrollbar mengikuti posisi piksel
 
   if (!kbOn) {                                      // bar bawah: ▲ ▼ Pemutar
     int bw3 = (SCR_W - 24 - 12) / 3;
@@ -2154,6 +2315,9 @@ static void musJamTouch(int x, int y) {
   bool rowBox = (y >= by - 2 && y <= by + 24);
   if (rowBox && x >= SCR_W - 12 - MJ_GO_W - 4 && x <= SCR_W - 6) { vibTap(); musJamSubmit(); needRedraw = true; return; }
   if (rowBox && x >= musJamSrcX() - 2 && x < SCR_W - 12 - MJ_GO_W - 4) { vibTap(); musJamSwitchSrc(); needRedraw = true; return; }   // AUDIUS_V1
+  if (rowBox && musJamQuery.length() > 0 && x >= musJamSrcX() - 4 - 22 && x < musJamSrcX() - 2) {   // MUS_UX_V1: tombol x
+    musJamQuery = ""; vibTap(); needRedraw = true; return;
+  }
   if (rowBox && x >= 12 && x < musJamSrcX() - 2) {
     if (kbOn) { kbVisible = false; kbTarget = nullptr; }
     else { kbTarget = &musJamQuery; kbVisible = true; kbMode = KB_LOWER; }
@@ -2168,18 +2332,12 @@ static void musJamTouch(int x, int y) {
       if (x >= x0 - 2 && x <= x0 + cw5 + 2) { musJamTag = i; musJamQuery = ""; vibTap(); musJamFetch("", MJ_CHIP_TAG[i]); needRedraw = true; return; }
     }
   }
-  int n = jamCount(), rows = musJamRows(), top = musJamTopY();
-  for (int r = 0; r < rows; r++) {
-    int idx = musJamTop + r;
-    if (idx >= n) break;
-    if (musHit(x, y, 12, top + r * 30, SCR_W - 30, 28)) {
-      musPost('J', idx, nullptr); musPage = 0; vibTap(); needRedraw = true; return;
-    }
-  }
+  int n = jamCount(), rows = musJamRows();
+  if (musLsDown(x, y)) return;                      // MUS_UX_V1: daftar -- ketuk dijalankan saat jari dilepas, bisa digeser
   int bw3 = (SCR_W - 24 - 12) / 3;
   int bx0 = 12, bx1 = 12 + bw3 + 6, bx2 = 12 + 2 * (bw3 + 6);
-  if (musHit(x, y, bx0, mBotY, bw3, mBotH)) { musJamTop -= rows; if (musJamTop < 0) musJamTop = 0; vibTap(); needRedraw = true; return; }
-  if (musHit(x, y, bx1, mBotY, bw3, mBotH)) { if (musJamTop + rows < n) musJamTop += rows; vibTap(); needRedraw = true; return; }
+  if (musHit(x, y, bx0, mBotY, bw3, mBotH)) { musJamTop -= rows; if (musJamTop < 0) musJamTop = 0; musLsFrac = 0; vibTap(); needRedraw = true; return; }
+  if (musHit(x, y, bx1, mBotY, bw3, mBotH)) { if (musJamTop + rows < n) musJamTop += rows; musLsFrac = 0; vibTap(); needRedraw = true; return; }
   if (musHit(x, y, bx2, mBotY, bw3, mBotH)) { musPage = 0; vibTap(); needRedraw = true; return; }
 }
 
@@ -2457,13 +2615,14 @@ void drawMusic(LGFX_Sprite& s) {
 void musicTouch(int x, int y, bool held, bool isNew) {
   musCalcLayout();
   if (isNew) musUiTouch++;                          // sinyal 'interaksi' utk RYNE
+  if (!isNew && !held) { musPtrUp(); return; }      // MUS_UX_V1: jari diangkat
 
   // slider volume: boleh di-drag (event held)
   if (musPage == 0 && (isNew || held) && musHit(x, y, mVolSX - 6, mVolY - 4, mVolSW + 12, 20)) {
     musSetVol(((x - mVolSX) * 127) / (mVolSW > 0 ? mVolSW : 1));
     needRedraw = true; return;
   }
-  if (!isNew) return;
+  if (!isNew) { musPtrMove(x, y); return; }          // MUS_UX_V1: geser
 
   if (musPage == 4 && musJamKbOn() && y >= kbY() - 2) { kbTouch(x, y); needRedraw = true; return; }   // JAM_UI_V1: keyboard dulu (area-nya menimpa tombol Kembali)
 
@@ -2478,17 +2637,11 @@ void musicTouch(int x, int y, bool held, bool isNew) {
 
   if (musPage == 1) {
     int n = musListCount(), rows = musListRows();
-    for (int r = 0; r < rows; r++) {
-      int idx = musListTop + r;
-      if (idx >= n) break;
-      if (musHit(x, y, 12, 48 + r * 30, SCR_W - 30, 28)) {
-        musPost('p', idx, nullptr); musPage = 0; vibTap(); needRedraw = true; return;
-      }
-    }
+    if (musLsDown(x, y)) return;                    // MUS_UX_V1: daftar -- ketuk dijalankan saat jari dilepas, bisa digeser
     int bw3 = (SCR_W - 24 - 18) / 4;                // JAM_UI_V1: 4 tombol
     int bx0 = 12, bx1 = 12 + bw3 + 6, bxJ = 12 + 2 * (bw3 + 6), bx2 = 12 + 3 * (bw3 + 6);
-    if (musHit(x, y, bx0, mBotY, bw3, mBotH)) { musListTop -= rows; if (musListTop < 0) musListTop = 0; vibTap(); needRedraw = true; return; }
-    if (musHit(x, y, bx1, mBotY, bw3, mBotH)) { if (musListTop + rows < n) musListTop += rows; vibTap(); needRedraw = true; return; }
+    if (musHit(x, y, bx0, mBotY, bw3, mBotH)) { musListTop -= rows; if (musListTop < 0) musListTop = 0; musLsFrac = 0; vibTap(); needRedraw = true; return; }
+    if (musHit(x, y, bx1, mBotY, bw3, mBotH)) { if (musListTop + rows < n) musListTop += rows; musLsFrac = 0; vibTap(); needRedraw = true; return; }
     if (musHit(x, y, bxJ, mBotY, bw3, mBotH)) { musOpenJam(); vibTap(); needRedraw = true; return; }
     if (musHit(x, y, bx2, mBotY, bw3, mBotH)) { musPage = 0; vibTap(); needRedraw = true; return; }
     return;
@@ -2515,16 +2668,18 @@ void musicTouch(int x, int y, bool held, bool isNew) {
   }
 
   // ---- halaman pemutar ----
-  if (musHit(x, y, mDafX, mHdrY - 3, mDafW, mChipH + 6)) { musPage = 1; int r = musListRows(); musListTop = (musCur / r) * r; vibTap(); needRedraw = true; return; }
+  if (musHit(x, y, mDafX, mHdrY - 3, mDafW, mChipH + 6)) { musPage = 1; { int t = musCur - musListRows() / 2; musListTop = t < 0 ? 0 : t; musLsFrac = 0; musLsSet(musLsGet()); } vibTap();   // MUS_UX_V1: buka di lagu yang sedang main
+    needRedraw = true; return; }
   { int cx, cw; bool vr = mVibeY >= 0 && musHit(x, y, mTitX, mVibeY - 3, mTitW, 14);          // chip RYNE / ketuk baris vibe
     if (vr || (ryvChipRect(&cx, &cw) && musHit(x, y, cx, mHdrY - 3, cw, mChipH + 6))) { musPage = 3; ryvTab = 0; ryvCell = -1; ryvInfo[0] = 0; vibTap(); needRedraw = true; return; } }
   { int jx, jw; if (musJamChipRect(&jx, &jw) && musHit(x, y, jx, mHdrY - 3, jw, mChipH + 6)) { musOpenJam(); vibTap(); needRedraw = true; return; } }   // JAM_UI_V1
   if (musHit(x, y, mTwsX, mHdrY - 3, mTwsW, mChipH + 6)) { musPage = 2; musPost('a', 0, nullptr); vibTap(); needRedraw = true; return; }
 
-  if (musHitC(x, y, mPlayX, mCtlCY, mPlayR + 6)) { musPost('u', 0, nullptr); vibTap(); needRedraw = true; return; }
-  if (musHitC(x, y, mPrevX, mCtlCY, 22)) { musPost('b', 0, nullptr); vibTap(); needRedraw = true; return; }
-  if (musHitC(x, y, mNextX, mCtlCY, 22)) { musPost('n', 0, nullptr); vibTap(); needRedraw = true; return; }
+  if (musHitC(x, y, mPlayX, mCtlCY, mPlayR + 6)) { musPost('u', 0, nullptr); musPressCtl = 1; vibTap(); needRedraw = true; return; }
+  if (musHitC(x, y, mPrevX, mCtlCY, 22)) { musPost('b', 0, nullptr); musPressCtl = 2; vibTap(); needRedraw = true; return; }
+  if (musHitC(x, y, mNextX, mCtlCY, 22)) { musPost('n', 0, nullptr); musPressCtl = 3; vibTap(); needRedraw = true; return; }
   if (musHitC(x, y, mShufX, mCtlCY, 20)) {
+    musPressCtl = 4;
     musShufMode = (musShufMode + 1) % 3; musPrefsDirty = true; musPrefsMs = millis(); vibTap();
     showToast(musShufMode == 0 ? RPTR("Acak: mati") : (musShufMode == 1 ? RPTR("Acak: biasa") : RPTR("Acak: AI (RYNE)")));
     needRedraw = true; return;
@@ -2532,14 +2687,16 @@ void musicTouch(int x, int y, bool held, bool isNew) {
   if (!musNetMode && musHitC(x, y, mTitX + mTitW - 8, mSubY + 4, 14)) {          // hati = suka
     musPost('k', 0, nullptr); musLiked = !musLiked; vibTap(); needRedraw = true; return;
   }
-  if (musHitC(x, y, mRepX, mCtlCY, 20)) { musRepeat = (musRepeat + 1) % 3; musPrefsDirty = true; musPrefsMs = millis(); vibTap(); needRedraw = true; return; }
+  if (musHitC(x, y, mRepX, mCtlCY, 20)) { musPressCtl = 5; musRepeat = (musRepeat + 1) % 3; musPrefsDirty = true; musPrefsMs = millis(); vibTap(); needRedraw = true; return; }
 
   if (musHitC(x, y, mVolIcX, mVolY + 7, 12)) {      // ikon speaker = bisu / kembalikan
     if (musVol > 0) { musMuteVol = musVol; musSetVol(0); }
     else            { musSetVol(musMuteVol > 0 ? musMuteVol : 80); }
     vibTap(); needRedraw = true; return;
   }
-  if (musHit(x, y, mCovX, mCovY, mCovS, mCovS)) { musPost('u', 0, nullptr); vibTap(); needRedraw = true; return; }   // ketuk cover = play/pause
+  if (y >= mCovY - 2 && y <= mSubY + 8) {            // MUS_UX_V1: area cover+judul: ketuk = play/jeda (saat dilepas), geser kiri/kanan = lagu lain
+    musPtrMode = 5; musPtrX0 = x; musPtrY0 = y; musPtrDx = 0; musPtrT0 = millis(); needRedraw = true; return;
+  }
 }
 
 

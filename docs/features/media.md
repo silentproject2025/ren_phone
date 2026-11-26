@@ -12,6 +12,7 @@ The [Camera](./camera.md) and the [Books](./books.md) reader have their own page
 Audio goes out through **Bluetooth TWS** earbuds, with the ESP32-CAM as the coprocessor (see [Architecture](../architecture.md#bluetooth-coprocessor-rplink)).
 
 - Up to 200 songs in the `music/` folder.
+- **Touch.** Drag the song list (and the Online list) with your finger, it glides after you lift it; tap a row to play (the song starts when you lift your finger). On the player, swipe left or right on the cover or title for the next or previous song; tap them to play or pause.
 - **Album cover** from the ID3 tag (baseline JPEG only; other formats show a vinyl-record image).
 - **Plain shuffle or AI mode** (RYNE v2, below).
 - **Control from the earbuds' buttons** (AVRCP).
