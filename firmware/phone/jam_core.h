@@ -11,9 +11,10 @@
 #define JAM_TITLE_LEN   48
 #define JAM_ARTIST_LEN  32
 #define JAM_URL_LEN     200
+#define JAM_IMG_LEN     160    // COVER_NET_V1: URL gambar cover (Jamendo "image" / Audius "artwork")
 #define JAM_MAX_TRACKS  40     // JAM_PARTIAL_V1: 20 -> 40
 
-struct JamTrack { char title[JAM_TITLE_LEN]; char artist[JAM_ARTIST_LEN]; char url[JAM_URL_LEN]; uint16_t durSec; };
+struct JamTrack { char title[JAM_TITLE_LEN]; char artist[JAM_ARTIST_LEN]; char url[JAM_URL_LEN]; char img[JAM_IMG_LEN]; uint16_t durSec; };
 
 static int jamHex4(const char* s, uint32_t* v) {
   uint32_t r = 0;
@@ -125,12 +126,17 @@ static int jamParse(char* json, JamTrack* out, int maxN) {
     if (*p != '}') break;                              // objek terpotong
     *p = 0;                                            // akhiri objek (aman: kita maju terus)
     JamTrack& t = out[n];
-    t.title[0] = t.artist[0] = t.url[0] = 0; t.durSec = 0;
+    t.title[0] = t.artist[0] = t.url[0] = t.img[0] = 0; t.durSec = 0;
     jamFindStr(start, "name", t.title, sizeof(t.title));
     jamFindStr(start, "artist_name", t.artist, sizeof(t.artist));
     { int d = jamFindInt(start, "duration"); t.durSec = (d > 0 && d < 65535) ? (uint16_t)d : 0; }
     bool ok = jamFindStr(start, "audio", t.url, sizeof(t.url)) && strncmp(t.url, "http", 4) == 0;
-    if (ok) { if (!t.title[0]) strcpy(t.title, "(tanpa judul)"); n++; }
+    if (ok) {
+      jamFindStr(start, "image", t.img, sizeof(t.img));              // COVER_NET_V1: URL cover lagu/album
+      if (strncmp(t.img, "http", 4) != 0) t.img[0] = 0;
+      if (!t.title[0]) strcpy(t.title, "(tanpa judul)");
+      n++;
+    }
     p++;
   }
   return n;
@@ -276,7 +282,7 @@ static int audParse(char* json, JamTrack* out, int maxN) {
     if (*p != '}') break;                              // objek terpotong
     *p = 0;
     JamTrack& t = out[n];
-    t.title[0] = t.artist[0] = t.url[0] = 0; t.durSec = 0;
+    t.title[0] = t.artist[0] = t.url[0] = t.img[0] = 0; t.durSec = 0;
     char id[28]; id[0] = 0;
     bool ok = audStr(start, "id", id, sizeof(id)) && audIdOk(id);
     if (ok && (audIsFalse(start, "is_streamable") || audIsTrue(start, "is_stream_gated"))) ok = false;
@@ -287,6 +293,9 @@ static int audParse(char* json, JamTrack* out, int maxN) {
       if (u && *u == '{') audStr(u, "name", t.artist, sizeof(t.artist));
       int d = audInt(start, "duration"); t.durSec = (d > 0 && d < 65535) ? (uint16_t)d : 0;
       snprintf(t.url, sizeof(t.url), AUD_BASE "/tracks/%s/stream?app_name=" AUD_APP, id);
+      const char* aw = audKey(start, "artwork");                     // COVER_NET_V1: {"150x150":"https://..","480x480":..}
+      if (aw && *aw == '{') { if (!audStr(aw, "150x150", t.img, sizeof(t.img))) audStr(aw, "480x480", t.img, sizeof(t.img)); }
+      if (strncmp(t.img, "http", 4) != 0) t.img[0] = 0;
       if (!t.title[0]) strcpy(t.title, "(tanpa judul)");
       n++;
     }

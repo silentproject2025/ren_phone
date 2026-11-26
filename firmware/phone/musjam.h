@@ -58,6 +58,7 @@ static const char* jamTitle(int i)  { return (jamTracks && i >= 0 && i < jamN) ?
 static const char* jamArtist(int i) { return (jamTracks && i >= 0 && i < jamN) ? jamTracks[i].artist : ""; }
 static const char* jamUrl(int i)    { return (jamTracks && i >= 0 && i < jamN) ? jamTracks[i].url    : ""; }
 static int jamDurSec(int i)         { return (jamTracks && i >= 0 && i < jamN) ? (int)jamTracks[i].durSec : 0; }
+static const char* jamImg(int i)    { return (jamTracks && i >= 0 && i < jamN) ? jamTracks[i].img    : ""; }   // COVER_NET_V1
 static void jamFree() {
   if (jamTracks) { heap_caps_free(jamTracks); jamTracks = nullptr; }
   jamN = 0;
@@ -140,7 +141,7 @@ static int jamSearch(const char* query, const char* tag) {
 
     char q[96], url[400];
     int u = snprintf(url, sizeof(url),
-        "https://api.jamendo.com/v3.0/tracks/?client_id=%s&format=json&limit=%d&audioformat=mp31&audiodlformat=mp31&imagesize=100",
+        "https://api.jamendo.com/v3.0/tracks/?client_id=%s&format=json&limit=%d&audioformat=mp31&audiodlformat=mp31&imagesize=200",
         JAM_CLIENT_ID, JAM_MAX_TRACKS);
     if (qq[0]) {
       jamUrlEnc(qq, q, sizeof(q));
@@ -178,6 +179,53 @@ static int jamSearch(const char* query, const char* tag) {
 //    jamLastResult()        -> hasil pencarian terakhir (>=0 jumlah lagu, <0 kode galat jamSearch)
 //    jamTakeDone()          -> true SEKALI setelah pencarian selesai (utk toast / redraw)
 // =====================================================================
+// =====================================================================
+//  COVER_NET_V1 -- gambar cover lagu online (Jamendo "image", Audius "artwork").
+//  Diunduh worker yang sama dengan pencarian (stack 16 KB di PSRAM untuk TLS), lalu diserahkan ke musTask
+//  lewat jamCvReady -- decode JPEG/PNG tetap di musTask supaya hanya SATU task yang menyentuh decoder cover.
+//  jamCvWant = nomor permintaan terakhir; hasil yang nomornya sudah usang dibuang oleh musTask.
+// =====================================================================
+#define JAM_IMG_MAX (320 * 1024)
+static char              jamCvUrl[JAM_IMG_LEN];
+static volatile uint32_t jamCvWant = 0;
+static volatile bool     jamCvPending = false;
+static uint8_t* volatile jamCvBuf = nullptr;
+static volatile uint32_t jamCvLen = 0, jamCvSeq = 0;
+static volatile bool     jamCvReady = false;
+
+static void jamFetchCover() {
+  char url[JAM_IMG_LEN];
+  strncpy(url, jamCvUrl, sizeof(url) - 1); url[sizeof(url) - 1] = 0;
+  uint32_t seq = jamCvWant;
+  jamCvPending = false;
+  if (!url[0] || WiFi.status() != WL_CONNECTED || jamCvReady) return;
+  if (heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL) < 24 * 1024) return;   // RAM internal terlalu sempit utk TLS: pakai piringan saja
+  uint8_t* buf = (uint8_t*)heap_caps_malloc(JAM_IMG_MAX, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  if (!buf) return;
+  size_t got = 0;
+  {
+    WiFiClientSecure net; net.setInsecure();
+    WiFiClient plain;
+    HTTPClient http; http.setTimeout(10000); http.setConnectTimeout(8000);
+    http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+    bool https = (strncmp(url, "https", 5) == 0);
+    if (https ? http.begin(net, url) : http.begin(plain, url)) {
+      int code = http.GET();
+      if (code == 200) {
+        JamSink sink((char*)buf, JAM_IMG_MAX);
+        http.writeToStream(&sink);
+        got = sink.len;
+        if (got >= JAM_IMG_MAX - 1) got = 0;                         // terpotong -> gambar rusak, buang
+      }
+      http.end();
+    }
+  }
+  if (got < 64 || seq != jamCvWant || jamCvReady) { heap_caps_free(buf); return; }
+  jamCvBuf = buf; jamCvLen = (uint32_t)got; jamCvSeq = seq;
+  __sync_synchronize();
+  jamCvReady = true;
+}
+
 static char              jamAQ[64], jamATag[16];
 static volatile bool     jamBusyF = false, jamDoneF = false;
 static volatile int      jamResF  = 0;
@@ -188,22 +236,36 @@ static StaticTask_t      jamTCB;
 static void jamWorker(void*) {
   for (;;) {
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-    jamResF = jamSearch(jamAQ, jamATag);
-    jamBusyF = false; jamDoneF = true;
+    if (jamCvPending) jamFetchCover();                 // COVER_NET_V1
+    if (jamBusyF) {
+      jamResF = jamSearch(jamAQ, jamATag);
+      jamBusyF = false; jamDoneF = true;
+    }
   }
 }
 static bool jamBusy()       { return jamBusyF; }
 static int  jamLastResult() { return jamResF; }
 static bool jamTakeDone()   { if (jamDoneF) { jamDoneF = false; return true; } return false; }
+static bool jamEnsureWorker() {
+  if (jamTaskH) return true;
+  const uint32_t stackBytes = 16384;                   // handshake TLS
+  jamStack = (StackType_t*)heap_caps_aligned_alloc(16, stackBytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  if (!jamStack) return false;
+  jamTaskH = xTaskCreateStaticPinnedToCore(jamWorker, "jamTask", stackBytes, NULL, 3, jamStack, &jamTCB, 0);
+  if (!jamTaskH) { heap_caps_free(jamStack); jamStack = nullptr; return false; }
+  return true;
+}
+// COVER_NET_V1: minta gambar cover (URL dari jamImg). seq = nomor permintaan; musTask membuang hasil yang nomornya sudah lewat.
+static void jamCoverRequest(const char* url, uint32_t seq) {
+  if (!url || strncmp(url, "http", 4) != 0) return;
+  if (!jamEnsureWorker()) return;
+  strncpy(jamCvUrl, url, sizeof(jamCvUrl) - 1); jamCvUrl[sizeof(jamCvUrl) - 1] = 0;
+  jamCvWant = seq; jamCvPending = true;
+  xTaskNotifyGive(jamTaskH);
+}
 static bool jamSearchAsync(const char* q, const char* tag) {
   if (jamBusyF) return false;
-  if (!jamTaskH) {
-    const uint32_t stackBytes = 16384;                 // handshake TLS
-    jamStack = (StackType_t*)heap_caps_aligned_alloc(16, stackBytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!jamStack) return false;
-    jamTaskH = xTaskCreateStaticPinnedToCore(jamWorker, "jamTask", stackBytes, NULL, 3, jamStack, &jamTCB, 0);
-    if (!jamTaskH) { heap_caps_free(jamStack); jamStack = nullptr; return false; }
-  }
+  if (!jamEnsureWorker()) return false;
   strncpy(jamAQ, q ? q : "", sizeof(jamAQ) - 1);     jamAQ[sizeof(jamAQ) - 1] = 0;
   strncpy(jamATag, tag ? tag : "", sizeof(jamATag) - 1); jamATag[sizeof(jamATag) - 1] = 0;
   jamSrcRun = jamSrc;                                // AUDIUS_V1: sumber dikunci selama satu pencarian

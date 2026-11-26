@@ -12,9 +12,9 @@ The [Camera](./camera.md) and the [Books](./books.md) reader have their own page
 Audio goes out through **Bluetooth TWS** earbuds, with the ESP32-CAM as the coprocessor (see [Architecture](../architecture.md#bluetooth-coprocessor-rplink)).
 
 - Up to 200 songs in the `music/` folder.
-- **Look.** Flat and single-accent: solid colour blocks, thin lines and square-ish corners, with no gradients, glow or glass. The cover placeholder is a flat geometric poster (Bauhaus-style shapes in solid colours) generated from the title.
+- **Look.** Soft and rounded, one accent colour: pill chips, rows and buttons, round knobs on the progress and volume bars, and a soft shadow and glow around the record. The cover is a black vinyl record that spins while playing; its centre label is the song's cover, or a colour taken from the title when there is none.
 - **Touch.** Drag the song list (and the Online list) with your finger, it glides after you lift it; tap a row to play (the song starts when you lift your finger). On the player, swipe left or right on the cover or title for the next or previous song; tap them to play or pause.
-- **Album cover** from the ID3 tag (baseline JPEG only; other formats show a vinyl-record image).
+- **Album cover** for local songs from the ID3 tag or an image next to the file (baseline JPEG or PNG), and for online songs (Jamendo / Audius) downloaded a few seconds after playback starts. Songs without a usable cover show the record with a coloured label.
 - **Plain shuffle or AI mode** (RYNE v2, below).
 - **Control from the earbuds' buttons** (AVRCP).
 - If the CAM restarts, the reason is shown on the screen to help diagnosis.
