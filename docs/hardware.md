@@ -94,6 +94,7 @@ The variant is selected with `-DRP_BOARD_AETHER`. Its profile is at the top of `
 | Display (SPI) | SCLK 12 · MOSI 11 · MISO 13 · CS 10 · DC 7 · RST 4 · BL 3 |
 | microSD (SPI, shared with the display bus) | CS 14, 20 MHz; `SD_MMC` calls are redirected to the Arduino `SD` library. Because the bus is shared, DOOM releases its display transaction around every SD read, and NES ROMs are read through an internal-RAM buffer (a direct SD-to-PSRAM read returns zeros) |
 | Touch FT6336U (I2C) | SDA 8 · SCL 9 · RST 5 · INT 6 (not used; touch is polled) |
-| MPU6050 and INA219 (`Wire1`) | SDA 1 · SCL 2 (the ST7796 defaults 5/4 clash with the touch and display reset pins) |
+| MPU6050 and INA219 (`Wire1`) | SDA 21 · SCL 2 (the ST7796 defaults 5/4 clash with the touch and display reset pins; SDA was 1 before the battery divider took that pin; override with `-DRP_SENS_SDA=<pin>`) |
+| Battery voltage (ADC) | GPIO 1 (`RP_BATT_ADC_PIN`, ADC1_CH0, safe with Wi-Fi) through a 10 kΩ + 10 kΩ divider (battery+ → 10k → GPIO1 → 10k → GND). Used when no INA219 is found. `vBat = pinVoltage × 2.0 + 0.032` (the +0.032 V is a multimeter calibration; override with `-DRP_BATT_DIV` / `-DRP_BATT_CAL_V`). Voltage only: the percentage comes from the voltage curve, and charging is not detected. A 100 nF capacitor from GPIO1 to GND steadies the reading |
 
 The display colors are inverted by default on this board (`RP_ST7796_INVERT 1`). The other options in the ST7796 troubleshooting table (`RP_ST7796_RGB_ORDER`, `RP_TOUCH_SWAP_XY`, `RP_TOUCH_FLIP_X`, `RP_TOUCH_FLIP_Y`) work here too.

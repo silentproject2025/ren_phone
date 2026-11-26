@@ -467,10 +467,49 @@ bool inaWantRedraw() {
   return false;
 }
 
+// ===== BATT_ADC_V1 BEGIN =====
+// Aether Board: baterai lewat pembagi tegangan 10k x 10k di GPIO RP_BATT_ADC_PIN (display_conf.h).
+// Dipakai hanya kalau INA219 tidak terdeteksi. Hanya tegangan yang terukur: arus / status charging tidak diketahui.
+#ifdef RP_BATT_ADC_PIN
+#ifndef RP_BATT_DIV
+#define RP_BATT_DIV    2.0f       // pembagi 10k x 10k
+#endif
+#ifndef RP_BATT_CAL_V
+#define RP_BATT_CAL_V  0.032f     // kalibrasi titik ukur multimeter (3.61 V vs 3.58 V)
+#endif
+static float    battAdcV = 0.0f, battAdcSoc = 100.0f;
+static bool     battAdcInit = false;
+static uint32_t battAdcLast = 0;
+static void battAdcUpdate() {
+  uint32_t now = millis();
+  battCharging = false;                                   // tanpa sensor arus: charging tidak terdeteksi
+  if (battAdcInit && now - battAdcLast < 1000UL) return;  // 1x per detik cukup
+  battAdcLast = now;
+  uint32_t acc = 0;
+  for (int i = 0; i < 16; i++) acc += analogReadMilliVolts(RP_BATT_ADC_PIN);   // rata-rata 16 sampel (redam noise ADC)
+  float pinVoltage = ((float)acc / 16.0f) / 1000.0f;      // volt di pin ADC
+  // Pembagi 10k x 10k (2.0f) + kalibrasi titik ukur multimeter (3.61V vs 3.58V -> +0.03V)
+  float vBat = (pinVoltage * RP_BATT_DIV) + RP_BATT_CAL_V;
+  float batteryVoltage = constrain(vBat, 0.0f, 5.0f);
+  float soc = inaOcvSoc(batteryVoltage);
+  if (!battAdcInit) { battAdcV = batteryVoltage; battAdcSoc = soc; battAdcInit = true; }
+  else { battAdcV += (batteryVoltage - battAdcV) * 0.2f; battAdcSoc += (soc - battAdcSoc) * 0.1f; }   // halus: UI tidak loncat
+  battVoltage = battAdcV;
+  int p = (int)(battAdcSoc + 0.5f);
+  battPercent = (p < 0) ? 0 : (p > 100 ? 100 : p);
+}
+#endif
+// ===== BATT_ADC_V1 END =====
+
 // Dipanggil dari loop(); mengisi variabel global batt* yang dipakai seluruh UI.
 void battUpdate() {
   inaPoll();
+#ifdef RP_BATT_ADC_PIN
+  if (!inaOk) battAdcUpdate();                            // BATT_ADC_V1: tanpa INA219 -> ADC (lalu lanjut ke peringatan di bawah)
+  else
+#else
   if (!inaOk) { battCharging = false; return; }
+#endif
   if (inaActive) {
     battVoltage = inaBatV;
     battPercent = inaSoc;

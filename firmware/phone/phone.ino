@@ -15336,7 +15336,8 @@ void mpuUpdate(){
 // BATERAI: sekarang dibaca dari sensor INA219 (lihat ina219_renphone.ino).
 // Di sini hanya variabel global yang dipakai seluruh UI. battUpdate(),
 // battEnter/battExit, drawBatteryApp dan battTouch dipindah ke ina219_renphone.ino.
-// ADC voltage divider (GPIO8) tidak dipakai lagi.
+// ADC voltage divider (GPIO8) tidak dipakai lagi. BATT_ADC_V1: khusus Aether, pembagi 10k/10k di GPIO1
+// (RP_BATT_ADC_PIN) dipakai bila INA219 tidak ada; lihat battAdcUpdate() di ina219_renphone.ino.
 // =================================================================
 float battVoltage = 3.7f;
 int   battPercent = 100;

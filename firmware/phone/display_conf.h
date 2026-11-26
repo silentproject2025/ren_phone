@@ -47,8 +47,16 @@
   #define RP_TOUCH_RST        5
   #define RP_TOUCH_INT        6      // tidak dipakai (sentuh di-polling), hanya dicatat
   // Bus sensor (MPU6050/INA219, Wire1): default ST7796 (5/4) bentrok dgn RST sentuh/RST layar -> pindah.
-  #define RP_SENS_SDA         1
+  // BATT_ADC_V1: GPIO1 sekarang = ADC baterai (pembagi 10k/10k), jadi SDA bus sensor pindah dari 1 ke 21.
+  // Cocokkan dgn kabel MPU6050/INA219 di board-mu; timpa dgn -DRP_SENS_SDA=<pin> kalau beda.
+  #ifndef RP_SENS_SDA
+  #define RP_SENS_SDA         21
+  #endif
   #define RP_SENS_SCL         2
+  // Baterai: pembagi 10k x 10k di GPIO1 (ADC1_CH0: aman dipakai bersama WiFi). Rumus + kalibrasi ada di ina219_renphone.ino.
+  #ifndef RP_BATT_ADC_PIN
+  #define RP_BATT_ADC_PIN     1
+  #endif
   #ifndef RP_ST7796_INVERT
   #define RP_ST7796_INVERT    1
   #endif
@@ -146,6 +154,11 @@
   #define RP_SENS_WIRE        Wire1
   #if (RP_SENS_SDA==RP_TOUCH_SDA) || (RP_SENS_SDA==RP_TOUCH_SCL) || (RP_SENS_SCL==RP_TOUCH_SDA) || (RP_SENS_SCL==RP_TOUCH_SCL)
     #error "RP_SENS_SDA/SCL tidak boleh sama dengan pin sentuh RP_TOUCH_SDA/SCL (bus terpisah)"
+  #endif
+  #if defined(RP_BATT_ADC_PIN)   // BATT_ADC_V1
+    #if (RP_BATT_ADC_PIN==RP_SENS_SDA) || (RP_BATT_ADC_PIN==RP_SENS_SCL) || (RP_BATT_ADC_PIN==RP_TOUCH_SDA) || (RP_BATT_ADC_PIN==RP_TOUCH_SCL)
+      #error "RP_BATT_ADC_PIN bentrok dengan pin bus sensor / sentuh (pindahkan RP_SENS_SDA/SCL atau RP_BATT_ADC_PIN)"
+    #endif
   #endif
 
   // Multi-touch: FT6236 melaporkan 2 jari. 1 = jari kedua dipakai game (DOOM/NES/Inferno).
