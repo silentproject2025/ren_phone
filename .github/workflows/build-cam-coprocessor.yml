@@ -52,7 +52,7 @@ jobs:
         run: |
           arduino-cli compile --fqbn esp32:esp32:esp32 \
             --board-options "PartitionScheme=huge_app" \
-            --build-property "build.extra_flags=-DRP_BT_ONLY=1" \
+            --build-property "compiler.cpp.extra_flags=-DRP_BT_ONLY=1" \
             firmware/cam_bt_coprocessor --output-dir build_wroom
 
       - name: Upload Binary Artifacts
