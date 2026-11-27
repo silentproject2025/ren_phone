@@ -18,6 +18,10 @@
  *  Arduino IDE / arduino-cli:
  *    Board : AI Thinker ESP32-CAM (PSRAM 4MB), Partition Scheme: Huge APP
  *    PSRAM : Enabled
+ *
+ *  VARIAN WROOM (khusus Bluetooth, tanpa kamera, tanpa PSRAM):
+ *    Board : ESP32 Dev Module, Partition Scheme: Huge APP, PSRAM: Disabled
+ *    Build flag: -DRP_BT_ONLY=1   (modul kamera tidak ikut dikompilasi)
  *    Library: AudioTools, ESP32-A2DP (pschatzmann)
  *
  *  Batasan v1: MP3 Layer III 44.1 kHz stereo saja (WAV/EQ/crossfade
@@ -39,7 +43,11 @@
 #include "esp_sleep.h"
 #include "rplink.h"
 #include "ring.h"
-#include "cam_module.h"   // kamera OV2640 (RP_CAM_*)
+#ifdef RP_BT_ONLY
+  #include "cam_stub.h"     // WROOM/DevKit: tanpa kamera & tanpa PSRAM (stub kosong)
+#else
+  #include "cam_module.h"   // kamera OV2640 (RP_CAM_*)
+#endif
 
 // ----------------------------------------------------------
 // KONFIGURASI
@@ -679,7 +687,11 @@ static void sendStatus() {
 void setup() {
   Serial.begin(115200);
   delay(200);
+#ifdef RP_BT_ONLY
+  Serial.println("\n=== BT Co-Processor WROOM (Ren Phone) - tanpa kamera ===");
+#else
   Serial.println("\n=== CAM BT Co-Processor (Ren Phone) ===");
+#endif
 
   bool hasPSRAM = psramFound();
   {
