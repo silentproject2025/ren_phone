@@ -54,7 +54,11 @@
 #define IN_CHUNK              2048
 #define PREFILL_BYTES         (32*1024)
 #define TRACK_END_SILENCE_CB  120     // callback kosong berturut2 sebelum dianggap selesai
-#define DECODE_TASK_STACK     32768
+#ifdef RP_BT_ONLY
+  #define DECODE_TASK_STACK   (20*1024)   // WROOM: RAM sempit. Pantau "stack bebas dec" di [DIAG] saat lagu main; kalau <2000 naikkan.
+#else
+  #define DECODE_TASK_STACK   32768
+#endif
 #define STATUS_INTERVAL_MS    40
 #define BT_RECONNECT_MS       8000
 #define BT_SCAN_DURATION      8
@@ -693,6 +697,10 @@ void setup() {
   cmdQ = xQueueCreate(8, sizeof(Cmd));
   keyQ = xQueueCreate(12, sizeof(KeyEvt));
   Serial.printf("[HEAP] sebelum BT: %uK blokMax=%uK\n", (unsigned)(ESP.getFreeHeap() / 1024), (unsigned)(ESP.getMaxAllocHeap() / 1024));
+  {   // proyek ini cuma Bluetooth Classic (A2DP): memori controller BLE dilepas ke heap
+    esp_err_t er = esp_bt_controller_mem_release(ESP_BT_MODE_BLE);
+    Serial.printf("[HEAP] lepas memori BLE: err=%d, heap=%uK\n", (int)er, (unsigned)(ESP.getFreeHeap() / 1024));
+  }
   a2dp.set_on_connection_state_changed(onConnectionChanged, nullptr);
   a2dp.set_volume(volumeNow);
   a2dp.set_data_callback_in_frames(getSoundData);   // aman: haveTrack=false -> callback kirim hening
@@ -701,8 +709,19 @@ void setup() {
   Serial.printf("[HEAP] sesudah BT: %uK blokMax=%uK\n", (unsigned)(ESP.getFreeHeap() / 1024), (unsigned)(ESP.getMaxAllocHeap() / 1024));
 #endif
 
-  bool ok = pcmRing.init(hasPSRAM ? PCM_RING_PSRAM : PCM_RING_FALLBACK, hasPSRAM);
-  uint32_t inSz = IN_RING_FALLBACK;
+  uint32_t pcmSz = hasPSRAM ? PCM_RING_PSRAM : PCM_RING_FALLBACK;
+  uint32_t inSz  = IN_RING_FALLBACK;
+#ifdef RP_BT_ONLY
+  {   // sisa heap setelah BT dibagi: cadangan = stack decode + Helix + task link + sambung TWS + margin
+    const uint32_t RESERVE = 85 * 1024;
+    uint32_t fh = ESP.getFreeHeap();
+    uint32_t budget = fh > RESERVE ? fh - RESERVE : 0;
+    pcmSz = budget * 2 / 3;  if (pcmSz < 24u * 1024u) pcmSz = 24u * 1024u;  if (pcmSz > (uint32_t)PCM_RING_FALLBACK) pcmSz = PCM_RING_FALLBACK;
+    inSz  = budget / 3;      if (inSz  < 12u * 1024u) inSz  = 12u * 1024u;  if (inSz  > (uint32_t)IN_RING_FALLBACK)  inSz  = IN_RING_FALLBACK;
+    Serial.printf("[RING] heap=%uK budget=%uK -> PCM=%uK MP3=%uK\n", (unsigned)(fh / 1024), (unsigned)(budget / 1024), (unsigned)(pcmSz / 1024), (unsigned)(inSz / 1024));
+  }
+#endif
+  bool ok = pcmRing.init(pcmSz, hasPSRAM);
   if (hasPSRAM) {
     inSz = IN_RING_PSRAM;
     uint32_t freePs = ESP.getFreePsram();
@@ -726,8 +745,14 @@ void setup() {
   Serial2.setRxBufferSize(8192);
   Serial2.begin(RP_BAUD, SERIAL_8N1, LINK_RX_PIN, LINK_TX_PIN);
 
-  xTaskCreatePinnedToCore(decodeTask, "decode", DECODE_TASK_STACK, nullptr, 3, &decodeTaskH, 0);
-  xTaskCreatePinnedToCore(linkRxTask, "linkrx", 4096, nullptr, 4, &linkTaskH, 1);
+  if (xTaskCreatePinnedToCore(decodeTask, "decode", DECODE_TASK_STACK, nullptr, 3, &decodeTaskH, 0) != pdPASS) {
+    decodeTaskH = nullptr;
+    Serial.printf("[FATAL] task decode gagal dibuat (RAM). heap=%uK blokMax=%uK\n", (unsigned)(ESP.getFreeHeap() / 1024), (unsigned)(ESP.getMaxAllocHeap() / 1024));
+  }
+  if (xTaskCreatePinnedToCore(linkRxTask, "linkrx", 4096, nullptr, 4, &linkTaskH, 1) != pdPASS) {
+    linkTaskH = nullptr;
+    Serial.println("[FATAL] task link gagal dibuat (RAM)");
+  }
 
 #ifndef RP_BT_ONLY
   a2dp.set_on_connection_state_changed(onConnectionChanged, nullptr);
