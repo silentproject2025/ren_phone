@@ -5264,7 +5264,7 @@ bool screenHasEdgeBack(Screen sc){
   switch(sc){
     case SCR_SETTINGS: case SCR_FILEEXPLORER: case SCR_UPDATE: case SCR_BATTERY: case SCR_APOD: case SCR_NEOWS:
     case SCR_EPIC: case SCR_NASAIMG: case SCR_ABOUT: case SCR_OWNER: case SCR_HOMEEDIT: case SCR_REMOTE: case SCR_BACKUP:
-    case SCR_CHAT: case SCR_CLOCK: case SCR_SENSOR: case SCR_HWMON: case SCR_MICLEVEL: case SCR_POMODORO:
+    case SCR_CHAT: case SCR_CLOCK: case SCR_SENSOR: case SCR_HWMON: case SCR_POMODORO:
     case SCR_WAKE: case SCR_MEMO: case SCR_STOPWATCH: case SCR_MUSIC: case SCR_GALLERY:
       return true;
     default: return false;
@@ -7115,9 +7115,6 @@ void drawFileExplorer(LGFX_Sprite&); void fileExpTouch(int,int,bool,bool);
 // manual di sini, sama seperti pola diNotify() di atas).
 extern volatile bool micRecording;
 extern bool micTranscribing;
-// ---- MIC LEVEL METER: forward declarations (BARU di v27) ----
-void micLvlEnter(); void micLvlExit();
-void drawMicLvl(LGFX_Sprite&); void micLvlTouch(int,int,bool,bool);
 // ---- HWMONITOR: forward declarations (BARU di v31) ----
 void hwmonEnter(); void hwmonExit();
 void drawHwmon(LGFX_Sprite&); void hwmonTouch(int,int,bool,bool);
@@ -7288,8 +7285,6 @@ AppDef apps[] = {  // ukuran otomatis
   { "Galeri NASA",'G', 0, imgLibEnter,   imgLibExit,   drawImgLib,       imgLibTouch,   SCR_NASAIMG, imgLibLowMem },
   // ---- v24: kontrol LED Neopixel (GPIO 48) ----
   { "Neopixel",   'P', 0, npxAppEnter,  npxAppExit,   drawNpxApp,       npxAppTouch,   SCR_NEOPIXEL },
-  // ---- v27: meteran level suara mic INMP441 ----
-  { "Mic Level",  'L', 0, micLvlEnter,  micLvlExit,   drawMicLvl,       micLvlTouch,   SCR_MICLEVEL },
   // ---- v31: HWmonitor -- bar performa CPU per-core + RAM/PSRAM + info chip ----
   { "HWmonitor",  'H', 0, hwmonEnter,   hwmonExit,    drawHwmon,        hwmonTouch,    SCR_HWMON },
   // ---- v56: Labirin -- kejar-kejaran ala Pac-Man (permintaan user) ----
@@ -7337,7 +7332,7 @@ AppDef apps[] = {  // ukuran otomatis
   // ---- Opsi Developer: pin yang bisa diubah + pantau ADC / INA219 (disembunyikan dari grid; buka dgn ketuk judul About Phone 7x) ----  // DEVPINS_V1
   { "Opsi Developer", 'd', 0, devoptEnter, devoptExit, drawDevopt, devoptTouch, SCR_DEVOPT },
 };
-#define APP_COUNT 48
+#define APP_COUNT 47
 static_assert(sizeof(apps)/sizeof(apps[0]) == APP_COUNT, "APP_COUNT harus sama dengan jumlah entri apps[]");
 
 // =============================================
@@ -7488,29 +7483,28 @@ void initAppColors(){
   apps[19].color=0x1F9F; // Bumi EPIC - biru samudra Bumi
   apps[20].color=0xC37F; // Galeri NASA - ungu (tema galeri/kreatif)
   apps[21].color=0xF81F; // Neopixel - magenta terang (kesan lampu RGB nyala)
-  apps[23].color=0x07FF; // HWmonitor - cyan terang (kesan teknis/monitoring)
-  apps[24].color=0x8BDF; // Labirin - biru-ungu terang
-  apps[25].color=0xFB80; // Inferno - oranye membara
-  apps[26].color=0xF187; // NES - merah klasik
+  apps[22].color=0x07FF; // HWmonitor - cyan terang (kesan teknis/monitoring)
+  apps[23].color=0x8BDF; // Labirin - biru-ungu terang
+  apps[24].color=0xFB80; // Inferno - oranye membara
+  apps[25].color=0xF187; // NES - merah klasik
   // v-baru: index 22 & 27-31 dulu TIDAK PERNAH diisi -> default 0 = HITAM (ikon gak keliatan).
-  apps[22].color=0xFB2E; // Mic Level - merah koral
-  apps[27].color=0xA745; // DOOM - hijau limau
-  apps[28].color=0x3FF9; // PPU Demo - mint/aqua
-  apps[29].color=0xFB28; // Pomodoro - tomat
-  apps[30].color=0xB41F; // Wake Word - ungu muda
-  apps[31].color=0xFA12; // Musik - pink terang
-  apps[32].color=0xFD20; // Stopwatch - oranye
-  apps[33].color=0xF9A6; // Voice Memo - merah rekam
-  apps[34].color=0x565F; // Galeri - biru langit
-  apps[35].color=0x5EBF; // Profil - biru muda
-  apps[36].color=0x8C71; // About Phone
-  apps[38].color=0x2DFA; // Remote - cyan
-  apps[39].color=0x34DF; // Chat - biru lembut
-  apps[40].color=0x2E8B; // Telepon - hijau
-  apps[41].color=0xF9A0; // Kamera - oranye
-  apps[42].color=0xE68A; // Buku - krem kecokelatan (kertas)
-  apps[44].color=0xFE60; // Catur - emas
-  apps[47].color=0x9D13; // Opsi Developer - abu kehijauan
+  apps[26].color=0xA745; // DOOM - hijau limau
+  apps[27].color=0x3FF9; // PPU Demo - mint/aqua
+  apps[28].color=0xFB28; // Pomodoro - tomat
+  apps[29].color=0xB41F; // Wake Word - ungu muda
+  apps[30].color=0xFA12; // Musik - pink terang
+  apps[31].color=0xFD20; // Stopwatch - oranye
+  apps[32].color=0xF9A6; // Voice Memo - merah rekam
+  apps[33].color=0x565F; // Galeri - biru langit
+  apps[34].color=0x5EBF; // Profil - biru muda
+  apps[35].color=0x8C71; // About Phone
+  apps[37].color=0x2DFA; // Remote - cyan
+  apps[38].color=0x34DF; // Chat - biru lembut
+  apps[39].color=0x2E8B; // Telepon - hijau
+  apps[40].color=0xF9A0; // Kamera - oranye
+  apps[41].color=0xE68A; // Buku - krem kecokelatan (kertas)
+  apps[43].color=0xFE60; // Catur - emas
+  apps[46].color=0x9D13; // Opsi Developer - abu kehijauan
   for(int i=0;i<APP_COUNT;i++) apps[i].color=modernTone(apps[i].color); // UI-MODERN: lembutkan warna neon
 }
 
@@ -8068,7 +8062,7 @@ uint8_t homeCatOfScreen(Screen sc){
     case SCR_APOD: case SCR_NEOWS: case SCR_EPIC: case SCR_NASAIMG:
       return 4; // NASA
     case SCR_SETTINGS: case SCR_BATTERY: case SCR_UPDATE: case SCR_HWMON: case SCR_SENSOR:
-    case SCR_MICLEVEL: case SCR_ABOUT: case SCR_OWNER: case SCR_HOMEEDIT: case SCR_REMOTE: case SCR_BACKUP: case SCR_WSENSE: case SCR_DEVOPT:
+    case SCR_ABOUT: case SCR_OWNER: case SCR_HOMEEDIT: case SCR_REMOTE: case SCR_BACKUP: case SCR_WSENSE: case SCR_DEVOPT:
       return 5; // Sistem
     default:
       return 3; // Alat (Jam, Kalkulator, Notepad, Canvas, AI Chat, Files, Neopixel, Pomodoro, Wake Word, Stopwatch, Chat, Telepon)
@@ -21858,140 +21852,6 @@ void micStopRecording(){
 }
 
 // =============================================
-// APP: MIC LEVEL METER (BARU v27)
-// Cuma buat NGECEK apakah INMP441-nya beneran nangkep suara -- bar besar
-// (RMS + peak-hold) + grafik batang kecil yg bergeser ke kiri tiap
-// dibaca, mirip VU meter. TIDAK ngerekam/nyimpen apa-apa, cuma baca I2S
-// sesaat tiap tick lalu buang lagi.
-//
-// Rebutan I2S dgn fitur dictation (tombol Mic di AI Chat, lihat blok
-// "MIC INMP441" di atas): dua-duanya sama2 makai instance micI2S yg
-// SAMA, jd HARUS gantian, gak boleh bareng. Makanya micLvlPoll() cek
-// dulu micRecording/micTranscribing/micTaskHandle -- kalau lg dipakai
-// dictation, meteran ini cuma nampilin 0 & pesan, gak ikut manggil
-// micI2S.readBytes().
-// =============================================
-#define MICLVL_HIST_LEN 56
-uint8_t  micLvlHist[MICLVL_HIST_LEN]; // histori level (0..100) buat grafik batang bergeser
-float    micLvlRms   = 0;   // level RMS terkini, dinormalisasi 0..1
-float    micLvlPeak  = 0;   // peak-hold, turun pelan2 (bukan langsung jatuh ke 0)
-bool     micLvlAcquired = false; // true kalau app INI yg lg pegang micI2S
-
-void micLvlEnter(){
-  wakeYieldMic(3000); // v115: lepas dulu micI2S dari task wake word (jembatan sampai curScreen()==SCR_MICLEVEL kebaca)
-  memset(micLvlHist, 0, sizeof(micLvlHist));
-  micLvlRms = 0; micLvlPeak = 0; micLvlAcquired = false;
-}
-void micLvlExit(){
-  if(micLvlAcquired){ micReleaseI2S(); micLvlAcquired = false; }
-}
-
-// Dipanggil dari loop() tiap ~30ms selagi app ini aktif (lihat pemanggilan
-// di LOOP, pola SAMA dgn lastSen/lastClk utk app lain).
-void micLvlPoll(){
-  if(micRecording || micTranscribing || micTaskHandle!=NULL){
-    // I2S lg dipegang fitur dictation AI Chat -> jangan direbut.
-    if(micLvlAcquired){ micReleaseI2S(); micLvlAcquired = false; }
-    micLvlRms = 0;
-    return;
-  }
-  if(!micLvlAcquired){ micEnsureI2S(); micLvlAcquired = true; }
-
-  const int FRAMES = 256;
-  int32_t rawBuf[FRAMES*2]; // stereo interleave, sama pola dgn micRecordTaskFunc
-  size_t got = micI2S.readBytes((char*)rawBuf, sizeof(rawBuf));
-  int frames = (int)(got/(2*sizeof(int32_t)));
-  if(frames<=0) return;
-
-  double sumSq=0; int16_t peakAbs=0;
-  for(int i=0;i<frames;i++){
-    int32_t leftRaw = rawBuf[i*2]; // channel kiri (sama spt fitur rekam)
-    int16_t s16 = (int16_t)(leftRaw >> MIC_SAMPLE_SHIFT);
-    sumSq += (double)s16*(double)s16;
-    int16_t a = s16<0? (int16_t)(-s16) : s16;
-    if(a>peakAbs) peakAbs=a;
-  }
-  float rmsNorm  = (float)(sqrt(sumSq/frames)/32767.0);
-  float peakNorm = (float)(peakAbs/32767.0);
-  if(rmsNorm>1.0f) rmsNorm=1.0f;
-  if(peakNorm>1.0f) peakNorm=1.0f;
-
-  micLvlRms = rmsNorm;
-  if(peakNorm > micLvlPeak) micLvlPeak = peakNorm;
-  else micLvlPeak *= 0.92f; // peluruhan halus, bukan drop instan ke level skrg
-
-  memmove(micLvlHist, micLvlHist+1, MICLVL_HIST_LEN-1);
-  micLvlHist[MICLVL_HIST_LEN-1] = (uint8_t)(rmsNorm*100.0f);
-}
-
-void drawMicLvl(LGFX_Sprite& s){
-  s.fillSprite(T().bg);
-  drawStatusBar(s);
-  s.setTextColor(0x07E0); s.setTextSize(1); s.setCursor(8,26); s.print("Mic Level (INMP441)");
-
-  iosRR(s,SCR_W-84,24,78,18,4,T().surface2);
-  s.setTextColor(T().accent); s.setCursor(SCR_W-78,29); s.print("Reset Peak");
-
-  bool micBusy = (micRecording || micTranscribing || micTaskHandle!=NULL);
-  int barX=14, barY=50, barH=30;
-  int barW=SCR_W-28;
-  nyxAaRRRing(s, barX,barY,barW,barH,6,T().text);
-
-  int pct = (int)(micLvlRms*100.0f);
-  uint16_t lvlColor = (pct>=85)?T().danger : (pct>=55)?T().accent : T().good;
-  int fillW = constrain((barW-4)*pct/100, 0, barW-4);
-  if(fillW>0) iosRR(s,barX+2,barY+2,fillW,barH-4,4,lvlColor);
-
-  // garis peak-hold
-  int peakX = barX+2 + constrain((int)((barW-4)*micLvlPeak),0,barW-4);
-  s.fillRect(peakX,barY+1,2,barH-2,T().text);
-
-  s.setTextColor(T().text); s.setTextSize(2);
-  char pctBuf[8]; sprintf(pctBuf,"%d%%",pct);
-  int pw=strlen(pctBuf)*12;
-  s.setCursor(SCR_W/2-pw/2, barY+barH+8);
-  s.print(pctBuf);
-  s.setTextSize(1);
-
-  // grafik batang bergeser (histori level RMS)
-  int histY0 = barY+barH+26;
-  int histH  = 48;
-  int gw = (SCR_W-28)/MICLVL_HIST_LEN;
-  if(gw<1) gw=1;
-  s.drawFastHLine(14,histY0+histH,SCR_W-28,T().divider);
-  for(int i=0;i<MICLVL_HIST_LEN;i++){
-    int hgt = (histH * micLvlHist[i]) / 100;
-    if(hgt<1) hgt=1;
-    uint16_t c = (micLvlHist[i]>=85)?T().danger : (micLvlHist[i]>=55)?T().accent : T().good;
-    s.fillRect(14 + i*gw, histY0+histH-hgt, gw>1?gw-1:1, hgt, c);
-  }
-
-  int msgY = histY0+histH+8;
-  s.setTextColor(T().subtext); s.setTextWrap(true);
-  s.setCursor(14,msgY);
-  if(micBusy){
-    s.print(RPTR("Mic sedang dipakai fitur rekam AI Chat, tutup dulu di sana."));
-  } else {
-    s.print(RPTR("Ngomong / ketuk2 dekat mic buat liat bar naik. Diam terus di 0%? Cek wiring GPIO 45/46/47."));
-  }
-  s.setTextWrap(false);
-
-  drawBack(s);
-  drawToast(s);
-}
-
-void micLvlTouch(int x,int y,bool held,bool isNew){
-  if(!isNew) return;
-  if(isBack(x,y)){ navBack(); return; }
-  if(x>=SCR_W-84 && x<=SCR_W-6 && y>=24 && y<=42){
-    micLvlPeak = 0;
-    showToast(RPTR("Peak direset"));
-    needRedraw=true;
-    return;
-  }
-}
-
-// =============================================
 // APP: HWMONITOR (BARU v31)
 // Bar performa per-core (mirip tab Performance di Task Manager Windows 11:
 // grafik utilisasi per logical processor) + RAM internal/PSRAM + info chip
@@ -23491,9 +23351,6 @@ void loop(){
     }
     if(curScreen()==SCR_CLOCK && millis()-lastClk>500){ needRedraw=true; lastClk=millis(); }
     if(curScreen()==SCR_SENSOR && millis()-lastSen>50){ needRedraw=true; lastSen=millis(); }
-    // v27: meteran mic di-poll ~30x/detik selagi app-nya kebuka (dipakai
-    // timer lastSen yg sama krn beda screen, gak akan tabrakan).
-    if(curScreen()==SCR_MICLEVEL && millis()-lastSen>30){ micLvlPoll(); needRedraw=true; lastSen=millis(); }
     // v31: HWmonitor -- sampling tiap 500ms (jendela sampel yg dipakai
     // hwmonPoll() buat hitung persen sibuk per core, lihat komentarnya)
     if(curScreen()==SCR_HWMON && millis()-hwmonLastPoll>500){ hwmonPoll(); needRedraw=true; hwmonLastPoll=millis(); }

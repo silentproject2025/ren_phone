@@ -336,10 +336,9 @@ static void wwHandleUtt(int n){
 // ---------------------------------------------------------------------
 static bool wwMicBusy(){
   if(micRecording||micTranscribing||micTaskHandle!=NULL) return true; // dictation AI Chat
-  if(micLvlAcquired) return true;                                      // app Mic Level
   if(millis()<wkYieldUntil) return true;                               // dipinjem sesaat
   Screen sc=curScreen();
-  return (sc==SCR_MICLEVEL||sc==SCR_NES||sc==SCR_DOOM);               // NES/DOOM: hemat CPU
+  return (sc==SCR_NES||sc==SCR_DOOM);               // NES/DOOM: hemat CPU
 }
 
 static void wakeTaskFunc(void* param){
