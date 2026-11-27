@@ -122,6 +122,8 @@ static void aboutPush(int t, const char* k, const char* v, int pct) {
 // dipakai juga oleh nyxAboutRows() (nyxextras_renphone.ino)
 static void aboutAdd(const char* k, const char* v) { aboutPush(AB_KV, k, v, 0); }
 static void aboutHead(const char* k)               { aboutPush(AB_HEAD, k, "", 0); }
+static int            aboutVerIdx = -1;            // DEVPINS_V2: indeks baris "Versi firmware" (pemicu Opsi Developer)
+static int            aboutVerY   = 0, aboutVerH = 0;   // posisi layar baris itu pada gambar terakhir (0 = tidak terlihat)
 static void aboutBar(const char* k, const char* v, int pct)   { aboutPush(AB_BAR, k, v, pct); }
 static void aboutLevel(const char* k, const char* v, int pct) { aboutPush(AB_LEVEL, k, v, pct); }
 
@@ -168,7 +170,7 @@ static void aboutRefresh() {
   aboutHead("Perangkat Lunak");
   { char vl[16]; otaVersionLabel(vl, sizeof(vl)); int bn = otaBuildNum();
     if (bn > 0) snprintf(a, sizeof(a), "%s (build %d)", vl, bn); else snprintf(a, sizeof(a), "%s", vl); }
-  aboutAdd("Versi firmware", a);
+  aboutAdd("Versi firmware", a); aboutVerIdx = aboutRowN - 1;   // DEVPINS_V2
   snprintf(a, sizeof(a), "%s %s", __DATE__, __TIME__);
   aboutAdd("Waktu build", a);
   {
@@ -778,6 +780,7 @@ void drawAbout(LGFX_Sprite& s) {
   {
     int ry = y0 + aboutRowsStart();
     int i = 0;
+    aboutVerH = 0;                                          // DEVPINS_V2
     while (i < aboutRowN) {
       if (aboutRows[i].t != AB_HEAD) { i++; continue; }    // pengaman; baris pertama selalu judul
       int j = i + 1, gh = 0;
@@ -802,6 +805,7 @@ void drawAbout(LGFX_Sprite& s) {
           int rh = aboutRowH(k);
           if (yy + rh > top && yy < bot) {
             aboutDrawRow(s, k, yy, px, pw);
+            if (k == aboutVerIdx) { aboutVerY = yy; aboutVerH = rh; }   // DEVPINS_V2
             if (k < j - 1) s.drawFastHLine(px + ABOUT_PAD, yy + rh - 1, pw - 2 * ABOUT_PAD, T().divider);
           }
           yy += rh;
