@@ -31,8 +31,8 @@
 #include "musspk.h"   // pemutar lokal: SD -> Helix -> I2S -> MAX98357A (output "SPK")
 #include "musjam.h"   // JAM_UI_V1: lagu online Jamendo (cari + stream lewat spkPlayUrl)
 
-#define MUS_UART_RX     42
-#define MUS_UART_TX     41
+#define MUS_UART_RX     rpPinV[DP_UART_RX]   // DEVPINS_V1: bawaan 42 / 41 (devpins.h)
+#define MUS_UART_TX     rpPinV[DP_UART_TX]
 #define MUS_DIR         "/music"
 #define MUS_MAX_TRACKS  200
 #define MUS_VOL_STEP    8

@@ -36,7 +36,7 @@
 | Speaker (optional, MAX98357A) | BCLK 16 · LRC 17 · DIN 8 (ILI9341) or 15 (ST7796 / Aether). Override with `-DAUDIO_I2S_BCLK / AUDIO_I2S_LRC / AUDIO_I2S_DOUT`. Power VIN from 5V |
 | Other | Vibration motor 18 · Neopixel 48 |
 
-The display and sensor pin definitions live in [`firmware/phone/display_conf.h`](../firmware/phone/display_conf.h) and [`firmware/phone/hw_conf.h`](../firmware/phone/hw_conf.h).
+The display and sensor pin definitions live in [`firmware/phone/display_conf.h`](../firmware/phone/display_conf.h) and [`firmware/phone/hw_conf.h`](../firmware/phone/hw_conf.h). These are only the **defaults**: every pin in the tables on this page can be changed without rebuilding from the [Developer options](./features/system-tools.md#developer-options-beta) app (a changed pin is tried first and only becomes permanent after you confirm).
 
 ## ESP32-CAM assembly notes
 

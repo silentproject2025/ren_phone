@@ -228,17 +228,15 @@ static void padSampleCpu(uint32_t now) {
 
 // Suhu NTC dalam C*10, atau -999 kalau tidak dipasang / tidak terbaca.
 static int padNtcX10() {
-#if PAD_NTC_PIN >= 0
+  const int ntcPin = rpPinV[DP_NTC];                  // DEVPINS_V1: pin NTC kini bisa diatur dari Opsi Developer (-1 = tidak dipasang)
+  if (ntcPin < 0) return -999;
   uint32_t acc = 0;
-  for (int i = 0; i < 8; i++) acc += analogReadMilliVolts(PAD_NTC_PIN);
+  for (int i = 0; i < 8; i++) acc += analogReadMilliVolts(ntcPin);
   float v = (float)acc / 8.0f;
   if (v < 50.0f || v > 3250.0f) return -999;          // kabel putus / korslet
   float r = PAD_NTC_RS * v / (3300.0f - v);
   float t = 1.0f / (1.0f / 298.15f + logf(r / PAD_NTC_R0) / PAD_NTC_BETA) - 273.15f;
   return (int)(t * 10.0f);
-#else
-  return -999;
-#endif
 }
 
 // Paket teks: "t" + 14 angka dipisah koma:

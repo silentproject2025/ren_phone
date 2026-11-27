@@ -1,6 +1,7 @@
 # System and device tools
 
 - [Battery (INA219)](#battery-ina219-ok)
+- [Developer options](#developer-options-beta)
 - [OTA updates (per channel)](#ota-updates-per-channel)
 - [Settings Backup and Restore](#settings-backup-and-restore-beta)
 - [Crash log](#crash-log-beta)
@@ -22,6 +23,21 @@ Power is read from the **INA219** sensor over I2C. The app has five tabs (Summar
 **Wiring:** VCC 3.3 V, GND, SDA 15, SCL 7 (on the ST7796 build the sensors use SDA 5 / SCL 4; see [Hardware](../hardware.md#35-st7796-display-variant)). The shunt resistor is placed in series with the battery's positive wire. Defaults: 100 mΩ shunt, gain /8, 2300 mAh capacity, 150 mΩ internal resistance.
 
 > The battery percentage is an **estimate** (there is no dedicated *fuel-gauge* chip). Fill in Capacity and internal R correctly on the Battery tab so the numbers make sense.
+
+## Developer options `BETA`
+
+An Android-style **Developer options** app for changing pins and reading the battery sensor, hidden until you unlock it.
+
+- **Unlock:** open *About Phone* and tap the **title 7 times** (within 1.5 s each). The app's icon then appears on Home (category *System*) and the app opens. *Hide Developer options* at the bottom of the Pin tab hides it again. It can also be shown or hidden in *Home Layout*.
+- **Pin tab:** every pin of the board is listed by group (display SPI, SD card, touch, sensor bus, analog sensors, outputs, microphone, speaker, ESP32-CAM UART). **[−] / [+]** step the GPIO number (hold to repeat; GPIOs that do not exist on the ESP32-S3 are skipped, optional pins can be set to `OFF` = −1), and tapping the number puts the board default back. Only pins used by your build are shown (for example the XPT2046 pins on ILI9341, the I2C touch pins on ST7796 / Aether, the SD CS pin only for SPI SD).
+  - A red mark means the pin is invalid or used twice; amber marks mean a strapping pin (0, 3, 45, 46), a USB pin (19, 20) or, for an analog input, a pin outside ADC1. *Apply* stays disabled while a pin is marked red.
+  - **Apply** stores the new pins as a *trial* and restarts. After the restart a banner asks for **Save permanently**; if you do not confirm (power cycle, crash, boot loop), the next boot drops the trial and the previous pins come back on their own. So a wrong display or touch pin cannot lock you out, but you do need to be able to cut the power once.
+  - **Reset everything to default** removes all pin overrides and the ADC calibration, then restarts.
+- **Sensor tab:** shows only the source that is **in use** for the battery:
+  - **INA219 found:** I2C address and pins, bus voltage, shunt voltage, current (+ use, − charge), power, battery voltage and charge, shunt resistor, calibration register, current LSB, full-scale current, overflow flag and conversion state, live.
+  - **No INA219, battery ADC pin set:** the **ADC calculation** only: the raw value (0–4095), the millivolts at the pin, the divider ratio and calibration offset (both adjustable with [−] / [+], no restart, remembered), the formula `pin voltage × ratio + offset`, the computed Vbat and the filtered value with the percentage. An NTC input pin (`ADC NTC`), if set, shows its raw value and millivolts.
+  - Neither: a hint to set the ADC pin or wire the INA219 (with the current SDA / SCL).
+- **Technical notes:** pin values are read from NVS (namespace `devpins`, read directly, not through SD, because the SD card pins are among the settings) at the very start of `setup()`; the defaults remain the compile-time `RP_*` macros of [`display_conf.h`](../../firmware/phone/display_conf.h), so a board that was never changed behaves exactly as before. Logic: [`devpins.h`](../../firmware/phone/devpins.h) (tested on a PC in `tests/devpins`), app: [`devopt_renphone.ino`](../../firmware/phone/devopt_renphone.ino).
 
 ## OTA updates (per channel)
 

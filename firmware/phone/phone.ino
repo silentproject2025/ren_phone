@@ -474,6 +474,7 @@ struct HomeRect{ int x,y,w,h; }; // harus paling atas: prototype otomatis Arduin
 #include <math.h>     // dipakai boot sequence (cosf/sinf utk animasi logo) + sensor 3D
 #include <Wire.h>     // I2C utk MPU6050 (accel+gyro)
 #include "display_conf.h"
+#include "devpins.h"   // DEVPINS_V1: pin runtime yg bisa diubah dari app Opsi Developer (devopt_renphone.ino)
 #include "i18n.h" // I18N_V1_CORE: sistem 2 bahasa (English default + Indonesia) // profil layar: ILI9341 (default) / ST7796 (-DRP_DISPLAY_ST7796)
 #include "esp_bt.h"   // v29 FIX: buat esp_bt_controller_mem_release()
 #include <esp_system.h> // v125: esp_reset_reason() utk bedain restart dari menu Daya vs cold boot
@@ -653,7 +654,9 @@ enum Screen { SCR_HOME, SCR_CLOCK, SCR_CALC, SCR_SENSOR,
               // Nyx Apps: app native (ELF) dari SD -- lihat nyxapp_renphone.ino  // NYXAPP_V1
               SCR_NYX,
               // WiFi Sensing (CSI: gerak + napas) -- lihat wifisense_renphone.ino  // WSENSE_V1
-              SCR_WSENSE };
+              SCR_WSENSE,
+              // Opsi Developer: ubah pin, pantau ADC / INA219 -- lihat devopt_renphone.ino + devpins.h  // DEVPINS_V1
+              SCR_DEVOPT };
 enum Orientation { ORIENT_LANDSCAPE = 0, ORIENT_PORTRAIT = 1 };
 
 // Dipindah ke atas — alasan sama dengan AiLine & Vec3f: arduino-cli men-generate
@@ -1453,8 +1456,8 @@ public:
   // ke base), jadi semua pemanggil display.getTouch(&tp) otomatis pakai ini. Output:
   // koordinat layar pada rotasi aktif (sama seperti hasil getTouch XPT2046 terkalibrasi).
   bool touchBegin(){
-    if(RP_TOUCH_RST>=0){ pinMode(RP_TOUCH_RST,OUTPUT); digitalWrite(RP_TOUCH_RST,LOW); delay(10); digitalWrite(RP_TOUCH_RST,HIGH); delay(60); }
-    Wire.begin(RP_TOUCH_SDA, RP_TOUCH_SCL);
+    if(rpPinV[DP_TCH_RST]>=0){ pinMode(rpPinV[DP_TCH_RST],OUTPUT); digitalWrite(rpPinV[DP_TCH_RST],LOW); delay(10); digitalWrite(rpPinV[DP_TCH_RST],HIGH); delay(60); }
+    Wire.begin(rpPinV[DP_TCH_SDA], rpPinV[DP_TCH_SCL]);
     Wire.setClock(RP_TOUCH_I2C_HZ);
     // TOUCH_PROBE_V1: reset CTP digabung ke reset LCD -> FT6236 butuh ~300 ms sejak reset. Ulangi probe (maks 1,5 dtk).
     uint32_t _t0=millis(); int _try=0;
@@ -1465,7 +1468,7 @@ public:
       if(_touchOk) break;
       delay(50);
     } while(millis()-_t0 < 1500);
-    Serial.printf("[touch] FT6236 @0x%02X %s (SDA=%d SCL=%d, coba %d, %lu ms, I2C %lu Hz)\n", RP_TOUCH_ADDR, _touchOk?"TERDETEKSI":"TIDAK ADA", RP_TOUCH_SDA, RP_TOUCH_SCL, _try, (unsigned long)(millis()-_t0), (unsigned long)RP_TOUCH_I2C_HZ);
+    Serial.printf("[touch] FT6236 @0x%02X %s (SDA=%d SCL=%d, coba %d, %lu ms, I2C %lu Hz)\n", RP_TOUCH_ADDR, _touchOk?"TERDETEKSI":"TIDAK ADA", (int)rpPinV[DP_TCH_SDA], (int)rpPinV[DP_TCH_SCL], _try, (unsigned long)(millis()-_t0), (unsigned long)RP_TOUCH_I2C_HZ);
     return _touchOk;
   }
   bool touchOk() const { return _touchOk; }
@@ -1611,6 +1614,31 @@ public:
     _bus_instance.config(cfg);
     _panel_instance.setBus(&_bus_instance);
   }
+  // DEVPINS_V1: pasang pin dari rpPinV[] (konstruktor memakai macro bawaan, karena NVS belum siap saat konstruktor global jalan).
+  // Dipanggil di setup() SESUDAH devpinsBoot() dan SEBELUM display.init().
+  void applyPins(){
+    { auto cfg = _bus_instance.config();
+      cfg.pin_sclk=rpPinV[DP_SCLK]; cfg.pin_mosi=rpPinV[DP_MOSI];
+      cfg.pin_miso=rpPinV[DP_MISO]; cfg.pin_dc=rpPinV[DP_TFT_DC];
+      _bus_instance.config(cfg); }
+    { auto cfg = _panel_instance.config();
+      cfg.pin_cs=rpPinV[DP_TFT_CS]; cfg.pin_rst=rpPinV[DP_TFT_RST];
+      _panel_instance.config(cfg); }
+    { auto cfg = _light_instance.config();
+      cfg.pin_bl=rpPinV[DP_TFT_BL];
+      _light_instance.config(cfg); }
+#if !RP_TOUCH_CAPACITIVE
+    { auto cfg = _touch_instance.config();
+      cfg.pin_sclk=rpPinV[DP_XPT_SCLK]; cfg.pin_mosi=rpPinV[DP_XPT_MOSI];
+      cfg.pin_miso=rpPinV[DP_XPT_MISO]; cfg.pin_cs=rpPinV[DP_XPT_CS];
+      _touch_instance.config(cfg); }
+#endif
+    _panel_instance.setBus(&_bus_instance);
+    _panel_instance.setLight(&_light_instance);
+#if !RP_TOUCH_CAPACITIVE
+    _panel_instance.setTouch(&_touch_instance);
+#endif
+  }
 };
 LGFX display;
 LGFX_Sprite canvas(&display);      // frame buffer utama (full screen)
@@ -1746,7 +1774,8 @@ void applyOrientation(Orientation o, bool doSave) {
 // kalau ditebak salah) -- kesan "interaktif"-nya didapat dr POLA & DURASI
 // getar yg beda2 tiap jenis aksi, bukan dr intensitasnya.
 // =============================================
-#define VIB_PIN 18
+#define VIB_PIN rpPinV[DP_VIB]   // DEVPINS_V1 (-1 = motor tidak dipasang)
+static inline void vibWrite(bool on){ if(VIB_PIN>=0) digitalWrite(VIB_PIN, on?HIGH:LOW); }
 bool vibEnabled=true; // saklar getaran, ON secara default (v94: skrg persisten, lihat saveVibPref/loadVibPref dkt saveShakePref)
 
 // struct VibStep: definisi lengkap ada PALING ATAS file (lihat catatan v23 di sana)
@@ -1757,12 +1786,12 @@ unsigned long vibStepStartMs=0;
 bool vibActive=false;
 
 void vibInit(){
-  pinMode(VIB_PIN, OUTPUT);
-  digitalWrite(VIB_PIN, LOW);
+  if(VIB_PIN>=0) pinMode(VIB_PIN, OUTPUT);
+  vibWrite(false);
 }
 void vibStop(){
   vibActive=false; vibQueueLen=0; vibQueueIdx=0;
-  digitalWrite(VIB_PIN, LOW);
+  vibWrite(false);
 }
 void vibPlayPattern(const VibStep* steps, int n){
   if(!vibEnabled) return;
@@ -1771,7 +1800,7 @@ void vibPlayPattern(const VibStep* steps, int n){
   vibQueueLen=n; vibQueueIdx=0;
   vibActive=true;
   vibStepStartMs=millis();
-  digitalWrite(VIB_PIN, vibQueue[0].on? HIGH:LOW);
+  vibWrite(vibQueue[0].on);
 }
 // Dipanggil TIAP loop() (tanpa syarat, spy pola getar tetap jalan sampai
 // selesai biarpun layar lg pindah/animasi lain jalan) -- majuin antrian
@@ -1782,7 +1811,7 @@ void vibStep(){
     vibQueueIdx++;
     if(vibQueueIdx>=vibQueueLen){ vibStop(); return; }
     vibStepStartMs=millis();
-    digitalWrite(VIB_PIN, vibQueue[vibQueueIdx].on? HIGH:LOW);
+    vibWrite(vibQueue[vibQueueIdx].on);
   }
 }
 
@@ -1836,7 +1865,7 @@ void vibExit(){        // v82: KHUSUS gestur "geser ke atas utk keluar app" -- 1
 // RGB_BUILTIN kadang bermasalah khusus di S3, tp panggilan dgn GPIO
 // literal biasa gak kena masalah itu).
 // =============================================
-#define NEOPIXEL_PIN 48
+#define NEOPIXEL_PIN rpPinV[DP_NPX]   // DEVPINS_V1 (-1 = LED tidak dipasang)
 bool npxOn=false;
 uint8_t npxR=255, npxG=255, npxB=255; // warna solid pilihan user (mode 0)
 uint8_t npxBrightness=80;             // skala 0-255, dikalikan ke RGB sblm dikirim
@@ -1848,9 +1877,9 @@ void npxApply(uint8_t r,uint8_t g,uint8_t b){
   uint8_t sr=(uint16_t)r*npxBrightness/255;
   uint8_t sg=(uint16_t)g*npxBrightness/255;
   uint8_t sb=(uint16_t)b*npxBrightness/255;
-  rgbLedWrite(NEOPIXEL_PIN, sr, sg, sb);
+  if(NEOPIXEL_PIN>=0) rgbLedWrite(NEOPIXEL_PIN, sr, sg, sb);
 }
-void npxOff(){ rgbLedWrite(NEOPIXEL_PIN, 0,0,0); }
+void npxOff(){ if(NEOPIXEL_PIN>=0) rgbLedWrite(NEOPIXEL_PIN, 0,0,0); }
 
 // HSV->RGB sederhana (h: 0-359 derajat, s/v: 0-255) -- dipakai mode rainbow.
 void npxHsvToRgb(float h,uint8_t sat,uint8_t val,uint8_t& r,uint8_t& g,uint8_t& b){
@@ -1923,9 +1952,9 @@ void npxStep(){
 // =============================================
 // SD CARD & GEMINI API KEY STORAGE
 // =============================================
-#define SD_PIN_CLK 39
-#define SD_PIN_CMD 38
-#define SD_PIN_D0  40
+#define SD_PIN_CLK rpPinV[DP_SD_CLK]   // DEVPINS_V1: nilai bawaan di devpins.h
+#define SD_PIN_CMD rpPinV[DP_SD_CMD]
+#define SD_PIN_D0  rpPinV[DP_SD_D0]
 // Speaker MAX98357A (I2S DAC + amp class-D) -- DIPASANG KEMBALI (opsional).
 // Dulu dicabut di v100; sekarang cuma dipakai app HWmonitor ("Tes Speaker").
 // Kalau modul TIDAK terpasang, firmware tetap jalan normal (I2S cuma dibuka
@@ -1934,25 +1963,19 @@ void npxStep(){
 //   BCLK 16 | LRC (WS) 17 | DIN (DOUT dari S3) 8 (ILI9341) / 15 (ST7796 & Aether)
 // Wiring: VIN->5V, GND->GND, BCLK/LRC/DIN->pin di atas. SD/GAIN dibiarkan
 // (SD floating = mono (L+R)/2, GAIN floating = 9 dB).
-#ifndef AUDIO_I2S_BCLK
-#define AUDIO_I2S_BCLK 16
-#endif
-#ifndef AUDIO_I2S_LRC
-#define AUDIO_I2S_LRC  17
-#endif
-#ifndef AUDIO_I2S_DOUT
-  #if defined(RP_DISPLAY_ST7796) || defined(RP_BOARD_AETHER)
-  #define AUDIO_I2S_DOUT 15
-  #else
-  #define AUDIO_I2S_DOUT 8
-  #endif
-#endif
+// DEVPINS_V1: nilai bawaan (termasuk -DAUDIO_I2S_...) kini dihitung di devpins.h; nilai AKTIF dibaca dari rpPinV[].
+#undef AUDIO_I2S_BCLK
+#undef AUDIO_I2S_LRC
+#undef AUDIO_I2S_DOUT
+#define AUDIO_I2S_BCLK rpPinV[DP_I2S_BCLK]
+#define AUDIO_I2S_LRC  rpPinV[DP_I2S_LRC]
+#define AUDIO_I2S_DOUT rpPinV[DP_I2S_DOUT]
 // v27: pin I2S mic INMP441 -- FISIK & PERIPHERAL I2S TERPISAH dr speaker
 // MAX98357A di atas (I2SClass beda instance, gak ada sangkut paut).
 // TETAP DIPERTAHANKAN krn masih dipakai dictation mic AI Chat & VU meter.
-#define MIC_I2S_SCK 47
-#define MIC_I2S_WS  46
-#define MIC_I2S_SD  45
+#define MIC_I2S_SCK rpPinV[DP_MIC_SCK]   // DEVPINS_V1
+#define MIC_I2S_WS  rpPinV[DP_MIC_WS]
+#define MIC_I2S_SD  rpPinV[DP_MIC_SD]
 bool sdReady=false;
 bool ffatReady=false; // v47: fallback wallpaper pas SD Card gak kedetek
 const char* NOTE_FILE="/notepad.txt";
@@ -1964,11 +1987,11 @@ void initSD(){
   if(sdReady) return; // PREFS_SD_V1: bisa dipanggil lebih awal oleh SdPrefs; jangan mount dua kali
 #if RP_SD_SPI
   // Pastikan CS layar & CS SD sama-sama HIGH sebelum bus dipakai (initSD bisa jalan sebelum display.init()).
-  pinMode(RP_PIN_TFT_CS,OUTPUT); digitalWrite(RP_PIN_TFT_CS,HIGH);
-  pinMode(RP_PIN_SD_CS,OUTPUT);  digitalWrite(RP_PIN_SD_CS,HIGH);
-  rpSdSpi.begin(RP_PIN_SCLK,RP_PIN_MISO,RP_PIN_MOSI,RP_PIN_SD_CS);
-  sdReady=SD.begin(RP_PIN_SD_CS,rpSdSpi,RP_SD_FREQ,"/sdcard",8,false);
-  Serial.printf("[sd] SPI CS=%d %lu Hz -> %s\n",(int)RP_PIN_SD_CS,(unsigned long)RP_SD_FREQ,sdReady?"OK":"GAGAL");
+  pinMode(rpPinV[DP_TFT_CS],OUTPUT); digitalWrite(rpPinV[DP_TFT_CS],HIGH);
+  pinMode(rpPinV[DP_SD_CS],OUTPUT);  digitalWrite(rpPinV[DP_SD_CS],HIGH);
+  rpSdSpi.begin(rpPinV[DP_SCLK],rpPinV[DP_MISO],rpPinV[DP_MOSI],rpPinV[DP_SD_CS]);
+  sdReady=SD.begin(rpPinV[DP_SD_CS],rpSdSpi,RP_SD_FREQ,"/sdcard",8,false);
+  Serial.printf("[sd] SPI CS=%d %lu Hz -> %s\n",(int)rpPinV[DP_SD_CS],(unsigned long)RP_SD_FREQ,sdReady?"OK":"GAGAL");
 #else
   SD_MMC.setPins(SD_PIN_CLK,SD_PIN_CMD,SD_PIN_D0);
   sdReady=SD_MMC.begin("/sdcard",true);
@@ -7011,6 +7034,13 @@ void drawAppIcon(LGFX_Sprite& s, char sym, int cx, int cy, int r, uint16_t bgCir
       s.fillRect(cx-q/3,cy-q/3,q*2/3+1,q*2/3+1,ic);
       break;
     }
+    case 'd': { // Opsi Developer: kurung kurawal + titik (ala simbol kode)  // DEVPINS_V1
+      int rr=max(8,r-6); int w=max(2,rr/6);
+      s.fillRect(cx-rr*2/3,cy-rr*2/3,w,rr*4/3+1,ic); s.fillRect(cx-rr*2/3,cy-rr*2/3,rr/2,w,ic); s.fillRect(cx-rr*2/3,cy+rr*2/3-w+1,rr/2,w,ic);
+      s.fillRect(cx+rr*2/3-w+1,cy-rr*2/3,w,rr*4/3+1,ic); s.fillRect(cx+rr*2/3-rr/2+1,cy-rr*2/3,rr/2,w,ic); s.fillRect(cx+rr*2/3-rr/2+1,cy+rr*2/3-w+1,rr/2,w,ic);
+      nyxAaCircle(s, cx,cy,max(2,rr/5),ic);
+      break;
+    }
     case 'x': { // WiFi Sensing: tiga busur + titik  // WSENSE_V1
       int rr=max(8,r-6); int by=cy+rr/2;
       for(int k=1;k<=3;k++){ int ro=rr*k/3+1, ri=ro-max(2,rr/8); s.fillArc(cx,by,ri,ro,225.0f,315.0f,ic); }
@@ -7217,6 +7247,9 @@ void aboutLoopPoll();
 // ---- wifisense_renphone.ino: WiFi Sensing (CSI) ----  // WSENSE_V1
 void wsenseEnter(); void wsenseExit(); void drawWsense(LGFX_Sprite&); void wsenseTouch(int,int,bool,bool);
 void wsenseLoopPoll();
+// ---- devopt_renphone.ino: Opsi Developer (pin runtime, ADC, INA219) ----  // DEVPINS_V1
+void devoptEnter(); void devoptExit(); void drawDevopt(LGFX_Sprite&); void devoptTouch(int,int,bool,bool);
+void devoptLoopPoll(); void devoptUnlock(); void pwrReleaseHold();
 // ---- backup_renphone.ino: Backup & Restore pengaturan ----
 void backupEnter(); void backupExit(); void drawBackup(LGFX_Sprite&); void backupTouch(int,int,bool,bool);
 void backupAutoBoot(); void backupAutoPoll();   // backup otomatis NVS -> SD (/backup/auto.nbk) + pulihkan otomatis saat NVS kosong
@@ -7301,8 +7334,10 @@ AppDef apps[] = {  // ukuran otomatis
   { "Nyx Apps", 'n', 0, nyxAppEnter, nyxAppExit, drawNyxApp, nyxAppTouch, SCR_NYX },
   // ---- WiFi Sensing: deteksi gerak / kehadiran + napas dari CSI WiFi ----  // WSENSE_V1
   { "WiFi Sensing", 'x', 0, wsenseEnter, wsenseExit, drawWsense, wsenseTouch, SCR_WSENSE },
+  // ---- Opsi Developer: pin yang bisa diubah + pantau ADC / INA219 (disembunyikan dari grid; buka dgn ketuk judul About Phone 7x) ----  // DEVPINS_V1
+  { "Opsi Developer", 'd', 0, devoptEnter, devoptExit, drawDevopt, devoptTouch, SCR_DEVOPT },
 };
-#define APP_COUNT 47
+#define APP_COUNT 48
 static_assert(sizeof(apps)/sizeof(apps[0]) == APP_COUNT, "APP_COUNT harus sama dengan jumlah entri apps[]");
 
 // =============================================
@@ -7475,6 +7510,7 @@ void initAppColors(){
   apps[41].color=0xF9A0; // Kamera - oranye
   apps[42].color=0xE68A; // Buku - krem kecokelatan (kertas)
   apps[44].color=0xFE60; // Catur - emas
+  apps[47].color=0x9D13; // Opsi Developer - abu kehijauan
   for(int i=0;i<APP_COUNT;i++) apps[i].color=modernTone(apps[i].color); // UI-MODERN: lembutkan warna neon
 }
 
@@ -8032,7 +8068,7 @@ uint8_t homeCatOfScreen(Screen sc){
     case SCR_APOD: case SCR_NEOWS: case SCR_EPIC: case SCR_NASAIMG:
       return 4; // NASA
     case SCR_SETTINGS: case SCR_BATTERY: case SCR_UPDATE: case SCR_HWMON: case SCR_SENSOR:
-    case SCR_MICLEVEL: case SCR_ABOUT: case SCR_OWNER: case SCR_HOMEEDIT: case SCR_REMOTE: case SCR_BACKUP: case SCR_WSENSE:
+    case SCR_MICLEVEL: case SCR_ABOUT: case SCR_OWNER: case SCR_HOMEEDIT: case SCR_REMOTE: case SCR_BACKUP: case SCR_WSENSE: case SCR_DEVOPT:
       return 5; // Sistem
     default:
       return 3; // Alat (Jam, Kalkulator, Notepad, Canvas, AI Chat, Files, Neopixel, Pomodoro, Wake Word, Stopwatch, Chat, Telepon)
@@ -8052,7 +8088,7 @@ void homeLayoutRebuildVis(){
 }
 void homeLayoutDefault(){
   homeWMask=0x0F; homeWLayout=1; homeWBig=1;   // v132: ikut kembali ke awal saat Reset
-  for(int i=0;i<APP_COUNT;i++){ homeOrder[i]=i; homeHide[i]=(apps[i].screen==SCR_HOMEEDIT || apps[i].screen==SCR_BACKUP); }
+  for(int i=0;i<APP_COUNT;i++){ homeOrder[i]=i; homeHide[i]=(apps[i].screen==SCR_HOMEEDIT || apps[i].screen==SCR_BACKUP || apps[i].screen==SCR_DEVOPT); }
   homeLayoutRebuildVis();
 }
 void homeLayoutLoad(){
@@ -10130,8 +10166,8 @@ void drawSensor(LGFX_Sprite& s){
     s.setCursor(bx+10,by+12);s.print(RPTR("MPU6050 tidak terdeteksi"));
     s.setTextColor(T().subtext);
     s.setCursor(bx+10,by+32);s.print(RPTR("Cek wiring:"));
-    s.setCursor(bx+10,by+46);s.printf("SDA -> GPIO %d",(int)RP_SENS_SDA);
-    s.setCursor(bx+10,by+58);s.printf("SCL -> GPIO %d",(int)RP_SENS_SCL);
+    s.setCursor(bx+10,by+46);s.printf("SDA -> GPIO %d",(int)rpPinV[DP_SENS_SDA]);
+    s.setCursor(bx+10,by+58);s.printf("SCL -> GPIO %d",(int)rpPinV[DP_SENS_SCL]);
     s.setCursor(bx+10,by+70);s.print("VCC -> 3V3, GND -> GND");
     iosRR(s,bx+10,by+bh-30,bw-20,22,6,T().accent);
     s.setTextColor(T().bg);s.setCursor(bx+bw/2-30,by+bh-24);s.print(RPTR("Coba Lagi"));
@@ -15141,8 +15177,8 @@ unsigned long gTouchStartMs=0;
 // =================================================================
 // SENS_BUS_V1: bus sensor (MPU6050 + INA219) dipisah dari bus sentuh FT6236.
 // ILI9341: Wire 15/7 (lama) | ST7796: Wire1 di RP_SENS_SDA/SCL (display_conf.h)
-#define MPU_SDA_PIN RP_SENS_SDA
-#define MPU_SCL_PIN RP_SENS_SCL
+#define MPU_SDA_PIN rpPinV[DP_SENS_SDA]   // DEVPINS_V1
+#define MPU_SCL_PIN rpPinV[DP_SENS_SCL]
 #define MPU_ADDR    0x68
 
 bool  mpuReady   = false;
@@ -22321,12 +22357,14 @@ static void rpTouchTaskStart(){
 #include "driver/gpio.h"
 static void rpSpiDriveBoost(){
   if(SPI_OC_OPTIONS[spiOcIdx] < 80) return;   // 40 MHz (default) tdk disentuh
-  const int pins[4] = {12, 11, 10, 2};        // SCLK, MOSI, CS, DC (lihat LGFX::LGFX)
+  const int pins[4] = {rpPinV[DP_SCLK], rpPinV[DP_MOSI], rpPinV[DP_TFT_CS], rpPinV[DP_TFT_DC]};   // SCLK, MOSI, CS, DC (DEVPINS_V1: ikut pin aktif)
   for(int i=0;i<4;i++) gpio_set_drive_capability((gpio_num_t)pins[i], GPIO_DRIVE_CAP_3);
   Serial.println("[spi] drive GPIO SCLK/MOSI/CS/DC = CAP_3 (80 MHz)");
 }
 void setup(){
   Serial.begin(115200);
+  devpinsBoot();   // DEVPINS_V1: PALING AWAL -- pin aktif dibaca dari NVS sebelum SdPrefs/SD/layar/sentuh dipakai
+  pwrReleaseHold();   // DEVPINS_V1: lepas gpio_hold deep sleep pada pin AKTIF (konstruktor statis hanya tahu pin bawaan)
   setCpuFrequencyMhz(CPU_MHZ_NORMAL);   // CPU240_V1: pastikan 240 MHz sejak awal (apa pun default board)
   rpHL("awal_setup");
   // v117: catat core tempat setup()/loop() (loopTask Arduino) berjalan. README lama menyebut
@@ -22413,6 +22451,7 @@ void setup(){
   // catatan lengkap di setSpiFreqMHz() (class LGFX) & loadSpiOcPref().
   spiOcIdx = loadSpiOcPref();
   display.setSpiFreqMHz(SPI_OC_OPTIONS[spiOcIdx]);
+  display.applyPins();   // DEVPINS_V1: pin layar/sentuh dari rpPinV[] (konstruktor global memakai bawaan compile-time)
   display.init();
   rpSpiDriveBoost();   // SPI_DRIVE_V1
   rpHL("setelah_display_init");
@@ -23462,6 +23501,7 @@ void loop(){
     backupAutoPoll(); // simpan salinan otomatis seluruh NVS ke SD kalau ada yang berubah (tiap 10 mnt)
     if(curScreen()==SCR_ABOUT) aboutLoopPoll();
     if(curScreen()==SCR_WSENSE) wsenseLoopPoll(); // WSENSE_V1: bin CSI 10 Hz + deteksi gerak/napas
+    devoptLoopPoll();                             // DEVPINS_V1: pengingat konfirmasi pin baru + refresh live saat app terbuka
     if(curScreen()==SCR_NYX && nyxWantsRedraw() && millis()-lastSen>33){ needRedraw=true; lastSen=millis(); } // NYXAPP_V1: app native jalan ~30 fps
     // v58 FIX bug "Labirin gak bisa digerakin sama sekali": SCR_MAZE lupa
     // didaftarin di sini pas game-nya dibikin (v56/v57). Tanpa ini,

@@ -439,6 +439,8 @@ static uint8_t eggKey(uint16_t i) {
 
 static bool           aboutEggOpen  = false;
 static uint8_t        eggTaps       = 0;
+static uint8_t        devTitleTaps  = 0;           // DEVPINS_V1: ketuk judul 7x = buka Opsi Developer (ala "nomor build" di Android)
+static unsigned long  devTitleLast  = 0;
 static unsigned long  eggLastTap    = 0;
 static uint16_t       eggLnOff[EGG_MAX_LINES];   // offset awal baris di EGG_BLOB
 static uint8_t        eggLnLen[EGG_MAX_LINES];
@@ -835,6 +837,9 @@ void aboutTouch(int x, int y, bool held, bool isNew) {
     aboutGlide = false; aboutVel = 0;                      // sentuhan baru menghentikan luncuran
     if (isBack(x, y)) { navBack(); return; }
     if (y >= 20 && y < top) {                              // ketuk area judul -> kembali ke atas
+      if (now - devTitleLast > 1500UL) devTitleTaps = 0;   // DEVPINS_V1
+      devTitleLast = now;
+      if (++devTitleTaps >= 7) { devTitleTaps = 0; devoptUnlock(); return; }
       aboutScroll = 0; aboutDragging = false; needRedraw = true;
       return;
     }

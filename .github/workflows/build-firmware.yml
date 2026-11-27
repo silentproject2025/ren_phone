@@ -297,6 +297,8 @@ jobs:
           cp firmware/phone/owner_renphone.ino build_sketch/
           cp firmware/phone/homeedit_renphone.ino build_sketch/
           cp firmware/phone/about_renphone.ino build_sketch/
+          cp firmware/phone/devpins.h build_sketch/              # DEVPINS_V1: tabel pin runtime (di-include phone.ino)
+          cp firmware/phone/devopt_renphone.ino build_sketch/    # DEVPINS_V1: app Opsi Developer
           cp firmware/phone/remote_renphone.ino build_sketch/
           cp firmware/phone/chat_renphone.ino build_sketch/
           cp firmware/phone/chess_renphone.ino build_sketch/

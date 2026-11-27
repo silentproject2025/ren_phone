@@ -470,26 +470,27 @@ bool inaWantRedraw() {
 // ===== BATT_ADC_V1 BEGIN =====
 // Aether Board: baterai lewat pembagi tegangan 10k x 10k di GPIO RP_BATT_ADC_PIN (display_conf.h).
 // Dipakai hanya kalau INA219 tidak terdeteksi. Hanya tegangan yang terukur: arus / status charging tidak diketahui.
-#ifdef RP_BATT_ADC_PIN
-#ifndef RP_BATT_DIV
-#define RP_BATT_DIV    2.0f       // pembagi 10k x 10k
-#endif
-#ifndef RP_BATT_CAL_V
-#define RP_BATT_CAL_V  0.032f     // kalibrasi titik ukur multimeter (3.61 V vs 3.58 V)
-#endif
+// DEVPINS_V1: pin (rpPinV[DP_BATT_ADC], -1 = tanpa ADC), pembagi (devBattDiv) dan ofset (devBattCal) kini runtime;
+// nilai bawaan di devpins.h (RP_BATT_ADC_PIN / RP_BATT_DIV / RP_BATT_CAL_V), diubah dari app Opsi Developer.
 static float    battAdcV = 0.0f, battAdcSoc = 100.0f;
 static bool     battAdcInit = false;
 static uint32_t battAdcLast = 0;
+// hasil hitung terakhir (dibaca app Opsi Developer untuk menampilkan perhitungan ADC)
+uint16_t battAdcDbgRaw = 0, battAdcDbgMv = 0;     // rata-rata analogRead (0..4095) & analogReadMilliVolts di pin
+float    battAdcDbgPinV = 0.0f, battAdcDbgVbat = 0.0f;   // volt di pin; Vbat hasil rumus (sebelum clamp & filter)
 static void battAdcUpdate() {
   uint32_t now = millis();
   battCharging = false;                                   // tanpa sensor arus: charging tidak terdeteksi
   if (battAdcInit && now - battAdcLast < 1000UL) return;  // 1x per detik cukup
   battAdcLast = now;
-  uint32_t acc = 0;
-  for (int i = 0; i < 16; i++) acc += analogReadMilliVolts(RP_BATT_ADC_PIN);   // rata-rata 16 sampel (redam noise ADC)
+  const int pin = rpPinV[DP_BATT_ADC];
+  if (pin < 0) return;
+  uint32_t acc = 0, accRaw = 0;
+  for (int i = 0; i < 16; i++) { acc += analogReadMilliVolts(pin); accRaw += analogRead(pin); }   // rata-rata 16 sampel (redam noise ADC)
   float pinVoltage = ((float)acc / 16.0f) / 1000.0f;      // volt di pin ADC
-  // Pembagi 10k x 10k (2.0f) + kalibrasi titik ukur multimeter (3.61V vs 3.58V -> +0.03V)
-  float vBat = (pinVoltage * RP_BATT_DIV) + RP_BATT_CAL_V;
+  // Pembagi (bawaan 10k x 10k = 2.0) + kalibrasi titik ukur multimeter (3.61V vs 3.58V -> +0.03V)
+  float vBat = (pinVoltage * devBattDiv) + devBattCal;
+  battAdcDbgRaw = (uint16_t)(accRaw / 16); battAdcDbgMv = (uint16_t)(acc / 16); battAdcDbgPinV = pinVoltage; battAdcDbgVbat = vBat;
   float batteryVoltage = constrain(vBat, 0.0f, 5.0f);
   float soc = inaOcvSoc(batteryVoltage);
   if (!battAdcInit) { battAdcV = batteryVoltage; battAdcSoc = soc; battAdcInit = true; }
@@ -498,18 +499,15 @@ static void battAdcUpdate() {
   int p = (int)(battAdcSoc + 0.5f);
   battPercent = (p < 0) ? 0 : (p > 100 ? 100 : p);
 }
-#endif
 // ===== BATT_ADC_V1 END =====
 
 // Dipanggil dari loop(); mengisi variabel global batt* yang dipakai seluruh UI.
 void battUpdate() {
   inaPoll();
-#ifdef RP_BATT_ADC_PIN
-  if (!inaOk) battAdcUpdate();                            // BATT_ADC_V1: tanpa INA219 -> ADC (lalu lanjut ke peringatan di bawah)
-  else
-#else
-  if (!inaOk) { battCharging = false; return; }
-#endif
+  if (!inaOk) {                                           // BATT_ADC_V1: tanpa INA219 -> ADC (lalu lanjut ke peringatan di bawah)
+    if (rpPinV[DP_BATT_ADC] >= 0) battAdcUpdate();        // DEVPINS_V1: ada/tidaknya ADC ditentukan pin runtime
+    else { battCharging = false; return; }
+  } else
   if (inaActive) {
     battVoltage = inaBatV;
     battPercent = inaSoc;
@@ -748,9 +746,10 @@ static void inaDrawSummary(LGFX_Sprite& s, int top, int bottom) {
     int errLines = (avail - 40) / 10; if (errLines < 3) errLines = 3; if (errLines > 8) errLines = 8;
     inaCard(s, 6, top, W - 12, 34 + errLines * 10);
     s.setTextColor(T().danger); s.setCursor(16, top + 9); s.print(RPTR("INA219 tidak terdeteksi"));
-    rpWrapText(s, 16, top + 26, W - 12 - 20, 10, errLines,
-               "Cek wiring: VCC 3.3V, GND, SDA = GPIO" RP_STR(RP_SENS_SDA) ", SCL = GPIO" RP_STR(RP_SENS_SCL) ". Shunt dipasang seri di kabel (+) baterai (baterai -> VIN+, beban -> VIN-). Alamat 0x40-0x4F (A0/A1). Buka tab Sensor > Scan ulang setelah memperbaiki.",
-               T().subtext);
+    static char inaHelp[260];                              // DEVPINS_V1: pin bus sensor kini runtime -> teks dirangkai saat digambar
+    snprintf(inaHelp, sizeof(inaHelp), "Cek wiring: VCC 3.3V, GND, SDA = GPIO%d, SCL = GPIO%d. Shunt dipasang seri di kabel (+) baterai (baterai -> VIN+, beban -> VIN-). Alamat 0x40-0x4F (A0/A1). Buka tab Sensor > Scan ulang setelah memperbaiki.",
+             (int)rpPinV[DP_SENS_SDA], (int)rpPinV[DP_SENS_SCL]);
+    rpWrapText(s, 16, top + 26, W - 12 - 20, 10, errLines, inaHelp, T().subtext);
     return;
   }
   const bool land = SCR_W > SCR_H;

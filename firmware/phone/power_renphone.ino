@@ -21,7 +21,7 @@
 #include "esp_sleep.h"
 
 #define PWR_WAKE_GPIO   GPIO_NUM_0     // tombol BOOT di board ESP32-S3 (aktif LOW)
-#define PWR_BL_PIN      RP_PIN_TFT_BL
+#define PWR_BL_PIN      rpPinV[DP_TFT_BL]   // DEVPINS_V1
 #define PWR_VIB_PIN     VIB_PIN
 #define PWR_NPX_PIN     NEOPIXEL_PIN
 
@@ -33,13 +33,14 @@ void inaSaveCounters(bool force);      // ina219_renphone.ino
 
 // Lepas "hold" pin dari deep sleep sebelumnya SEBELUM setup() jalan,
 // supaya backlight/motor/neopixel normal lagi setelah bangun.
+// DEVPINS_V1: dipanggil dari konstruktor statis di bawah (pin bawaan) DAN dari setup() sesudah devpinsBoot() (pin aktif).
+void pwrReleaseHold() {
+  gpio_deep_sleep_hold_dis();
+  const int pins[3] = { PWR_BL_PIN, PWR_VIB_PIN, PWR_NPX_PIN };
+  for (int i = 0; i < 3; i++) if (pins[i] >= 0) gpio_hold_dis((gpio_num_t)pins[i]);
+}
 static struct PwrBootRelease {
-  PwrBootRelease() {
-    gpio_deep_sleep_hold_dis();
-    gpio_hold_dis((gpio_num_t)PWR_BL_PIN);
-    gpio_hold_dis((gpio_num_t)PWR_VIB_PIN);
-    gpio_hold_dis((gpio_num_t)PWR_NPX_PIN);
-  }
+  PwrBootRelease() { pwrReleaseHold(); }
 } pwrBootRelease;
 
 void powerMenuShow() {
@@ -125,6 +126,7 @@ void powerShutdownNow() {
   // tahan backlight, motor, neopixel di LOW selama deep sleep
   const int holdPins[3] = { PWR_BL_PIN, PWR_VIB_PIN, PWR_NPX_PIN };
   for (int i = 0; i < 3; i++) {
+    if (holdPins[i] < 0) continue;                       // DEVPINS_V1: pin dimatikan (-1)
     gpio_set_direction((gpio_num_t)holdPins[i], GPIO_MODE_OUTPUT);
     gpio_set_level((gpio_num_t)holdPins[i], 0);
     gpio_hold_en((gpio_num_t)holdPins[i]);
