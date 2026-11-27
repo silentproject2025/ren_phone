@@ -92,7 +92,7 @@ If the touch panel sends false touches, the system rejects points in dead boxes,
 
 ## Personalisation
 
-- **Wallpaper.** Put `wallpaper.jpg` on the SD card, or upload it through the Web File Manager. It applies to Home and the Lock Screen and takes effect immediately without a restart.
+- **Wallpaper.** Two wallpapers, one per orientation: `wallpaper2.jpg` (horizontal) and `wallpaper1.jpg` (vertical). Put them on the SD card, or upload them through the Web File Manager. The one that matches the screen orientation is used, and it switches when you rotate the screen. If an orientation has no file, `wallpaper.jpg` is used for it (the old single-wallpaper name still works). It applies to Home and the Lock Screen and takes effect immediately without a restart. The image fills the screen and the edges that do not fit are cropped, so use the screen size (for example 480x320 horizontal, 320x480 vertical).
 - **Edit Home.** Reorder icons and hide apps from the grid. A *Reset* button with confirmation is provided.
 - **Profile.** An avatar and owner-name card at the top of Settings; the photo is picked from the SD card.
 - **About Phone.** Device and system information. A scrolling page with an identity card (logo or owner photo, name, NyxOS version, board), three quick tiles (battery, free RAM, chip temperature) and sections for Devices, Software, Processor, Memory, Power, Network and System. Firmware, RAM, PSRAM, SD card and battery show a usage bar (orange from 75 %, red from 90 %; the battery bar turns orange at 30 % and red at 15 %). A value that does not fit next to its label drops to a second line. Drag to scroll (it glides after you lift your finger); tap the title to jump to the top.

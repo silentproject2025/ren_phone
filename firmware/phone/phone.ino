@@ -1684,6 +1684,10 @@ void nyxAaRR(lgfx::LGFXBase&,int,int,int,int,int,uint16_t); void nyxAaRRRing(lgf
 // dipakai duluan oleh handler Web File Manager yg letaknya lebih awal
 // di file (handleWebRoot, handleWebDelete, handleUploadStream).
 extern const char* WALLPAPER_FILE;
+extern const char* WALLPAPER_FILE_L;   // WALLPAPER_2WAY_V1: horizontal
+extern const char* WALLPAPER_FILE_P;   // WALLPAPER_2WAY_V1: vertikal
+bool isWallpaperPath(const String& p);
+bool wallpaperFileExists(const char* path);
 extern bool wallpaperReady;
 extern LGFX_Sprite wallpaperImg; // dipakai drawLockScreen() (v48) & drawHome(), definisi aslinya dekat drawHome()
 
@@ -2494,18 +2498,26 @@ void handleWebRoot() {
   // otomatis ke-reload live (lihat hook di handleUploadStream), gak perlu
   // restart ESP32. Kalau SD Card gak kedetek, otomatis fallback ke FFat
   // (flash internal) -- lihat initFfat()/loadWallpaper().
+  // WALLPAPER_2WAY_V1: dua slot (horizontal / vertikal) + cadangan umum. Aktif = yang cocok dgn orientasi layar sekarang.
   html += "<div class='card'><h3>Wallpaper Home Screen</h3>";
-  html += "<p>Status: <b style='color:" + String(wallpaperReady?"#4caf50":"#ff5252") + "'>" + String(wallpaperReady?"Aktif":"Belum diset (pakai warna solid tema)") + "</b></p>";
-  if (wallpaperReady) {
-    String wpStoreInfo = sdReady ? "SD Card" : "flash internal ESP32 (FFat, fallback krn SD Card tidak terdeteksi)";
-    html += "<p style='color:#aaa;font-size:13px;'>Tersimpan di: " + wpStoreInfo + "</p>";
-    html += "<a href='/delete?file=" + String(WALLPAPER_FILE) + "' class='btn' style='background:#ff5252;display:inline-block;text-decoration:none;' onclick=\"return confirm('Hapus wallpaper?')\">Hapus Wallpaper</a>";
-  } else {
-    html += "<p style='color:#aaa;font-size:13px;'>Upload file JPG lewat form Upload di atas dgn nama file PERSIS <b>wallpaper.jpg</b> (gaya \"cover\" -- otomatis dipotong tepinya biar nutup penuh layar). ";
-    html += sdReady ? "Akan disimpan ke SD Card." : (ffatReady ? "SD Card tidak terdeteksi -- akan disimpan ke flash internal (FFat) sbg fallback." : "SD Card & FFat sama2 tidak tersedia -- upload wallpaper belum bisa dipakai.");
-    html += "</p>";
+  html += "<p>Status: <b style='color:" + String(wallpaperReady?"#4caf50":"#ff5252") + "'>" + String(wallpaperReady?"Aktif":"Belum diset (pakai warna solid tema)") + "</b>";
+  html += " <span style='color:#aaa;font-size:13px;'>(layar sekarang: " + String(SCR_W>=SCR_H?"horizontal":"vertikal") + ")</span></p>";
+  {
+    const char* wpF[3]  = { WALLPAPER_FILE_L, WALLPAPER_FILE_P, WALLPAPER_FILE };
+    const char* wpLb[3] = { "Horizontal", "Vertikal", "Umum (cadangan)" };
+    for (int i = 0; i < 3; i++) {
+      bool has = wallpaperFileExists(wpF[i]);
+      html += "<p>" + String(wpLb[i]) + ": <b style='color:" + String(has?"#4caf50":"#888") + "'>" + String(has?"ada":"kosong") + "</b> <span style='color:#aaa;font-size:13px;'>" + String(wpF[i] + 1) + "</span>";
+      if (has) html += " <a href='/delete?file=" + String(wpF[i]) + "' class='btn' style='background:#ff5252;display:inline-block;text-decoration:none;' onclick=\"return confirm('Hapus wallpaper?')\">Hapus</a>";
+      html += "</p>";
+    }
   }
-  html += "</div>";
+  html += "<p style='color:#aaa;font-size:13px;'>Upload JPG lewat form Upload di atas dgn nama file PERSIS <b>wallpaper1.jpg</b> (vertikal) dan/atau <b>wallpaper2.jpg</b> (horizontal). Wallpaper otomatis ikut orientasi layar. Kalau salah satunya kosong, dipakai <b>wallpaper.jpg</b> (kalau ada). Gaya \"cover\": tepinya dipotong biar nutup penuh layar. Ukuran pas untuk layar ini: ";
+  { int lo = SCR_W < SCR_H ? SCR_W : SCR_H, hi = SCR_W < SCR_H ? SCR_H : SCR_W;
+    html += String(hi) + "x" + String(lo) + " (horizontal), " + String(lo) + "x" + String(hi) + " (vertikal). "; }
+  html += sdReady ? "Akan disimpan ke SD Card." : (ffatReady ? "SD Card tidak terdeteksi -- akan disimpan ke flash internal (FFat) sbg fallback." : "SD Card & FFat sama2 tidak tersedia -- upload wallpaper belum bisa dipakai.");
+  html += "</p>";
+  html += "</div>\n\n";
 
   html += "<div class='card'><h3>Daftar File SD Card</h3><table><tr><th>Nama File</th><th>Ukuran</th><th>Aksi</th></tr>";
   if (sdReady) {
@@ -2749,7 +2761,7 @@ void handleUploadStream() {
     // file lain, atau wallpaper.jpg pas SD ADA) tetap ke SD_MMC spt biasa.
     ffatUpFail = false;
     ffatUpName = filename;
-    ffatUpToFfat = ffatReady && (webServer.arg("fs") == "ffat" || (!sdReady && filename == WALLPAPER_FILE));   // FFAT_UPLOAD_V1
+    ffatUpToFfat = ffatReady && (webServer.arg("fs") == "ffat" || (!sdReady && isWallpaperPath(filename)));   // FFAT_UPLOAD_V1
     if (filename.lastIndexOf('/') > 0) {   // NYXFS_DUAL_V1: buat folder induk (mkdir -p)
       String dp = filename.substring(0, filename.lastIndexOf('/'));
       for (int i = 1; i <= (int)dp.length(); i++) {
@@ -2774,7 +2786,7 @@ void handleUploadStream() {
     // v47: kalau yg baru selesai diupload PERSIS wallpaper.jpg, langsung
     // reload wallpaper skrg jg (live, gak perlu restart ESP32)
     String fn = upload.filename; if (!fn.startsWith("/")) fn = "/" + fn;
-    if (fn == WALLPAPER_FILE) loadWallpaper();
+    if (isWallpaperPath(fn)) loadWallpaper();   // WALLPAPER_2WAY_V1
     needRedrawNow();
   }
 }
@@ -2785,7 +2797,7 @@ void handleWebDelete() {
     String path = webServer.arg("file");
     if (webServer.arg("fs") == "ffat" && ffatReady && FFat.exists(path)) {   // FFAT_UPLOAD_V1
       FFat.remove(path);
-      if (path == WALLPAPER_FILE) loadWallpaper();
+      if (isWallpaperPath(path)) loadWallpaper();
       needRedrawNow();
       webServer.sendHeader("Location", "/");
       webServer.send(303);
@@ -2793,12 +2805,12 @@ void handleWebDelete() {
     }
     if (SD_MMC.exists(path)) {
       SD_MMC.remove(path);
-      if (path == WALLPAPER_FILE) loadWallpaper(); // v47: wallpaper dihapus -> balik ke warna solid tema, live
+      if (isWallpaperPath(path)) loadWallpaper(); // v47: wallpaper dihapus -> balik ke warna solid tema, live
       needRedrawNow();
     } else if (ffatReady && FFat.exists(path)) {
       // v47: file wallpaper fallback yg tersimpan di FFat (bukan SD)
       FFat.remove(path);
-      if (path == WALLPAPER_FILE) loadWallpaper();
+      if (isWallpaperPath(path)) loadWallpaper();
       needRedrawNow();
     }
   }
@@ -8186,7 +8198,23 @@ const char* homeGreeting(int hour){
 // v102: efek parallax wallpaper (tilt MPU6050, ditambah di v99) DICABUT
 // lagi atas permintaan user -- balik ke wallpaper statis biasa, sprite
 // didekode pas SCR_W x SCR_H spt semula.
-const char* WALLPAPER_FILE = "/wallpaper.jpg";
+// WALLPAPER_2WAY_V1: dua wallpaper, satu per orientasi. loadWallpaper() memilih file sesuai orientasi layar saat ini
+// (dipanggil ulang tiap ganti orientasi). Kalau file orientasinya tidak ada, dipakai /wallpaper.jpg lama sebagai cadangan
+// (gaya "cover" memotong tepinya). Kalau itu juga tidak ada -> warna solid tema.
+const char* WALLPAPER_FILE   = "/wallpaper.jpg";         // umum / cadangan untuk dua orientasi (kompatibel dgn versi lama)
+const char* WALLPAPER_FILE_L = "/wallpaper2.jpg";    // horizontal (landscape)
+const char* WALLPAPER_FILE_P = "/wallpaper1.jpg";    // vertikal (portrait)
+bool isWallpaperPath(const String& p){ return p==WALLPAPER_FILE || p==WALLPAPER_FILE_L || p==WALLPAPER_FILE_P; }
+bool wallpaperFileExists(const char* path){
+  if(sdReady) return SD_MMC.exists(path);
+  return ffatReady && FFat.exists(path);
+}
+static const char* wallpaperResolve(){
+  const char* pref = (SCR_W>=SCR_H) ? WALLPAPER_FILE_L : WALLPAPER_FILE_P;
+  if(wallpaperFileExists(pref)) return pref;
+  if(wallpaperFileExists(WALLPAPER_FILE)) return WALLPAPER_FILE;
+  return nullptr;
+}
 LGFX_Sprite wallpaperImg(&display);
 bool wallpaperReady = false;
 PsramJpeg wallpaperJpeg;
@@ -8206,13 +8234,10 @@ bool loadWallpaper(){
   // dari filesystem mana isinya berasal -- SD_MMC.open() & FFat.open()
   // sama2 balikin tipe File yg kompatibel.
   File f;
-  if(sdReady && SD_MMC.exists(WALLPAPER_FILE)){
-    f = SD_MMC.open(WALLPAPER_FILE,FILE_READ);
-  } else if(!sdReady && ffatReady && FFat.exists(WALLPAPER_FILE)){
-    f = FFat.open(WALLPAPER_FILE,FILE_READ);
-  } else {
-    return false; // gak ada sumber valid -> Home Screen balik ke warna solid tema, WAJAR bukan error
-  }
+  const char* wpPath = wallpaperResolve();   // WALLPAPER_2WAY_V1: file sesuai orientasi, cadangan /wallpaper.jpg
+  if(!wpPath) return false;                  // gak ada sumber valid -> Home Screen balik ke warna solid tema, WAJAR bukan error
+  if(sdReady) f = SD_MMC.open(wpPath,FILE_READ);
+  else        f = FFat.open(wpPath,FILE_READ);
   if(!f) return false;
 
   wallpaperImg.setPsram(true);
