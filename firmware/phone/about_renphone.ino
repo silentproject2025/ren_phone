@@ -122,7 +122,7 @@ static void aboutPush(int t, const char* k, const char* v, int pct) {
 // dipakai juga oleh nyxAboutRows() (nyxextras_renphone.ino)
 static void aboutAdd(const char* k, const char* v) { aboutPush(AB_KV, k, v, 0); }
 static void aboutHead(const char* k)               { aboutPush(AB_HEAD, k, "", 0); }
-static int            aboutVerIdx = -1;            // DEVPINS_V2: indeks baris "Versi firmware" (pemicu Opsi Developer)
+static int            aboutVerIdx = -1;            // DEVPINS_V2: indeks baris "Versi firmware" (penanda bagian pemicu Opsi Developer)
 static int            aboutVerY   = 0, aboutVerH = 0;   // posisi layar baris itu pada gambar terakhir (0 = tidak terlihat)
 static void aboutBar(const char* k, const char* v, int pct)   { aboutPush(AB_BAR, k, v, pct); }
 static void aboutLevel(const char* k, const char* v, int pct) { aboutPush(AB_LEVEL, k, v, pct); }
@@ -798,6 +798,8 @@ void drawAbout(LGFX_Sprite& s) {
         s.setCursor(px + 6, ry + 12); s.print(up);
       }
       int gy = ry + ABOUT_HEAD_H;
+      // DEVPINS_V3: area ketuk = seluruh bagian "Perangkat Lunak" (judul + baris) +6 px atas/bawah, bukan satu baris tipis
+      if (aboutVerIdx > i && aboutVerIdx < j) { aboutVerY = ry - 6; aboutVerH = ABOUT_HEAD_H + gh + 12; }
       if (gh > 0 && gy + gh > top && gy < bot) {
         nyxAaRR(s, px, gy, pw, gh, 10, panel);
         int yy = gy;
@@ -805,7 +807,6 @@ void drawAbout(LGFX_Sprite& s) {
           int rh = aboutRowH(k);
           if (yy + rh > top && yy < bot) {
             aboutDrawRow(s, k, yy, px, pw);
-            if (k == aboutVerIdx) { aboutVerY = yy; aboutVerH = rh; }   // DEVPINS_V2
             if (k < j - 1) s.drawFastHLine(px + ABOUT_PAD, yy + rh - 1, pw - 2 * ABOUT_PAD, T().divider);
           }
           yy += rh;
