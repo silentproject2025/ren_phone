@@ -836,10 +836,14 @@ void aboutTouch(int x, int y, bool held, bool isNew) {
   if (isNew) {
     aboutGlide = false; aboutVel = 0;                      // sentuhan baru menghentikan luncuran
     if (isBack(x, y)) { navBack(); return; }
-    if (y >= 20 && y < top) {                              // ketuk area judul -> kembali ke atas
+    if (y >= 8 && y < top) {                               // ketuk area judul -> kembali ke atas (DEVPINS_V2: dilebarkan dari y>=20)
       if (now - devTitleLast > 1500UL) devTitleTaps = 0;   // DEVPINS_V1
       devTitleLast = now;
       if (++devTitleTaps >= 7) { devTitleTaps = 0; devoptUnlock(); return; }
+      if (devTitleTaps >= 3) {                             // DEVPINS_V2: umpan balik hitung mundur ala "Build number"
+        char b[32]; snprintf(b, sizeof b, "Opsi Developer: %d lagi", 7 - devTitleTaps);
+        showToast(b, 900);
+      }
       aboutScroll = 0; aboutDragging = false; needRedraw = true;
       return;
     }
