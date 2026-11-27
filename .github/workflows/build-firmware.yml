@@ -374,11 +374,14 @@ jobs:
           find third_party/esp_doom_core \( -name "*.c" -o -name "*.cpp" -o -name "*.h" \) \
             -exec cp {} build_sketch/src/ \;
 
-          # Percepat inti emulator/DOOM: -O2 per-file lewat pragma (sisa sketch tetap -Os
-          # supaya partisi app 3 MB tidak penuh). Hanya mengubah salinan di build_sketch/.
+          # Percepat inti emulator/DOOM: -O2 per-file lewat pragma HANYA untuk file panas
+          # (sisa sketch tetap -Os supaya partisi app 3 MB tidak penuh). File DOOM render
+          # sudah punya pragma O3 sendiri -> dilewati. Hanya mengubah salinan di build_sketch/.
+          HOT="i_scale.c p_map.c p_mobj.c p_enemy.c mus_synth.cpp DoomSound.cpp nes6502.c nes_ppu.c nes_apu.c nes.c vid_drv.c nes_mmc.c mmc5_snd.c vrcvisnd.c"
           for f in build_sketch/src/*.c build_sketch/src/*.cpp; do
             [ -f "$f" ] || continue
             grep -q 'GCC optimize' "$f" && continue
+            case " $HOT " in *" $(basename "$f") "*) ;; *) continue ;; esac
             sed -i '1i #pragma GCC optimize ("O2")' "$f"
           done
 
