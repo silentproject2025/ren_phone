@@ -18,10 +18,6 @@
  *  Arduino IDE / arduino-cli:
  *    Board : AI Thinker ESP32-CAM (PSRAM 4MB), Partition Scheme: Huge APP
  *    PSRAM : Enabled
- *
- *  VARIAN WROOM (khusus Bluetooth, tanpa kamera, tanpa PSRAM):
- *    Board : ESP32 Dev Module, Partition Scheme: Huge APP, PSRAM: Disabled
- *    Build flag: -DRP_BT_ONLY=1   (modul kamera tidak ikut dikompilasi)
  *    Library: AudioTools, ESP32-A2DP (pschatzmann)
  *
  *  Batasan v1: MP3 Layer III 44.1 kHz stereo saja (WAV/EQ/crossfade
@@ -43,11 +39,7 @@
 #include "esp_sleep.h"
 #include "rplink.h"
 #include "ring.h"
-#ifdef RP_BT_ONLY
-  #include "cam_stub.h"     // WROOM/DevKit: tanpa kamera & tanpa PSRAM (stub kosong)
-#else
-  #include "cam_module.h"   // kamera OV2640 (RP_CAM_*)
-#endif
+#include "cam_module.h"   // kamera OV2640 (RP_CAM_*)
 
 // ----------------------------------------------------------
 // KONFIGURASI
@@ -683,11 +675,7 @@ static void sendStatus() {
 void setup() {
   Serial.begin(115200);
   delay(200);
-  #ifdef RP_BT_ONLY
-  Serial.println("\n=== BT Co-Processor WROOM (Ren Phone) - tanpa kamera ===");
-#else
   Serial.println("\n=== CAM BT Co-Processor (Ren Phone) ===");
-#endif
 
   bool hasPSRAM = psramFound();
   {
@@ -697,6 +685,21 @@ void setup() {
     txGain = constrain(p.getInt("txgain", TX_GAIN_DEFAULT), 0, TX_GAIN_LEVELS - 1);
     p.end();
   }
+
+#ifdef RP_BT_ONLY
+  // WROOM tanpa PSRAM: RAM internal sempit. Stack BT (controller+bluedroid) HARUS dapat memori duluan,
+  // baru ring buffer + task decode mengambil sisanya. Kalau urutannya terbalik controller gagal init
+  // (assert controller_get_interface / "BT module not detected").
+  cmdQ = xQueueCreate(8, sizeof(Cmd));
+  keyQ = xQueueCreate(12, sizeof(KeyEvt));
+  Serial.printf("[HEAP] sebelum BT: %uK blokMax=%uK\n", (unsigned)(ESP.getFreeHeap() / 1024), (unsigned)(ESP.getMaxAllocHeap() / 1024));
+  a2dp.set_on_connection_state_changed(onConnectionChanged, nullptr);
+  a2dp.set_volume(volumeNow);
+  a2dp.set_data_callback_in_frames(getSoundData);   // aman: haveTrack=false -> callback kirim hening
+  a2dp.start(savedBTName[0] ? savedBTName : BT_DEFAULT_NAME);
+  delay(300);
+  Serial.printf("[HEAP] sesudah BT: %uK blokMax=%uK\n", (unsigned)(ESP.getFreeHeap() / 1024), (unsigned)(ESP.getMaxAllocHeap() / 1024));
+#endif
 
   bool ok = pcmRing.init(hasPSRAM ? PCM_RING_PSRAM : PCM_RING_FALLBACK, hasPSRAM);
   uint32_t inSz = IN_RING_FALLBACK;
@@ -715,8 +718,10 @@ void setup() {
   Serial.printf("[RING] MP3 in=%u KB, PCM=%u KB, PSRAM=%s\n",
                 (unsigned)(inRing.size / 1024), (unsigned)(pcmRing.size / 1024), hasPSRAM ? "ya" : "TIDAK");
 
+#ifndef RP_BT_ONLY
   cmdQ = xQueueCreate(8, sizeof(Cmd));
   keyQ = xQueueCreate(12, sizeof(KeyEvt));
+#endif
 
   Serial2.setRxBufferSize(8192);
   Serial2.begin(RP_BAUD, SERIAL_8N1, LINK_RX_PIN, LINK_TX_PIN);
@@ -724,11 +729,13 @@ void setup() {
   xTaskCreatePinnedToCore(decodeTask, "decode", DECODE_TASK_STACK, nullptr, 3, &decodeTaskH, 0);
   xTaskCreatePinnedToCore(linkRxTask, "linkrx", 4096, nullptr, 4, &linkTaskH, 1);
 
+#ifndef RP_BT_ONLY
   a2dp.set_on_connection_state_changed(onConnectionChanged, nullptr);
   a2dp.set_volume(volumeNow);
   a2dp.set_data_callback_in_frames(getSoundData);
   a2dp.start(savedBTName[0] ? savedBTName : BT_DEFAULT_NAME);
   delay(300);
+#endif
   applyTxGain(txGain);
   avrcpStackInit();
 
