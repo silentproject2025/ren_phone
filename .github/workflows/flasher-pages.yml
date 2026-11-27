@@ -47,6 +47,8 @@ jobs:
                "title": "Co-prosesor Bluetooth", "sub": "ESP32-CAM &middot; board kamera", "short": "Co-prosesor BT"},
               {"key": "cam_wroom", "prefix": "cam-", "asset": "bt_wroom_merged.bin", "chip": "ESP32", "esp": "esp32",
                "title": "Co-prosesor Bluetooth (WROOM)", "sub": "ESP32 WROOM &middot; tanpa kamera, tanpa PSRAM", "short": "BT WROOM"},
+              {"key": "cam_wroom_aether", "prefix": "cam-", "asset": "bt_wroom_aether_merged.bin", "chip": "ESP32", "esp": "esp32",
+               "title": "Co-prosesor Bluetooth (WROOM, Aether)", "sub": "ESP32 WROOM &middot; link UART2 GPIO16/17 &middot; untuk Aether Board", "short": "BT WROOM Aether"},
           ]
           BULAN = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"]
 

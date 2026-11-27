@@ -22,6 +22,12 @@
  *  VARIAN WROOM (khusus Bluetooth, tanpa kamera, tanpa PSRAM):
  *    Board : ESP32 Dev Module, Partition Scheme: Huge APP, PSRAM: Disabled
  *    Build flag: -DRP_BT_ONLY=1   (modul kamera tidak ikut dikompilasi)
+ *
+ *  VARIAN WROOM untuk AETHER BOARD (AETHER_UART2_V1): tambah -DRP_LINK_UART2=1
+ *    Link pindah ke pin asli UART2:  S3 GPIO41 (TX) -> WROOM GPIO16 (RX2)
+ *                                    S3 GPIO42 (RX) <- WROOM GPIO17 (TX2)
+ *    Wajib modul TANPA PSRAM (WROOM-32); di WROVER GPIO16/17 dipakai PSRAM.
+ *    Catatan: GPIO16 bukan pin RTC, jadi "matikan" dari S3 memakai light sleep (bukan deep sleep).
  *    Library: AudioTools, ESP32-A2DP (pschatzmann)
  *
  *  Batasan v1: MP3 Layer III 44.1 kHz stereo saja (WAV/EQ/crossfade
@@ -53,8 +59,13 @@
 // KONFIGURASI
 // ----------------------------------------------------------
 #define BT_DEFAULT_NAME       "HUOREI-BS10"
-#define LINK_RX_PIN           13      // <- TX S3
-#define LINK_TX_PIN           14      // -> RX S3
+#ifdef RP_LINK_UART2   // AETHER_UART2_V1: Aether Board + WROOM -> pin asli UART2 (RX2/TX2)
+  #define LINK_RX_PIN         16      // <- TX S3 (RX2)
+  #define LINK_TX_PIN         17      // -> RX S3 (TX2)
+#else
+  #define LINK_RX_PIN         13      // <- TX S3
+  #define LINK_TX_PIN         14      // -> RX S3
+#endif
 #define IN_RING_PSRAM         (512*1024)   // buffer MP3 mentah (~32 dtk @128kbps)
 #define IN_RING_FALLBACK      (24*1024)
 #define PCM_RING_PSRAM        (512*1024)   // buffer PCM hasil decode (~3 dtk)
@@ -394,10 +405,24 @@ static void camPowerOff() {
   a2dp.set_auto_reconnect(false);
   if (btConnected) a2dp.disconnect();
   delay(500);
+#ifdef RP_LINK_UART2
+  // AETHER_UART2_V1: GPIO16 bukan pin RTC -> ext0 deep sleep tidak bisa. Pakai light sleep + wakeup GPIO
+  // (level LOW = start-bit dari S3), lalu restart supaya BT/UART mulai bersih. Arus tidur lebih besar dari deep sleep.
+  esp_bluedroid_disable(); esp_bluedroid_deinit();
+  esp_bt_controller_disable(); esp_bt_controller_deinit();
+  Serial2.end();
+  pinMode(LINK_RX_PIN, INPUT_PULLUP);
+  { uint32_t t0 = millis(); while (digitalRead(LINK_RX_PIN) == 0 && millis() - t0 < 500) delay(5); }
+  gpio_wakeup_enable((gpio_num_t)LINK_RX_PIN, GPIO_INTR_LOW_LEVEL);
+  esp_sleep_enable_gpio_wakeup();
+  esp_light_sleep_start();
+  esp_restart();
+#else
   rtc_gpio_pullup_en(GPIO_NUM_13);               // RX dari S3 (GPIO13) idle HIGH
   rtc_gpio_pulldown_dis(GPIO_NUM_13);
   esp_sleep_enable_ext0_wakeup(GPIO_NUM_13, 0);  // bangun begitu S3 mulai kirim data (start-bit LOW)
   esp_deep_sleep_start();
+#endif
 }
 
 // Saklar Bluetooth dari tombol Control Center (RP_BTMODE).

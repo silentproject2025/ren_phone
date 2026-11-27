@@ -55,6 +55,13 @@ jobs:
             --build-property "compiler.cpp.extra_flags=-DRP_BT_ONLY=1" \
             firmware/cam_bt_coprocessor --output-dir build_wroom
 
+      - name: Compile varian WROOM Aether (link di UART2 GPIO16/17)
+        run: |
+          arduino-cli compile --fqbn esp32:esp32:esp32 \
+            --board-options "PartitionScheme=huge_app" \
+            --build-property "compiler.cpp.extra_flags=-DRP_BT_ONLY=1 -DRP_LINK_UART2=1" \
+            firmware/cam_bt_coprocessor --output-dir build_wroom_aether
+
       - name: Upload Binary Artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -76,6 +83,8 @@ jobs:
           cp build_cam/cam_bt_coprocessor.ino.merged.bin cam_merged.bin
           test -f build_wroom/cam_bt_coprocessor.ino.merged.bin || (echo "::error::merged WROOM tidak ada" && ls build_wroom && exit 1)
           cp build_wroom/cam_bt_coprocessor.ino.merged.bin bt_wroom_merged.bin
+          test -f build_wroom_aether/cam_bt_coprocessor.ino.merged.bin || (echo "::error::merged WROOM Aether tidak ada" && ls build_wroom_aether && exit 1)
+          cp build_wroom_aether/cam_bt_coprocessor.ino.merged.bin bt_wroom_aether_merged.bin
 
       - name: Publish Release CAM (prerelease)
         if: github.event_name != 'pull_request'
@@ -84,9 +93,9 @@ jobs:
         run: |
           TAG="cam-${{ github.run_number }}"
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" cam_merged.bin bt_wroom_merged.bin --clobber
+            gh release upload "$TAG" cam_merged.bin bt_wroom_merged.bin bt_wroom_aether_merged.bin --clobber
           else
-            gh release create "$TAG" cam_merged.bin bt_wroom_merged.bin \
+            gh release create "$TAG" cam_merged.bin bt_wroom_merged.bin bt_wroom_aether_merged.bin \
               --prerelease \
               --target "${{ github.sha }}" \
               --title "CAM co-processor build ${{ github.run_number }}" \
