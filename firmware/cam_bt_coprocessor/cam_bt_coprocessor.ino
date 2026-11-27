@@ -647,6 +647,7 @@ static void handleFrame(uint8_t type, const uint8_t* p, uint16_t len) {
   }
 }
 
+static volatile uint32_t linkRxBytes = 0, linkRxFrames = 0;   // LINK_DIAG_V1
 static void linkRxTask(void* param) {
   uint8_t tmp[128];
   for (;;) {
@@ -654,8 +655,9 @@ static void linkRxTask(void* param) {
     if (n <= 0) { vTaskDelay(pdMS_TO_TICKS(1)); continue; }
     if (n > (int)sizeof(tmp)) n = sizeof(tmp);
     n = Serial2.readBytes(tmp, n);
+    linkRxBytes += n;
     for (int i = 0; i < n; i++)
-      if (parser.feed(tmp[i])) { camModNoteRx(); handleFrame(parser.type, parser.payload, parser.len); }
+      if (parser.feed(tmp[i])) { linkRxFrames++; camModNoteRx(); handleFrame(parser.type, parser.payload, parser.len); }
   }
 }
 
@@ -866,6 +868,7 @@ void loop() {
         inRing.size  ? (unsigned)((uint64_t)inRing.avail()  * 100 / inRing.size)  : 0u,
         pcmRing.size ? (unsigned)((uint64_t)pcmRing.avail() * 100 / pcmRing.size) : 0u,
         (unsigned)parser.errors, (int)decErr, (int)btConnected);
+      Serial.printf("[LINK] RX=%d TX=%d | byte masuk=%u frame ok=%u\n", (int)LINK_RX_PIN, (int)LINK_TX_PIN, (unsigned)linkRxBytes, (unsigned)linkRxFrames);
     }
   }
 
