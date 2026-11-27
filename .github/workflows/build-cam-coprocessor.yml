@@ -65,7 +65,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: bt-wroom-coprocessor-binaries
-          path: build_wroom/*.bin
+          path: |
+            build_wroom/*.bin
+            build_wroom/*.elf
 
       - name: Siapkan cam_merged.bin untuk web flasher
         if: github.event_name != 'pull_request'
