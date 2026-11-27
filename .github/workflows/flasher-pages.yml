@@ -45,6 +45,8 @@ jobs:
                "title": "Ren Phone (Aether Board)", "sub": "ESP32-S3 &middot; ST7796 + sentuh FT6336U &middot; SD via SPI", "short": "Aether Board"},
               {"key": "cam", "prefix": "cam-", "asset": "cam_merged.bin", "chip": "ESP32", "esp": "esp32",
                "title": "Co-prosesor Bluetooth", "sub": "ESP32-CAM &middot; board kamera", "short": "Co-prosesor BT"},
+              {"key": "cam_wroom", "prefix": "cam-", "asset": "bt_wroom_merged.bin", "chip": "ESP32", "esp": "esp32",
+               "title": "Co-prosesor Bluetooth (WROOM)", "sub": "ESP32 WROOM &middot; tanpa kamera, tanpa PSRAM", "short": "BT WROOM"},
           ]
           BULAN = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"]
 
