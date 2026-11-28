@@ -23382,7 +23382,7 @@ void loop(){
         if(newT) apps[idx].touch(tx,ty,false,true);
         else if(touched && held) apps[idx].touch(tx,ty,true,false);
         else if(!touched && wasTouched) apps[idx].touch(tx,ty,false,false);
-      } else if(curScreen()==SCR_BACKUP || curScreen()==SCR_OWNER || curScreen()==SCR_MUSIC){   // MUS_UX_V1: Musik juga butuh event lepas   // UI-REVAMP: Profil juga tap-saat-lepas
+      } else if(curScreen()==SCR_BACKUP || curScreen()==SCR_OWNER || curScreen()==SCR_MUSIC || curScreen()==SCR_DEVOPT){   // DEVOPT_REL_V1: Opsi Developer juga tap-saat-lepas (tab/Terapkan/Reset/Sembunyikan)  // MUS_UX_V1: Musik juga butuh event lepas   // UI-REVAMP: Profil juga tap-saat-lepas
         // FIX Backup: ketukan baru dieksekusi saat JARI DILEPAS (supaya geser-scroll tdk memicu tombol),
         // jadi backupTouch() WAJIB dapat event lepas (held=false,isNew=false). Dispatch generik di bawah
         // tidak pernah mengirimnya -> sebelumnya tombol Backup tidak bereaksi sama sekali.
