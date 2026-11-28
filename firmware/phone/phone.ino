@@ -4007,7 +4007,51 @@ void navZoomArm(int x,int y,int w,int h,int r,uint16_t col){
 // Fase 1: balok berwarna ikon membesar (sudut membulat -> persegi), warnanya pelan2 menyatu ke warna latar app.
 // Fase 2: layar baru "terbuka" di jendela yg terus membesar. Rect hanya TUMBUH, jadi tiap piksel ditulis tanpa sisa.
 void navZoomPushHome(int x,int y,int w,int h);   // SMOOTH-ZOOM: definisi di bawah (tempel potongan canvas ke panel, di-clip)
+// NAV_ROUND_V1 BEGIN -------------------------------------------------------------------------------
+// Sudut membulat utk jendela zoom buka/tutup app. Panel TIDAK bisa di-mask per piksel, jadi sudut dibuat dengan
+// mengembalikan piksel di luar lengkung dari sprite sumber (potongan 1-2 baris per kotak kecil, 4 sudut).
+bool navZoomPlain=false;   // true = bentuk lama (tanpa sudut bulat di fase jendela); dipakai unlockZoomHome()
+int navZoomRadius(float ez,int orad){   // ez: 0 = sebesar ikon, 1 = layar penuh
+  if(navZoomPlain){
+    if(ez>=0.5f) return 0;
+    float cr=ez*1.6f; if(cr>1.0f) cr=1.0f;
+    return (int)lroundf(orad*(1.0f-cr));
+  }
+  const float RM=18.0f;                                  // radius di tengah gerakan
+  if(ez<0.5f) return (int)lroundf((float)orad+(RM-(float)orad)*(ez*2.0f));
+  return (int)lroundf(RM*(1.0f-ez)*2.0f);
+}
+// tempel potongan sprite sumber (fromShot ? transShot : canvas) ke panel, dibatasi kotak (bx0,by0)-(bx1,by1)
+void navZoomPiece(bool fromShot,int x,int y,int w,int h,int bx0,int by0,int bx1,int by1){
+  int x1=x+w, y1=y+h;
+  if(x<bx0) x=bx0; if(y<by0) y=by0; if(x1>bx1) x1=bx1; if(y1>by1) y1=by1;
+  if(x1<=x || y1<=y) return;
+  display.setClipRect(x,y,x1-x,y1-y);
+  if(fromShot) transShot.pushSprite(0,0); else canvas.pushSprite(0,0);
+  display.clearClipRect();
+}
+// isi piksel DI LUAR lengkung di 4 sudut jendela (x0,y0,w,h) berradius rr dari sprite sumber
+void navZoomCorners(bool fromShot,int x0,int y0,int w,int h,int rr,int bx0,int by0,int bx1,int by1){
+  if(rr>w/2) rr=w/2;
+  if(rr>h/2) rr=h/2;
+  if(rr<2) return;
+  for(int i=0;i<rr;){
+    int hh=(i<rr/2)?1:2; if(i+hh>rr) hh=rr-i;           // dekat tepi lengkung curam -> baris tunggal
+    float dy=(float)rr-((float)i+(float)hh*0.5f);
+    int dx=rr-(int)(sqrtf((float)rr*(float)rr-dy*dy)+0.5f);
+    if(dx>0){
+      navZoomPiece(fromShot,x0,y0+i,dx,hh,bx0,by0,bx1,by1);
+      navZoomPiece(fromShot,x0+w-dx,y0+i,dx,hh,bx0,by0,bx1,by1);
+      navZoomPiece(fromShot,x0,y0+h-i-hh,dx,hh,bx0,by0,bx1,by1);
+      navZoomPiece(fromShot,x0+w-dx,y0+h-i-hh,dx,hh,bx0,by0,bx1,by1);
+    }
+    i+=hh;
+  }
+}
+// NAV_ROUND_V1 END ---------------------------------------------------------------------------------
 void navPlayZoomOpen(){
+  const bool rnd=!navZoomPlain;   // NAV_ROUND_V1
+  if(rnd) canvas.pushSprite(&transShot,0,0);   // NAV_ROUND_V1: salinan Home (canvas msh berisi layar lama) utk mengisi sudut membulat
   renderCurrentFrame();   // canvas = layar BARU; panel masih menampilkan Home (frame terakhir)
   const int ox=navZoomX, oy=navZoomY, ow=navZoomW, oh=navZoomH, orad=navZoomR;
   const uint16_t col=navZoomCol, dst=T().bg;
@@ -4016,6 +4060,7 @@ void navPlayZoomOpen(){
   const unsigned long t0=millis();
   int lx0=-1,ly0=-1,lx1=-1,ly1=-1;
   bool inApp=false;       // SMOOTH-ZOOM: true = rect terakhir di panel sudah berisi isi app (fase 2)
+  int prr=0;              // NAV_ROUND_V1: radius sudut jendela frame sebelumnya (0 = tidak ada sudut yg perlu dipulihkan)
   display.startWrite();
   for(;;){
     uiBoostKick();
@@ -4033,21 +4078,26 @@ void navPlayZoomOpen(){
       const int px0=lx0, py0=ly0, px1=lx1, py1=ly1;     // rect frame sebelumnya (rect hanya TUMBUH)
       lx0=x0; ly0=y0; lx1=x1; ly1=y1;
       int w=x1-x0, h=y1-y0;
+      const int rrc=navZoomRadius(ez,orad);             // NAV_ROUND_V1: radius sudut mulus ikon -> 18 -> 0
       if(ez<0.5f){
-        float cr=ez*1.6f; if(cr>1.0f) cr=1.0f;
-        int rr=(int)lroundf(orad*(1.0f-cr));
-        if(rr>w/2) rr=w/2; if(rr>h/2) rr=h/2; if(rr<0) rr=0;
+        int rr=rrc; if(rr>w/2) rr=w/2; if(rr>h/2) rr=h/2; if(rr<0) rr=0;
         display.fillRoundRect(x0,y0,w,h,rr,blend565(col,dst,(uint8_t)(ez*2.0f*190.0f)));
-      } else if(!inApp){
-        navZoomPushHome(x0,y0,w,h);                     // SMOOTH-ZOOM: pindah balok -> isi app: tempel SELURUH jendela sekali
-        inApp=true;
+        prr=0;
       } else {
-        // SMOOTH-ZOOM: jendela sebelumnya sudah berisi isi app yg sama -> kirim HANYA 4 strip yg baru terbuka
-        // (dulu seluruh jendela tiap frame, ~300 KB di akhir animasi -> ~16 fps @40 MHz).
-        navZoomPushHome(x0,y0,w,py0-y0);                // strip atas
-        navZoomPushHome(x0,py1,w,y1-py1);               // strip bawah
-        navZoomPushHome(x0,py0,px0-x0,py1-py0);         // strip kiri
-        navZoomPushHome(px1,py0,x1-px1,py1-py0);        // strip kanan
+        if(!inApp){
+          navZoomPushHome(x0,y0,w,h);                   // SMOOTH-ZOOM: pindah balok -> isi app: tempel SELURUH jendela sekali
+          inApp=true;
+        } else {
+          // SMOOTH-ZOOM: jendela sebelumnya sudah berisi isi app yg sama -> kirim HANYA 4 strip yg baru terbuka
+          // (dulu seluruh jendela tiap frame, ~300 KB di akhir animasi -> ~16 fps @40 MHz).
+          if(prr>=2) navZoomCorners(false,px0,py0,px1-px0,py1-py0,prr,0,0,SCR_W,SCR_H);   // sudut lama (tadinya Home) -> isi app lagi
+          navZoomPushHome(x0,y0,w,py0-y0);              // strip atas
+          navZoomPushHome(x0,py1,w,y1-py1);             // strip bawah
+          navZoomPushHome(x0,py0,px0-x0,py1-py0);       // strip kiri
+          navZoomPushHome(px1,py0,x1-px1,py1-py0);      // strip kanan
+        }
+        if(rnd) navZoomCorners(true,x0,y0,w,h,rrc,0,0,SCR_W,SCR_H);   // sudut baru: piksel di luar lengkung = Home (transShot)
+        prr=rnd ? min(rrc,min(w/2,h/2)) : 0;
       }
     }
     if(lastFrame) break;
@@ -4069,6 +4119,8 @@ void navZoomPushHome(int x,int y,int w,int h){   // tempel potongan Home (canvas
   display.clearClipRect();
 }
 void navPlayZoomClose(){
+  const bool rnd=!navZoomPlain;   // NAV_ROUND_V1
+  if(rnd) canvas.pushSprite(&transShot,0,0);   // NAV_ROUND_V1: salinan layar app (canvas msh berisi app) utk memulihkan sudut yg tadinya Home
   renderCurrentFrame();   // canvas = Home; panel masih menampilkan layar app (frame terakhir)
   int ox=navZoomSX, oy=navZoomSY, ow=navZoomSW, oh=navZoomSH, orad=navZoomSR;
   if(navZoomCloseApp>=0){   // v118: app dibuka dari Switcher/notif/dll -> menyusut ke ikonnya di Home (kalau kelihatan)
@@ -4077,6 +4129,7 @@ void navPlayZoomClose(){
   const uint16_t col=navZoomSCol, dst=T().bg;
   const unsigned long t0=millis();
   int px0=0,py0=0,px1=SCR_W,py1=SCR_H;            // rect frame sebelumnya (selalu mengandung rect baru)
+  int prr=0;                                      // NAV_ROUND_V1: radius sudut frame sebelumnya
   display.startWrite();
   for(;;){
     uiBoostKick();
@@ -4097,14 +4150,19 @@ void navPlayZoomClose(){
       navZoomPushHome(px0,y0,x0-px0,h);            // strip kiri
       navZoomPushHome(x1,y0,px1-x1,h);             // strip kanan
       if(ez<0.5f){
-        float cr=ez*1.6f; if(cr>1.0f) cr=1.0f;
-        int rr=(int)lroundf(orad*(1.0f-cr));
+        int rr=navZoomRadius(ez,orad);             // NAV_ROUND_V1
         if(rr>w/2) rr=w/2; if(rr>h/2) rr=h/2; if(rr<0) rr=0;
         if(rr>0){                                  // pojok yg terpotong lengkungan balok -> kembalikan isi Home
           navZoomPushHome(x0,y0,rr,rr); navZoomPushHome(x1-rr,y0,rr,rr);
           navZoomPushHome(x0,y1-rr,rr,rr); navZoomPushHome(x1-rr,y1-rr,rr,rr);
         }
         display.fillRoundRect(x0,y0,w,h,rr,blend565(col,dst,(uint8_t)(ez*2.0f*190.0f)));
+        prr=0;
+      } else if(rnd){                              // NAV_ROUND_V1: jendela berisi app tetap bersudut bulat
+        if(prr>=2) navZoomCorners(true,px0,py0,px1-px0,py1-py0,prr,x0,y0,x1,y1);   // sudut lama yg kini di dalam jendela -> isi app lagi
+        const int rrc=navZoomRadius(ez,orad);
+        navZoomCorners(false,x0,y0,w,h,rrc,0,0,SCR_W,SCR_H);                       // sudut baru: piksel di luar lengkung = Home (canvas)
+        prr=min(rrc,min(w/2,h/2));
       }
       px0=x0; py0=y0; px1=x1; py1=y1;
     }
@@ -4203,7 +4261,9 @@ void unlockZoomHome(){
   navZoomSaved=false;
   const int sz=44;
   navZoomArm(SCR_W/2-sz/2, SCR_H-sz-30, sz, sz, (sz*11)/20, T().surface2);
+  navZoomPlain=true;                                   // NAV_ROUND_V1: transShot dipakai cache layar kunci -> bentuk lama
   navPlayZoomOpen();                                   // renderCurrentFrame() sudah Home (locked=false)
+  navZoomPlain=false;
   navZoomSaved=false; navZoomArmed=false;
   needRedraw=false;
   homeWarmMarkReady();   // WARMUP-V1: panel + canvas sudah berisi Home polos penuh -> pemanasan cache/pager boleh jalan
@@ -22621,9 +22681,9 @@ void dragCloseDraw(float p){
   navZoomPushHome(x1,y0,SCR_W-x1,h);
   if(ez>=0.5f){
     display.setClipRect(x0,y0,w,h); transShot.pushSprite(0,0); display.clearClipRect();
+    navZoomCorners(false,x0,y0,w,h,navZoomRadius(ez,dragOR),0,0,SCR_W,SCR_H);   // NAV_ROUND_V1: jendela yg mengikuti jari bersudut bulat (Home = canvas)
   } else {
-    float cr=ez*1.6f; if(cr>1.0f) cr=1.0f;
-    int rr=(int)lroundf(dragOR*(1.0f-cr)); if(rr>w/2) rr=w/2; if(rr>h/2) rr=h/2; if(rr<0) rr=0;
+    int rr=navZoomRadius(ez,dragOR); if(rr>w/2) rr=w/2; if(rr>h/2) rr=h/2; if(rr<0) rr=0;
     if(rr>0){ navZoomPushHome(x0,y0,rr,rr); navZoomPushHome(x1-rr,y0,rr,rr); navZoomPushHome(x0,y1-rr,rr,rr); navZoomPushHome(x1-rr,y1-rr,rr,rr); }
     float qq=ez*2.0f;
     display.fillRoundRect(x0,y0,w,h,rr,blend565(dragCol,T().bg,(uint8_t)(190.0f*qq*qq)));
