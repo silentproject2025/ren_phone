@@ -371,7 +371,6 @@ static void nyxFail(const char* msg) {
 }
 
 // THEME_V1: app Theme menulis data/applied setelah mengganti/menghapus wallpaper -> muat ulang di sini.
-bool loadWallpaper();
 static void nyxThemeReload() {
   if (!nyxAppFs || !nyxAppFs->exists("/apps/theme/data/applied")) return;
   nyxAppFs->remove("/apps/theme/data/applied");

@@ -25,7 +25,7 @@ EDITS = {
      "        http.setTimeout(12000);\n        http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);   // THEME_V1: picsum.photos -> 302\n        code = http.GET();"),
     ("hook muat ulang",
      "// hentikan app (aman dipanggil berulang). Tidak mengubah nyxState kecuali ke LIST bila tidak ada galat.\nstatic void nyxStop() {",
-     "// THEME_V1: app Theme menulis data/applied setelah mengganti/menghapus wallpaper -> muat ulang di sini.\nbool loadWallpaper();\nstatic void nyxThemeReload() {\n"
+     "// THEME_V1: app Theme menulis data/applied setelah mengganti/menghapus wallpaper -> muat ulang di sini.\n// (JANGAN deklarasikan loadWallpaper() di sini: prototipe manual di file .ino yang digabung belakangan merusak prototipe otomatis Arduino.)\nstatic void nyxThemeReload() {\n"
      "  if (!nyxAppFs || !nyxAppFs->exists(\"/apps/theme/data/applied\")) return;\n"
      "  nyxAppFs->remove(\"/apps/theme/data/applied\");\n  loadWallpaper();\n}\n\n"
      "// hentikan app (aman dipanggil berulang). Tidak mengubah nyxState kecuali ke LIST bila tidak ada galat.\nstatic void nyxStop() {"),
@@ -43,6 +43,14 @@ EDITS = {
   ],
 }
 
+MARKS = {
+    "redirect HTTP": "THEME_V1: picsum.photos",
+    "hook muat ulang": "static void nyxThemeReload()",
+    "panggil muat ulang": "nyxThemeReload();   // THEME_V1",
+    "resolve wallpaper": "THEME_V1: wallpaper dari app Theme",
+}
+STALE = "bool loadWallpaper();\nstatic void nyxThemeReload()"   # versi lama skrip ini -> merusak build
+
 def main():
     check = "--check" in sys.argv
     new = {}
@@ -50,10 +58,12 @@ def main():
         if not os.path.exists(path): sys.exit("tidak ada: " + path + " (jalankan dari root repo)")
         s = open(path, encoding="utf-8").read()
         for name, old, rep in edits:
-            if rep in s: print("  sudah ada:", name); continue
+            if rep in s or MARKS[name] in s: print("  sudah ada:", name); continue
             n = s.count(old)
             if n != 1: sys.exit("GAGAL: anchor '%s' ditemukan %d kali di %s (harus 1). Tidak ada yang diubah." % (name, n, path))
             s = s.replace(old, rep); print("  ok:", name)
+        if STALE in s:
+            s = s.replace(STALE, "static void nyxThemeReload()"); print("  dibersihkan: prototipe loadWallpaper() lama")
         new[path] = s
     if check: print("--check: semua anchor cocok."); return
     for path, s in new.items():
