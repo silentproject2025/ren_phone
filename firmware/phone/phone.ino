@@ -7855,14 +7855,25 @@ float swCardOff[SWITCHER_MAX]={0};
 unsigned long swCardLastMs=0;
 float swProg=1.0f, swFrom=0.0f;
 unsigned long swAnimStartMs=0;
-const float SW_ANIM_MS = 220.0f;
+const float SW_ANIM_MS = 260.0f;   // SW_UX_V2: 220 -> 260 (pegas iOS, melandai di akhir)
 #define SW_STAGGER 0.07f // jeda antar kartu (fraksi progres)
+// SW_UX_V2: kartu yg dibuang tidak lagi hilang seketika -- "kartu hantu" terbang ke atas sambil memudar
+// (kartu di bawahnya sudah naik mengisi slot lewat swCardOff, jadi daftar tetap konsisten).
+// Flick cepat ke atas (>= SW_FLICK_VEL px/ms) juga membuang kartu walau jaraknya < SWITCHER_DISMISS_PX.
+// SW_FAST_PANEL=1: selama ada gerakan, kartu digambar sebagai panel rata (tanpa kaca/bayangan) -> frame lebih ringan;
+// begitu diam kembali jadi kaca. Set -DSW_FAST_PANEL=0 kalau perubahan tampilan itu mengganggu.
+#ifndef SW_FAST_PANEL
+#define SW_FAST_PANEL 1
+#endif
+#define SW_FLY_MS 170UL
+#define SW_FLICK_VEL 0.65f
+bool swGhostOn=false; int swGhostAi=-1, swGhostBy=0; float swGhostFrom=0.0f; unsigned long swGhostMs=0;
 
 void openAppSwitcher(){
   if(appSwitcherOpen) return;
   swThumbCaptureCurrent(); // v133: app yg sedang aktif juga dapat preview utk kartu-nya nanti
   switcherBuildList();
-  appSwitcherOpen=true; switcherDragIdx=-1; switcherDragDY=0;
+  appSwitcherOpen=true; switcherDragIdx=-1; switcherDragDY=0; swGhostOn=false;
   switcherSuppressUntilRelease=true; // v97 FIX: lihat catatan di deklarasi var-nya
   switcherHasRealTouch=false; // v103 FIX: lihat catatan di deklarasi var-nya
   swClosing=false; swAnimating=true; swProg=0.0f; swFrom=0.0f; swAnimStartMs=millis();
@@ -7870,12 +7881,33 @@ void openAppSwitcher(){
   needRedraw=true;
 }
 void closeAppSwitcherNow(){
-  appSwitcherOpen=false; swAnimating=false; swClosing=false; swProg=1.0f;
+  appSwitcherOpen=false; swAnimating=false; swClosing=false; swProg=1.0f; swGhostOn=false;
   needRedraw=true;
 }
 void closeAppSwitcher(){
   if(!appSwitcherOpen || swClosing) return;
   swClosing=true; swAnimating=true; swFrom=swProg; swAnimStartMs=millis();
+  needRedraw=true;
+}
+// SW_UX_V2: buang kartu ke-idx dari daftar (RAM cache app dilepas, preview dibuang) + mulai animasi "hantu" terbang.
+void switcherDismissCard(int idx,float fromDY){
+  if(idx<0 || idx>=switcherN) return;
+  int ai=switcherIdx[idx];
+  if(apps[ai].onLowMem) apps[ai].onLowMem(); // v96: nutup dr switcher beneran lepas cache RAM app itu
+  appLastUsedMs[ai]=0;
+  swThumbDrop(ai); // v133: preview ikut dibuang (RAM + privasi)
+  swGhostAi=ai; swGhostBy=SWITCHER_ROW_TOP+idx*(SWITCHER_ROW_H+SWITCHER_ROW_GAP);
+  swGhostFrom=fromDY; swGhostMs=millis(); swGhostOn=true;
+  // v125: kartu di bawahnya pindah 1 slot ke atas; offset-nya dimulai dari 1 slot (+ sisa offset lama) lalu meluruh -> naik halus
+  for(int k=idx;k<switcherN-1;k++){
+    switcherIdx[k]=switcherIdx[k+1];
+    swCardOff[k]=swCardOff[k+1]+(float)(SWITCHER_ROW_H+SWITCHER_ROW_GAP);
+  }
+  swCardOff[switcherN-1]=0.0f;
+  swCardLastMs=millis();
+  switcherN--;
+  vibTap(); // konfirmasi kartu kebuang -- KONSEKUENSI gestur (kartu hilang permanen), msh sesuai kebijakan v96
+  if(switcherN==0) closeAppSwitcher();
   needRedraw=true;
 }
 // Dipanggil tiap frame dari blok appSwitcherOpen di loop().
@@ -7887,18 +7919,22 @@ void switcherAnimTick(){
     swCardLastMs=nowMs;
     float k=expf(-dtc/62.0f);
     for(int i=0;i<SWITCHER_MAX;i++){
-      if(swCardOff[i]>0.0f){
+      if(swCardOff[i]!=0.0f){   // SW_UX_V2: boleh negatif (kartu dilepas sebelum ambang -> meluncur balik ke slot)
         swCardOff[i]*=k;
-        if(swCardOff[i]<0.5f) swCardOff[i]=0.0f; else any=true;
+        if(fabsf(swCardOff[i])<0.5f) swCardOff[i]=0.0f; else any=true;
       }
     }
     if(any){ uiBoostKick(); needRedraw=true; }
+  }
+  if(swGhostOn){   // SW_UX_V2: kartu hantu terbang keluar
+    uiBoostKick(); needRedraw=true;
+    if(millis()-swGhostMs>=SW_FLY_MS) swGhostOn=false;
   }
   if(!swAnimating) return;
   uiBoostKick(); // v108
   float t=(millis()-swAnimStartMs)/SW_ANIM_MS;
   if(t>1.0f) t=1.0f;
-  float u=1.0f-t; float e=1.0f-u*u*u; // ease-out cubic
+  float e=navSpringEase(t,NAV_SPRING_W); // SW_UX_V2: pegas critically-damped, konsisten dgn zoom buka/tutup app (dulu ease-out cubic)
   float target = swClosing ? 0.0f : 1.0f;
   swProg = swFrom + (target-swFrom)*e;
   if(t>=1.0f){
@@ -7906,6 +7942,51 @@ void switcherAnimTick(){
     if(swClosing){ swClosing=false; appSwitcherOpen=false; swProg=1.0f; }
   }
   needRedraw=true;
+}
+
+// SW_UX_V2: gambar SATU kartu (dipakai kartu biasa & kartu hantu yg terbang keluar).
+// dyOff = geser vertikal (negatif = ke atas); ci = 0..1 progres muncul/memudar; pressed = jari menekan kartu.
+static void swDrawCard(LGFX_Sprite& s,int ai,int by,int dyOff,float ci,bool pressed,bool fast){
+  const int bx = 16, bw = SCR_W-32;
+  // makin ditarik jauh (lewat ambang buang), kartu makin merah + makin pudar -- sinyal visual "bakal ditutup"
+  bool armed = -dyOff>SWITCHER_DISMISS_PX;
+  uint8_t tintA = armed ? (uint8_t)max(30, 90-(int)((-dyOff-SWITCHER_DISMISS_PX)/2)) : (pressed ? 200 : 150);
+  if(ci<1.0f) tintA=(uint8_t)(tintA*ci); // panel "memudar" selagi naik / terbang keluar
+  bool prevNS=ccNoShadow; if(fast) ccNoShadow=true;   // SW_FAST_PANEL: panel rata selagi bergerak
+  drawGlassPanel(s, bx, by+dyOff, bw, SWITCHER_ROW_H, 12, armed?T().danger:T().surface2, tintA);
+  ccNoShadow=prevNS;
+  if(ci<0.45f) return; // isi kartu (ikon+teks gak bisa di-fade) baru muncul / sudah hilang di ambang ini
+  // v104: chevron kecil di tengah-atas kartu -- hint diskrit "usap ke atas buat nutup"
+  int chevY = by+dyOff+5;
+  s.drawLine(bx+bw/2-4, chevY+3, bx+bw/2, chevY, T().subtext);
+  s.drawLine(bx+bw/2, chevY, bx+bw/2+4, chevY+3, T().subtext);
+  // v133: PREVIEW KARTU -- thumbnail layar terakhir (64x48) di kiri; ikon kecil + nama + umur di kanan.
+  const int tbW=SW_THUMB_MAXW, tbH=SW_THUMB_H;
+  int tbx=bx+6, tby=by+dyOff+(SWITCHER_ROW_H-tbH)/2;
+  int tsl=swThumbFind(ai);
+  if(tsl>=0){
+    int tw2=swThumb[tsl].w, th2=swThumb[tsl].h;
+    int ix=tbx+(tbW-tw2)/2, iy=tby+(tbH-th2)/2;
+    s.pushImage(ix,iy,tw2,th2,(lgfx::swap565_t*)swThumb[tsl].px);
+    s.drawRect(ix-1,iy-1,tw2+2,th2+2,T().divider);
+  } else {
+    nyxAaRR(s, tbx,tby,tbW,tbH,6,T().surface);
+    drawAppIcon(s, apps[ai].sym, tbx+tbW/2, tby+tbH/2, 14, apps[ai].color);
+  }
+  int txx=tbx+tbW+10, midY=by+dyOff+SWITCHER_ROW_H/2;
+  drawAppIcon(s, apps[ai].sym, txx+8, midY-9, 8, T().surface2);
+  char nm[28]; strncpy(nm,RPTR(apps[ai].name),sizeof(nm)-1); nm[sizeof(nm)-1]=0;
+  int nmMaxW=(bx+bw-8)-(txx+22);
+  while(strlen(nm)>2 && s.textWidth(nm)>nmMaxW) nm[strlen(nm)-1]=0;   // potong bila kepanjangan (portrait lebih sempit)
+  s.setTextColor(T().text); s.setTextSize(1);
+  s.setCursor(txx+22, midY-13); s.print(nm);
+  unsigned long ago=millis()-appLastUsedMs[ai];
+  char ag[16];
+  if(appLastUsedMs[ai]==0 || ago<60000UL) snprintf(ag,sizeof(ag),"baru saja");   // appLastUsedMs=0 (kartu hantu) -> jangan tampil "jam lalu" raksasa
+  else if(ago<3600000UL) snprintf(ag,sizeof(ag),"%lu mnt lalu",ago/60000UL);
+  else snprintf(ag,sizeof(ag),"%lu jam lalu",ago/3600000UL);
+  s.setTextColor(T().subtext);
+  s.setCursor(txx, midY+4); s.print(ag);
 }
 
 void drawAppSwitcher(LGFX_Sprite& s){
@@ -7917,12 +7998,18 @@ void drawAppSwitcher(LGFX_Sprite& s){
     s.setTextColor(T().text); s.setTextSize(1);
     s.setCursor(16,12-(int)((1.0f-e)*10.0f)); s.print(RPTR("Aplikasi Terakhir"));
   }
-  if(switcherN==0){
+  if(switcherN==0 && !swGhostOn){
     if(e>0.6f){
       s.setTextColor(T().subtext);
       s.setCursor(16,SWITCHER_ROW_TOP+16); s.print(RPTR("Belum ada aplikasi lain yg dibuka."));
     }
     return;
+  }
+  // SW_FAST_PANEL: ada gerakan? (animasi buka/tutup, drag, kartu hantu, kartu naik mengisi slot)
+  bool fast=false;
+  if(SW_FAST_PANEL){
+    fast = swAnimating || swGhostOn || (switcherDragIdx>=0 && switcherDragDY!=0.0f);
+    for(int i=0;i<switcherN && !fast;i++) if(fabsf(swCardOff[i])>0.5f) fast=true;
   }
   // v107: rentang progres per kartu (stagger) -- kartu ke-i mulai sedikit lebih lambat
   float swSpan = 1.0f - SW_STAGGER*(float)(switcherN>1?switcherN-1:0);
@@ -7930,58 +8017,22 @@ void drawAppSwitcher(LGFX_Sprite& s){
   for(int i=0;i<switcherN;i++){
     int by = SWITCHER_ROW_TOP + i*(SWITCHER_ROW_H+SWITCHER_ROW_GAP);
     if(by+SWITCHER_ROW_H>SCR_H-6) break;
-    // v104: kartu SEKARANG digeser VERTIKAL (dulu horizontal) pas ditarik --
-    // swipe ke ATAS = tutup app, biar konsisten sama gestur App Switcher iOS
-    // asli yg diminta. dyOff cuma pernah negatif (ke atas) -- lihat
-    // switcherTouch(), gerak ke bawah gak ngefek sama sekali.
+    // v104: kartu digeser VERTIKAL pas ditarik -- swipe ke ATAS = tutup app (dyOff cuma pernah negatif, lihat switcherTouch())
     int dyOff = (switcherDragIdx==i)? (int)switcherDragDY : 0;
-    int bx = 16, bw = SCR_W-32;
-    int ai=switcherIdx[i];
     // v107: progres kartu ini (0..1) + geser naik dari bawah selagi belum "sampai"
     float ci=(e-SW_STAGGER*(float)i)/swSpan; if(ci<0.0f) ci=0.0f; if(ci>1.0f) ci=1.0f;
     if(ci<=0.0f) continue;
     dyOff += (int)((1.0f-ci)*44.0f);
-    if(swCardOff[i]>0.5f) dyOff += (int)(swCardOff[i]+0.5f); // v125: kartu mengisi slot kosong dgn naik halus
-    // makin ditarik jauh (lewat ambang buang), kartu makin merah + makin pudar -- sinyal visual "bakal ditutup"
-    bool armed = -dyOff>SWITCHER_DISMISS_PX;
-    uint8_t tintA = armed ? (uint8_t)max(30, 90-(int)((-dyOff-SWITCHER_DISMISS_PX)/2)) : 150;
-    if(ci<1.0f) tintA=(uint8_t)(tintA*ci); // v107: panel "memudar masuk" selagi naik
-    drawGlassPanel(s, bx, by+dyOff, bw, SWITCHER_ROW_H, 12, armed?T().danger:T().surface2, tintA);
-    if(ci<0.45f) continue; // isi kartu (ikon+teks gak bisa di-fade) baru muncul setelah panel cukup jelas
-    // v104: chevron kecil di tengah-atas kartu -- hint diskrit "usap ke atas
-    // buat nutup", biar gestur baru ini kenaliin sendiri tanpa perlu teks
-    // instruksi tambahan yg makan tempat.
-    int chevY = by+dyOff+5;
-    s.drawLine(bx+bw/2-4, chevY+3, bx+bw/2, chevY, T().subtext);
-    s.drawLine(bx+bw/2, chevY, bx+bw/2+4, chevY+3, T().subtext);
-    // v133: PREVIEW KARTU -- thumbnail layar terakhir (64x48) di kiri; ikon kecil + nama + umur di kanan.
-    // Belum ada thumbnail (app belum pernah ditinggalkan / PSRAM penuh) -> placeholder ikon besar.
-    const int tbW=SW_THUMB_MAXW, tbH=SW_THUMB_H;
-    int tbx=bx+6, tby=by+dyOff+(SWITCHER_ROW_H-tbH)/2;
-    int tsl=swThumbFind(ai);
-    if(tsl>=0){
-      int tw2=swThumb[tsl].w, th2=swThumb[tsl].h;
-      int ix=tbx+(tbW-tw2)/2, iy=tby+(tbH-th2)/2;
-      s.pushImage(ix,iy,tw2,th2,(lgfx::swap565_t*)swThumb[tsl].px);
-      s.drawRect(ix-1,iy-1,tw2+2,th2+2,T().divider);
-    } else {
-      nyxAaRR(s, tbx,tby,tbW,tbH,6,T().surface);
-      drawAppIcon(s, apps[ai].sym, tbx+tbW/2, tby+tbH/2, 14, apps[ai].color);
-    }
-    int txx=tbx+tbW+10, midY=by+dyOff+SWITCHER_ROW_H/2;
-    drawAppIcon(s, apps[ai].sym, txx+8, midY-9, 8, T().surface2);
-    char nm[28]; strncpy(nm,RPTR(apps[ai].name),sizeof(nm)-1); nm[sizeof(nm)-1]=0;
-    int nmMaxW=(bx+bw-8)-(txx+22);
-    while(strlen(nm)>2 && s.textWidth(nm)>nmMaxW) nm[strlen(nm)-1]=0;   // potong bila kepanjangan (portrait lebih sempit)
-    s.setTextColor(T().text); s.setTextSize(1);
-    s.setCursor(txx+22, midY-13); s.print(nm);
-    unsigned long ago=millis()-appLastUsedMs[ai];
-    char ag[16];
-    if(ago<60000UL) snprintf(ag,sizeof(ag),"baru saja");
-    else if(ago<3600000UL) snprintf(ag,sizeof(ag),"%lu mnt lalu",ago/60000UL);
-    else snprintf(ag,sizeof(ag),"%lu jam lalu",ago/3600000UL);
-    s.setTextColor(T().subtext);
-    s.setCursor(txx, midY+4); s.print(ag);
+    if(fabsf(swCardOff[i])>0.5f) dyOff += (int)lroundf(swCardOff[i]); // v125: kartu mengisi slot kosong dgn naik halus / SW_UX_V2: meluncur balik
+    bool pressed = (switcherDragIdx==i && switcherDragDY==0.0f);   // SW_UX_V2: umpan balik tekan
+    swDrawCard(s, switcherIdx[i], by, dyOff, ci, pressed, fast);
+  }
+  if(swGhostOn){   // SW_UX_V2: kartu yg baru dibuang terbang ke atas sambil memudar, DI ATAS kartu lain
+    float gp=(float)(millis()-swGhostMs)/(float)SW_FLY_MS; if(gp>1.0f) gp=1.0f;
+    float ge=1.0f-(1.0f-gp)*(1.0f-gp);   // ease-out: melesat lalu melambat
+    float target=-(float)(swGhostBy+SWITCHER_ROW_H+8);
+    int gdy=(int)(swGhostFrom+(target-swGhostFrom)*ge);
+    swDrawCard(s, swGhostAi, swGhostBy, gdy, 1.0f-gp, false, fast);
   }
   // v133: chip "Tutup semua" di kanan atas judul (tap = buang semua kartu)
   if(switcherN>0 && e>0.35f){
@@ -7997,6 +8048,7 @@ void drawAppSwitcher(LGFX_Sprite& s){
 void switcherTouch(bool touched, bool newT, int tx, int ty){
   static int stx=0, sty=0; static bool moved=false;
   static bool armedPrev=false; // v133: getar 1x saat drag kartu melewati ambang buang
+  static float vy=0.0f; static int lastTy=0; static unsigned long lastMs=0;   // SW_UX_V2: kecepatan jari (px/ms, negatif = ke atas)
   // v103 FIX: lihat catatan lengkap di deklarasi switcherHasRealTouch --
   // tolak proses SAMPAI ada newT sungguhan, biar event "jari diangkat"
   // palsu (nyusul abis switcherSuppressUntilRelease kelar) gak disalah-
@@ -8006,14 +8058,17 @@ void switcherTouch(bool touched, bool newT, int tx, int ty){
   if(newT){
     switcherHasRealTouch=true;
     stx=tx; sty=ty; moved=false; switcherDragIdx=-1; switcherDragDY=0; armedPrev=false;
+    vy=0.0f; lastTy=ty; lastMs=millis();
     for(int i=0;i<switcherN;i++){
       int by=SWITCHER_ROW_TOP+i*(SWITCHER_ROW_H+SWITCHER_ROW_GAP);
-      if(ty>=by && ty<=by+SWITCHER_ROW_H){ switcherDragIdx=i; break; }
+      if(ty>=by && ty<=by+SWITCHER_ROW_H){ switcherDragIdx=i; needRedraw=true; break; }   // SW_UX_V2: needRedraw -> kartu langsung tampil "tertekan"
     }
     return;
   }
   if(touched){
     int dx=tx-stx, dy=ty-sty;
+    { unsigned long nowMs=millis(); unsigned long dt=nowMs-lastMs;   // SW_UX_V2: low-pass kecepatan jari
+      if(dt>=6){ float inst=(float)(ty-lastTy)/(float)dt; vy=vy*0.55f+inst*0.45f; lastTy=ty; lastMs=nowMs; } }
     if(abs(dx)>10 || abs(dy)>10) moved=true;
     // v104: cuma gerak ke ATAS (dy negatif) yg dianggap drag kartu -- geser
     // ke bawah/samping diabaikan (switcherDragDY tetap 0), persis kelakuan
@@ -8043,21 +8098,12 @@ void switcherTouch(bool touched, bool newT, int tx, int ty){
     switcherDragIdx=-1; return;
   }
   if(switcherDragIdx>=0){
-    if(abs(switcherDragDY)>SWITCHER_DISMISS_PX){
-      int ai=switcherIdx[switcherDragIdx];
-      if(apps[ai].onLowMem) apps[ai].onLowMem(); // v96: nutup dr switcher beneran lepas cache RAM app itu
-      appLastUsedMs[ai]=0;
-      swThumbDrop(ai); // v133: preview ikut dibuang (RAM + privasi)
-      // v125: kartu di bawahnya pindah 1 slot ke atas; offset-nya dimulai dari 1 slot (+ sisa offset lama) lalu meluruh -> naik halus
-      for(int k=switcherDragIdx;k<switcherN-1;k++){
-        switcherIdx[k]=switcherIdx[k+1];
-        swCardOff[k]=swCardOff[k+1]+(float)(SWITCHER_ROW_H+SWITCHER_ROW_GAP);
-      }
-      swCardOff[switcherN-1]=0.0f;
-      swCardLastMs=millis();
-      switcherN--;
-      vibTap(); // konfirmasi kartu kebuang -- ini KONSEKUENSI gestur (kartu hilang permanen), bukan tap rutin, msh sesuai kebijakan v96
-      if(switcherN==0) closeAppSwitcher();
+    // SW_UX_V2: buang kartu bila ditarik cukup jauh ATAU di-flick cepat ke atas
+    bool flick = (vy<-SW_FLICK_VEL && switcherDragDY<-18.0f);
+    if(abs(switcherDragDY)>SWITCHER_DISMISS_PX || flick){
+      switcherDismissCard(switcherDragIdx, switcherDragDY);
+    } else if(switcherDragDY<0.0f){   // SW_UX_V2: belum cukup jauh -> kartu meluncur balik ke slotnya (bukan loncat)
+      swCardOff[switcherDragIdx]=switcherDragDY; swCardLastMs=millis();
     }
   } else {
     closeAppSwitcher(); // drag mulai di area kosong -> anggap swipe-dismiss switcher
@@ -22644,6 +22690,9 @@ float dragCloseP=0.0f, dragLastP=-1.0f;
 int   dragOX=0,dragOY=0,dragOW=0,dragOH=0,dragOR=0, dragMaxDy=0, dragLastTy=0, dragApp=-1;
 uint16_t dragCol=0;
 unsigned long dragLastMoveMs=0;
+// DRAG_UX_V2: kecepatan jari (px/ms, positif = ke atas) utk keputusan flick; + rect frame sebelumnya utk gambar "delta" (hanya strip yg berubah)
+float dragVy=0.0f; int dragVLastTy=0; unsigned long dragVLastMs=0;
+int dcX0=0,dcY0=0,dcX1=0,dcY1=0,dcPrr=0; bool dcValid=false;
 
 // DOOM_BACK_GUARD_V1: gestur swipe-atas dari tepi bawah (keluar cepat / App Switcher) selagi DOOM jalan.
 // true = gestur sudah ditangani di sini (pemanggil cukup menyelesaikan gestur & return).
@@ -22678,6 +22727,14 @@ void dragCloseBegin(){
   }
   dragCloseActive=true; dragCloseP=0.0f; dragLastP=-1.0f; dragMaxDy=0;
   dragLastTy=gStartY; dragLastMoveMs=millis();
+  dragVy=0.0f; dragVLastTy=gStartY; dragVLastMs=millis(); dcValid=false;   // DRAG_UX_V2
+}
+// DRAG_UX_V2: tempel potongan layar APP (transShot) ke panel, dibatasi kotak
+static void dragPushApp(int x,int y,int w,int h){
+  if(w<=0||h<=0) return;
+  display.setClipRect(x,y,w,h);
+  transShot.pushSprite(0,0);
+  display.clearClipRect();
 }
 // gambar 1 frame: p=0 layar penuh, p=1 sebesar ikon. Home di luar jendela, app (transShot) di dalam.
 void dragCloseDraw(float p){
@@ -22687,6 +22744,35 @@ void dragCloseDraw(float p){
   if(x0<0) x0=0; if(y0<0) y0=0; if(x1>SCR_W) x1=SCR_W; if(y1>SCR_H) y1=SCR_H;
   if(x1<=x0||y1<=y0) return;
   int w=x1-x0, h=y1-y0;
+  // DRAG_UX_V2: fase jendela (ez>=0.5) -> kirim HANYA strip yg berubah dibanding frame sebelumnya (dulu seluruh jendela
+  // ~300 KB tiap frame). Rect jendela selalu bersarang (mengecil ATAU membesar), jadi cukup 4 strip + sudut bulat.
+  if(ez>=0.5f && dcValid){
+    if(x0==dcX0 && y0==dcY0 && x1==dcX1 && y1==dcY1) return;   // tidak ada yg berubah
+    const int px0=dcX0, py0=dcY0, px1=dcX1, py1=dcY1;
+    const bool shrink = (x0>=px0 && y0>=py0 && x1<=px1 && y1<=py1);
+    const bool grow   = (x0<=px0 && y0<=py0 && x1>=px1 && y1>=py1);
+    if(shrink || grow){
+      const int rrc=navZoomRadius(ez,dragOR);
+      display.startWrite();
+      if(shrink){
+        navZoomPushHome(px0,py0,px1-px0,y0-py0);     // strip atas
+        navZoomPushHome(px0,y1,px1-px0,py1-y1);      // strip bawah
+        navZoomPushHome(px0,y0,x0-px0,h);            // strip kiri
+        navZoomPushHome(x1,y0,px1-x1,h);             // strip kanan
+        if(dcPrr>=2) navZoomCorners(true,px0,py0,px1-px0,py1-py0,dcPrr,x0,y0,x1,y1);   // sudut lama yg kini di dalam jendela -> isi app lagi
+      } else {
+        if(dcPrr>=2) navZoomCorners(true,px0,py0,px1-px0,py1-py0,dcPrr,0,0,SCR_W,SCR_H);   // sudut lama (tadinya Home) -> app
+        dragPushApp(x0,y0,w,py0-y0);                 // strip atas
+        dragPushApp(x0,py1,w,y1-py1);                // strip bawah
+        dragPushApp(x0,py0,px0-x0,py1-py0);          // strip kiri
+        dragPushApp(px1,py0,x1-px1,py1-py0);         // strip kanan
+      }
+      navZoomCorners(false,x0,y0,w,h,rrc,0,0,SCR_W,SCR_H);   // sudut baru: piksel di luar lengkung = Home (canvas)
+      display.endWrite();
+      dcX0=x0; dcY0=y0; dcX1=x1; dcY1=y1; dcPrr=min(rrc,min(w/2,h/2));
+      return;
+    }
+  }
   display.startWrite();
   navZoomPushHome(0,0,SCR_W,y0);
   navZoomPushHome(0,y1,SCR_W,SCR_H-y1);
@@ -22702,6 +22788,10 @@ void dragCloseDraw(float p){
     display.fillRoundRect(x0,y0,w,h,rr,blend565(dragCol,T().bg,(uint8_t)(190.0f*qq*qq)));
   }
   display.endWrite();
+  if(ez>=0.5f){   // DRAG_UX_V2: catat rect+radius utk frame berikutnya
+    dcX0=x0; dcY0=y0; dcX1=x1; dcY1=y1; dcValid=true;
+    dcPrr=min(navZoomRadius(ez,dragOR),min(w/2,h/2));
+  } else dcValid=false;
 }
 // ikon Home memantul kecil (membesar ~16% lalu kembali) -- dipanggil setelah Home penuh tampil
 void dragCloseBounce(){
@@ -22728,11 +22818,14 @@ void dragCloseBounce(){
 }
 void dragCloseFinish(float p0){
   vibExit();
-  unsigned long MS=(unsigned long)(90.0f+200.0f*(1.0f-p0));
+  float msf=90.0f+210.0f*(1.0f-p0);
+  if(dragVy>0.55f) msf*=0.72f;   // DRAG_UX_V2: di-flick cepat -> lanjut menyusut lebih cepat (momentum jari terasa)
+  if(msf<80.0f) msf=80.0f;
+  unsigned long MS=(unsigned long)msf;
   unsigned long t0=millis();
   for(;;){
     float u=(float)(millis()-t0)/MS; if(u>1.0f) u=1.0f;
-    float e=1.0f-(1.0f-u)*(1.0f-u);
+    float e=1.0f-(1.0f-u)*(1.0f-u)*(1.0f-u);   // DRAG_UX_V2: ease-out cubic (dulu quad) -> melandai lebih lembut ke ikon
     dragCloseDraw(p0+(1.0f-p0)*e);
     if(u>=1.0f) break;
     uiBoostKick(); yield();
@@ -22745,11 +22838,11 @@ void dragCloseFinish(float p0){
   dragCloseBounce();
 }
 void dragCloseCancel(float p0){
-  unsigned long MS=(unsigned long)(110.0f+120.0f*p0);
+  unsigned long MS=(unsigned long)(130.0f+130.0f*p0);
   unsigned long t0=millis();
   for(;;){
     float u=(float)(millis()-t0)/MS; if(u>1.0f) u=1.0f;
-    float e=1.0f-(1.0f-u)*(1.0f-u);
+    float e=navSpringEase(u,NAV_SPRING_W);   // DRAG_UX_V2: balik ke layar penuh dgn pegas yg sama dgn animasi buka/tutup
     dragCloseDraw(p0*(1.0f-e));
     if(u>=1.0f) break;
     uiBoostKick(); yield();
@@ -22765,6 +22858,8 @@ bool dragCloseHandle(bool touched,int tx,int ty){
     float p=(float)(gStartY-ty)/((float)SCR_H*0.55f); if(p<0.0f) p=0.0f; if(p>1.0f) p=1.0f;
     if(gStartY-ty>dragMaxDy) dragMaxDy=gStartY-ty;
     if(abs(ty-dragLastTy)>=2){ dragLastTy=ty; dragLastMoveMs=millis(); }
+    { unsigned long nowMs=millis(); unsigned long dt=nowMs-dragVLastMs;   // DRAG_UX_V2: low-pass kecepatan jari (positif = ke atas)
+      if(dt>=6){ float inst=(float)(dragVLastTy-ty)/(float)dt; dragVy=dragVy*0.55f+inst*0.45f; dragVLastTy=ty; dragVLastMs=nowMs; } }
     dragCloseP=p;
     if(fabsf(p-dragLastP)>0.004f){ dragCloseDraw(p); dragLastP=p; }
     if(p>=0.18f && millis()-dragLastMoveMs>=APPSWITCH_HOLD_MS){   // ditahan diam -> App Switcher
@@ -22776,7 +22871,10 @@ bool dragCloseHandle(bool touched,int tx,int ty){
     return true;
   }
   unsigned long el=millis()-gTouchStartMs;
-  if(dragMaxDy>=28 && (dragCloseP>=0.30f || el<APPSWITCH_HOLD_MS)) dragCloseFinish(dragCloseP);
+  // DRAG_UX_V2: flick ke atas = selesai walau jaraknya pendek; flick ke bawah = batal walau sudah jauh
+  const bool flickUp   = (dragVy>0.55f && dragMaxDy>=20);
+  const bool flickDown = (dragVy<-0.5f);
+  if(!flickDown && (flickUp || (dragMaxDy>=28 && (dragCloseP>=0.30f || el<APPSWITCH_HOLD_MS)))) dragCloseFinish(dragCloseP);
   else dragCloseCancel(dragCloseP);
   return true;
 }
