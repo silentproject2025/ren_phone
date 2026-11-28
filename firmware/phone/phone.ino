@@ -783,6 +783,7 @@ static SPIClass rpSdSpi(FSPI);   // SPI2 = host yg sama dgn layar (LGFX spi_host
 // (penuh), nilainya otomatis disimpan di SD sbg berkas /prefs/<namespace>/<key>. Saat baca, berkas SD (kalau ada)
 // didahulukan; kalau nanti NVS lega & tulis berhasil, berkas SD kunci itu dihapus. Tanpa SD = sama persis spt dulu.
 extern bool sdReady;
+extern bool ffatReady;
 void initSD();
 class SdPrefs {
   Preferences _p; char _ns[20]; bool _nvs=false, _ro=false, _open=false;
@@ -796,42 +797,71 @@ class SdPrefs {
   }
   static bool sdOkW(){ if(!sdOk()) return false; maybe()=true; return true; }
   void path(char* o,size_t n,const char* k) const { snprintf(o,n,"/prefs/%s/%s",_ns,k); }
-  bool ovHas(const char* k){
-    if(!sdOk()||!maybe()) return false;
-    char f[64]; path(f,sizeof f,k); return SD_MMC.exists(f);
+  // PREFS_FFAT_V1: berkas luapan disimpan di FFat (flash internal, selalu ada) dulu; SD hanya cadangan/warisan.
+  // Baca: FFat didahulukan, lalu SD (berkas lama dari versi sebelumnya tetap terbaca).
+  static bool& ffTried(){ static bool t=false; return t; }
+  static bool& ffMaybe(){ static bool m=true; return m; }   // true = belum tahu ada /prefs di FFat
+  static bool ffOk(){
+    if(!ffatReady && !ffTried()){ ffTried()=true; ffatReady=FFat.begin(true); }   // dipanggil lebih awal dari initFfat()
+    if(!ffatReady) return false;
+    if(ffMaybe()) ffMaybe()=FFat.exists("/prefs");
+    return true;
   }
+  static bool ffOkW(){ if(!ffOk()) return false; ffMaybe()=true; return true; }
+  fs::FS* ovFs(const char* k){   // FS yang menyimpan berkas luapan kunci ini (nullptr = tidak ada)
+    char f[64]; path(f,sizeof f,k);
+    if(ffOk() && ffMaybe() && FFat.exists(f)) return &FFat;
+    if(sdOk() && maybe() && SD_MMC.exists(f)) return &SD_MMC;
+    return nullptr;
+  }
+  bool ovHas(const char* k){ return ovFs(k)!=nullptr; }
   int ovLen(const char* k){
-    if(!ovHas(k)) return -1;
-    char f[64]; path(f,sizeof f,k); File g=SD_MMC.open(f,FILE_READ); if(!g) return -1;
+    fs::FS* d=ovFs(k); if(!d) return -1;
+    char f[64]; path(f,sizeof f,k); File g=d->open(f,FILE_READ); if(!g) return -1;
     int n=(int)g.size(); g.close(); return n;
   }
   int ovRead(const char* k,void* b,size_t mx){   // -1 = tidak ada, selain itu jumlah byte terbaca
-    if(!ovHas(k)) return -1;
-    char f[64]; path(f,sizeof f,k); File g=SD_MMC.open(f,FILE_READ); if(!g) return -1;
+    fs::FS* d=ovFs(k); if(!d) return -1;
+    char f[64]; path(f,sizeof f,k); File g=d->open(f,FILE_READ); if(!g) return -1;
     size_t n=(size_t)g.size(); if(n>mx) n=mx;
     int r=(int)g.read((uint8_t*)b,n); g.close(); return r<0?-1:r;
   }
-  size_t ovWrite(const char* k,const void* b,size_t n){
-    if(_ro||!sdOkW()) return 0;
-    char d[48],f[64],t[72]; snprintf(d,sizeof d,"/prefs/%s",_ns);
-    SD_MMC.mkdir("/prefs"); SD_MMC.mkdir(d); path(f,sizeof f,k); snprintf(t,sizeof t,"%s.tmp",f);
-    File g=SD_MMC.open(t,FILE_WRITE); if(!g) return 0;
+  size_t ovWriteTo(fs::FS& d,const char* k,const void* b,size_t n){
+    char dir[48],f[64],t[72]; snprintf(dir,sizeof dir,"/prefs/%s",_ns);
+    d.mkdir("/prefs"); d.mkdir(dir); path(f,sizeof f,k); snprintf(t,sizeof t,"%s.tmp",f);
+    File g=d.open(t,FILE_WRITE); if(!g) return 0;
     size_t w=n?g.write((const uint8_t*)b,n):0; g.close();
-    if(w!=n){ SD_MMC.remove(t); return 0; }
-    if(SD_MMC.exists(f)) SD_MMC.remove(f);
-    if(!SD_MMC.rename(t,f)){ SD_MMC.remove(t); return 0; }
-    Serial.printf("[prefs] NVS penuh -> %s/%s disimpan di SD (%u B)\n",_ns,k,(unsigned)n);
+    if(w!=n){ d.remove(t); return 0; }
+    if(d.exists(f)) d.remove(f);
+    if(!d.rename(t,f)){ d.remove(t); return 0; }
     return n?n:1;
   }
-  bool ovDrop(const char* k){ if(!ovHas(k)) return false; char f[64]; path(f,sizeof f,k); return SD_MMC.remove(f); }
+  size_t ovWrite(const char* k,const void* b,size_t n){
+    if(_ro) return 0;
+    if(ffOkW()){                                    // FFat dulu
+      size_t r=ovWriteTo(FFat,k,b,n);
+      if(r){ if(sdOk()&&maybe()){ char f[64]; path(f,sizeof f,k); if(SD_MMC.exists(f)) SD_MMC.remove(f); }   // buang berkas SD lama
+             Serial.printf("[prefs] NVS penuh -> %s/%s disimpan di FFat (%u B)\n",_ns,k,(unsigned)n); return r; }
+    }
+    if(!sdOkW()) return 0;                          // cadangan: SD
+    size_t r=ovWriteTo(SD_MMC,k,b,n);
+    if(r) Serial.printf("[prefs] NVS penuh -> %s/%s disimpan di SD (%u B)\n",_ns,k,(unsigned)n);
+    return r;
+  }
+  bool ovDrop(const char* k){
+    bool r=false; char f[64]; path(f,sizeof f,k);
+    if(ffOk() && ffMaybe() && FFat.exists(f)) r=FFat.remove(f)||r;
+    if(sdOk() && maybe() && SD_MMC.exists(f)) r=SD_MMC.remove(f)||r;
+    return r;
+  }
   template<class T> size_t putN(const char* k,T v,size_t r){ if(_ro) return 0; if(r){ ovDrop(k); return r; } return ovWrite(k,&v,sizeof v); }
 public:
   bool begin(const char* ns,bool ro=false,const char* part=NULL){
     end(); strncpy(_ns,ns,sizeof(_ns)-1); _ns[sizeof(_ns)-1]=0; _ro=ro;
     _nvs=_p.begin(ns,ro,part);
     if(_nvs) _open=true;
-    else if(ro){ char d[48]; snprintf(d,sizeof d,"/prefs/%s",_ns); _open=sdOk()&&maybe()&&SD_MMC.exists(d); }
-    else _open=sdOk();
+    else if(ro){ char d[48]; snprintf(d,sizeof d,"/prefs/%s",_ns); _open=(ffOk()&&ffMaybe()&&FFat.exists(d))||(sdOk()&&maybe()&&SD_MMC.exists(d)); }
+    else _open=ffOk()||sdOk();
     return _open;
   }
   void end(){ if(_nvs) _p.end(); _nvs=false; _open=false; }
@@ -840,10 +870,14 @@ public:
   bool remove(const char* k){ bool a=(_nvs&&!_ro)?_p.remove(k):false; bool b=_ro?false:ovDrop(k); return a||b; }
   bool clear(){
     bool a=(_nvs&&!_ro)?_p.clear():false;
-    if(!_ro&&sdOk()&&maybe()){
-      char d[48]; snprintf(d,sizeof d,"/prefs/%s",_ns); File r=SD_MMC.open(d);
-      if(r){ String names[24]; int n=0; File e=r.openNextFile(); while(e&&n<24){ names[n++]=String(e.name()); e=r.openNextFile(); } r.close();
-        for(int i=0;i<n;i++){ String f=String(d)+"/"+names[i]; SD_MMC.remove(f.c_str()); } a=true; }
+    if(!_ro){
+      char d[48]; snprintf(d,sizeof d,"/prefs/%s",_ns);
+      fs::FS* st[2]={ (ffOk()&&ffMaybe())?(fs::FS*)&FFat:nullptr, (sdOk()&&maybe())?(fs::FS*)&SD_MMC:nullptr };
+      for(int s=0;s<2;s++){ if(!st[s]) continue;
+        File r=st[s]->open(d);
+        if(r){ String names[24]; int n=0; File e=r.openNextFile(); while(e&&n<24){ names[n++]=String(e.name()); e=r.openNextFile(); } r.close();
+          for(int i=0;i<n;i++){ String f=String(d)+"/"+names[i]; st[s]->remove(f.c_str()); } a=true; }
+      }
     }
     return a;
   }
