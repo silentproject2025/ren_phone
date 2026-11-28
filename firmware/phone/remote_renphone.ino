@@ -1028,11 +1028,11 @@ void rcRegisterRoutes() {
 // menyentuh layar. Muncul saat IP berubah/baru dapat, lalu diulang tiap 30 dtk
 // (maks 8x) selama belum ada penonton remote lewat WiFi itu.
 static void rcAnnounceIp(unsigned long now) {
-  if (!wifiConnected) { rcLastIp = 0; return; }
+  if (!wifiConnected) return;   // DI_IP_ONCE_V1: jangan reset rcLastIp, supaya reconnect dgn IP sama tidak diumumkan lagi
   IPAddress si = WiFi.localIP();
   uint32_t cur = ((uint32_t)si[0] << 24) | ((uint32_t)si[1] << 16) | ((uint32_t)si[2] << 8) | (uint32_t)si[3];
   if (cur == 0) return;
-  if (cur != rcLastIp) { rcLastIp = cur; rcIpRepeat = 8; rcIpNextMs = 0; }
+  if (cur != rcLastIp) { rcLastIp = cur; rcIpRepeat = 1; rcIpNextMs = 0; }   // DI_IP_ONCE_V1: sekali per IP baru
   if (rcViewerActive()) { rcIpRepeat = 0; return; }
   if (rcIpRepeat && now >= rcIpNextMs) {
     rcIpRepeat--;
