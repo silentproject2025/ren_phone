@@ -82,27 +82,28 @@
 // ---- flags ----
 #define DPF_OPT   1    // boleh -1 (tidak dipakai)
 #define DPF_ADC   2    // pin analog: sebaiknya ADC1 (GPIO 1..10) supaya aman bersama WiFi
+#define DPF_LOCK  4    // DEVPINS_V3: disembunyikan dari Opsi Developer (layar & sentuh; tidak bisa diubah dari layar, tetap ikut cek bentrok)
 
 // X(ID, nama tampil, grup, bawaan, tersedia, flags). Urutan = urutan di layar; pin satu grup harus berurutan.
 #define DP_LIST(X) \
-  X(SCLK,     "SCLK",             "Layar (SPI)",            RP_PIN_SCLK,    1,           0)       \
-  X(MOSI,     "MOSI",             "Layar (SPI)",            RP_PIN_MOSI,    1,           0)       \
-  X(MISO,     "MISO",             "Layar (SPI)",            RP_PIN_MISO,    1,           0)       \
-  X(TFT_CS,   "CS layar",         "Layar (SPI)",            RP_PIN_TFT_CS,  1,           0)       \
-  X(TFT_DC,   "DC layar",         "Layar (SPI)",            RP_PIN_TFT_DC,  1,           0)       \
-  X(TFT_RST,  "Reset layar",      "Layar (SPI)",            RP_PIN_TFT_RST, 1,           DPF_OPT) \
-  X(TFT_BL,   "Lampu latar",      "Layar (SPI)",            RP_PIN_TFT_BL,  1,           DPF_OPT) \
+  X(SCLK,     "SCLK",             "Layar (SPI)",            RP_PIN_SCLK,    1,           DPF_LOCK)       \
+  X(MOSI,     "MOSI",             "Layar (SPI)",            RP_PIN_MOSI,    1,           DPF_LOCK)       \
+  X(MISO,     "MISO",             "Layar (SPI)",            RP_PIN_MISO,    1,           DPF_LOCK)       \
+  X(TFT_CS,   "CS layar",         "Layar (SPI)",            RP_PIN_TFT_CS,  1,           DPF_LOCK)       \
+  X(TFT_DC,   "DC layar",         "Layar (SPI)",            RP_PIN_TFT_DC,  1,           DPF_LOCK)       \
+  X(TFT_RST,  "Reset layar",      "Layar (SPI)",            RP_PIN_TFT_RST, 1,           DPF_OPT | DPF_LOCK) \
+  X(TFT_BL,   "Lampu latar",      "Layar (SPI)",            RP_PIN_TFT_BL,  1,           DPF_OPT | DPF_LOCK) \
   X(SD_CS,    "CS kartu SD",      "Kartu SD",               RP_PIN_SD_CS,   DPA_SD_SPI,  0)       \
   X(SD_CLK,   "SD CLK",           "Kartu SD",               39,             DPA_SD_MMC,  0)       \
   X(SD_CMD,   "SD CMD",           "Kartu SD",               38,             DPA_SD_MMC,  0)       \
   X(SD_D0,    "SD D0",            "Kartu SD",               40,             DPA_SD_MMC,  0)       \
-  X(TCH_SDA,  "Sentuh SDA",       "Sentuh",                 RP_TOUCH_SDA,   DPA_TCH_I2C, 0)       \
-  X(TCH_SCL,  "Sentuh SCL",       "Sentuh",                 RP_TOUCH_SCL,   DPA_TCH_I2C, 0)       \
-  X(TCH_RST,  "Sentuh RST",       "Sentuh",                 RP_TOUCH_RST,   DPA_TCH_I2C, DPF_OPT) \
-  X(XPT_SCLK, "XPT2046 SCLK",     "Sentuh",                 6,              DPA_TCH_XPT, 0)       \
-  X(XPT_MOSI, "XPT2046 MOSI",     "Sentuh",                 5,              DPA_TCH_XPT, 0)       \
-  X(XPT_MISO, "XPT2046 MISO",     "Sentuh",                 4,              DPA_TCH_XPT, 0)       \
-  X(XPT_CS,   "XPT2046 CS",       "Sentuh",                 9,              DPA_TCH_XPT, 0)       \
+  X(TCH_SDA,  "Sentuh SDA",       "Sentuh",                 RP_TOUCH_SDA,   DPA_TCH_I2C, DPF_LOCK)       \
+  X(TCH_SCL,  "Sentuh SCL",       "Sentuh",                 RP_TOUCH_SCL,   DPA_TCH_I2C, DPF_LOCK)       \
+  X(TCH_RST,  "Sentuh RST",       "Sentuh",                 RP_TOUCH_RST,   DPA_TCH_I2C, DPF_OPT | DPF_LOCK) \
+  X(XPT_SCLK, "XPT2046 SCLK",     "Sentuh",                 6,              DPA_TCH_XPT, DPF_LOCK)       \
+  X(XPT_MOSI, "XPT2046 MOSI",     "Sentuh",                 5,              DPA_TCH_XPT, DPF_LOCK)       \
+  X(XPT_MISO, "XPT2046 MISO",     "Sentuh",                 4,              DPA_TCH_XPT, DPF_LOCK)       \
+  X(XPT_CS,   "XPT2046 CS",       "Sentuh",                 9,              DPA_TCH_XPT, DPF_LOCK)       \
   X(SENS_SDA, "Sensor SDA",       "Bus sensor (MPU6050 / INA219)", RP_SENS_SDA, 1,       0)       \
   X(SENS_SCL, "Sensor SCL",       "Bus sensor (MPU6050 / INA219)", RP_SENS_SCL, 1,       0)       \
   X(BATT_ADC, "ADC baterai",      "Sensor analog (ADC)",    DP_D_BATT_ADC,  1,           DPF_OPT | DPF_ADC) \

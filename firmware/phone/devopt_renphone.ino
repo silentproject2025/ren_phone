@@ -313,7 +313,7 @@ static int dvDrawPins(LGFX_Sprite& s, int y0) {
 
   const char* lastGrp = "";
   for (int id = 0; id < DP_COUNT; id++) {
-    if (!DP_DEFS[id].avail) continue;
+    if (!DP_DEFS[id].avail || (DP_DEFS[id].flags & DPF_LOCK)) continue;   // DEVPINS_V3: pin layar & sentuh tidak ditampilkan (cegah salah tekan)
     if (strcmp(DP_DEFS[id].group, lastGrp) != 0) {
       lastGrp = DP_DEFS[id].group;
       if (y + DV_HEAD_H > dvViewTop() && y < dvViewBottom()) { s.setTextColor(T().subtext); s.setCursor(x + 6, y + 8); s.print(RPTR(lastGrp)); }
