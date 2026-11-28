@@ -3928,6 +3928,19 @@ float easeOutBackSoft(float p){
   return 1.0f + c3*x*x*x + c1*x*x;
 }
 
+// NAV_IOS_V1: pegas critically-damped s(p)=1-(1+w*p)*e^(-w*p), dinormalisasi supaya s(1)=1.
+// Monoton naik 0->1 (TANPA overshoot): mulai lembut, cepat di tengah, melandai panjang di akhir -- rasa iOS.
+// w kecil = lebih lembut/lambat mengendap, w besar = lebih tegas. Aman utk renderer strip-delta (zoom buka/tutup).
+float navSpringEase(float p,float w){
+  if(p<=0.0f) return 0.0f;
+  if(p>=1.0f) return 1.0f;
+  float k=1.0f-(1.0f+w)*expf(-w);
+  return (1.0f-(1.0f+w*p)*expf(-w*p))/k;
+}
+#ifndef NAV_SPRING_W
+#define NAV_SPRING_W 7.0f
+#endif
+
 // v19: playNavTransition DIKEMBALIKAN ke pola LANGKAH TETAP (STEPS=12) +
 // delay(6) per langkah, PERSIS seperti kode yg dikasih user -- lihat
 // changelog v19 di puncak file utk alasan lengkap kenapa dicabut dari versi
@@ -3960,7 +3973,7 @@ float easeOutBackSoft(float p){
 // Kalau mau efek zoom v73 balik: ambil pushRotateZoom-nya dari v73, tapi
 // siap2 FPS turun.
 #ifndef NAV_TRANS_MS
-#define NAV_TRANS_MS 260UL
+#define NAV_TRANS_MS 320UL   // NAV_IOS_V1: 260 -> 320
 #endif
 // v109: bayangan tepi tipis (2 garis gelap) di sisi kiri layar yg ada di ATAS -- murah, tanpa alpha blend.
 // Selalu tertimpa frame berikutnya karena layar bawah digambar penuh dulu tiap frame.
@@ -3983,7 +3996,7 @@ void navDrawLower(LGFX_Sprite& spr,int sx,int edge){
 // Home memanggil navZoomArm() sesaat sebelum navPush(); playNavTransition(PUSH) memakainya SEKALI.
 // Kalau tidak di-arm (buka dari App Switcher, notifikasi, dll) -> tetap animasi geser lama.
 #ifndef NAV_ZOOM_MS
-#define NAV_ZOOM_MS 340UL   // SMOOTH-ZOOM: 300->340 (kurva quad + strip delta, lebih banyak frame antara)
+#define NAV_ZOOM_MS 380UL   // NAV_IOS_V1: 340 -> 380   // SMOOTH-ZOOM: 300->340 (kurva quad + strip delta, lebih banyak frame antara)
 #endif
 bool navZoomArmed=false;
 unsigned long navZoomArmMs=0;
@@ -4067,8 +4080,8 @@ void navPlayZoomOpen(){
     unsigned long el=millis()-t0;
     bool lastFrame = el>=NAV_ZOOM_MS;
     float lin = lastFrame ? 1.0f : (float)el/(float)NAV_ZOOM_MS;
-    float inv=1.0f-lin;
-    float ez=1.0f-inv*inv;                                // SMOOTH-ZOOM: ease-out quad (dulu cubic: frame pertama sudah loncat ~50%)
+    float ez=navSpringEase(lin,NAV_SPRING_W);   // NAV_IOS_V1 (dulu ease-out quad)
+    //                                // SMOOTH-ZOOM: ease-out quad (dulu cubic: frame pertama sudah loncat ~50%)
     int x0=(int)lroundf(ox*(1.0f-ez));
     int y0=(int)lroundf(oy*(1.0f-ez));
     int x1=(int)lroundf((ox+ow)*(1.0f-ez)+SCR_W*ez);
@@ -4110,7 +4123,7 @@ void navPlayZoomOpen(){
 // berwarna ikon yg mengecil ke posisi ikon di Home. Home digambar ulang HANYA di area yg baru "terbuka" (4 strip),
 // jadi tiap piksel ditulis sekali per frame; isi app di dalam jendela tidak perlu digambar ulang.
 #ifndef NAV_ZOOM_CLOSE_MS
-#define NAV_ZOOM_CLOSE_MS 260UL
+#define NAV_ZOOM_CLOSE_MS 300UL   // NAV_IOS_V1: 260 -> 300
 #endif
 void navZoomPushHome(int x,int y,int w,int h){   // tempel potongan Home (canvas) ke panel
   if(w<=0||h<=0) return;
@@ -4136,8 +4149,8 @@ void navPlayZoomClose(){
     unsigned long el=millis()-t0;
     bool lastFrame = el>=NAV_ZOOM_CLOSE_MS;
     float u = lastFrame ? 1.0f : (float)el/(float)NAV_ZOOM_CLOSE_MS;
-    float q=1.0f-u;
-    float ez=q*q;                                  // 1 -> 0, cepat di awal lalu melandai ke ikon
+    float ez=1.0f-navSpringEase(u,NAV_SPRING_W+1.0f);   // NAV_IOS_V1 (dulu q*q)
+    //                                  // 1 -> 0, cepat di awal lalu melandai ke ikon
     int x0=(int)lroundf(ox*(1.0f-ez));
     int y0=(int)lroundf(oy*(1.0f-ez));
     int x1=(int)lroundf((ox+ow)*(1.0f-ez)+SCR_W*ez);
@@ -4198,7 +4211,7 @@ void playNavTransition(NavAnim anim){
     unsigned long el = millis()-t0;
     bool lastFrame = el>=NAV_TRANS_MS;
     float lin = lastFrame ? 1.0f : (float)el/(float)NAV_TRANS_MS;
-    int offset = (int)(span*navEase(lin)+0.5f);
+    int offset = (int)(span*navSpringEase(lin,NAV_SPRING_W)+0.5f);   // NAV_IOS_V1 (dulu navEase in-out)
     if(offset>span) offset=span;
     if(offset!=lastOff){ // gak ada perubahan posisi = gak perlu kirim ulang ke SPI
       lastOff=offset;
@@ -5229,8 +5242,8 @@ void drawDynamicIsland(LGFX_Sprite& s){
   // UI-POLISH-V2: membesar = pegas lembut (tinggi sedikit mendahului lebar); mengecil = ease-in-out tanpa mantul.
   const bool growing = (diTargetW()+diTargetH()) >= (int)(diAnimFromW+diAnimFromH);
   float tH=t*1.15f; if(tH>1.0f) tH=1.0f;
-  float e  = growing ? diSpringEase(t)  : navEase(t);
-  float eh = growing ? diSpringEase(tH) : navEase(t);
+  float e  = diSpringEase(t);                          // NAV_IOS_V1: mengecil juga pegas lembut (dulu navEase)
+  float eh = growing ? diSpringEase(tH) : diSpringEase(t);
   float ca = growing ? (t-0.30f)/0.45f : 1.0f-t/0.35f;   // transparansi isi (ikon+teks)
   if(ca<0.0f) ca=0.0f; if(ca>1.0f) ca=1.0f;
   if(t>=1.0f) ca=1.0f;
@@ -5248,7 +5261,7 @@ void drawDynamicIsland(LGFX_Sprite& s){
     tw=th+(wFull-th)*st;
     if(tw>(float)(SCR_W-4)) tw=(float)(SCR_W-4);
   } else if(!growing && diTargetH()<1){
-    float es=navEase(t);
+    float es=navSpringEase(t,8.0f);   // NAV_IOS_V1: hilang total = pegas tanpa mantul
     tw=diAnimFromW*(1.0f-es);
     th=diAnimFromH*(1.0f-0.35f*es); if(th>tw) th=tw;       // melangsing jadi bulat, lalu titik
   }
