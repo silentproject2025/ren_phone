@@ -56,8 +56,8 @@ enum { NYXC_NONE = 0, NYXC_START = 1, NYXC_FRAME = 2, NYXC_STOP = 3 };
 // ---------------------------- state global ----------------------------
 static int   nyxState = NYX_ST_LIST;
 static char  nyxErr[112];
-static char  nyxIds[NYXAPP_MAX_LIST][24];
-static char  nyxNames[NYXAPP_MAX_LIST][NYX_MF_NAME_MAX];
+static char  nyxIds[NYXAPP_MAX_LIST][24] EXT_RAM_BSS_ATTR;
+static char  nyxNames[NYXAPP_MAX_LIST][NYX_MF_NAME_MAX] EXT_RAM_BSS_ATTR;
 static char  nyxSyms[NYXAPP_MAX_LIST];
 static uint16_t nyxCols[NYXAPP_MAX_LIST];
 static int   nyxN = 0;

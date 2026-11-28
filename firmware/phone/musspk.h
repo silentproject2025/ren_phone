@@ -56,7 +56,7 @@ static char              spkCmdPath[128];
 static volatile bool     spkCmdWav    = false;
 static volatile uint32_t spkCmdOff    = 0;
 static volatile bool     spkCmdFfat   = false;   // SPK_FFAT_V1: sesi ini membaca dari FFat
-static char              spkCmdUrl[256];         // JAM_STREAM_V1: URL MP3 (http/https)
+static char              spkCmdUrl[256] EXT_RAM_BSS_ATTR;         // JAM_STREAM_V1: URL MP3 (http/https)
 static volatile bool     spkCmdNet    = false;   // JAM_STREAM_V1: sesi ini membaca dari jaringan
 
 // ---- status ----

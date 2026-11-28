@@ -150,7 +150,7 @@ static char     callScanIp[CALL_SCAN_MAX][16];
 static volatile int  callScanCount = 0;
 static volatile bool callScanBusy = false;
 
-static char     callRecent[CALL_REC_MAX][44];
+static char     callRecent[CALL_REC_MAX][44] EXT_RAM_BSS_ATTR;
 static int      callRecentCount = 0;
 
 // UI
@@ -223,7 +223,7 @@ static void callCopy(char* dst, int cap, const char* src) {
 }
 
 // riwayat diagnosa: 4 kejadian terakhir (paket masuk + keputusan atas INVITE)
-static char callDbgHist[6][40];
+static char callDbgHist[6][40] EXT_RAM_BSS_ATTR;
 static void callDbgPush(const char* m) {
   for (int i = 5; i > 0; i--) memcpy(callDbgHist[i], callDbgHist[i - 1], sizeof(callDbgHist[i]));
   callCopy(callDbgHist[0], sizeof(callDbgHist[0]), m);

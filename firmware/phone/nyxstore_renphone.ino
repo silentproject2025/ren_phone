@@ -54,7 +54,7 @@ static bool     nsLeaveAfter = false;       // Kembali ditekan saat tugas jaring
 static volatile int      nsJob = NSJ_NONE, nsJobSt = NSW_IDLE;
 static volatile uint32_t nsGot = 0, nsTotal = 0;
 static volatile bool     nsAbort = false;
-static char     nsUrl[220], nsJobErr[72];
+static char     nsUrl[220] EXT_RAM_BSS_ATTR, nsJobErr[72] EXT_RAM_BSS_ATTR;
 static uint8_t* nsBuf = nullptr; static uint32_t nsBufCap = 0; static volatile uint32_t nsBufLen = 0;
 static bool     nsWantSha = false; static char nsShaCalc[65];
 static TaskHandle_t nsTask = nullptr; static StackType_t* nsStack = nullptr; static StaticTask_t nsTcb;

@@ -68,7 +68,7 @@ static uint8_t  ownerFrameCol   = 0;
 static int      ownerView       = 0;        // 0 utama, 1 bingkai & warna, 2 statistik
 static unsigned long ownerStatArmUntil = 0;
 
-static uint32_t ownerCnt[OWNER_STAT_MAX];   // berapa kali tiap app dibuka (per nilai enum Screen)
+static uint32_t ownerCnt[OWNER_STAT_MAX] EXT_RAM_BSS_ATTR;   // berapa kali tiap app dibuka (per nilai enum Screen)
 static uint32_t ownerUpBase = 0;            // total detik aktif sebelum boot ini
 static bool     ownerStatLoaded = false;
 static bool     ownerStatDirty  = false;

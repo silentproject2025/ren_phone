@@ -444,9 +444,9 @@ static uint8_t        eggTaps       = 0;
 static uint8_t        devTitleTaps  = 0;           // DEVPINS_V1: ketuk judul 7x = buka Opsi Developer (ala "nomor build" di Android)
 static unsigned long  devTitleLast  = 0;
 static unsigned long  eggLastTap    = 0;
-static uint16_t       eggLnOff[EGG_MAX_LINES];   // offset awal baris di EGG_BLOB
+static uint16_t       eggLnOff[EGG_MAX_LINES] EXT_RAM_BSS_ATTR;   // offset awal baris di EGG_BLOB
 static uint8_t        eggLnLen[EGG_MAX_LINES];
-static uint16_t       eggLnCum[EGG_MAX_LINES];   // total karakter sampai akhir baris i
+static uint16_t       eggLnCum[EGG_MAX_LINES] EXT_RAM_BSS_ATTR;   // total karakter sampai akhir baris i
 static int            eggLnN        = 0;
 static int            eggTotal      = 0;
 static int            eggChars      = 0;         // karakter isi cerita yang sudah "diketik"

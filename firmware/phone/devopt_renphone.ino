@@ -57,7 +57,7 @@ struct DvHit { int16_t x, y, w, h; uint8_t act; int8_t arg; bool fixed; };
 static int8_t   dvEdit[DP_COUNT];            // nilai pin yang sedang diedit (belum tentu diterapkan)
 static uint8_t  dvTab = 0;
 static uint8_t  dvModal = 0;                 // 0 tidak ada, 1 konfirmasi terapkan, 2 konfirmasi reset semua
-static DvHit    dvHits[DV_MAX_HIT];
+static DvHit    dvHits[DV_MAX_HIT] EXT_RAM_BSS_ATTR;
 static int      dvHitN = 0;
 static int      dvContentH = 0, dvMax = 0;
 static float    dvScroll = 0, dvVel = 0;

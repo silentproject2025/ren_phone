@@ -164,7 +164,7 @@ static int           musJamTop  = 0;         // baris pertama yg tampak
 static int           musJamTag  = 0;         // chip aktif (0 Hits, 1 Pop, 2 Rock, 3 Lofi, 4 Jazz); -1 = hasil cari teks
 static bool          musJamOpened = false;   // pengambilan awal sudah dicoba
 
-static char          musScanName[MUS_SCAN_MAX][40];
+static char          musScanName[MUS_SCAN_MAX][40] EXT_RAM_BSS_ATTR;
 static int8_t        musScanRssi[MUS_SCAN_MAX];
 static volatile int  musScanCount = 0;
 static volatile bool musScanning = false;

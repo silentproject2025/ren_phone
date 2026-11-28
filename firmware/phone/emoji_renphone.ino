@@ -50,8 +50,8 @@ static uint32_t* emjSdCp = nullptr;                  // kodepoint kanonik per sp
 static File      emjFile;                            // /emoji.bin (tetap terbuka selama set SD aktif)
 static uint32_t  emjOff[3] = {0, 0, 0};              // offset awal blok piksel tiap ukuran di file
 static uint16_t* emjCPx[3] = { nullptr, nullptr, nullptr };   // cache piksel: EMJ_CACHE_N * n*n u16 (dialokasi saat ukuran dipakai)
-static uint16_t  emjCKey[3][EMJ_CACHE_N];            // indeks sprite + 1 (0 = slot kosong)
-static uint32_t  emjCUse[3][EMJ_CACHE_N];            // stempel pemakaian terakhir (LRU)
+static uint16_t  emjCKey[3][EMJ_CACHE_N] EXT_RAM_BSS_ATTR;            // indeks sprite + 1 (0 = slot kosong)
+static uint32_t  emjCUse[3][EMJ_CACHE_N] EXT_RAM_BSS_ATTR;            // stempel pemakaian terakhir (LRU)
 static uint32_t  emjTick = 0;
 static uint8_t   emjFails = 0;
 static volatile bool emjBusy = false;

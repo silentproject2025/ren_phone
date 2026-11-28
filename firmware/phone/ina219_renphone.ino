@@ -117,9 +117,9 @@ static float    inaUnsavedMah = 0;
 static bool     inaPrevCharging = false;
 
 // riwayat grafik
-static int16_t  inaHistI[INA_HIST_N];
-static uint16_t inaHistV[INA_HIST_N];
-static int16_t  inaHistP[INA_HIST_N];
+static int16_t  inaHistI[INA_HIST_N] EXT_RAM_BSS_ATTR;
+static uint16_t inaHistV[INA_HIST_N] EXT_RAM_BSS_ATTR;
+static int16_t  inaHistP[INA_HIST_N] EXT_RAM_BSS_ATTR;
 static uint16_t inaHistHead = 0, inaHistCount = 0;
 static uint32_t inaHistLast = 0;
 

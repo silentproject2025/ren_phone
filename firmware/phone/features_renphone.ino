@@ -407,7 +407,7 @@ void swTouch(int x, int y, bool held, bool isNew) {
 #define MEMO_GATE_THR    0.0006f  // ambang "senyap" (skala 0..1 dr full-scale mic)
 
 static char     memoNames[MEMO_MAX_FILES][32] EXT_RAM_BSS_ATTR;
-static uint32_t memoSizes[MEMO_MAX_FILES];
+static uint32_t memoSizes[MEMO_MAX_FILES] EXT_RAM_BSS_ATTR;
 static int      memoCount = 0, memoSel = -1, memoScroll = 0;
 static volatile bool     memoRec = false, memoStopReq = false, memoListDirty = true;
 static volatile bool     memoRecFail = false;

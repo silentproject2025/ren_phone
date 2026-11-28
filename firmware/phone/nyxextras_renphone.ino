@@ -331,7 +331,7 @@ void nyxAppEnergyTouch(int x, int y, int top, int bottom) {
 // NYX-CMD-V2
 #define NYX_CMD_Q   5
 #define NYX_CMD_LEN 120
-static char nyxCmdQ[NYX_CMD_Q][NYX_CMD_LEN];
+static char nyxCmdQ[NYX_CMD_Q][NYX_CMD_LEN] EXT_RAM_BSS_ATTR;
 static volatile uint8_t nyxCmdN = 0;
 static volatile bool    nyxCmdReady = false;
 

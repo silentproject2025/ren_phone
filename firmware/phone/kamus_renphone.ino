@@ -31,7 +31,7 @@
 static bool        kmsInited = false;
 static int         kmsMode = 2;              // 0 mati | 1 saran saja | 2 saran + autokoreksi (pilihan pengguna)
 static char        kmsUserBuf[KMS_USER_MAX][KMS_MAXW + 1] EXT_RAM_BSS_ATTR;
-static const char* kmsUserPtr[KMS_USER_MAX];
+static const char* kmsUserPtr[KMS_USER_MAX] EXT_RAM_BSS_ATTR;
 static int         kmsUserN = 0;
 static char*       kmsSdBuf = nullptr;       // isi /kamus.txt (PSRAM), dipotong per kata di tempat
 static const char** kmsSdPtr = nullptr;
@@ -42,7 +42,7 @@ static KmsCtx      kmsC;
 static KmsSugs     kmsCur;                   // saran untuk kata yang sedang diketik
 static int         kmsFixIdx = -1;           // slot saran yang akan dipakai autokoreksi (-1 = tidak ada)
 static uint32_t    kmsSigLast = 0;
-static char        kmsSeen[12][KMS_MAXW + 1];  // kata asing yang pernah dikonfirmasi 1x (dipelajari saat kedua kali)
+static char        kmsSeen[12][KMS_MAXW + 1] EXT_RAM_BSS_ATTR;  // kata asing yang pernah dikonfirmasi 1x (dipelajari saat kedua kali)
 static int         kmsSeenPos = 0;
 static struct { bool valid; char orig[KMS_MAXW + 1]; char fixed[KMS_MAXW + 1]; char sep; } kmsAc = { false, "", "", 0 };
 
