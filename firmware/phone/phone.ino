@@ -581,16 +581,6 @@ struct InfFireball{ float x,y,dx,dy; bool active; unsigned long spawnMs; };
 // TriviaLayout/forward-decl diNotify/struct Theme dipindah ke SINI --
 // SEBELUM nasaWaitForHeap()/nasaHttpErrHint() -- supaya semua tipe sudah
 // dikenal sebelum fungsi-ber-body pertama di file manapun itu berada.
-// NO_NASAAPPS_V1: 1 = NEO Asteroid, Bumi EPIC & Galeri NASA tidak ikut di-build (hemat flash+RAM). 0 = hidupkan lagi. APOD tidak terpengaruh.
-#ifndef RP_NO_NASAAPPS
-#define RP_NO_NASAAPPS 1
-#endif
-#if RP_NO_NASAAPPS
-#define RP_NASA_N 3   // jumlah entri apps[] yg dibuang
-#else
-#define RP_NASA_N 0
-#endif
-
 enum Screen { SCR_HOME, SCR_CLOCK, SCR_CALC, SCR_SENSOR,
               SCR_SETTINGS, SCR_NOTEPAD, SCR_CANVAS, SCR_AICHAT, SCR_FILEEXPLORER,
               SCR_MJPEG, SCR_UPDATE, SCR_BATTERY, SCR_SNAKE, SCR_FLAPPY,
@@ -775,6 +765,16 @@ struct Theme {
 static SPIClass rpSdSpi(FSPI);   // SPI2 = host yg sama dgn layar (LGFX spi_host=SPI2_HOST), bus_shared=true
 #define SD_MMC SD
 #endif
+// NO_NASAAPPS_V1: 1 = NEO Asteroid, Bumi EPIC & Galeri NASA tidak ikut di-build (hemat flash+RAM). 0 = hidupkan lagi. APOD tidak terpengaruh.
+#ifndef RP_NO_NASAAPPS
+#define RP_NO_NASAAPPS 1
+#endif
+#if RP_NO_NASAAPPS
+#define RP_NASA_N 3   // jumlah entri apps[] yg dibuang
+#else
+#define RP_NASA_N 0
+#endif
+
 // PREFS_SD_V1: sengaja DI SINI (sesudah struct Theme), bukan di blok yg dipindah ci_hoist_types.py -- blok itu
 // tidak boleh berisi #define. Preferences pertama kali dipakai jauh sesudah baris ini.
 // ===== PREFS_SD_V1 BEGIN =====
