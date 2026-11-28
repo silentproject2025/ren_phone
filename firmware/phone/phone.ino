@@ -656,7 +656,9 @@ enum Screen { SCR_HOME, SCR_CLOCK, SCR_CALC, SCR_SENSOR,
               // WiFi Sensing (CSI: gerak + napas) -- lihat wifisense_renphone.ino  // WSENSE_V1
               SCR_WSENSE,
               // Opsi Developer: ubah pin, pantau ADC / INA219 -- lihat devopt_renphone.ino + devpins.h  // DEVPINS_V1
-              SCR_DEVOPT };
+              SCR_DEVOPT,
+              // Wallpaper acak dari picsum.photos (pengganti app ELF Theme) -- lihat theme_renphone.ino  // THEME_BUILTIN_V1
+              SCR_THEME };
 enum Orientation { ORIENT_LANDSCAPE = 0, ORIENT_PORTRAIT = 1 };
 
 // Dipindah ke atas — alasan sama dengan AiLine & Vec3f: arduino-cli men-generate
@@ -7369,6 +7371,8 @@ void wsenseLoopPoll();
 void devoptEnter(); void devoptExit(); void drawDevopt(LGFX_Sprite&); void devoptTouch(int,int,bool,bool);
 void devoptLoopPoll(); void devoptUnlock(); void pwrReleaseHold();
 bool devoptIsOn(); void devoptSetOn(bool);   // DEVOPT_IN_SETTINGS_V1
+// ---- theme_renphone.ino: Wallpaper acak (Picsum)  // THEME_BUILTIN_V1 ----
+void thEnter(); void thExit(); void drawTheme(LGFX_Sprite&); void themeTouch(int,int,bool,bool); void thLoopTick();
 // ---- backup_renphone.ino: Backup & Restore pengaturan ----
 void backupEnter(); void backupExit(); void drawBackup(LGFX_Sprite&); void backupTouch(int,int,bool,bool);
 void backupAutoBoot(); void backupAutoPoll();   // backup otomatis NVS -> SD (/backup/auto.nbk) + pulihkan otomatis saat NVS kosong
@@ -7455,8 +7459,10 @@ AppDef apps[] = {  // ukuran otomatis
   { "WiFi Sensing", 'x', 0, wsenseEnter, wsenseExit, drawWsense, wsenseTouch, SCR_WSENSE },
   // ---- Opsi Developer: pin yang bisa diubah + pantau ADC / INA219 (disembunyikan dari grid; buka dgn ketuk judul About Phone 7x) ----  // DEVPINS_V1
   { "Opsi Developer", 'd', 0, devoptEnter, devoptExit, drawDevopt, devoptTouch, SCR_DEVOPT },
+  // ---- Wallpaper: ganti wallpaper Home dari Picsum (disembunyikan dari grid; ada di Setting > Tampilan) ----  // THEME_BUILTIN_V1
+  { "Wallpaper", 'W', 0, thEnter, thExit, drawTheme, themeTouch, SCR_THEME },
 };
-#define APP_COUNT (47 - RP_NASA_N)   // NO_NASAAPPS_V1
+#define APP_COUNT (48 - RP_NASA_N)   // NO_NASAAPPS_V1
 static_assert(sizeof(apps)/sizeof(apps[0]) == APP_COUNT, "APP_COUNT harus sama dengan jumlah entri apps[]");
 
 // =============================================
@@ -8258,7 +8264,7 @@ void homeLayoutRebuildVis(){
 }
 void homeLayoutDefault(){
   homeWMask=0x0F; homeWLayout=1; homeWBig=1;   // v132: ikut kembali ke awal saat Reset
-  for(int i=0;i<APP_COUNT;i++){ homeOrder[i]=i; homeHide[i]=(apps[i].screen==SCR_HOMEEDIT || apps[i].screen==SCR_BACKUP || apps[i].screen==SCR_DEVOPT); }
+  for(int i=0;i<APP_COUNT;i++){ homeOrder[i]=i; homeHide[i]=(apps[i].screen==SCR_HOMEEDIT || apps[i].screen==SCR_BACKUP || apps[i].screen==SCR_DEVOPT || apps[i].screen==SCR_THEME); }   // THEME_BUILTIN_V1
   homeLayoutRebuildVis();
 }
 void homeLayoutLoad(){
@@ -10477,7 +10483,7 @@ void devoptSetOn(bool on){
 enum { SR_TITLE=0, SR_SECT, SR_BRIGHT, SR_THEME, SR_FONT, SR_ROT, SR_SPI, SR_SPIAPPLY,
        SR_SCAN, SR_WIFI, SR_NONET, SR_SSID, SR_PASS, SR_CONNECT, SR_MPU, SR_TCAL, SR_OWNER, SR_ABOUT, SR_POWER, SR_HOMEEDIT, SR_BACKUP, SR_HEAPLOG, SR_HWS, SR_LANG,
        SR_WSTAT, SR_FOOT /* SETT_UX_V1 */, SR_FACTORY /* FACTORY_RESET_V1 */, SR_KBTAP /* KB_TAPOFF_V1 */,
-       SR_SEARCH, SR_QUICK, SR_CAT, SR_NOHIT, SR_GAP /* UI-REVAMP */, SR_DEVOPT /* DEVOPT_IN_SETTINGS_V1 */ };
+       SR_SEARCH, SR_QUICK, SR_CAT, SR_NOHIT, SR_GAP /* UI-REVAMP */, SR_DEVOPT /* DEVOPT_IN_SETTINGS_V1 */, SR_WALL /* THEME_BUILTIN_V1 */ };
 #define SETT_MAXROWS 44
 int settRT[SETT_MAXROWS], settRG[SETT_MAXROWS], settRY[SETT_MAXROWS], settRH[SETT_MAXROWS], settRA[SETT_MAXROWS];
 const char* settRL[SETT_MAXROWS];
@@ -10539,6 +10545,7 @@ const char* settKeys(int t){
     case SR_LANG:     return "bahasa language";
     case SR_ROT:      return "rotasi rotate putar auto";
     case SR_HOMEEDIT: return "home layar atur edit";
+    case SR_WALL:     return "wallpaper latar belakang tema theme picsum foto gambar";   // THEME_BUILTIN_V1
     case SR_SPI:      return "spi overclock kecepatan speed";
     case SR_HWS:      return "scroll hardware gulir";
     case SR_HEAPLOG:  return "heaplog ram log";
@@ -10605,7 +10612,7 @@ void settBuildLayout(){
     int firstRow=settRowN;
 
     if(sq || pg==1){   // TAMPILAN
-      SADD(SR_BRIGHT,34); SADD(SR_THEME,52); SADD(SR_FONT,34); SADD(SR_LANG,34); SADD(SR_ROT,34); SADD(SR_HOMEEDIT,34);
+      SADD(SR_BRIGHT,34); SADD(SR_THEME,52); SADD(SR_FONT,34); SADD(SR_LANG,34); SADD(SR_ROT,34); SADD(SR_HOMEEDIT,34); SADD(SR_WALL,34);
       SGRP();
     }
     if(sq || pg==2){   // KINERJA
@@ -10676,7 +10683,7 @@ void settChevron(LGFX_Sprite& s,int cx,int cy,uint16_t col){ // ">" tipis
 // SETT_UX_V1: baris yang bereaksi pada ketukan (disorot selagi ditekan). Slider / segmen / judul tidak.
 bool settPressable(int t){
   switch(t){
-    case SR_FONT: case SR_LANG: case SR_ROT: case SR_HOMEEDIT: case SR_HEAPLOG: case SR_SPIAPPLY:
+    case SR_FONT: case SR_LANG: case SR_ROT: case SR_HOMEEDIT: case SR_HEAPLOG: case SR_SPIAPPLY: case SR_WALL:
     case SR_SCAN: case SR_WIFI: case SR_SSID: case SR_PASS: case SR_CONNECT: case SR_MPU: case SR_TCAL:
     case SR_OWNER: case SR_ABOUT: case SR_POWER: case SR_BACKUP: case SR_FACTORY: case SR_CAT: case SR_DEVOPT:
       return true;
@@ -10685,7 +10692,7 @@ bool settPressable(int t){
 }
 bool settHasChip(int t){
   switch(t){
-    case SR_BRIGHT: case SR_THEME: case SR_FONT: case SR_LANG: case SR_ROT: case SR_HOMEEDIT: case SR_SPI:
+    case SR_BRIGHT: case SR_THEME: case SR_FONT: case SR_LANG: case SR_ROT: case SR_HOMEEDIT: case SR_SPI: case SR_WALL:
     case SR_SCAN: case SR_SSID: case SR_PASS: case SR_MPU: case SR_TCAL: case SR_ABOUT: case SR_POWER: case SR_BACKUP: case SR_HEAPLOG: case SR_HWS: case SR_FACTORY: case SR_KBTAP: case SR_CAT: case SR_DEVOPT:
       return true;
   }
@@ -10700,6 +10707,7 @@ void settChip(LGFX_Sprite& s,int type,int x,int y){ // x,y = pojok kiri-atas chi
     case SR_LANG:     col=CHIP_BLUE;   break;   // I18N_V1
     case SR_ROT:      col=CHIP_GREEN;  break;
     case SR_HOMEEDIT: col=CHIP_PURPLE; break;
+    case SR_WALL:     col=CHIP_PINK;   break;   // THEME_BUILTIN_V1
     case SR_SPI:      col=CHIP_ORANGE; break;
     case SR_SCAN:     col=CHIP_BLUE;   break;
     case SR_SSID:     col=CHIP_TEAL;   break;
@@ -10744,6 +10752,9 @@ void settChip(LGFX_Sprite& s,int type,int x,int y){ // x,y = pojok kiri-atas chi
     case SR_HOMEEDIT:  // kisi 2x2
       nyxAaRR(s, cx-6,cy-6,5,5,1,W); nyxAaRR(s, cx+1,cy-6,5,5,1,W);
       nyxAaRR(s, cx-6,cy+1,5,5,1,W); nyxAaRR(s, cx+1,cy+1,5,5,1,W);
+      break;
+    case SR_WALL:      // THEME_BUILTIN_V1: bingkai foto + gunung + matahari
+      nyxAaRRRing(s, cx-8,cy-6,16,12,2,W); s.fillTriangle(cx-6,cy+4,cx-1,cy-2,cx+4,cy+4,W); nyxAaCircle(s, cx+4,cy-2,2,W);
       break;
     case SR_SPI:       // petir
       s.fillTriangle(cx+2,cy-8,cx-4,cy+1,cx+1,cy+1,W);
@@ -10969,6 +10980,10 @@ void drawSettings(LGFX_Sprite& s){
         s.setTextColor(T().text); s.setCursor(xl,ty); s.print(RPTR("Atur Layar Home"));
         settChevron(s,xr-4,ry+rh/2,T().subtext);
         break;
+      case SR_WALL:   // THEME_BUILTIN_V1
+        s.setTextColor(T().text); s.setCursor(xl,ty); s.print("Wallpaper");
+        settChevron(s,xr-4,ry+rh/2,T().subtext);
+        break;
       case SR_ROT:
         settPrintFit(s,xl,ty,RPTR("Rotasi Otomatis"),xr-34-8-xl,T().text);   // SETT_FIT_V1
         iosSwitch(s,xr-34,ry+(rh-20)/2,autoRotateEnabled);
@@ -11170,6 +11185,8 @@ void settTap(int x,int y){
       needRedraw=true; break;
     case SR_HOMEEDIT:
       settKeepPage=true; settKeepScroll=settScroll; navPush(SCR_HOMEEDIT); break;
+    case SR_WALL:   // THEME_BUILTIN_V1
+      settKeepPage=true; settKeepScroll=settScroll; navPush(SCR_THEME); break;
     case SR_ROT:
       autoRotateEnabled=!autoRotateEnabled; saveAutoRotatePref();
       showToast(autoRotateEnabled?RPTR("Auto-rotate aktif"):RPTR("Auto-rotate mati"));
@@ -23644,6 +23661,7 @@ void loop(){
     // v112: Pomodoro -- pola SAMA PERSIS kayak diTickProgress() di atas,
     // timer tetap ngitung mundur walau user pindah app lain selagi belajar.
     if(pomoRunning) pomoTick();
+    thLoopTick();   // THEME_BUILTIN_V1: simpan/terapkan unduhan wallpaper, animasi loading
     if(curScreen()==SCR_TRIVIA && triviaPage==TRV_LOADING){ needRedraw=true; } // v14: animasi spinner
     if(curScreen()==SCR_APOD && apodPage==APOD_LOADING){ needRedraw=true; } // v21: animasi spinner APOD
     if(apodPage==APOD_LOADING) diTickProgress(); // v96

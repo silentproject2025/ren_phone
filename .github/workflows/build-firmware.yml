@@ -312,6 +312,7 @@ jobs:
           cp firmware/phone/kamus_data.h build_sketch/
           cp firmware/phone/call_renphone.ino build_sketch/
           cp firmware/phone/nyxextras_renphone.ino build_sketch/
+          cp firmware/phone/theme_renphone.ino build_sketch/     # THEME_BUILTIN_V1: app Wallpaper (Picsum)
           cp firmware/phone/nyxhost.h build_sketch/
           cp firmware/phone/nyx_app.h build_sketch/
           cp firmware/phone/nyxmem.h build_sketch/
