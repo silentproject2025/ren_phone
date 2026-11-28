@@ -86,7 +86,7 @@ Status markers used throughout the documentation:
 | | Row-diff screen push (`RP_PUSH_DIFF`): only the rows that changed are sent to the panel | `BETA` (ST7796 and Aether, on by default) |
 | | New gestures (pull-to-refresh, edge swipe-back, finger-following panels) | `BETA` |
 | | Grouped notifications, swipe-to-dismiss, quick actions, App Switcher previews | `BETA` |
-| | [Developer options](./docs/features/system-tools.md#developer-options-beta): change pins without rebuilding (tried first, then confirmed), live ADC calculation or INA219 readings; unlock by tapping the *Firmware version* row in *About Phone* 7 times | `BETA` |
+| | [Developer options](./docs/features/system-tools.md#developer-options-beta): change pins without rebuilding (tried first, then confirmed), live ADC calculation or INA219 readings, found in *Settings > System*; unlock by tapping the *Firmware version* row in *About Phone* 7 times | `BETA` |
 | | Color emoji (built-in set and full set from SD) | `BETA` |
 | | Keyboard dictionary (word suggestions + autocorrect) | `BETA` |
 | **Communication** | [Chat over an MQTT broker](./docs/features/chat.md) | `OK` |

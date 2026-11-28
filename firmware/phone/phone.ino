@@ -7295,6 +7295,7 @@ void wsenseLoopPoll();
 // ---- devopt_renphone.ino: Opsi Developer (pin runtime, ADC, INA219) ----  // DEVPINS_V1
 void devoptEnter(); void devoptExit(); void drawDevopt(LGFX_Sprite&); void devoptTouch(int,int,bool,bool);
 void devoptLoopPoll(); void devoptUnlock(); void pwrReleaseHold();
+bool devoptIsOn(); void devoptSetOn(bool);   // DEVOPT_IN_SETTINGS_V1
 // ---- backup_renphone.ino: Backup & Restore pengaturan ----
 void backupEnter(); void backupExit(); void drawBackup(LGFX_Sprite&); void backupTouch(int,int,bool,bool);
 void backupAutoBoot(); void backupAutoPoll();   // backup otomatis NVS -> SD (/backup/auto.nbk) + pulihkan otomatis saat NVS kosong
@@ -8129,7 +8130,11 @@ void homeShowRebuild(){
 }
 void homeLayoutRebuildVis(){
   homeVisN=0;
-  for(int k=0;k<APP_COUNT;k++){ int i=homeOrder[k]; if(!homeHide[i]) homeVis[homeVisN++]=i; }
+  for(int k=0;k<APP_COUNT;k++){
+    int i=homeOrder[k];
+    if(apps[i].screen==SCR_DEVOPT){ if(!homeHide[i]){ devoptSetOn(true); homeHide[i]=true; } continue; }   // DEVOPT_IN_SETTINGS_V1: Opsi Developer hidup di Setting > Sistem, bukan di Home
+    if(!homeHide[i]) homeVis[homeVisN++]=i;
+  }
   homeShowRebuild(); // HOME-KATEGORI
 }
 void homeLayoutDefault(){
@@ -10321,6 +10326,28 @@ int loadSpiOcPref(){
   return 0; // fallback: kalau NVS somehow kesimpen angka yg gak ada di daftar, jangan crash -- balik ke paling aman
 }
 
+// DEVOPT_IN_SETTINGS_V1: Opsi Developer jadi baris di Setting > Sistem. Baris baru muncul setelah dibuka
+// (ketuk "Versi firmware" di About Phone 7x). Status disimpan di NVS "ui" key "devopt".
+// Key belum ada + ikon app sudah pernah ditampilkan di Home (versi lama) -> dianggap sudah terbuka.
+static int devOptOnState=-1;   // -1 = belum dimuat
+bool devoptIsOn(){
+  if(devOptOnState<0){
+    Preferences p; p.begin("ui",true);
+    int v=p.getInt("devopt",-1);
+    p.end();
+    if(v<0){ homeLayoutEnsure(); int i=appIndexForScreen(SCR_DEVOPT); v=(i>=0 && !homeHide[i])?1:0; }
+    devOptOnState=v?1:0;
+  }
+  return devOptOnState==1;
+}
+void devoptSetOn(bool on){
+  devOptOnState=on?1:0;
+  Preferences p;
+  if(!p.begin("ui",false)) return;
+  p.putInt("devopt",on?1:0);
+  p.end();
+}
+
 
 // =====================================================================
 // PENGATURAN ala iOS -- state layout & sentuhan (daftar scroll, tap-saat-lepas)
@@ -10328,7 +10355,7 @@ int loadSpiOcPref(){
 enum { SR_TITLE=0, SR_SECT, SR_BRIGHT, SR_THEME, SR_FONT, SR_ROT, SR_SPI, SR_SPIAPPLY,
        SR_SCAN, SR_WIFI, SR_NONET, SR_SSID, SR_PASS, SR_CONNECT, SR_MPU, SR_TCAL, SR_OWNER, SR_ABOUT, SR_POWER, SR_HOMEEDIT, SR_BACKUP, SR_HEAPLOG, SR_HWS, SR_LANG,
        SR_WSTAT, SR_FOOT /* SETT_UX_V1 */, SR_FACTORY /* FACTORY_RESET_V1 */, SR_KBTAP /* KB_TAPOFF_V1 */,
-       SR_SEARCH, SR_QUICK, SR_CAT, SR_NOHIT, SR_GAP /* UI-REVAMP */ };
+       SR_SEARCH, SR_QUICK, SR_CAT, SR_NOHIT, SR_GAP /* UI-REVAMP */, SR_DEVOPT /* DEVOPT_IN_SETTINGS_V1 */ };
 #define SETT_MAXROWS 44
 int settRT[SETT_MAXROWS], settRG[SETT_MAXROWS], settRY[SETT_MAXROWS], settRH[SETT_MAXROWS], settRA[SETT_MAXROWS];
 const char* settRL[SETT_MAXROWS];
@@ -10402,6 +10429,7 @@ const char* settKeys(int t){
     case SR_BACKUP:   return "backup restore cadangan";
     case SR_POWER:    return "daya power matikan restart shutdown";
     case SR_FACTORY:  return "reset pabrik factory hapus";
+    case SR_DEVOPT:   return "developer opsi pengembang pin gpio adc ina219 baterai sensor";   // DEVOPT_IN_SETTINGS_V1
   }
   return "";
 }
@@ -10479,6 +10507,7 @@ void settBuildLayout(){
     }
     if(sq || pg==5){   // SISTEM
       SADD(SR_ABOUT,34); SADD(SR_BACKUP,34);
+      if(devoptIsOn()) SADD(SR_DEVOPT,34);   // DEVOPT_IN_SETTINGS_V1
       SGRP();
       SADD(SR_POWER,34); SADD(SR_FACTORY,34);
       SGRP();
@@ -10527,7 +10556,7 @@ bool settPressable(int t){
   switch(t){
     case SR_FONT: case SR_LANG: case SR_ROT: case SR_HOMEEDIT: case SR_HEAPLOG: case SR_SPIAPPLY:
     case SR_SCAN: case SR_WIFI: case SR_SSID: case SR_PASS: case SR_CONNECT: case SR_MPU: case SR_TCAL:
-    case SR_OWNER: case SR_ABOUT: case SR_POWER: case SR_BACKUP: case SR_FACTORY: case SR_CAT:
+    case SR_OWNER: case SR_ABOUT: case SR_POWER: case SR_BACKUP: case SR_FACTORY: case SR_CAT: case SR_DEVOPT:
       return true;
   }
   return false;
@@ -10535,7 +10564,7 @@ bool settPressable(int t){
 bool settHasChip(int t){
   switch(t){
     case SR_BRIGHT: case SR_THEME: case SR_FONT: case SR_LANG: case SR_ROT: case SR_HOMEEDIT: case SR_SPI:
-    case SR_SCAN: case SR_SSID: case SR_PASS: case SR_MPU: case SR_TCAL: case SR_ABOUT: case SR_POWER: case SR_BACKUP: case SR_HEAPLOG: case SR_HWS: case SR_FACTORY: case SR_KBTAP: case SR_CAT:
+    case SR_SCAN: case SR_SSID: case SR_PASS: case SR_MPU: case SR_TCAL: case SR_ABOUT: case SR_POWER: case SR_BACKUP: case SR_HEAPLOG: case SR_HWS: case SR_FACTORY: case SR_KBTAP: case SR_CAT: case SR_DEVOPT:
       return true;
   }
   return false;
@@ -10562,6 +10591,7 @@ void settChip(LGFX_Sprite& s,int type,int x,int y){ // x,y = pojok kiri-atas chi
     case SR_KBTAP:    col=CHIP_ORANGE; break;   // KB_TAPOFF_V1
     case SR_POWER:    col=CHIP_RED;    break;
     case SR_FACTORY:  col=CHIP_RED;    break;   // FACTORY_RESET_V1
+    case SR_DEVOPT:   col=CHIP_GREEN;  break;   // DEVOPT_IN_SETTINGS_V1
     default: return;
   }
   const uint16_t W=0xFFFF;
@@ -10636,6 +10666,9 @@ void settChip(LGFX_Sprite& s,int type,int x,int y){ // x,y = pojok kiri-atas chi
       break;
     case SR_FACTORY:   // tempat sampah
       s.fillRect(cx-5,cy-5,11,2,W); s.fillRect(cx-2,cy-7,5,2,W); s.fillRect(cx-4,cy-2,9,9,W); s.fillRect(cx-2,cy,1,5,col); s.fillRect(cx+1,cy,1,5,col);
+      break;
+    case SR_DEVOPT:    // DEVOPT_IN_SETTINGS_V1: "</>"
+      s.setTextSize(1); s.setTextColor(W); s.setCursor(cx-8,cy-4); s.print("</>");
       break;
     case SR_POWER:     // tombol daya
       s.fillArc(cx,cy+1,5,7,300.0f,360.0f,W); s.fillArc(cx,cy+1,5,7,0.0f,240.0f,W);
@@ -10929,6 +10962,11 @@ void drawSettings(LGFX_Sprite& s){
         settTextR(s,xr-12,ty,vl,T().subtext);
         } break;
         break;
+      case SR_DEVOPT:   // DEVOPT_IN_SETTINGS_V1
+        settPrintFit(s,xl,ty,RPTR("Opsi Developer"),xr-xl-(rpPinBootState==1?30:16),T().text);
+        if(rpPinBootState==1) nyxAaCircle(s,xr-20,ty+4,3,T().accent);   // pin percobaan menunggu konfirmasi
+        settChevron(s,xr-4,ty+4,T().subtext);
+        break;
       case SR_POWER:
         settPrintFit(s,xl,ty,RPTR("Daya (Matikan / Mulai Ulang)"),xr-xl-16,T().danger);   // SETT_FIT_V1
         settChevron(s,xr-4,ty+4,T().subtext);
@@ -11083,6 +11121,8 @@ void settTap(int x,int y){
       settKeepPage=true; settKeepScroll=settScroll; navPush(SCR_ABOUT); break;
     case SR_BACKUP:
       settKeepPage=true; settKeepScroll=settScroll; navPush(SCR_BACKUP); break;
+    case SR_DEVOPT:   // DEVOPT_IN_SETTINGS_V1
+      settKeepPage=true; settKeepScroll=settScroll; navPush(SCR_DEVOPT); break;
     case SR_POWER:
       powerMenuShow(); needRedraw=true; break;
     case SR_FACTORY:   // FACTORY_RESET_V1: ketuk 2x dalam 4 detik

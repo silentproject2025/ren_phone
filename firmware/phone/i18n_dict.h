@@ -910,6 +910,7 @@ static const I18nPair I18N_DICT[] = {
   { "Opsi Developer sudah aktif", "Developer options already on" },
   { "Opsi Developer disembunyikan", "Developer options hidden" },
   { "Sembunyikan Opsi Developer", "Hide developer options" },
+  { "Ada di Setting > Sistem", "Find it in Settings > System" },
   { "Pin baru dicoba: ketuk untuk simpan", "New pins on trial: tap to save" },
   { "Pin baru dibatalkan (tidak dikonfirmasi)", "New pins cancelled (not confirmed)" },
   { "Kalau layar & sentuh normal, simpan permanen. Kalau tidak, cabut daya: pin lama kembali sendiri.", "If display and touch work, save permanently. If not, unplug power: the old pins come back by themselves." },

@@ -132,6 +132,7 @@ static void heTap(int x, int y) {
     if (k < APP_COUNT - 1) { int t = homeOrder[k + 1]; homeOrder[k + 1] = homeOrder[k]; homeOrder[k] = t; heScroll += HE_RH; }
     else return;
   } else if (x >= heVisX() - 2 && x <= heVisX() + heVisW() + 2) { // tampil / sembunyi
+    if (apps[i].screen == SCR_DEVOPT) { showToast(RPTR("Ada di Setting > Sistem")); return; }   // DEVOPT_IN_SETTINGS_V1
     homeHide[i] = !homeHide[i];
     if (homeHide[i]) showToast(RPTR("Disembunyikan -- tetap bisa dicari"));
   } else return;

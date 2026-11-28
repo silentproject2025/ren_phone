@@ -147,14 +147,10 @@ void devoptExit() {
   if (rpPinBootState == 2) rpPinBootState = 0;                   // catatan "dibatalkan otomatis" cukup dilihat sekali
 }
 
-// membuka app dari About (ketuk judul 7x): tampilkan ikonnya di Home lalu buka
+// membuka dari About (ketuk 7x): munculkan baris "Opsi Developer" di Setting > Sistem lalu buka  // DEVOPT_IN_SETTINGS_V1
 void devoptUnlock() {
-  homeLayoutEnsure();
-  int i = appIndexForScreen(SCR_DEVOPT);
-  if (i >= 0 && homeHide[i]) {
-    homeHide[i] = false; homeLayoutRebuildVis(); homeLayoutSave();
-    showToast(RPTR("Opsi Developer aktif"));
-  } else showToast(RPTR("Opsi Developer sudah aktif"));
+  if (!devoptIsOn()) { devoptSetOn(true); showToast(RPTR("Opsi Developer aktif")); }
+  else showToast(RPTR("Opsi Developer sudah aktif"));
   navPush(SCR_DEVOPT);
 }
 
@@ -167,9 +163,7 @@ void devoptLoopPoll() {
   // pengingat sekali setelah boot (HP perlu menyala dulu): percobaan pin baru / percobaan dibatalkan
   if (!dvNoticeDone && now > 6000UL && rpPinBootState != 0) {
     dvNoticeDone = true;
-    homeLayoutEnsure();
-    int i = appIndexForScreen(SCR_DEVOPT);
-    if (i >= 0 && homeHide[i]) { homeHide[i] = false; homeLayoutRebuildVis(); homeLayoutSave(); }   // pastikan app bisa dibuka
+    if (!devoptIsOn()) devoptSetOn(true);   // DEVOPT_IN_SETTINGS_V1: pastikan baris Opsi Developer ada di Setting > Sistem
     if (rpPinBootState == 1) diNotify('d', RPTR("Pin baru dicoba: ketuk untuk simpan"), T().accent, 5000, false, "", SCR_DEVOPT, true);
     else                     diNotify('d', RPTR("Pin baru dibatalkan (tidak dikonfirmasi)"), T().danger, 4200, false, "", SCR_DEVOPT, true);
   }
@@ -533,8 +527,7 @@ static void dvDoAction(int act, int arg) {
     case DA_APPLY:   if (dvDiffFromActive() > 0 && dpErrorCount(dvEdit) == 0) dvModal = 1; break;
     case DA_RESET:   dvModal = 2; break;
     case DA_LOCK: {
-      int i = appIndexForScreen(SCR_DEVOPT);
-      if (i >= 0) { homeHide[i] = true; homeLayoutRebuildVis(); homeLayoutSave(); }
+      devoptSetOn(false);   // DEVOPT_IN_SETTINGS_V1: baris di Setting > Sistem hilang
       showToast(RPTR("Opsi Developer disembunyikan"));
       navBack();
       return;

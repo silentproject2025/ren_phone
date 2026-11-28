@@ -26,9 +26,9 @@ Power is read from the **INA219** sensor over I2C. The app has five tabs (Summar
 
 ## Developer options `BETA`
 
-An Android-style **Developer options** app for changing pins and reading the battery sensor, hidden until you unlock it.
+An Android-style **Developer options** page (inside Settings) for changing pins and reading the battery sensor, hidden until you unlock it.
 
-- **Unlock:** open *About Phone* and tap anywhere in the **Software** section (the *Firmware version* row) 7 times (within 1.5 s each; a countdown toast appears from the 3rd tap). The app's icon then appears on Home (category *System*) and the app opens. *Hide Developer options* at the bottom of the Pin tab hides it again. It can also be shown or hidden in *Home Layout*.
+- **Unlock:** open *About Phone* and tap anywhere in the **Software** section (the *Firmware version* row) 7 times (within 1.5 s each; a countdown toast appears from the 3rd tap). A *Developer options* row then appears in *Settings > System* (under *Backup & Restore*; it is searchable too) and the app opens. The app has no icon on Home. *Hide Developer options* at the bottom of the Pin tab removes the row again.
 - **Pin tab:** every pin of the board is listed by group (display SPI, SD card, touch, sensor bus, analog sensors, outputs, microphone, speaker, ESP32-CAM UART). **[−] / [+]** step the GPIO number (hold to repeat; GPIOs that do not exist on the ESP32-S3 are skipped, optional pins can be set to `OFF` = −1), and tapping the number puts the board default back. Only pins used by your build are shown (for example the XPT2046 pins on ILI9341, the I2C touch pins on ST7796 / Aether, the SD CS pin only for SPI SD).
   - A red mark means the pin is invalid or used twice; amber marks mean a strapping pin (0, 3, 45, 46), a USB pin (19, 20) or, for an analog input, a pin outside ADC1. *Apply* stays disabled while a pin is marked red.
   - **Apply** stores the new pins as a *trial* and restarts. After the restart a banner asks for **Save permanently**; if you do not confirm (power cycle, crash, boot loop), the next boot drops the trial and the previous pins come back on their own. So a wrong display or touch pin cannot lock you out, but you do need to be able to cut the power once.

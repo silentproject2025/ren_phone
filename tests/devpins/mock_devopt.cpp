@@ -41,6 +41,7 @@ static Screen g_cur = SCR_DEVOPT; static Screen curScreen() { return g_cur; }
 static bool homeHide[4] = {false, true, false, false};
 static void homeLayoutEnsure() {} static void homeLayoutRebuildVis() {} static int g_saves = 0; static void homeLayoutSave() { g_saves++; }
 static int appIndexForScreen(Screen s) { return s == SCR_DEVOPT ? 1 : -1; }
+static bool g_devOn = false; static bool devoptIsOn() { return g_devOn; } static void devoptSetOn(bool v) { g_devOn = v; }   // DEVOPT_IN_SETTINGS_V1
 static int g_notif = 0; static void diNotify(char, const char*, uint16_t, unsigned long, bool, const char*, Screen, bool) { g_notif++; }
 static void powerRestartNow() { g_restart++; }
 // ---- variabel ina219_renphone.ino ----
@@ -125,9 +126,9 @@ int main() {
   for (int i = 0; i < DP_COUNT; i++) rpPinV[i] = DP_DEFS[i].def;
   devpinsBoot(); CHECK(rpPinV[DP_VIB] == DP_DEFS[DP_VIB].def);
   // sembunyikan app
-  homeHide[1] = false; devoptEnter(); h = scrollToHit(DA_LOCK, 0); CHECK(h >= 0); tapHit(h); CHECK(homeHide[1] && g_navBack == 1);
+  g_devOn = true; devoptEnter(); h = scrollToHit(DA_LOCK, 0); CHECK(h >= 0); tapHit(h); CHECK(!g_devOn && g_navBack == 1);
   // unlock dari About
-  homeHide[1] = true; devoptUnlock(); CHECK(!homeHide[1] && g_navPush == 1);
+  g_devOn = false; devoptUnlock(); CHECK(g_devOn && g_navPush == 1);
   // tab Sensor ADC: stepper kalibrasi
   rpPinV[DP_BATT_ADC] = 1; inaOk = false; devoptEnter(); dvTab = 1; devoptLoopPoll();
   h = scrollToHit(DA_DIV_INC, 0); CHECK(h >= 0); float d0 = devBattDiv; tapHit(h); CHECK(devBattDiv > d0);
