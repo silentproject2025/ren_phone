@@ -1268,7 +1268,9 @@ void nyxSkeleton(LGFX_Sprite& s, int kind) {
         nyxSkelBox(s, 10, tTop + 4 + i * lineH + 1, w, 6, 3, bandX);
       }
     }
-  } else if (kind == 1) {                                                // ---- daftar NEO ----
+  }
+#if !RP_NO_NASAAPPS
+  else if (kind == 1) {                                                // ---- daftar NEO ----
     nyxSkelHeader(s, 150, bandX);
     nyxSkelBox(s, SCR_W - 4 - 22, 24, 22, 22, 11, bandX);            // ikon kaca pembesar
     int top = neoListTop(), rowH = neoRowH();
@@ -1294,6 +1296,7 @@ void nyxSkeleton(LGFX_Sprite& s, int kind) {
     nyxSkelBox(s, 8, navY + 27, (SCR_W - 16) * 72 / 100, 7, 3, bandX);   // judul
     nyxSkelBox(s, 8, navY + 38, 64, 7, 3, bandX);                        // tanggal
   }
+#endif // RP_NO_NASAAPPS
 }
 
 // =====================================================================

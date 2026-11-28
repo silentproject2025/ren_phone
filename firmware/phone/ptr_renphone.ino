@@ -24,9 +24,11 @@ static bool ptrScreenOk() {
   if (locked || appSwitcherOpen || controlCenterOpen || notifShadeOpen || diMenuOpen || powerMenuOpen || kbVisible) return false;
   switch (curScreen()) {
     case SCR_UPDATE:  return !updBusy;
+#if !RP_NO_NASAAPPS
     case SCR_NEOWS:   return neoPage == NEO_LIST && !numPadVisible;
     case SCR_EPIC:    return epicPage == EPIC_VIEW && !numPadVisible;
     case SCR_NASAIMG: return imgLibPage == ILIB_VIEW && imgLibQuery.length() > 0;
+#endif // RP_NO_NASAAPPS
     default:          return false;
   }
 }
@@ -34,9 +36,11 @@ static bool ptrScreenOk() {
 static void ptrFire() {
   switch (curScreen()) {
     case SCR_UPDATE:  otaCheckAndFill(); break;
+#if !RP_NO_NASAAPPS
     case SCR_NEOWS:   neoRetry();        break;
     case SCR_EPIC:    epicRetry();       break;
     case SCR_NASAIMG: imgLibRetry();     break;
+#endif // RP_NO_NASAAPPS
     default: break;
   }
 }

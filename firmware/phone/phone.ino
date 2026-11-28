@@ -581,6 +581,16 @@ struct InfFireball{ float x,y,dx,dy; bool active; unsigned long spawnMs; };
 // TriviaLayout/forward-decl diNotify/struct Theme dipindah ke SINI --
 // SEBELUM nasaWaitForHeap()/nasaHttpErrHint() -- supaya semua tipe sudah
 // dikenal sebelum fungsi-ber-body pertama di file manapun itu berada.
+// NO_NASAAPPS_V1: 1 = NEO Asteroid, Bumi EPIC & Galeri NASA tidak ikut di-build (hemat flash+RAM). 0 = hidupkan lagi. APOD tidak terpengaruh.
+#ifndef RP_NO_NASAAPPS
+#define RP_NO_NASAAPPS 1
+#endif
+#if RP_NO_NASAAPPS
+#define RP_NASA_N 3   // jumlah entri apps[] yg dibuang
+#else
+#define RP_NASA_N 0
+#endif
+
 enum Screen { SCR_HOME, SCR_CLOCK, SCR_CALC, SCR_SENSOR,
               SCR_SETTINGS, SCR_NOTEPAD, SCR_CANVAS, SCR_AICHAT, SCR_FILEEXPLORER,
               SCR_MJPEG, SCR_UPDATE, SCR_BATTERY, SCR_SNAKE, SCR_FLAPPY,
@@ -6779,6 +6789,7 @@ void drawAppIcon(LGFX_Sprite& s, char sym, int cx, int cy, int r, uint16_t bgCir
       s.fillTriangle(cx-rr/8,cy-rr/6, cx+rr/3,cy-rr/6, cx-rr/4,cy+rr, ic);
       break;
     }
+#if !RP_NO_NASAAPPS
     // -------- v22: 4 app astronomi tambahan --------
     case 'O': { // NEO Asteroid: gumpalan tak beraturan + sepotong lintasan orbit
       int rr=max(3,r-7);
@@ -6801,6 +6812,7 @@ void drawAppIcon(LGFX_Sprite& s, char sym, int cx, int cy, int r, uint16_t bgCir
       nyxAaCircle(s, cx+3,cy+2,2,bgCircle);
       break;
     }
+#endif // RP_NO_NASAAPPS
     case 'Z': { // Labirin: hantu sederhana -- kubah bulat + badan + alas bergerigi + mata
       int rr=r-4;
       nyxAaCircle(s, cx,cy-2,rr,ic);
@@ -7168,6 +7180,7 @@ void apodLowMem(); // v92: App Memory Guard -- lepas cache RAM internal (String 
 // ---- NeoWs / EPIC / NASA Image Library: forward
 // declarations (BARU di v22 -- app astronomi tambahan, tema sama dgn
 // APOD) ----
+#if !RP_NO_NASAAPPS
 void neoEnter(); void neoExit();
 void drawNeo(LGFX_Sprite&); void neoTouch(int,int,bool,bool);
 void neoLowMem(); // v92: App Memory Guard, lihat apodLowMem()
@@ -7177,6 +7190,7 @@ void epicLowMem(); // v92: App Memory Guard, lihat apodLowMem()
 void imgLibEnter(); void imgLibExit();
 void drawImgLib(LGFX_Sprite&); void imgLibTouch(int,int,bool,bool);
 void imgLibLowMem(); // v92: App Memory Guard, lihat apodLowMem()
+#endif // RP_NO_NASAAPPS
 // v24: app kontrol LED Neopixel
 void npxAppEnter(); void npxAppExit();
 void drawNpxApp(LGFX_Sprite&); void npxAppTouch(int,int,bool,bool);
@@ -7280,9 +7294,11 @@ AppDef apps[] = {  // ukuran otomatis
   { "Trivia",     'Q', 0, triviaEnter,   triviaExit,   drawTrivia,       triviaTouch,   SCR_TRIVIA },
   { "Astronomi",  '*', 0, apodEnter,     apodExit,     drawApod,         apodTouch,     SCR_APOD,    apodLowMem },
   // ---- v22: 4 app astronomi tambahan (tema sama, sumber data NASA beda) ----
+#if !RP_NO_NASAAPPS
   { "NEO Asteroid",'O', 0, neoEnter,     neoExit,      drawNeo,          neoTouch,      SCR_NEOWS,   neoLowMem },
   { "Bumi EPIC",  'E', 0, epicEnter,     epicExit,     drawEpic,         epicTouch,     SCR_EPIC,    epicLowMem },
   { "Galeri NASA",'G', 0, imgLibEnter,   imgLibExit,   drawImgLib,       imgLibTouch,   SCR_NASAIMG, imgLibLowMem },
+#endif // RP_NO_NASAAPPS
   // ---- v24: kontrol LED Neopixel (GPIO 48) ----
   { "Neopixel",   'P', 0, npxAppEnter,  npxAppExit,   drawNpxApp,       npxAppTouch,   SCR_NEOPIXEL },
   // ---- v31: HWmonitor -- bar performa CPU per-core + RAM/PSRAM + info chip ----
@@ -7332,7 +7348,7 @@ AppDef apps[] = {  // ukuran otomatis
   // ---- Opsi Developer: pin yang bisa diubah + pantau ADC / INA219 (disembunyikan dari grid; buka dgn ketuk judul About Phone 7x) ----  // DEVPINS_V1
   { "Opsi Developer", 'd', 0, devoptEnter, devoptExit, drawDevopt, devoptTouch, SCR_DEVOPT },
 };
-#define APP_COUNT 47
+#define APP_COUNT (47 - RP_NASA_N)   // NO_NASAAPPS_V1
 static_assert(sizeof(apps)/sizeof(apps[0]) == APP_COUNT, "APP_COUNT harus sama dengan jumlah entri apps[]");
 
 // =============================================
@@ -7479,32 +7495,34 @@ void initAppColors(){
   apps[16].color=0xFDA0; // Trivia Quiz - kuning-oranye cerah (BARU v14)
   apps[17].color=0x7CBF; // Astronomi (APOD NASA) - biru indigo spt langit malam (BARU v21)
   // ---- v22: warna app astronomi tambahan ----
+#if !RP_NO_NASAAPPS
   apps[18].color=0xFBC0; // NEO Asteroid - oranye debu asteroid
   apps[19].color=0x1F9F; // Bumi EPIC - biru samudra Bumi
   apps[20].color=0xC37F; // Galeri NASA - ungu (tema galeri/kreatif)
-  apps[21].color=0xF81F; // Neopixel - magenta terang (kesan lampu RGB nyala)
-  apps[22].color=0x07FF; // HWmonitor - cyan terang (kesan teknis/monitoring)
-  apps[23].color=0x8BDF; // Labirin - biru-ungu terang
-  apps[24].color=0xFB80; // Inferno - oranye membara
-  apps[25].color=0xF187; // NES - merah klasik
+#endif // RP_NO_NASAAPPS
+  apps[21 - RP_NASA_N].color=0xF81F; // Neopixel - magenta terang (kesan lampu RGB nyala)
+  apps[22 - RP_NASA_N].color=0x07FF; // HWmonitor - cyan terang (kesan teknis/monitoring)
+  apps[23 - RP_NASA_N].color=0x8BDF; // Labirin - biru-ungu terang
+  apps[24 - RP_NASA_N].color=0xFB80; // Inferno - oranye membara
+  apps[25 - RP_NASA_N].color=0xF187; // NES - merah klasik
   // v-baru: index 22 & 27-31 dulu TIDAK PERNAH diisi -> default 0 = HITAM (ikon gak keliatan).
-  apps[26].color=0xA745; // DOOM - hijau limau
-  apps[27].color=0x3FF9; // PPU Demo - mint/aqua
-  apps[28].color=0xFB28; // Pomodoro - tomat
-  apps[29].color=0xB41F; // Wake Word - ungu muda
-  apps[30].color=0xFA12; // Musik - pink terang
-  apps[31].color=0xFD20; // Stopwatch - oranye
-  apps[32].color=0xF9A6; // Voice Memo - merah rekam
-  apps[33].color=0x565F; // Galeri - biru langit
-  apps[34].color=0x5EBF; // Profil - biru muda
-  apps[35].color=0x8C71; // About Phone
-  apps[37].color=0x2DFA; // Remote - cyan
-  apps[38].color=0x34DF; // Chat - biru lembut
-  apps[39].color=0x2E8B; // Telepon - hijau
-  apps[40].color=0xF9A0; // Kamera - oranye
-  apps[41].color=0xE68A; // Buku - krem kecokelatan (kertas)
-  apps[43].color=0xFE60; // Catur - emas
-  apps[46].color=0x9D13; // Opsi Developer - abu kehijauan
+  apps[26 - RP_NASA_N].color=0xA745; // DOOM - hijau limau
+  apps[27 - RP_NASA_N].color=0x3FF9; // PPU Demo - mint/aqua
+  apps[28 - RP_NASA_N].color=0xFB28; // Pomodoro - tomat
+  apps[29 - RP_NASA_N].color=0xB41F; // Wake Word - ungu muda
+  apps[30 - RP_NASA_N].color=0xFA12; // Musik - pink terang
+  apps[31 - RP_NASA_N].color=0xFD20; // Stopwatch - oranye
+  apps[32 - RP_NASA_N].color=0xF9A6; // Voice Memo - merah rekam
+  apps[33 - RP_NASA_N].color=0x565F; // Galeri - biru langit
+  apps[34 - RP_NASA_N].color=0x5EBF; // Profil - biru muda
+  apps[35 - RP_NASA_N].color=0x8C71; // About Phone
+  apps[37 - RP_NASA_N].color=0x2DFA; // Remote - cyan
+  apps[38 - RP_NASA_N].color=0x34DF; // Chat - biru lembut
+  apps[39 - RP_NASA_N].color=0x2E8B; // Telepon - hijau
+  apps[40 - RP_NASA_N].color=0xF9A0; // Kamera - oranye
+  apps[41 - RP_NASA_N].color=0xE68A; // Buku - krem kecokelatan (kertas)
+  apps[43 - RP_NASA_N].color=0xFE60; // Catur - emas
+  apps[46 - RP_NASA_N].color=0x9D13; // Opsi Developer - abu kehijauan
   for(int i=0;i<APP_COUNT;i++) apps[i].color=modernTone(apps[i].color); // UI-MODERN: lembutkan warna neon
 }
 
@@ -20340,6 +20358,7 @@ bool nasaErrorRetryHit(int x,int y){
   return x>=8&&x<=SCR_W-8&&y>=by&&y<=by+26;
 }
 
+#if !RP_NO_NASAAPPS   // NO_NASAAPPS_V1: awal blok NEO/EPIC/Galeri NASA
 // =============================================
 // APP: NEO ASTEROID (NASA NeoWs -- Near Earth Object Web Service) -- BARU v22
 // -----------------------------------------------------------------
@@ -21483,6 +21502,7 @@ void imgLibTouch(int x,int y,bool held,bool isNew){
   if(x>=SCR_W-56 && x<=SCR_W-6 && y>=navY && y<=navY+20){ imgLibGoto(imgLibIdx+1); return; }
 }
 
+#endif // RP_NO_NASAAPPS: akhir blok NEO/EPIC/Galeri NASA
 // =============================================
 // APP: NEOPIXEL (kontrol LED RGB di GPIO 48) -- BARU v24
 // -----------------------------------------------------------------
@@ -22413,7 +22433,9 @@ void setup(){
   }
   apodEnsureCacheDir(); // v21: folder cache gambar+terjemahan APOD (/apod_cache)
   // v22: folder cache app astronomi tambahan
+#if !RP_NO_NASAAPPS
   neoEnsureCacheDir(); epicEnsureCacheDir(); imgLibEnsureCacheDir();
+#endif // RP_NO_NASAAPPS
 
   Serial.printf("[Boot] FreePsram=%u FreeInternal=%u LargestInternalBlock=%u\n",
                 ESP.getFreePsram(),
@@ -23378,6 +23400,7 @@ void loop(){
     if(curScreen()==SCR_APOD && apodPage==APOD_LOADING){ needRedraw=true; } // v21: animasi spinner APOD
     if(apodPage==APOD_LOADING) diTickProgress(); // v96
     // v22: animasi spinner loading utk 4 app astronomi tambahan
+#if !RP_NO_NASAAPPS
     if(curScreen()==SCR_NEOWS && neoPage==NEO_LOADING){ needRedraw=true; }
     if(neoPage==NEO_LOADING) diTickProgress(); // v96
     if(curScreen()==SCR_EPIC && epicPage==EPIC_LOADING){ needRedraw=true; }
@@ -23386,13 +23409,16 @@ void loop(){
     if(imgLibPage==ILIB_LOADING) diTickProgress(); // v96
     if(curScreen()==SCR_EPIC && epicPhotoLoading){ needRedraw=true; }       // v129: ring foto EPIC beranimasi
     if(curScreen()==SCR_NASAIMG && imgLibPhotoLoading){ needRedraw=true; }  // v129: ring galeri NASA beranimasi
+#endif // RP_NO_NASAAPPS
     // v22: animasi buka/tutup kolom cari (ikon kaca pembesar) -- berbasis
     // waktu (searchBarStep), jalan tiap frame selagi app itu aktif &
     // animasinya blm selesai (lihat WIDGET: TOMBOL CARI utk detail).
     if(curScreen()==SCR_APOD && searchBarStep(apodSearchBar, apodSearchRightX())) needRedraw=true;
+#if !RP_NO_NASAAPPS
     if(curScreen()==SCR_NEOWS && searchBarStep(neoSearchBar, neoSearchRightX())) needRedraw=true;
     if(curScreen()==SCR_EPIC && searchBarStep(epicSearchBar, epicSearchRightX())) needRedraw=true;
     if(curScreen()==SCR_NASAIMG && searchBarStep(imgLibSearchBar, imgLibSearchRightX())) needRedraw=true;
+#endif // RP_NO_NASAAPPS
 
     // v12: momentum scroll halus utk teks (AI Chat & isi file di File
     // Explorer) selagi jari SUDAH dilepas -> gerakannya jalan terus lalu
