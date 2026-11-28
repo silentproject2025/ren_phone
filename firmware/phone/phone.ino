@@ -3938,7 +3938,7 @@ float navSpringEase(float p,float w){
   return (1.0f-(1.0f+w*p)*expf(-w*p))/k;
 }
 #ifndef NAV_SPRING_W
-#define NAV_SPRING_W 7.0f
+#define NAV_SPRING_W 5.5f   // NAV_IOS_V1b: 7.0 -> 5.5
 #endif
 
 // v19: playNavTransition DIKEMBALIKAN ke pola LANGKAH TETAP (STEPS=12) +
@@ -3973,7 +3973,7 @@ float navSpringEase(float p,float w){
 // Kalau mau efek zoom v73 balik: ambil pushRotateZoom-nya dari v73, tapi
 // siap2 FPS turun.
 #ifndef NAV_TRANS_MS
-#define NAV_TRANS_MS 320UL   // NAV_IOS_V1: 260 -> 320
+#define NAV_TRANS_MS 380UL   // NAV_IOS_V1b   // NAV_IOS_V1: 260 -> 320
 #endif
 // v109: bayangan tepi tipis (2 garis gelap) di sisi kiri layar yg ada di ATAS -- murah, tanpa alpha blend.
 // Selalu tertimpa frame berikutnya karena layar bawah digambar penuh dulu tiap frame.
@@ -3996,7 +3996,7 @@ void navDrawLower(LGFX_Sprite& spr,int sx,int edge){
 // Home memanggil navZoomArm() sesaat sebelum navPush(); playNavTransition(PUSH) memakainya SEKALI.
 // Kalau tidak di-arm (buka dari App Switcher, notifikasi, dll) -> tetap animasi geser lama.
 #ifndef NAV_ZOOM_MS
-#define NAV_ZOOM_MS 380UL   // NAV_IOS_V1: 340 -> 380   // SMOOTH-ZOOM: 300->340 (kurva quad + strip delta, lebih banyak frame antara)
+#define NAV_ZOOM_MS 450UL   // NAV_IOS_V1b   // NAV_IOS_V1: 340 -> 380   // SMOOTH-ZOOM: 300->340 (kurva quad + strip delta, lebih banyak frame antara)
 #endif
 bool navZoomArmed=false;
 unsigned long navZoomArmMs=0;
@@ -4123,7 +4123,7 @@ void navPlayZoomOpen(){
 // berwarna ikon yg mengecil ke posisi ikon di Home. Home digambar ulang HANYA di area yg baru "terbuka" (4 strip),
 // jadi tiap piksel ditulis sekali per frame; isi app di dalam jendela tidak perlu digambar ulang.
 #ifndef NAV_ZOOM_CLOSE_MS
-#define NAV_ZOOM_CLOSE_MS 300UL   // NAV_IOS_V1: 260 -> 300
+#define NAV_ZOOM_CLOSE_MS 360UL   // NAV_IOS_V1b   // NAV_IOS_V1: 260 -> 300
 #endif
 void navZoomPushHome(int x,int y,int w,int h){   // tempel potongan Home (canvas) ke panel
   if(w<=0||h<=0) return;
