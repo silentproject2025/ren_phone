@@ -8416,6 +8416,9 @@ bool wallpaperFileExists(const char* path){
   return ffatReady && FFat.exists(path);
 }
 static const char* wallpaperResolve(){
+  // THEME_V1: wallpaper dari app Theme (folder data app) menang atas file di root
+  const char* thm = (SCR_W>=SCR_H) ? "/apps/theme/data/wallpaper2.jpg" : "/apps/theme/data/wallpaper1.jpg";
+  if(wallpaperFileExists(thm)) return thm;
   const char* pref = (SCR_W>=SCR_H) ? WALLPAPER_FILE_L : WALLPAPER_FILE_P;
   if(wallpaperFileExists(pref)) return pref;
   if(wallpaperFileExists(WALLPAPER_FILE)) return WALLPAPER_FILE;

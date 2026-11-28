@@ -215,6 +215,7 @@ static void nyxHttpWorker(void*) {
       else begun = http.begin(pc, nyxHttpUrl);
       if (begun) {
         http.setTimeout(12000);
+        http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);   // THEME_V1: picsum.photos -> 302
         code = http.GET();
         if (code > 0) {
           WiFiClient* st = http.getStreamPtr(); unsigned long t0 = millis();
@@ -369,6 +370,14 @@ static void nyxFail(const char* msg) {
   nyxState = NYX_ST_ERR; Serial.printf("[NyxApp] %s\n", nyxErr);
 }
 
+// THEME_V1: app Theme menulis data/applied setelah mengganti/menghapus wallpaper -> muat ulang di sini.
+bool loadWallpaper();
+static void nyxThemeReload() {
+  if (!nyxAppFs || !nyxAppFs->exists("/apps/theme/data/applied")) return;
+  nyxAppFs->remove("/apps/theme/data/applied");
+  loadWallpaper();
+}
+
 // hentikan app (aman dipanggil berulang). Tidak mengubah nyxState kecuali ke LIST bila tidak ada galat.
 static void nyxStop() {
   if (nyxTask) {
@@ -449,6 +458,7 @@ static void nyxLaunch(int idx) {
   nyxTouchDown = nyxTouchNew = nyxTouchRel = false;
   nyxState = NYX_ST_RUN;
 #endif
+  nyxThemeReload();   // THEME_V1
 }
 
 // ------------------------------ hook UI -------------------------------

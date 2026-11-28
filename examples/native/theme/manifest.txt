@@ -1,0 +1,7 @@
+name=Theme
+sym=T
+color=8a4fd8
+perms=fs,net,notify
+mem_kb=192
+stack_kb=8
+elf=app.elf
